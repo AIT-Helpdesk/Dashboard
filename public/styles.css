@@ -1,0 +1,142 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --card: #f9fafb;
+  --accent: #2563eb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --fg: #eef0f3;
+    --muted: #9aa3af;
+    --border: #2a2e35;
+    --card: #1b1e24;
+    --accent: #5b8def;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 2rem;
+}
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0;
+}
+
+.date-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.date-form label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.date-form input[type="date"] {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.95rem;
+}
+
+.date-form button {
+  padding: 0.45rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.date-form button:hover { opacity: 0.9; }
+.date-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.status {
+  color: var(--muted);
+}
+
+.status.error {
+  color: #dc2626;
+}
+
+.summary {
+  margin-bottom: 1.5rem;
+  font-size: 1.1rem;
+}
+
+.summary strong {
+  font-size: 1.6rem;
+}
+
+.resource-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.resource-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: var(--card);
+  font-weight: 600;
+}
+
+.resource-group-header .count {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.9rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+td.ticket-number {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
