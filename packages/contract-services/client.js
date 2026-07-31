@@ -99,7 +99,7 @@ export function mount(container) {
               <td class="ticket-number">${escapeHtml(r.units)}</td>
               <td class="ticket-number">${formatPrice(r.price)}</td>
               <td class="ticket-number">${formatDate(r.startDate)} - ${formatDate(r.endDate)}</td>
-              <td class="ticket-number" title="Contract's last-modified date -- the service unit itself has no modification timestamp">${formatDate(r.contractLastModified)}</td>
+              <td class="ticket-number${isStale(r.contractLastModified) ? ' cell-stale' : ''}" title="Contract's last-modified date -- the service unit itself has no modification timestamp">${formatDate(r.contractLastModified)}</td>
             </tr>`
             )
             .join('')}
@@ -119,6 +119,13 @@ export function mount(container) {
   function formatDate(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleDateString();
+  }
+
+  function isStale(iso) {
+    if (!iso) return false;
+    const oneMonthAgo = new Date();
+    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+    return new Date(iso) < oneMonthAgo;
   }
 
   function formatPrice(value) {

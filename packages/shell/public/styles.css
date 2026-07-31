@@ -213,3 +213,8 @@ td.ticket-number {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
+
+.cell-stale {
+  color: #dc2626 !important;
+  font-weight: 600;
+}
