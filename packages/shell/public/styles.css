@@ -214,7 +214,7 @@ td.ticket-number {
   color: var(--muted);
 }
 
-.cell-stale {
+.cell-flag-red {
   color: #dc2626 !important;
   font-weight: 600;
 }

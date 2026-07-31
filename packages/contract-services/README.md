@@ -26,7 +26,7 @@ The second condition is what picks up quarterly, semi-annual, and annual contrac
 
 ## Last Changed column
 
-`ContractServiceUnits` has no modification timestamp of its own (Autotask doesn't track that at the line-item level). The "Last Changed" column shows the parent **Contract**'s `lastModifiedDateTime` instead - the closest thing available, but it reflects changes to the contract record generally, not specifically to that service/period line. It's shown in red/bold when more than a month old.
+`ContractServiceUnits` has no modification timestamp of its own (Autotask doesn't track that at the line-item level). The "Last Changed" column shows the parent **Contract**'s `lastModifiedDateTime` instead - the closest thing available, but it reflects changes to the contract record generally, not specifically to that service/period line. It's shown in red/bold when the change was within the last 30 days (i.e. red flags *recent* activity, not staleness).
 
 ## Search syntax
 
