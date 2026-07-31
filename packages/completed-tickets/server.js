@@ -1,5 +1,5 @@
 const express = require('express');
-const { getClient, mapWithConcurrency, resolveResourceName, resolveCompanyName } = require('@dashboard/autotask-client');
+const { getClient, mapWithConcurrency, resolveResourceName, resolveCompanyName, listAll } = require('@dashboard/autotask-client');
 
 async function fetchTicketsCompletedOn(client, dateStr) {
   const startISO = `${dateStr}T00:00:00.000Z`;
@@ -7,27 +7,13 @@ async function fetchTicketsCompletedOn(client, dateStr) {
   endDate.setUTCDate(endDate.getUTCDate() + 1);
   const endISO = endDate.toISOString();
 
-  const all = [];
-  const pageSize = 500;
-  // Safety cap: a single client site won't plausibly complete more than 10k tickets in a day.
-  for (let page = 1; page <= 20; page++) {
-    const result = await client.tickets.list({
-      filter: [
-        { op: 'eq', field: 'status', value: 5 },
-        { op: 'gte', field: 'completedDate', value: startISO },
-        { op: 'lt', field: 'completedDate', value: endISO },
-        // issueType 14 = "Monitoring Alert" -- excluded from the dashboard by request.
-        { op: 'noteq', field: 'issueType', value: 14 },
-      ],
-      page,
-      pageSize,
-    });
-
-    const batch = result.data || [];
-    all.push(...batch);
-    if (batch.length < pageSize) break;
-  }
-  return all;
+  return listAll(client.tickets, [
+    { op: 'eq', field: 'status', value: 5 },
+    { op: 'gte', field: 'completedDate', value: startISO },
+    { op: 'lt', field: 'completedDate', value: endISO },
+    // issueType 14 = "Monitoring Alert" -- excluded from the dashboard by request.
+    { op: 'noteq', field: 'issueType', value: 14 },
+  ]);
 }
 
 const router = express.Router();

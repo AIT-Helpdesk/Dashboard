@@ -67,9 +67,32 @@ async function resolveCompanyName(client, id) {
   }
 }
 
+// Autotask's REST API paginates POST /query results via a `pageDetails.nextPageUrl`
+// cursor in the response body -- NOT via a `page` number in the request, despite the
+// SDK's `.list()` wrapper accepting a `page` option (it silently ignores it and
+// re-returns page 1 every time, and also strips `pageDetails` from its return value).
+// This talks to the entity's underlying axios instance directly to do real pagination.
+// `entity.axios` / `entity.endpoint` are TypeScript "protected" but plain runtime
+// properties, so they're reachable from JS.
+async function listAll(entity, filter) {
+  const all = [];
+  const body = { filter, MaxRecords: 500 };
+  let response = await entity.axios.post(`${entity.endpoint}/query`, body);
+  all.push(...(response.data?.items || []));
+  let nextUrl = response.data?.pageDetails?.nextPageUrl || null;
+  // Safety cap in case Autotask ever returns a cursor that doesn't terminate.
+  for (let i = 0; i < 100 && nextUrl; i++) {
+    response = await entity.axios.post(nextUrl, body);
+    all.push(...(response.data?.items || []));
+    nextUrl = response.data?.pageDetails?.nextPageUrl || null;
+  }
+  return all;
+}
+
 module.exports = {
   getClient,
   mapWithConcurrency,
   resolveResourceName,
   resolveCompanyName,
+  listAll,
 };
