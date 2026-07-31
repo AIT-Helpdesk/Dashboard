@@ -1,5 +1,5 @@
 export const id = "tickets-created-today";
-export const label = "Tickets Created Today";
+export const label = "Tickets Created";
 
 export function mount(container) {
   container.innerHTML = `
