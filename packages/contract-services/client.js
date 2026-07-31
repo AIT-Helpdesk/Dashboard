@@ -43,7 +43,7 @@ export function mount(container) {
     button.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
-    statusEl.textContent = `Loading services active in ${formatMonth(month)}...`;
+    statusEl.textContent = `Loading services starting in ${formatMonth(month)}...`;
     summaryEl.hidden = true;
     resultsEl.innerHTML = '';
 
@@ -67,7 +67,7 @@ export function mount(container) {
 
     summaryEl.hidden = false;
     const searchLabel = data.search ? ` matching "${escapeHtml(data.search)}"` : '';
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> service item${data.totalCount === 1 ? '' : 's'} active in ${formatMonth(data.month)}${searchLabel} (active contracts only)`;
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> service item${data.totalCount === 1 ? '' : 's'} starting in ${formatMonth(data.month)}${searchLabel} (active contracts only)`;
 
     if (data.totalCount === 0) {
       resultsEl.innerHTML = '<p class="status">No matching service items.</p>';
@@ -87,7 +87,7 @@ export function mount(container) {
       const table = document.createElement('table');
       table.innerHTML = `
         <thead>
-          <tr><th>Service</th><th>Contract</th><th>Units</th><th>Price</th><th>Period</th></tr>
+          <tr><th>Service</th><th>Contract</th><th>Units</th><th>Price</th><th>Period</th><th>Last Changed</th></tr>
         </thead>
         <tbody>
           ${group.rows
@@ -99,6 +99,7 @@ export function mount(container) {
               <td class="ticket-number">${escapeHtml(r.units)}</td>
               <td class="ticket-number">${formatPrice(r.price)}</td>
               <td class="ticket-number">${formatDate(r.startDate)} - ${formatDate(r.endDate)}</td>
+              <td class="ticket-number" title="Contract's last-modified date -- the service unit itself has no modification timestamp">${formatDate(r.contractLastModified)}</td>
             </tr>`
             )
             .join('')}

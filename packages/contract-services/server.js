@@ -56,11 +56,11 @@ router.get('/', async (req, res) => {
 
     // Contract service units are Autotask's per-period record (start/end date + unit
     // count) for a service on a contract -- this is what "active for a billing period"
-    // maps to. Pull everything overlapping the selected month, then narrow to units
-    // belonging to an active contract and a matching, active service.
+    // maps to. Only units whose period *starts* in the selected month, narrowed to
+    // units belonging to an active contract and a matching, active service.
     const units = await listAll(client.contractServiceUnits, [
-      { op: 'lte', field: 'startDate', value: monthEnd },
-      { op: 'gte', field: 'endDate', value: monthStart },
+      { op: 'gte', field: 'startDate', value: monthStart },
+      { op: 'lt', field: 'startDate', value: monthEnd },
     ]);
 
     const rows = units
@@ -79,6 +79,10 @@ router.get('/', async (req, res) => {
           price: u.price,
           startDate: u.startDate,
           endDate: u.endDate,
+          // ContractServiceUnits has no modification timestamp of its own; this is
+          // the closest thing Autotask exposes -- when the parent contract record
+          // was last changed, not the line item itself.
+          contractLastModified: contract.lastModifiedDateTime || null,
         };
       });
 
