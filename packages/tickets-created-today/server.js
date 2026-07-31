@@ -1,0 +1,86 @@
+const express = require('express');
+const { getClient, mapWithConcurrency, resolveCompanyName } = require('@dashboard/autotask-client');
+
+async function fetchTicketsCreatedOn(client, dateStr) {
+  const startISO = `${dateStr}T00:00:00.000Z`;
+  const endDate = new Date(`${dateStr}T00:00:00.000Z`);
+  endDate.setUTCDate(endDate.getUTCDate() + 1);
+  const endISO = endDate.toISOString();
+
+  const all = [];
+  const pageSize = 500;
+  // Safety cap: a single client site won't plausibly create more than 10k tickets in a day.
+  for (let page = 1; page <= 20; page++) {
+    const result = await client.tickets.list({
+      filter: [
+        { op: 'gte', field: 'createDate', value: startISO },
+        { op: 'lt', field: 'createDate', value: endISO },
+        // issueType 14 = "Monitoring Alert" -- excluded from the dashboard by request,
+        // same as the Completed Tickets page.
+        { op: 'noteq', field: 'issueType', value: 14 },
+      ],
+      page,
+      pageSize,
+    });
+
+    const batch = result.data || [];
+    all.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  return all;
+}
+
+const router = express.Router();
+
+router.get('/', async (req, res) => {
+  const date = req.query.date;
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Query param "date" is required in YYYY-MM-DD format.' });
+  }
+
+  try {
+    const client = await getClient();
+    const tickets = await fetchTicketsCreatedOn(client, date);
+
+    const uniqueCompanyIDs = [...new Set(tickets.map((t) => t.companyID).filter((id) => id !== null && id !== undefined))];
+    await mapWithConcurrency(uniqueCompanyIDs, 3, (id) => resolveCompanyName(client, id));
+
+    const enriched = [];
+    for (const t of tickets) {
+      enriched.push({
+        id: t.id,
+        ticketNumber: t.ticketNumber,
+        title: t.title,
+        companyID: t.companyID,
+        company: await resolveCompanyName(client, t.companyID),
+        createDate: t.createDate,
+        priority: t.priority,
+        status: t.status,
+      });
+    }
+    enriched.sort((a, b) => new Date(a.createDate) - new Date(b.createDate));
+
+    const byCompanyMap = new Map();
+    for (const t of enriched) {
+      const key = t.companyID ?? 'unknown';
+      if (!byCompanyMap.has(key)) {
+        byCompanyMap.set(key, { companyId: t.companyID, companyName: t.company, tickets: [] });
+      }
+      byCompanyMap.get(key).tickets.push(t);
+    }
+    const byCompany = [...byCompanyMap.values()]
+      .map((g) => ({ ...g, count: g.tickets.length }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({
+      date,
+      totalCount: enriched.length,
+      byCompany,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+module.exports = router;
