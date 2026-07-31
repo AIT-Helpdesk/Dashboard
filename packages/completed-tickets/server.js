@@ -7,13 +7,27 @@ async function fetchTicketsCompletedOn(client, dateStr) {
   endDate.setUTCDate(endDate.getUTCDate() + 1);
   const endISO = endDate.toISOString();
 
-  return listAll(client.tickets, [
+  // status 5 = "Complete", filtered by completedDate as usual.
+  const completed = await listAll(client.tickets, [
     { op: 'eq', field: 'status', value: 5 },
     { op: 'gte', field: 'completedDate', value: startISO },
     { op: 'lt', field: 'completedDate', value: endISO },
     // issueType 14 = "Monitoring Alert" -- excluded from the dashboard by request.
     { op: 'noteq', field: 'issueType', value: 14 },
   ]);
+
+  // status 20 = "Billing - Contract" -- included as completed by request, but these
+  // tickets never get a completedDate set (Autotask only populates that on the
+  // transition to status 5). resolvedDateTime is the closest equivalent: when the
+  // work was actually finished, before the ticket got routed to billing.
+  const billing = await listAll(client.tickets, [
+    { op: 'eq', field: 'status', value: 20 },
+    { op: 'gte', field: 'resolvedDateTime', value: startISO },
+    { op: 'lt', field: 'resolvedDateTime', value: endISO },
+    { op: 'noteq', field: 'issueType', value: 14 },
+  ]);
+
+  return [...completed, ...billing];
 }
 
 const router = express.Router();
@@ -44,7 +58,7 @@ router.get('/', async (req, res) => {
         company: await resolveCompanyName(client, t.companyID),
         completedByResourceID: t.completedByResourceID || null,
         completedBy: t.completedByResourceID ? await resolveResourceName(client, t.completedByResourceID) : 'Unassigned',
-        completedDate: t.completedDate,
+        completedDate: t.completedDate || t.resolvedDateTime,
         priority: t.priority,
       });
     }
