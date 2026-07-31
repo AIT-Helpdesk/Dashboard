@@ -95,6 +95,7 @@ router.get('/', async (req, res) => {
           serviceName: service.name,
           units: u.units,
           price: u.price,
+          cost: u.cost,
           startDate: u.startDate,
           endDate: u.endDate,
           // ContractServiceUnits has no modification timestamp of its own; this is

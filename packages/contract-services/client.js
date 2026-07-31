@@ -87,7 +87,7 @@ export function mount(container) {
       const table = document.createElement('table');
       table.innerHTML = `
         <thead>
-          <tr><th>Service</th><th>Contract</th><th>Units</th><th>Price</th><th>Period</th><th>Last Changed</th></tr>
+          <tr><th>Service</th><th>Contract</th><th>Units</th><th>Cost</th><th>Sell</th><th>Period</th><th>Last Changed</th></tr>
         </thead>
         <tbody>
           ${group.rows
@@ -97,7 +97,8 @@ export function mount(container) {
               <td>${escapeHtml(r.serviceName)}</td>
               <td>${escapeHtml(r.contractName)}</td>
               <td class="ticket-number">${escapeHtml(r.units)}</td>
-              <td class="ticket-number">${formatPrice(r.price)}</td>
+              <td class="ticket-number">${formatPrice(perItem(r.cost, r.units))}</td>
+              <td class="ticket-number">${formatPrice(perItem(r.price, r.units))}</td>
               <td class="ticket-number">${formatDate(r.startDate)} - ${formatDate(r.endDate)}</td>
               <td class="ticket-number${isRecentChange(r.contractLastModified) ? ' cell-flag-red' : ''}" title="Contract's last-modified date -- the service unit itself has no modification timestamp">${formatDate(r.contractLastModified)}</td>
             </tr>`
@@ -131,6 +132,13 @@ export function mount(container) {
   function formatPrice(value) {
     if (value === null || value === undefined) return '';
     return '$' + Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // ContractServiceUnits' price/cost are totals for the full unit quantity in that
+  // period, not a per-item rate -- divide by units to get the per-item figure.
+  function perItem(total, units) {
+    if (total === null || total === undefined || !units) return total;
+    return total / units;
   }
 
   function escapeHtml(str) {

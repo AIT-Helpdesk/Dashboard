@@ -28,6 +28,13 @@ The second condition is what picks up quarterly, semi-annual, and annual contrac
 
 `ContractServiceUnits` has no modification timestamp of its own (Autotask doesn't track that at the line-item level). The "Last Changed" column shows the parent **Contract**'s `lastModifiedDateTime` instead - the closest thing available, but it reflects changes to the contract record generally, not specifically to that service/period line. It's shown in red/bold when the change was within the last 30 days (i.e. red flags *recent* activity, not staleness).
 
+## Cost / Sell columns
+
+`ContractServiceUnits` stores `cost`/`price` as totals for the full unit quantity in
+that period, not a per-item rate. The table shows the per-item figure
+(`cost`/`price` divided by `units`) so it's directly comparable to the service's
+list price.
+
 ## Search syntax
 
 - No `*` - substring match (same as `*term*`).
