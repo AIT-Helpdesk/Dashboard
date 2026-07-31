@@ -87,6 +87,8 @@ async function fetchTicketsCompletedOn(client, dateStr) {
         { op: 'eq', field: 'status', value: 5 },
         { op: 'gte', field: 'completedDate', value: startISO },
         { op: 'lt', field: 'completedDate', value: endISO },
+        // issueType 14 = "Monitoring Alert" -- excluded from the dashboard by request.
+        { op: 'noteq', field: 'issueType', value: 14 },
       ],
       page,
       pageSize,
