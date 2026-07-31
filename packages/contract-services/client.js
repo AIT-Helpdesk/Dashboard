@@ -43,7 +43,7 @@ export function mount(container) {
     button.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
-    statusEl.textContent = `Loading services starting in ${formatMonth(month)}...`;
+    statusEl.textContent = `Loading services active in ${formatMonth(month)}...`;
     summaryEl.hidden = true;
     resultsEl.innerHTML = '';
 
@@ -67,7 +67,7 @@ export function mount(container) {
 
     summaryEl.hidden = false;
     const searchLabel = data.search ? ` matching "${escapeHtml(data.search)}"` : '';
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> service item${data.totalCount === 1 ? '' : 's'} starting in ${formatMonth(data.month)}${searchLabel} (active contracts only)`;
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> service item${data.totalCount === 1 ? '' : 's'} active in ${formatMonth(data.month)}${searchLabel} (active contracts only)`;
 
     if (data.totalCount === 0) {
       resultsEl.innerHTML = '<p class="status">No matching service items.</p>';

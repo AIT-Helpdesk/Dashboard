@@ -56,12 +56,30 @@ router.get('/', async (req, res) => {
 
     // Contract service units are Autotask's per-period record (start/end date + unit
     // count) for a service on a contract -- this is what "active for a billing period"
-    // maps to. Only units whose period *starts* in the selected month, narrowed to
-    // units belonging to an active contract and a matching, active service.
-    const units = await listAll(client.contractServiceUnits, [
-      { op: 'gte', field: 'startDate', value: monthStart },
+    // maps to. Fetch the full overlap superset (anything touching the selected month
+    // at all), then narrow in JS to:
+    //   - units whose period starts in the selected month (monthly services, and any
+    //     longer-period service that happens to kick off this month), OR
+    //   - units that started before the month and are still running (endDate >=
+    //     monthStart), but ONLY if the period is longer than a month -- this is what
+    //     picks up quarterly/semi-annual/annual contracts without also pulling in
+    //     short monthly periods that merely spill over a day or two from last month.
+    const MONTHLY_PERIOD_MAX_DAYS = 35; // comfortably above any single calendar month (28-31 days)
+    function startsInMonth(u) {
+      return u.startDate >= monthStart && u.startDate < monthEnd;
+    }
+    function isLongerThanAMonth(u) {
+      const days = (new Date(u.endDate) - new Date(u.startDate)) / 86400000;
+      return days > MONTHLY_PERIOD_MAX_DAYS;
+    }
+
+    const candidateUnits = await listAll(client.contractServiceUnits, [
       { op: 'lt', field: 'startDate', value: monthEnd },
+      { op: 'gte', field: 'endDate', value: monthStart },
     ]);
+    const units = candidateUnits.filter(
+      (u) => startsInMonth(u) || (u.startDate < monthStart && isLongerThanAMonth(u))
+    );
 
     const rows = units
       .filter((u) => contractsById.has(u.contractID) && servicesById.has(u.serviceID))
