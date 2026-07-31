@@ -1,6 +1,18 @@
-# Autotask Completed-Tickets Dashboard
+# Ambient IT Dashboard
 
-Small internal web app: pick a date, see every ticket completed that day across all clients, grouped by the technician who closed it.
+Small internal multi-page dashboard, backed by the Autotask API. The frontend is a sidebar-navigated single-page app: pages live under `public/pages/`, and the sidebar lists whatever's registered.
+
+## Pages
+
+- **Completed Tickets** - pick a date, see every ticket completed that day across all clients, grouped by the technician who closed it. Excludes tickets with issue type "Monitoring Alert".
+
+### Adding a new page
+
+1. Create `public/pages/your-page.js` exporting `id`, `label`, and `mount(container)` (mount renders into the given DOM element).
+2. Add an entry to `public/pages-registry.js` pointing at it.
+3. Add any backend endpoints it needs to `server.js`.
+
+The sidebar and routing (URL hash-based) pick it up automatically - no other wiring needed.
 
 ## Setup
 

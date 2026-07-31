@@ -3,25 +3,18 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Completed Tickets Dashboard</title>
+  <title>Ambient IT Dashboard</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="page-header">
-    <h1>Completed Tickets by Technician</h1>
-    <form id="date-form" class="date-form">
-      <label for="date-input">Date</label>
-      <input type="date" id="date-input" name="date" required />
-      <button type="submit">Load</button>
-    </form>
-  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="sidebar-title">Dashboard</div>
+      <ul id="nav-list" class="nav-list"></ul>
+    </nav>
+    <main id="page-content" class="page-content"></main>
+  </div>
 
-  <main id="content">
-    <p id="status" class="status">Pick a date and click Load.</p>
-    <div id="summary" class="summary" hidden></div>
-    <div id="results" class="results"></div>
-  </main>
-
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

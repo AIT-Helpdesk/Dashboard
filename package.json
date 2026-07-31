@@ -2,7 +2,7 @@
   "name": "autotask-completed-dashboard",
   "version": "1.0.0",
   "private": true,
-  "description": "Internal dashboard: tickets completed on a chosen date, grouped by technician",
+  "description": "Multi-page internal dashboard backed by the Autotask API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
