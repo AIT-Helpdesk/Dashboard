@@ -78,6 +78,23 @@ body {
   color: #fff;
 }
 
+.nav-item {
+  border-radius: 6px;
+  cursor: grab;
+}
+
+.nav-item:active {
+  cursor: grabbing;
+}
+
+.nav-item.dragging {
+  opacity: 0.4;
+}
+
+.nav-item.drag-over {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
 .page-content {
   flex: 1;
   min-width: 0;

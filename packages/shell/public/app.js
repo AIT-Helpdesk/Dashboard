@@ -1,19 +1,89 @@
-import { pages } from './pages-registry.js';
+import { pages as registeredPages } from './pages-registry.js';
 
 const navList = document.getElementById('nav-list');
 const content = document.getElementById('page-content');
+const ORDER_KEY = 'dashboard.pageOrder';
+
+function loadOrder() {
+  try {
+    const raw = localStorage.getItem(ORDER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveOrder() {
+  try {
+    localStorage.setItem(ORDER_KEY, JSON.stringify(pages.map((p) => p.id)));
+  } catch {
+    // localStorage unavailable (private browsing, storage full, etc.) -- order just won't persist.
+  }
+}
+
+function applyStoredOrder(list) {
+  const savedOrder = loadOrder();
+  if (!savedOrder) return [...list];
+  const byId = new Map(list.map((p) => [p.id, p]));
+  const ordered = savedOrder.map((id) => byId.get(id)).filter(Boolean);
+  for (const p of list) {
+    if (!savedOrder.includes(p.id)) ordered.push(p);
+  }
+  return ordered;
+}
+
+// Mutated in place by drag-and-drop reordering below, so `pages` stays a stable
+// reference for currentPageId()/loadPage() rather than needing to be re-imported.
+const pages = applyStoredOrder(registeredPages);
+
+let dragSrcIndex = null;
 
 function renderNav(activeId) {
   navList.innerHTML = '';
-  for (const page of pages) {
+  pages.forEach((page, index) => {
     const li = document.createElement('li');
+    li.className = 'nav-item';
+    li.draggable = true;
+
     const a = document.createElement('a');
     a.href = `#${page.id}`;
     a.textContent = page.label;
     a.className = 'nav-link' + (page.id === activeId ? ' active' : '');
     li.appendChild(a);
+
+    li.addEventListener('dragstart', (e) => {
+      dragSrcIndex = index;
+      li.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    li.addEventListener('dragend', () => {
+      li.classList.remove('dragging');
+    });
+    li.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      li.classList.add('drag-over');
+    });
+    li.addEventListener('dragleave', () => {
+      li.classList.remove('drag-over');
+    });
+    li.addEventListener('drop', (e) => {
+      e.preventDefault();
+      li.classList.remove('drag-over');
+      if (dragSrcIndex === null || dragSrcIndex === index) return;
+      const [moved] = pages.splice(dragSrcIndex, 1);
+      // Removing the source shifts everything after it down by one, so a
+      // target index that was after the source needs the same adjustment --
+      // otherwise the dragged item lands one slot past where it was dropped.
+      const insertAt = dragSrcIndex < index ? index - 1 : index;
+      pages.splice(insertAt, 0, moved);
+      dragSrcIndex = null;
+      saveOrder();
+      renderNav(activeId);
+    });
+
     navList.appendChild(li);
-  }
+  });
 }
 
 function currentPageId() {
