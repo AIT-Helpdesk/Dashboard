@@ -1,0 +1,9 @@
+{
+  "name": "@dashboard/autotask-client",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "autotask-node": "npm:@wyre-technology/autotask-node@^2.3.0"
+  }
+}
