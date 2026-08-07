@@ -103,7 +103,7 @@ export function mount(container) {
             <tr>
               <td>${escapeHtml(t.company)}</td>
               <td class="ticket-number">${ticketLink(t)}</td>
-              <td>${escapeHtml(t.title)}</td>
+              <td${t.billingContract ? ' class="cell-flag-blue"' : ''}>${escapeHtml(t.title)}</td>
               <td>${escapeHtml(t.completedBy)}</td>
             </tr>`
             )

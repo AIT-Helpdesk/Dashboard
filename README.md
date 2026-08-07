@@ -11,7 +11,7 @@ packages/
   completed-tickets/    a dashboard page (frontend + its own backend router)
 ```
 
-- **shell** serves the sidebar shell UI, discovers page packages, and mounts each page's router at `/api/<page-id>`. Sidebar items can be reordered by dragging; the order is saved per-browser in `localStorage` (key `dashboard.pageOrder`), not shared across machines/users.
+- **shell** serves the sidebar shell UI, discovers page packages, and mounts each page's router at `/api/<page-id>`. The sidebar is a two-level tree -- pages sit at the top level or inside a category (e.g. "Client Info", "Ticket Info") -- built entirely by dragging: drop a page onto a category's header to file it there, drop it beside another page to reorder, drop it on the thin strip below everything to pull it back out to the top level. The whole layout (categories, their labels, and which pages are in which, in what order) is saved per-browser in `localStorage` (key `dashboard.navTree`), not shared across machines/users. New page packages appear ungrouped at the top level on first load; a page package that's removed quietly drops out of the saved layout.
 - **autotask-client** is shared plumbing (`getClient()`, `resolveResourceName()`, `resolveCompanyName()`) that any page needing Autotask data can depend on, so connection/rate-limit/name-resolution logic isn't duplicated per page.
 - Each page package (e.g. **completed-tickets**) owns its own frontend module and, optionally, its own Express router - a self-contained unit one person can build and review independently.
 

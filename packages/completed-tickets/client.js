@@ -93,7 +93,7 @@ export function mount(container) {
       const table = document.createElement('table');
       table.innerHTML = `
         <thead>
-          <tr><th>Company</th><th>Ticket #</th><th>Title</th><th>Review?</th></tr>
+          <tr><th>Company</th><th>Ticket #</th><th>Title</th><th></th></tr>
         </thead>
         <tbody>
           ${group.tickets

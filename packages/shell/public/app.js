@@ -17,7 +17,8 @@ window.fetch = async (...args) => {
 const navList = document.getElementById('nav-list');
 const content = document.getElementById('page-content');
 const userInfoEl = document.getElementById('user-info');
-const ORDER_KEY = 'dashboard.pageOrder';
+const TREE_KEY = 'dashboard.navTree';
+const LEGACY_ORDER_KEY = 'dashboard.pageOrder'; // pre-categories flat order, migrated once below
 
 async function renderUserInfo() {
   try {
@@ -41,95 +42,252 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-function loadOrder() {
+// Sidebar nav is a two-level tree: top-level entries are either a page or a
+// category, and a category holds pages (not further categories -- one level
+// of grouping is all that's asked for). Shape:
+//   { type: 'page', id: <pageId> }
+//   { type: 'category', id: <categoryId>, label: <string>, children: [{type:'page', id}, ...] }
+// Persisted whole, as one tree, rather than the old flat page-order array --
+// that's the only way to capture "which category a page is in" alongside
+// ordering, in one JSON blob.
+const pagesById = new Map(registeredPages.map((p) => [p.id, p]));
+
+function defaultTree() {
+  // Seeded with the two requested categories, empty -- pages start
+  // ungrouped at the top level and get dragged in by hand, rather than
+  // guessing which page belongs in which category.
+  return [
+    { type: 'category', id: 'client-info', label: 'Client Info', children: [] },
+    { type: 'category', id: 'ticket-info', label: 'Ticket Info', children: [] },
+    ...registeredPages.map((p) => ({ type: 'page', id: p.id })),
+  ];
+}
+
+function loadTree() {
   try {
-    const raw = localStorage.getItem(ORDER_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const raw = localStorage.getItem(TREE_KEY);
+    if (raw) return JSON.parse(raw);
   } catch {
-    return null;
+    // fall through to legacy/default below
   }
-}
-
-function saveOrder() {
+  // One-time migration from the old flat order, so an existing custom
+  // top-level order isn't lost the first time this loads post-upgrade.
   try {
-    localStorage.setItem(ORDER_KEY, JSON.stringify(pages.map((p) => p.id)));
+    const legacyRaw = localStorage.getItem(LEGACY_ORDER_KEY);
+    if (legacyRaw) {
+      const order = JSON.parse(legacyRaw);
+      const byId = new Map(registeredPages.map((p) => [p.id, p]));
+      const orderedPages = order.filter((id) => byId.has(id)).map((id) => ({ type: 'page', id }));
+      return [
+        { type: 'category', id: 'client-info', label: 'Client Info', children: [] },
+        { type: 'category', id: 'ticket-info', label: 'Ticket Info', children: [] },
+        ...orderedPages,
+      ];
+    }
   } catch {
-    // localStorage unavailable (private browsing, storage full, etc.) -- order just won't persist.
+    // fall through to default
+  }
+  return null;
+}
+
+function saveTree() {
+  try {
+    localStorage.setItem(TREE_KEY, JSON.stringify(tree));
+  } catch {
+    // localStorage unavailable (private browsing, storage full, etc.) -- layout just won't persist.
   }
 }
 
-function applyStoredOrder(list) {
-  const savedOrder = loadOrder();
-  if (!savedOrder) return [...list];
-  const byId = new Map(list.map((p) => [p.id, p]));
-  const ordered = savedOrder.map((id) => byId.get(id)).filter(Boolean);
-  for (const p of list) {
-    if (!savedOrder.includes(p.id)) ordered.push(p);
+// Drops any page id no longer registered (a page package that got removed)
+// and appends any registered page id missing from the tree entirely (a
+// newly added page package) at the top level, in registeredPages order --
+// keeps the persisted layout in sync with whatever pages actually exist
+// without losing the user's categorization/ordering of the rest.
+function reconcileTree(rawTree) {
+  const seen = new Set();
+  const result = [];
+  for (const node of rawTree) {
+    if (node.type === 'page') {
+      if (pagesById.has(node.id) && !seen.has(node.id)) {
+        seen.add(node.id);
+        result.push(node);
+      }
+    } else if (node.type === 'category') {
+      const children = node.children.filter((c) => pagesById.has(c.id) && !seen.has(c.id));
+      children.forEach((c) => seen.add(c.id));
+      result.push({ ...node, children });
+    }
   }
-  return ordered;
+  for (const p of registeredPages) {
+    if (!seen.has(p.id)) result.push({ type: 'page', id: p.id });
+  }
+  return result;
 }
 
-// Mutated in place by drag-and-drop reordering below, so `pages` stays a stable
-// reference for currentPageId()/loadPage() rather than needing to be re-imported.
-const pages = applyStoredOrder(registeredPages);
+// Mutated in place by drag-and-drop below, so `tree` stays a stable
+// reference for currentPageId()/loadPage() rather than needing re-import.
+const tree = reconcileTree(loadTree() || defaultTree());
 
-let dragSrcIndex = null;
+function flattenPageIds() {
+  const ids = [];
+  for (const node of tree) {
+    if (node.type === 'page') ids.push(node.id);
+    else ids.push(...node.children.map((c) => c.id));
+  }
+  return ids;
+}
+
+function findCategory(categoryId) {
+  return tree.find((n) => n.type === 'category' && n.id === categoryId);
+}
+
+// Location descriptors address where a page node currently sits:
+//   { kind: 'root', index }                    -- top level of the tree
+//   { kind: 'category', categoryId, index }     -- inside a category's children
+function listForLocation(loc) {
+  return loc.kind === 'root' ? tree : findCategory(loc.categoryId).children;
+}
+
+function removeAt(loc) {
+  return listForLocation(loc).splice(loc.index, 1)[0];
+}
+
+function insertAt(node, loc) {
+  listForLocation(loc).splice(loc.index, 0, node);
+}
+
+function sameList(a, b) {
+  return a.kind === 'root' ? b.kind === 'root' : b.kind === 'category' && a.categoryId === b.categoryId;
+}
+
+// Drag state lives across the dragstart/drop event pair -- native HTML5 DnD
+// doesn't hand you the source element in the drop event, only in dragstart.
+let dragSrc = null; // a location descriptor, set on dragstart
+
+function moveTo(targetLoc) {
+  if (!dragSrc) return;
+  const node = removeAt(dragSrc);
+  // Removing the source shifts everything after it down by one -- if the
+  // target is later in the SAME list, its index needs the same adjustment,
+  // otherwise the dragged item lands one slot past where it was dropped.
+  const insertIndex = sameList(dragSrc, targetLoc) && dragSrc.index < targetLoc.index ? targetLoc.index - 1 : targetLoc.index;
+  insertAt(node, { ...targetLoc, index: insertIndex });
+  dragSrc = null;
+  saveTree();
+}
 
 function renderNav(activeId) {
   navList.innerHTML = '';
-  pages.forEach((page, index) => {
-    const li = document.createElement('li');
-    li.className = 'nav-item';
-    li.draggable = true;
-
-    const a = document.createElement('a');
-    a.href = `#${page.id}`;
-    a.textContent = page.label;
-    a.className = 'nav-link' + (page.id === activeId ? ' active' : '');
-    li.appendChild(a);
-
-    li.addEventListener('dragstart', (e) => {
-      dragSrcIndex = index;
-      li.classList.add('dragging');
-      e.dataTransfer.effectAllowed = 'move';
-    });
-    li.addEventListener('dragend', () => {
-      li.classList.remove('dragging');
-    });
-    li.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      li.classList.add('drag-over');
-    });
-    li.addEventListener('dragleave', () => {
-      li.classList.remove('drag-over');
-    });
-    li.addEventListener('drop', (e) => {
-      e.preventDefault();
-      li.classList.remove('drag-over');
-      if (dragSrcIndex === null || dragSrcIndex === index) return;
-      const [moved] = pages.splice(dragSrcIndex, 1);
-      // Removing the source shifts everything after it down by one, so a
-      // target index that was after the source needs the same adjustment --
-      // otherwise the dragged item lands one slot past where it was dropped.
-      const insertAt = dragSrcIndex < index ? index - 1 : index;
-      pages.splice(insertAt, 0, moved);
-      dragSrcIndex = null;
-      saveOrder();
-      renderNav(activeId);
-    });
-
-    navList.appendChild(li);
+  tree.forEach((node, index) => {
+    if (node.type === 'category') {
+      navList.appendChild(renderCategory(node, index, activeId));
+    } else {
+      navList.appendChild(renderPageItem(node, { kind: 'root', index }, activeId));
+    }
   });
+  navList.appendChild(renderRootDropZone());
+}
+
+function renderPageItem(node, loc, activeId) {
+  const page = pagesById.get(node.id);
+  const li = document.createElement('li');
+  li.className = 'nav-item' + (loc.kind === 'category' ? ' nav-item--nested' : '');
+  li.draggable = true;
+
+  const a = document.createElement('a');
+  a.href = `#${page.id}`;
+  a.textContent = page.label;
+  a.className = 'nav-link' + (page.id === activeId ? ' active' : '');
+  li.appendChild(a);
+
+  li.addEventListener('dragstart', (e) => {
+    dragSrc = loc;
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  li.addEventListener('dragend', () => li.classList.remove('dragging'));
+  li.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    li.classList.add('drag-over');
+  });
+  li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+  li.addEventListener('drop', (e) => {
+    e.preventDefault();
+    li.classList.remove('drag-over');
+    if (!dragSrc) return;
+    moveTo(loc);
+    renderNav(activeId);
+  });
+
+  return li;
+}
+
+function renderCategory(node, index, activeId) {
+  const li = document.createElement('li');
+  li.className = 'nav-category';
+
+  const header = document.createElement('div');
+  header.className = 'nav-category-header';
+  header.textContent = node.label;
+  // The header itself is the "drop into this category" target -- lands the
+  // page at the end of this category's children, regardless of where in the
+  // header you drop (there's no per-position meaning for a header drop).
+  header.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    header.classList.add('drag-over');
+  });
+  header.addEventListener('dragleave', () => header.classList.remove('drag-over'));
+  header.addEventListener('drop', (e) => {
+    e.preventDefault();
+    header.classList.remove('drag-over');
+    if (!dragSrc) return;
+    moveTo({ kind: 'category', categoryId: node.id, index: node.children.length });
+    renderNav(activeId);
+  });
+  li.appendChild(header);
+
+  const childList = document.createElement('ul');
+  childList.className = 'nav-category-children';
+  node.children.forEach((child, childIndex) => {
+    childList.appendChild(renderPageItem(child, { kind: 'category', categoryId: node.id, index: childIndex }, activeId));
+  });
+  li.appendChild(childList);
+
+  return li;
+}
+
+// A thin strip below everything -- lets a page be dragged back out to the
+// top level (out of any category) or moved to the very end of the root
+// list, which no single top-level item's dragover target covers.
+function renderRootDropZone() {
+  const li = document.createElement('li');
+  li.className = 'nav-root-dropzone';
+  li.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    li.classList.add('drag-over');
+  });
+  li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+  li.addEventListener('drop', (e) => {
+    e.preventDefault();
+    li.classList.remove('drag-over');
+    if (!dragSrc) return;
+    moveTo({ kind: 'root', index: tree.length });
+    renderNav(currentPageId());
+  });
+  return li;
 }
 
 function currentPageId() {
   const hash = window.location.hash.replace(/^#/, '');
-  return pages.some((p) => p.id === hash) ? hash : pages[0]?.id;
+  const ids = flattenPageIds();
+  return ids.includes(hash) ? hash : ids[0];
 }
 
 async function loadPage(id) {
-  const page = pages.find((p) => p.id === id) || pages[0];
+  const page = pagesById.get(id) || pagesById.get(flattenPageIds()[0]);
   if (!page) {
     content.innerHTML = '<p class="status">No dashboard pages configured.</p>';
     return;

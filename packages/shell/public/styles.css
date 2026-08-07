@@ -103,6 +103,54 @@ body {
   box-shadow: inset 0 2px 0 0 var(--accent);
 }
 
+.nav-item--nested .nav-link {
+  font-size: 0.9rem;
+}
+
+.nav-category {
+  border-radius: 6px;
+}
+
+.nav-category-header {
+  padding: 0.55rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-radius: 6px;
+}
+
+.nav-category-header.drag-over {
+  background: var(--section-header-bg);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.nav-category-children {
+  list-style: none;
+  margin: 0 0 0.4rem;
+  padding: 0 0 0 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  /* A category with no pages in it yet still needs to read as a real drop
+     target, not just disappear -- this keeps a sliver of height so the
+     (empty) header + child list combo isn't a zero-height sliver you'd have
+     to aim a drag at pixel-perfectly. */
+  min-height: 0.25rem;
+}
+
+.nav-root-dropzone {
+  min-height: 10px;
+  border-radius: 6px;
+}
+
+.nav-root-dropzone.drag-over {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+  min-height: 18px;
+}
+
 .user-info {
   margin-top: 1.5rem;
   padding: 0.75rem;
@@ -303,6 +351,11 @@ td.ticket-number a:hover {
 
 .cell-flag-green {
   color: #16a34a !important;
+  font-weight: 600;
+}
+
+.cell-flag-blue {
+  color: var(--accent) !important;
   font-weight: 600;
 }
 

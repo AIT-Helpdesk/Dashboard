@@ -92,6 +92,10 @@ router.get('/', async (req, res) => {
         ticketNumber: t.ticketNumber,
         ticketUrl: await getTicketUrl(t.id),
         title: t.title,
+        // Status 20 = "Billing - Contract" (see fetchTicketsCompletedInWeek
+        // above) -- flagged per-ticket, by request, so the client can call
+        // it out visually against the more common status-5 "Complete" rows.
+        billingContract: t.status === 20,
         company: await resolveCompanyName(client, t.companyID),
         completedBy: t.completedByResourceID ? await resolveResourceName(client, t.completedByResourceID) : 'Unassigned',
         completedDate: effectiveDate,
