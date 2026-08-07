@@ -1,8 +1,45 @@
 import { pages as registeredPages } from './pages-registry.js';
 
+// Every page's client.js calls plain fetch() for its /api/* calls -- rather
+// than teaching each one to handle an expired session, wrap fetch once here:
+// a 401 (session expired/signed out server-side) bounces the whole page to
+// Microsoft sign-in instead of surfacing as a confusing "Error: Not signed
+// in." inside whatever page happened to be open.
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await nativeFetch(...args);
+  if (res.status === 401) {
+    window.location.href = '/auth/login';
+  }
+  return res;
+};
+
 const navList = document.getElementById('nav-list');
 const content = document.getElementById('page-content');
+const userInfoEl = document.getElementById('user-info');
 const ORDER_KEY = 'dashboard.pageOrder';
+
+async function renderUserInfo() {
+  try {
+    const res = await nativeFetch('/api/me');
+    const data = await res.json();
+    if (!data.user) return;
+    userInfoEl.innerHTML = `
+      <div class="user-name">${escapeHtml(data.user.name || data.user.email)}</div>
+      <a href="/auth/logout" class="user-signout">Sign out</a>
+    `;
+  } catch {
+    // Non-essential UI -- if this fails, the sidebar just shows no user info.
+  }
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 function loadOrder() {
   try {
@@ -109,3 +146,4 @@ async function loadPage(id) {
 
 window.addEventListener('hashchange', () => loadPage(currentPageId()));
 loadPage(currentPageId());
+renderUserInfo();

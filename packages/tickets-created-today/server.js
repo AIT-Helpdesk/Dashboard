@@ -1,5 +1,5 @@
 const express = require('express');
-const { getClient, mapWithConcurrency, resolveCompanyName, listAll } = require('@dashboard/autotask-client');
+const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getTicketUrl } = require('@dashboard/autotask-client');
 
 async function fetchTicketsCreatedOn(client, dateStr) {
   const startISO = `${dateStr}T00:00:00.000Z`;
@@ -36,6 +36,7 @@ router.get('/', async (req, res) => {
       enriched.push({
         id: t.id,
         ticketNumber: t.ticketNumber,
+        ticketUrl: await getTicketUrl(t.id),
         title: t.title,
         companyID: t.companyID,
         company: await resolveCompanyName(client, t.companyID),
@@ -56,7 +57,7 @@ router.get('/', async (req, res) => {
     }
     const byCompany = [...byCompanyMap.values()]
       .map((g) => ({ ...g, count: g.tickets.length }))
-      .sort((a, b) => b.count - a.count);
+      .sort((a, b) => a.companyName.localeCompare(b.companyName));
 
     res.json({
       date,

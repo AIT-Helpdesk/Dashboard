@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/classification-summary",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "classification-summary",
+    "label": "Clients by Classification",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "express": "^4.19.2"
+  }
+}

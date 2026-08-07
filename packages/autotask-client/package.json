@@ -4,6 +4,7 @@
   "private": true,
   "main": "index.js",
   "dependencies": {
-    "autotask-node": "npm:@wyre-technology/autotask-node@^2.3.0"
+    "autotask-node": "npm:@wyre-technology/autotask-node@^2.3.0",
+    "axios": "^1.7.2"
   }
 }

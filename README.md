@@ -18,6 +18,14 @@ packages/
 ## Pages
 
 - **Completed Tickets** (`packages/completed-tickets`) - pick a date, see every ticket completed that day across all clients, grouped by the technician who closed it. Excludes tickets with issue type "Monitoring Alert".
+- **Tickets Created** (`packages/tickets-created-today`) - pick a date, see every ticket created that day, grouped by company. Same "Monitoring Alert" exclusion as Completed Tickets.
+- **Contract Services** (`packages/contract-services`) - pick a month (and optionally filter by client and/or service name, with `*` wildcards), see every active service/service-bundle line item on contracts covering that month, grouped by company. See its own README for the data model -- it's the most involved page, spanning six Autotask entities.
+- **Client Details** (`packages/client-details`) - pick a criteria from a dropdown (active, inactive, any, no primary contact, no main billing contact, no invoice since a moving two-year-ago cutoff), see the matching companies with classification, last invoice, and contact info. Not date-scoped -- a live snapshot rather than a per-period report.
+- **Client Contacts** (`packages/client-contacts`) - pick which contacts to show (primary, main billing, both, or all active), optionally filter by Client / Company Type / Classification (`*` wildcards against the resolved picklist label, not the raw code), see matching contacts across active clients. Not date-scoped.
+- **Clients by Classification** (`packages/classification-summary`) - a horizontal bar chart, one bar per classification, counting active clients; click a bar to drill into that classification's client list. Auto-loads on open (with a Refresh button) rather than waiting for a Search click, since there's no criteria to fill in first -- the one page on this dashboard that intentionally breaks from that convention.
+- **Client Financials** (`packages/client-financials`) - type a client name (must resolve to exactly one company, via the shared `resolveSingleCompany()`), see a 12-month invoiced-amounts summary (Labour / Recurring Services / Charges, by month plus a total) and that window's invoice list.
+- **Client Activity** (`packages/client-activity`) - type a client name (single-company, same resolution flow as Client Financials), see 12-month ticket volume (created/completed) and logged hours (billable/non-billable), a currently-open ticket snapshot by status and priority, and the list of tickets created in that window.
+- **Asked for Review** (`packages/asked-for-review`) - pick any date, see every ticket asked for a Google review (the "Ask For Review" UDF = `ASK`) that week, Monday through Sunday, broken into a section per day.
 
 ### Adding a new page
 
@@ -68,6 +76,33 @@ That's it - no shell code changes needed. The sidebar and routing pick up the ne
    ```
 
 4. Open http://localhost:3000
+
+## Securing the dashboard
+
+Every page and every `/api/*` route requires signing in with a Microsoft 365 account from your own tenant (`packages/shell/auth.js`, wired in `packages/shell/server.js`). It's Microsoft Entra ID (Azure AD) via OpenID Connect - there's no separate local username/password, so access is exactly whoever can sign in to your Microsoft 365 tenant (further narrowed if you use the options below).
+
+### One-time setup in the Entra admin center
+
+1. **App registrations -> New registration.**
+   - Name: anything recognizable, e.g. "Ambient IT Dashboard".
+   - Supported account types: **Accounts in this organizational directory only (Single tenant)** - this alone is what restricts sign-in to your org; anyone outside the tenant is rejected by Microsoft before your app ever sees them.
+   - Redirect URI: platform **Web**, value `<APP_BASE_URL>/auth/callback` - use the real address other people reach this box at (LAN IP, hostname, or public domain), never `localhost`, once it's shared on the network.
+2. **Certificates & secrets -> New client secret.** Copy the secret's **value** immediately - Entra only shows it once.
+3. **API permissions**: Microsoft Graph -> Delegated -> `openid`, `profile`, `email`, `User.Read`. These are typically pre-consented; no admin-consent button needed for just these four.
+4. Note the **Application (client) ID** and **Directory (tenant) ID** from the app's Overview page.
+5. Optional, for a smaller allowed group than "anyone in the tenant": on the app registration, **Properties -> "Assignment required?" = Yes**, then assign specific users/groups under **Enterprise applications -> (this app) -> Users and groups**. This is enforced by Microsoft at sign-in time, before your app is involved.
+
+### Config
+
+Fill these into `.env` (see `.env.example` for the full list): `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, `AUTH_TENANT_ID`, `APP_BASE_URL` (must exactly match the redirect URI above, minus `/auth/callback`), `SESSION_SECRET` (any long random string - `openssl rand -hex 32`), and optionally `AUTH_ALLOWED_USERS` (comma-separated exact emails, a second layer of narrowing enforced in the app itself rather than Entra, on top of whatever the "Assignment required" setting above does).
+
+### How it behaves
+
+- Visiting any page while signed out redirects to Microsoft's sign-in page, then back to whatever URL was originally requested (`/auth/login`, `/auth/callback` in `auth.js`).
+- Every `/api/*` call from a page's `client.js` goes through a shared `fetch` wrapper (`packages/shell/public/app.js`) that treats a `401` (session expired, or signed out server-side) as "bounce the whole page to sign-in" rather than surfacing it as an error inside whatever page happened to be open.
+- Sessions last 8 hours (`cookie.maxAge` in `auth.js`) - an internal work tool, not a long-lived login.
+- The sidebar shows who's signed in (bottom of the nav) with a **Sign out** link, which also ends the Microsoft session (not just this app's), so it doesn't silently sign back in via SSO on a shared machine.
+- Rejects tokens from any tenant other than `AUTH_TENANT_ID` as defense-in-depth, even though the app registration being single-tenant should already prevent that.
 
 ## Notes
 

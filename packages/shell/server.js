@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { getClient } = require('@dashboard/autotask-client');
+const { registerAuthRoutes, requireAuth } = require('./auth');
 
 const PORT = process.env.PORT || 3000;
 const packagesRoot = path.resolve(__dirname, '..');
@@ -35,6 +36,15 @@ function discoverPages() {
 const pages = discoverPages();
 
 const app = express();
+
+// Session + /auth/login, /auth/callback, /auth/logout, /api/me -- mounted
+// first so sign-in itself is reachable while signed out. Everything
+// registered after requireAuth() below (static files, pages-registry.js,
+// per-page client.js, every /api/<page> router) requires a signed-in
+// Microsoft 365 account from the tenant configured in .env.
+registerAuthRoutes(app);
+app.use(requireAuth);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/pages-registry.js', (req, res) => {
@@ -69,7 +79,15 @@ for (const page of pages) {
   app.use(`/api/${page.id}`, router);
 }
 
-app.listen(PORT, () => {
-  console.log(`Dashboard shell running at http://localhost:${PORT}`);
+// Bound to localhost-only, not every network interface -- the intended path
+// in is always through a reverse proxy (Caddy in production, terminating
+// real HTTPS) in front of this port, never this raw HTTP port directly.
+// HOST is overridable via env var for the rare case that's not true (e.g. a
+// container where the proxy is a separate host), but 127.0.0.1 is the safe
+// default so a firewall misconfiguration doesn't expose plain-HTTP sign-in
+// straight to the internet.
+const HOST = process.env.HOST || '127.0.0.1';
+app.listen(PORT, HOST, () => {
+  console.log(`Dashboard shell running at http://${HOST}:${PORT}`);
   console.log(`Pages loaded: ${pages.map((p) => p.id).join(', ') || '(none)'}`);
 });

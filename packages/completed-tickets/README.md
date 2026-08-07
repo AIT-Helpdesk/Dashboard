@@ -19,3 +19,7 @@ Dashboard page: pick a date, see every ticket completed that day across all clie
 - Excludes tickets with issue type 14 ("Monitoring Alert").
 - Date filtering compares against UTC calendar-day boundaries for the selected date.
 - Resource and company names are resolved via `@dashboard/autotask-client` and cached in memory for the life of the server process.
+
+## Review? column
+
+Reads the ticket's **"Ask For Review"** UDF (Autotask's own field label; the picklist values are `ASK` / `NO`) via `getTicketUdf()` (shared, `@dashboard/autotask-client` -- also used by the Asked for Review page) out of the `userDefinedFields` array the Tickets API includes on every ticket by default, no extra request needed. Blank when the UDF was never set on the ticket (its entry is present with a `null` value, or absent on older tickets).

@@ -1,5 +1,5 @@
-export const id = "tickets-created-today";
-export const label = "Tickets Created";
+export const id = "asked-for-review";
+export const label = "Asked for Review";
 
 // Module-scope, not inside mount() -- the shell fully tears down and re-mounts a
 // page's DOM on every navigation away and back, but the dynamically-imported
@@ -12,14 +12,14 @@ let lastData = null;
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
-      <h1>Tickets Created</h1>
+      <h1>Asked for Review</h1>
       <form id="date-form" class="date-form">
         <label for="date-input">Date</label>
         <input type="date" id="date-input" name="date" required />
         <button type="submit">Load</button>
       </form>
     </header>
-    <p id="status" class="status">Pick a date and click Load.</p>
+    <p id="status" class="status">Pick any date and click Load -- shows the whole Monday-Sunday week that date falls in.</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
   `;
@@ -50,12 +50,12 @@ export function mount(container) {
     button.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
-    statusEl.textContent = `Loading tickets created on ${date}...`;
+    statusEl.textContent = `Loading tickets asked for review for the week of ${date}...`;
     summaryEl.hidden = true;
     resultsEl.innerHTML = '';
 
     try {
-      const res = await fetch(`/api/tickets-created-today?date=${encodeURIComponent(date)}`);
+      const res = await fetch(`/api/asked-for-review?date=${encodeURIComponent(date)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastDate = date;
@@ -73,58 +73,64 @@ export function mount(container) {
     statusEl.hidden = true;
 
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> ticket${data.totalCount === 1 ? '' : 's'} created on ${data.date}`;
-
-    if (data.totalCount === 0) {
-      resultsEl.innerHTML = '<p class="status">No tickets created on this date.</p>';
-      return;
-    }
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> ticket${data.totalCount === 1 ? '' : 's'} asked for review, week of ${formatDate(data.weekStart)} - ${formatDate(data.weekEnd)}`;
 
     resultsEl.innerHTML = '';
-    for (const group of data.byCompany) {
-      const groupEl = document.createElement('div');
-      groupEl.className = 'resource-group';
+    for (const day of data.days) {
+      const dayEl = document.createElement('div');
+      dayEl.className = 'resource-group';
 
       const header = document.createElement('div');
       header.className = 'resource-group-header';
-      header.innerHTML = `<span>${escapeHtml(group.companyName)}</span><span class="count">${group.count} ticket${group.count === 1 ? '' : 's'}</span>`;
-      groupEl.appendChild(header);
+      header.innerHTML = `<span>${escapeHtml(day.label)} -- ${formatDate(day.date)}</span><span class="count">${day.count} ticket${day.count === 1 ? '' : 's'}</span>`;
+      dayEl.appendChild(header);
+
+      if (day.count === 0) {
+        dayEl.insertAdjacentHTML('beforeend', '<p class="status" style="margin: 0.75rem 1rem;">None.</p>');
+        resultsEl.appendChild(dayEl);
+        continue;
+      }
 
       const table = document.createElement('table');
       table.innerHTML = `
         <thead>
-          <tr><th>Ticket #</th><th>Created</th><th>Title</th></tr>
+          <tr><th>Company</th><th>Ticket #</th><th>Title</th><th>Completed By</th></tr>
         </thead>
         <tbody>
-          ${group.tickets
+          ${day.tickets
             .map(
               (t) => `
             <tr>
+              <td>${escapeHtml(t.company)}</td>
               <td class="ticket-number">${ticketLink(t)}</td>
-              <td class="ticket-number">${formatTime(t.createDate)}</td>
               <td>${escapeHtml(t.title)}</td>
+              <td>${escapeHtml(t.completedBy)}</td>
             </tr>`
             )
             .join('')}
         </tbody>
       `;
-      groupEl.appendChild(table);
-      resultsEl.appendChild(groupEl);
+      dayEl.appendChild(table);
+      resultsEl.appendChild(dayEl);
     }
   }
 
   if (lastData) render(lastData);
 
-  function formatTime(iso) {
-    if (!iso) return '';
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-
   function ticketLink(t) {
     const label = escapeHtml(t.ticketNumber);
     if (!t.ticketUrl) return label;
     return `<a href="${escapeHtml(t.ticketUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  }
+
+  function formatDate(isoDateOnly) {
+    if (!isoDateOnly) return '';
+    // isoDateOnly is a plain YYYY-MM-DD (no time), so parse it as UTC-midnight
+    // explicitly -- new Date('YYYY-MM-DD') is already UTC-midnight per spec,
+    // but toLocaleDateString below needs timeZone: 'UTC' to match, otherwise
+    // a negative UTC offset rolls it back a day.
+    const d = new Date(`${isoDateOnly}T00:00:00.000Z`);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
   }
 
   function escapeHtml(str) {

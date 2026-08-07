@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/client-details",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "client-details",
+    "label": "Client Details",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "express": "^4.19.2"
+  }
+}

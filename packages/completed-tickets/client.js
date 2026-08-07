@@ -1,6 +1,14 @@
 export const id = "completed-tickets";
 export const label = "Completed Tickets";
 
+// Module-scope, not inside mount() -- the shell fully tears down and re-mounts a
+// page's DOM on every navigation away and back, but the dynamically-imported
+// module itself is cached by the browser and stays alive for the session, so a
+// module-level variable survives across re-mounts and lets the last result
+// restore instantly instead of coming back blank.
+let lastDate = null;
+let lastData = null;
+
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
@@ -30,6 +38,8 @@ export function mount(container) {
   }
   dateInput.value = todayISO();
 
+  if (lastDate) dateInput.value = lastDate;
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     loadDate(dateInput.value);
@@ -48,6 +58,8 @@ export function mount(container) {
       const res = await fetch(`/api/completed-tickets?date=${encodeURIComponent(date)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      lastDate = date;
+      lastData = data;
       render(data);
     } catch (err) {
       statusEl.className = 'status error';
@@ -81,16 +93,17 @@ export function mount(container) {
       const table = document.createElement('table');
       table.innerHTML = `
         <thead>
-          <tr><th>Ticket #</th><th>Company</th><th>Title</th></tr>
+          <tr><th>Company</th><th>Ticket #</th><th>Title</th><th>Review?</th></tr>
         </thead>
         <tbody>
           ${group.tickets
             .map(
               (t) => `
             <tr>
-              <td class="ticket-number">${escapeHtml(t.ticketNumber)}</td>
               <td>${escapeHtml(t.company)}</td>
+              <td class="ticket-number">${ticketLink(t)}</td>
               <td>${escapeHtml(t.title)}</td>
+              <td>${escapeHtml(t.askForReview || '')}</td>
             </tr>`
             )
             .join('')}
@@ -101,6 +114,14 @@ export function mount(container) {
     }
   }
 
+  if (lastData) render(lastData);
+
+  function ticketLink(t) {
+    const label = escapeHtml(t.ticketNumber);
+    if (!t.ticketUrl) return label;
+    return `<a href="${escapeHtml(t.ticketUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  }
+
   function escapeHtml(str) {
     if (str === null || str === undefined) return '';
     return String(str)
@@ -109,6 +130,4 @@ export function mount(container) {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
-
-  loadDate(dateInput.value);
 }

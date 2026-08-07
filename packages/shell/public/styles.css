@@ -6,6 +6,10 @@
   --border: #e5e7eb;
   --card: #f9fafb;
   --accent: #2563eb;
+  --section-header-bg: #eff6ff;
+  --row-alt-bg: #fafafb;
+  --row-warn-bg: #fef2f3;
+  --row-changed-bg: #f2faf3;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -16,6 +20,10 @@
     --border: #2a2e35;
     --card: #1b1e24;
     --accent: #5b8def;
+    --section-header-bg: #1c2530;
+    --row-alt-bg: #191c21;
+    --row-warn-bg: #21191d;
+    --row-changed-bg: #161c18;
   }
 }
 
@@ -93,6 +101,30 @@ body {
 
 .nav-item.drag-over {
   box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+.user-info {
+  margin-top: 1.5rem;
+  padding: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.user-name {
+  color: var(--fg);
+  font-weight: 500;
+  margin-bottom: 0.2rem;
+  overflow-wrap: break-word;
+}
+
+.user-signout {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.user-signout:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .page-content {
@@ -178,7 +210,7 @@ h1 {
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1rem;
-  background: var(--card);
+  background: var(--section-header-bg);
   font-weight: 600;
 }
 
@@ -200,6 +232,17 @@ th, td {
   border-top: 1px solid var(--border);
 }
 
+tbody tr:nth-child(even) {
+  background: var(--row-alt-bg);
+}
+
+/* Same blue as .resource-group-header (Completed Tickets' per-technician group
+   bar), reused wherever a table needs its header row and/or a totals row
+   shaded to stand out -- e.g. Client Financials' summary table. */
+.shaded-row {
+  background: var(--section-header-bg) !important;
+}
+
 th {
   color: var(--muted);
   font-weight: 500;
@@ -214,7 +257,134 @@ td.ticket-number {
   color: var(--muted);
 }
 
+.cell-subtext {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+
+.col-service {
+  max-width: 64ch;
+}
+
+.inline-subtext {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+td.ticket-number a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+td.ticket-number a:hover {
+  text-decoration: underline;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
 .cell-flag-red {
   color: #dc2626 !important;
   font-weight: 600;
+}
+
+.cell-flag-green {
+  color: #16a34a !important;
+  font-weight: 600;
+}
+
+tr.row-no-next-period {
+  background: var(--row-warn-bg) !important;
+}
+
+tr.row-units-changed {
+  background: var(--row-changed-bg) !important;
+}
+
+/* Horizontal bar chart: nominal categories (classification names), not ordinal --
+   swapping their order doesn't change meaning, so every bar takes the SAME
+   single accent hue rather than a per-category or magnitude-shaded color. Bar
+   length already encodes the count; color re-encoding it would spend the
+   identity channel on nothing. Each row is a real <button> so click and
+   keyboard (Enter/Space) both work, and focus is visible without extra JS. */
+.bar-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 200px 1fr 3.5rem;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+}
+
+.bar-row:hover {
+  background: var(--card);
+}
+
+.bar-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.bar-row[aria-expanded="true"] {
+  background: var(--section-header-bg);
+}
+
+.bar-row[aria-expanded="true"] .bar-label {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.bar-label {
+  font-size: 0.9rem;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-track {
+  height: 20px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  background: var(--accent);
+  border-radius: 0 4px 4px 0;
+}
+
+.bar-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 0.9rem;
 }

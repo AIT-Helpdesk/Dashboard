@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/asked-for-review",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "asked-for-review",
+    "label": "Asked for Review",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "express": "^4.19.2"
+  }
+}
