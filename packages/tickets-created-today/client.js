@@ -93,13 +93,14 @@ export function mount(container) {
       const table = document.createElement('table');
       table.innerHTML = `
         <thead>
-          <tr><th>Ticket #</th><th>Created</th><th>Title</th></tr>
+          <tr><th>Client</th><th>Ticket #</th><th>Created</th><th>Title</th></tr>
         </thead>
         <tbody>
           ${group.tickets
             .map(
               (t) => `
             <tr>
+              <td>${escapeHtml(group.companyName)}</td>
               <td class="ticket-number">${ticketLink(t)}</td>
               <td class="ticket-number">${formatTime(t.createDate)}</td>
               <td>${escapeHtml(t.title)}</td>

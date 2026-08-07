@@ -1,0 +1,17 @@
+{
+  "name": "@dashboard/ingram-subscriptions",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "ingram-subscriptions",
+    "label": "Ingram Subscriptions",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "axios": "^1.7.2",
+    "express": "^4.19.2"
+  }
+}
