@@ -27,6 +27,7 @@ packages/
 - **Client Activity** (`packages/client-activity`) - type a client name (single-company, same resolution flow as Client Financials), see 12-month ticket volume (created/completed) and logged hours (billable/non-billable), a currently-open ticket snapshot by status and priority, and the list of tickets created in that window.
 - **Asked for Review** (`packages/asked-for-review`) - pick any date, see every ticket asked for a Google review (the "Ask For Review" UDF = `ASK`) that week, Monday through Sunday, broken into a section per day.
 - **Ingram Subscriptions** (`packages/ingram-subscriptions`) - every active and pending Ingram Micro Cloud Marketplace subscription, grouped by client. Not Autotask data -- its own API client and credentials (Ingram's Cloud Marketplace API, not the Autotask REST API). Not date-scoped -- a live snapshot, auto-loads on open with a Refresh button.
+- **CSP Customers** (`packages/csp-customers`) - every CSP customer's company name and Microsoft tenant ID, via Microsoft Graph's `/contracts` endpoint (not the Partner Center REST API, which doesn't support Indirect Reseller accounts). Not date-scoped -- a live snapshot, auto-loads on open with a Refresh button and an instant client-side name filter.
 
 ### Adding a new page
 
