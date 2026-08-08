@@ -25,7 +25,7 @@ export function mount(container) {
         <label for="client-input">Client</label>
         <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
         <label for="all-statuses-input" class="inline-checkbox-label">
-          <input type="checkbox" id="all-statuses-input" /> All statuses (not just Active &amp; Pending)
+          <input type="checkbox" id="all-statuses-input" /> All Statuses
         </label>
         <button type="submit" id="refresh-button">Refresh</button>
       </form>
