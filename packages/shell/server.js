@@ -35,6 +35,39 @@ function discoverPages() {
 
 const pages = discoverPages();
 
+// Shared sidebar layout (categories + page order/grouping) -- one JSON file
+// on disk, not per-browser localStorage, since the whole point is that
+// everyone hitting the real dashboard URL sees the SAME arrangement. Not
+// checked into git (see .gitignore) -- it's runtime-configured state, not
+// source, and survives a `git pull` redeploy naturally as an untracked file
+// already sitting in the working directory.
+const NAV_LAYOUT_PATH = path.join(__dirname, 'nav-layout.json');
+
+function readNavLayout() {
+  try {
+    return JSON.parse(fs.readFileSync(NAV_LAYOUT_PATH, 'utf8'));
+  } catch {
+    return null; // no file yet, or unreadable -- client falls back to its own built-in default
+  }
+}
+
+function writeNavLayout(tree) {
+  fs.writeFileSync(NAV_LAYOUT_PATH, JSON.stringify(tree, null, 2));
+}
+
+// The sidebar is only editable (drag-and-drop) when the app is reached via
+// localhost -- either a local dev copy, or RDP'ing into the production
+// server itself and hitting its own http://localhost:3000 directly
+// (bypassing Caddy) to edit the LIVE shared layout everyone else sees via
+// the real domain. `req.hostname` reflects the Host header the browser
+// actually sent -- NOT the TCP peer address, which would be useless here
+// since Caddy reverse-proxies every real request to this same box, making
+// every request look locally-sourced at the socket level regardless of who
+// is really on the other end of the public domain.
+function isLocalhostRequest(req) {
+  return req.hostname === 'localhost' || req.hostname === '127.0.0.1';
+}
+
 const app = express();
 
 // Session + /auth/login, /auth/callback, /auth/logout, /api/me -- mounted
@@ -61,6 +94,24 @@ app.get('/pages/:id/client.js', (req, res) => {
   const page = pages.find((p) => p.id === req.params.id);
   if (!page || !page.client) return res.status(404).end();
   res.type('application/javascript').sendFile(path.join(page.root, page.client));
+});
+
+app.get('/api/nav-layout', (req, res) => {
+  res.json({ tree: readNavLayout(), editable: isLocalhostRequest(req) });
+});
+
+app.put('/api/nav-layout', express.json(), (req, res) => {
+  // Enforced here too, not just hidden in the UI (a hidden drag handle is
+  // not access control) -- a request to save a layout from anywhere other
+  // than localhost is rejected outright, regardless of what the client sent.
+  if (!isLocalhostRequest(req)) {
+    return res.status(403).json({ error: 'The sidebar layout can only be edited via localhost.' });
+  }
+  if (!Array.isArray(req.body?.tree)) {
+    return res.status(400).json({ error: 'Body must be { tree: [...] }.' });
+  }
+  writeNavLayout(req.body.tree);
+  res.json({ ok: true });
 });
 
 app.get('/api/health', async (req, res) => {

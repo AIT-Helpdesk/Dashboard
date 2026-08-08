@@ -17,8 +17,6 @@ window.fetch = async (...args) => {
 const navList = document.getElementById('nav-list');
 const content = document.getElementById('page-content');
 const userInfoEl = document.getElementById('user-info');
-const TREE_KEY = 'dashboard.navTree';
-const LEGACY_ORDER_KEY = 'dashboard.pageOrder'; // pre-categories flat order, migrated once below
 
 async function renderUserInfo() {
   try {
@@ -47,9 +45,17 @@ function escapeHtml(str) {
 // of grouping is all that's asked for). Shape:
 //   { type: 'page', id: <pageId> }
 //   { type: 'category', id: <categoryId>, label: <string>, children: [{type:'page', id}, ...] }
-// Persisted whole, as one tree, rather than the old flat page-order array --
-// that's the only way to capture "which category a page is in" alongside
-// ordering, in one JSON blob.
+//
+// The whole tree is a SHARED, server-side setting (GET/PUT /api/nav-layout)
+// -- not per-browser localStorage -- because the point is that everyone
+// hitting the real dashboard URL sees the same arrangement. Only editable
+// (drag-and-drop) when the server says so, which it decides from the Host
+// header: localhost only (a local dev copy, or someone RDP'd into the
+// production box itself hitting its own localhost:3000 to edit the LIVE
+// shared layout). `editable` here just mirrors what the server already
+// enforces -- hiding the drag handles is a UX nicety, the server rejects a
+// save from anywhere else regardless of what this value says.
+let editable = false;
 const pagesById = new Map(registeredPages.map((p) => [p.id, p]));
 
 function defaultTree() {
@@ -63,46 +69,11 @@ function defaultTree() {
   ];
 }
 
-function loadTree() {
-  try {
-    const raw = localStorage.getItem(TREE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // fall through to legacy/default below
-  }
-  // One-time migration from the old flat order, so an existing custom
-  // top-level order isn't lost the first time this loads post-upgrade.
-  try {
-    const legacyRaw = localStorage.getItem(LEGACY_ORDER_KEY);
-    if (legacyRaw) {
-      const order = JSON.parse(legacyRaw);
-      const byId = new Map(registeredPages.map((p) => [p.id, p]));
-      const orderedPages = order.filter((id) => byId.has(id)).map((id) => ({ type: 'page', id }));
-      return [
-        { type: 'category', id: 'client-info', label: 'Client Info', children: [] },
-        { type: 'category', id: 'ticket-info', label: 'Ticket Info', children: [] },
-        ...orderedPages,
-      ];
-    }
-  } catch {
-    // fall through to default
-  }
-  return null;
-}
-
-function saveTree() {
-  try {
-    localStorage.setItem(TREE_KEY, JSON.stringify(tree));
-  } catch {
-    // localStorage unavailable (private browsing, storage full, etc.) -- layout just won't persist.
-  }
-}
-
 // Drops any page id no longer registered (a page package that got removed)
 // and appends any registered page id missing from the tree entirely (a
 // newly added page package) at the top level, in registeredPages order --
-// keeps the persisted layout in sync with whatever pages actually exist
-// without losing the user's categorization/ordering of the rest.
+// keeps the saved layout in sync with whatever pages actually exist without
+// losing the existing categorization/ordering of the rest.
 function reconcileTree(rawTree) {
   const seen = new Set();
   const result = [];
@@ -124,9 +95,36 @@ function reconcileTree(rawTree) {
   return result;
 }
 
-// Mutated in place by drag-and-drop below, so `tree` stays a stable
-// reference for currentPageId()/loadPage() rather than needing re-import.
-const tree = reconcileTree(loadTree() || defaultTree());
+async function loadTree() {
+  try {
+    const res = await nativeFetch('/api/nav-layout');
+    const data = await res.json();
+    editable = !!data.editable;
+    if (data.tree) return reconcileTree(data.tree);
+  } catch {
+    // fall through to default -- e.g. offline, or the endpoint erroring
+  }
+  return defaultTree();
+}
+
+async function saveTree() {
+  if (!editable) return; // shouldn't be reachable -- drag is only wired up when editable -- but guard anyway
+  try {
+    await nativeFetch('/api/nav-layout', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tree }),
+    });
+  } catch {
+    // Best-effort -- the in-memory tree still reflects the move for the rest
+    // of this session even if the save itself failed to persist.
+  }
+}
+
+// Populated by init() before first render; mutated in place by
+// drag-and-drop, so it stays a stable reference for currentPageId()/
+// loadPage() rather than needing re-fetching.
+let tree = [];
 
 function flattenPageIds() {
   const ids = [];
@@ -185,14 +183,15 @@ function renderNav(activeId) {
       navList.appendChild(renderPageItem(node, { kind: 'root', index }, activeId));
     }
   });
-  navList.appendChild(renderRootDropZone());
+  // Only meaningful as a drop target -- no point rendering it when nothing
+  // on the page can be dragged.
+  if (editable) navList.appendChild(renderRootDropZone());
 }
 
 function renderPageItem(node, loc, activeId) {
   const page = pagesById.get(node.id);
   const li = document.createElement('li');
-  li.className = 'nav-item' + (loc.kind === 'category' ? ' nav-item--nested' : '');
-  li.draggable = true;
+  li.className = 'nav-item' + (loc.kind === 'category' ? ' nav-item--nested' : '') + (editable ? '' : ' nav-item--readonly');
 
   const a = document.createElement('a');
   a.href = `#${page.id}`;
@@ -200,25 +199,28 @@ function renderPageItem(node, loc, activeId) {
   a.className = 'nav-link' + (page.id === activeId ? ' active' : '');
   li.appendChild(a);
 
-  li.addEventListener('dragstart', (e) => {
-    dragSrc = loc;
-    li.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-  });
-  li.addEventListener('dragend', () => li.classList.remove('dragging'));
-  li.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    li.classList.add('drag-over');
-  });
-  li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
-  li.addEventListener('drop', (e) => {
-    e.preventDefault();
-    li.classList.remove('drag-over');
-    if (!dragSrc) return;
-    moveTo(loc);
-    renderNav(activeId);
-  });
+  if (editable) {
+    li.draggable = true;
+    li.addEventListener('dragstart', (e) => {
+      dragSrc = loc;
+      li.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    li.addEventListener('dragend', () => li.classList.remove('dragging'));
+    li.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      li.classList.add('drag-over');
+    });
+    li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+    li.addEventListener('drop', (e) => {
+      e.preventDefault();
+      li.classList.remove('drag-over');
+      if (!dragSrc) return;
+      moveTo(loc);
+      renderNav(activeId);
+    });
+  }
 
   return li;
 }
@@ -230,22 +232,25 @@ function renderCategory(node, index, activeId) {
   const header = document.createElement('div');
   header.className = 'nav-category-header';
   header.textContent = node.label;
-  // The header itself is the "drop into this category" target -- lands the
-  // page at the end of this category's children, regardless of where in the
-  // header you drop (there's no per-position meaning for a header drop).
-  header.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    header.classList.add('drag-over');
-  });
-  header.addEventListener('dragleave', () => header.classList.remove('drag-over'));
-  header.addEventListener('drop', (e) => {
-    e.preventDefault();
-    header.classList.remove('drag-over');
-    if (!dragSrc) return;
-    moveTo({ kind: 'category', categoryId: node.id, index: node.children.length });
-    renderNav(activeId);
-  });
+
+  if (editable) {
+    // The header itself is the "drop into this category" target -- lands
+    // the page at the end of this category's children, regardless of where
+    // in the header you drop (there's no per-position meaning for a header drop).
+    header.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      header.classList.add('drag-over');
+    });
+    header.addEventListener('dragleave', () => header.classList.remove('drag-over'));
+    header.addEventListener('drop', (e) => {
+      e.preventDefault();
+      header.classList.remove('drag-over');
+      if (!dragSrc) return;
+      moveTo({ kind: 'category', categoryId: node.id, index: node.children.length });
+      renderNav(activeId);
+    });
+  }
   li.appendChild(header);
 
   const childList = document.createElement('ul');
@@ -260,7 +265,8 @@ function renderCategory(node, index, activeId) {
 
 // A thin strip below everything -- lets a page be dragged back out to the
 // top level (out of any category) or moved to the very end of the root
-// list, which no single top-level item's dragover target covers.
+// list, which no single top-level item's dragover target covers. Only
+// rendered at all when editable (see renderNav()).
 function renderRootDropZone() {
   const li = document.createElement('li');
   li.className = 'nav-root-dropzone';
@@ -302,6 +308,10 @@ async function loadPage(id) {
   }
 }
 
-window.addEventListener('hashchange', () => loadPage(currentPageId()));
-loadPage(currentPageId());
-renderUserInfo();
+async function init() {
+  tree = await loadTree();
+  window.addEventListener('hashchange', () => loadPage(currentPageId()));
+  await loadPage(currentPageId());
+  renderUserInfo();
+}
+init();

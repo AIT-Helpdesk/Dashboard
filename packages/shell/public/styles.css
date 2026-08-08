@@ -95,6 +95,12 @@ body {
   cursor: grabbing;
 }
 
+/* Sidebar layout is only draggable via localhost (see app.js) -- everywhere
+   else, the grab cursor would advertise an interaction that doesn't work. */
+.nav-item--readonly {
+  cursor: default;
+}
+
 .nav-item.dragging {
   opacity: 0.4;
 }
