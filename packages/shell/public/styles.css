@@ -270,14 +270,13 @@ h1 {
 
 .button-link:hover { opacity: 0.9; }
 
-/* Fills essentially all remaining vertical space below the page header --
-   an approximation (page-header's own height varies a little with content),
-   not a pixel-perfect calc(), but close enough that an embedded page reads
-   as a real full-height panel rather than a small box. */
+/* Fills essentially the whole page -- no page-header on this page at all
+   (see technician-forms/client.js), so this only needs to account for
+   .page-content's own top+bottom padding (2rem each). */
 .embedded-frame {
   display: block;
   width: 100%;
-  height: calc(100vh - 9rem);
+  height: calc(100vh - 4rem);
   border: 1px solid var(--border);
   border-radius: 10px;
 }

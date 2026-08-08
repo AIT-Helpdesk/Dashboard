@@ -5,7 +5,7 @@
   "main": "client.js",
   "dashboardPage": {
     "id": "technician-forms",
-    "label": "Technician Forms",
+    "label": "Automation Forms",
     "client": "client.js"
   }
 }

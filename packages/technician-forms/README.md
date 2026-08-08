@@ -1,6 +1,6 @@
 # @dashboard/technician-forms
 
-Dashboard page: embeds the Rewst-hosted ROC Technician Forms portal (`ambientit-com-au-roc-technician-forms-portal.asia.rew.st`) directly in an iframe, plus an "Open in new tab" link.
+Dashboard page: embeds the Rewst-hosted ROC Technician Forms portal (`ambientit-com-au-roc-technician-forms-portal.asia.rew.st`) directly in an iframe. No page header/title -- by request, just the embedded page itself, filling essentially the whole content area.
 
 - `client.js` - frontend module. Exports `id`, `label`, and `mount(container)`, picked up automatically by the shell. No `server.js` -- there's no backend of ours involved at all, just an iframe pointed at Rewst's own URL.
 
@@ -10,8 +10,8 @@ Confirmed before building this: the target site sends no `X-Frame-Options` or `C
 
 ## Known limitation: third-party cookies
 
-Modern browsers restrict third-party cookies inside iframes by default, to varying degrees depending on the browser. A site not specifically designed to be framed (most aren't) can have its login/session state silently fail to persist inside the iframe even though the page itself loads fine and framing isn't blocked. If Technician Forms seems to load but won't stay signed in, that's the likely cause -- the **"Open in new tab"** link is the fallback, since no framing-related cookie restriction applies to a normal top-level browser tab.
+Modern browsers restrict third-party cookies inside iframes by default, to varying degrees depending on the browser. A site not specifically designed to be framed (most aren't) can have its login/session state silently fail to persist inside the iframe even though the page itself loads fine and framing isn't blocked. If Automation Forms seems to load but won't stay signed in, that's the likely cause -- opening `EMBED_URL` (in `client.js`) directly in its own browser tab is the fallback, since no framing-related cookie restriction applies there.
 
 ## Sizing
 
-`.embedded-frame` (`packages/shell/public/styles.css`) is sized via `calc(100vh - 9rem)` -- an approximation of "fill the space below the page header," not a pixel-perfect calculation (the header's own height varies slightly with content), but close enough to read as a real full-height panel.
+`.embedded-frame` (`packages/shell/public/styles.css`) is sized via `calc(100vh - 4rem)` -- there's no page-header on this page at all, so this only needs to account for `.page-content`'s own top+bottom padding (2rem each).

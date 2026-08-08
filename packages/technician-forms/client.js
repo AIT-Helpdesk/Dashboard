@@ -1,5 +1,5 @@
 export const id = "technician-forms";
-export const label = "Technician Forms";
+export const label = "Automation Forms";
 
 // Rewst-hosted portal, embedded via iframe -- no backend of ours involved at
 // all (no server.js in this package), just pointing an iframe at Rewst's own
@@ -11,21 +11,16 @@ export const label = "Technician Forms";
 // iframes by default (stricter in some browsers than others), which can
 // break session persistence for a site not designed with framing in mind,
 // even though nothing here (or on Rewst's side) is explicitly blocking the
-// frame itself. If that happens, "Open in new tab" is the fallback -- no
-// framing-related restriction applies to a normal top-level tab.
+// frame itself. If that happens, opening EMBED_URL directly in its own
+// browser tab is the fallback -- no framing-related restriction applies to
+// a normal top-level tab.
 const EMBED_URL = "https://ambientit-com-au-roc-technician-forms-portal.asia.rew.st/";
 
 export function mount(container) {
   container.innerHTML = `
-    <header class="page-header">
-      <h1>Technician Forms</h1>
-      <div class="date-form">
-        <a href="${EMBED_URL}" target="_blank" rel="noopener noreferrer" class="button-link">Open in new tab &#8599;</a>
-      </div>
-    </header>
     <iframe
       src="${EMBED_URL}"
-      title="Technician Forms Portal"
+      title="Automation Forms Portal"
       class="embedded-frame"
     ></iframe>
   `;

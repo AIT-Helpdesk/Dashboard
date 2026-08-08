@@ -28,7 +28,7 @@ packages/
 - **Asked for Review** (`packages/asked-for-review`) - pick any date, see every ticket asked for a Google review (the "Ask For Review" UDF = `ASK`) that week, Monday through Sunday, broken into a section per day.
 - **Ingram Subscriptions** (`packages/ingram-subscriptions`) - every active and pending Ingram Micro Cloud Marketplace subscription, grouped by client. Not Autotask data -- its own API client and credentials (Ingram's Cloud Marketplace API, not the Autotask REST API). Not date-scoped -- a live snapshot, auto-loads on open with a Refresh button.
 - **CSP Customers** (`packages/csp-customers`) - every CSP customer's company name and Microsoft tenant ID, via Microsoft Graph's `/contracts` endpoint (not the Partner Center REST API, which doesn't support Indirect Reseller accounts). Not date-scoped -- a live snapshot, auto-loads on open with a Refresh button and an instant client-side name filter.
-- **Technician Forms** (`packages/technician-forms`) - embeds the Rewst-hosted ROC Technician Forms portal directly in an iframe (plus an "Open in new tab" link). No backend of ours involved -- no `server.js`, no Autotask/other API calls, just an iframe pointed at Rewst's own URL. Confirmed the target site doesn't send `X-Frame-Options`/CSP headers that would block framing before building this.
+- **Automation Forms** (`packages/technician-forms`) - embeds the Rewst-hosted ROC Technician Forms portal directly in an iframe, no page header/title. No backend of ours involved -- no `server.js`, no Autotask/other API calls, just an iframe pointed at Rewst's own URL. Confirmed the target site doesn't send `X-Frame-Options`/CSP headers that would block framing before building this.
 
 ### Adding a new page
 
