@@ -59,12 +59,14 @@ let editable = false;
 const pagesById = new Map(registeredPages.map((p) => [p.id, p]));
 
 function defaultTree() {
-  // Seeded with the two requested categories, empty -- pages start
-  // ungrouped at the top level and get dragged in by hand, rather than
-  // guessing which page belongs in which category.
+  // Seeded with the requested categories, empty -- pages start ungrouped at
+  // the top level and get dragged in by hand, rather than guessing which
+  // page belongs in which category.
   return [
     { type: 'category', id: 'client-info', label: 'Client Info', children: [] },
     { type: 'category', id: 'ticket-info', label: 'Ticket Info', children: [] },
+    { type: 'category', id: 'financials', label: 'Client Financials', children: [] },
+    { type: 'category', id: 'licensing', label: 'Licensing', children: [] },
     ...registeredPages.map((p) => ({ type: 'page', id: p.id })),
   ];
 }
@@ -158,6 +160,30 @@ function sameList(a, b) {
   return a.kind === 'root' ? b.kind === 'root' : b.kind === 'category' && a.categoryId === b.categoryId;
 }
 
+// Which categories are expanded -- purely a per-browser viewing preference,
+// deliberately separate from the shared/server-side nav tree above: everyone
+// sees the same categories and pages (admin-controlled, localhost-only edit),
+// but whether YOU currently have a given category open is personal and
+// doesn't need localhost access to change. Defaults to nothing expanded
+// (minimized) -- a category only opens because you clicked it, or because it
+// contains the page you're currently on (see renderCategory()).
+const EXPANDED_KEY = 'dashboard.expandedCategories';
+function loadExpanded() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(EXPANDED_KEY) || '[]'));
+  } catch {
+    return new Set();
+  }
+}
+function saveExpanded() {
+  try {
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify([...expandedCategories]));
+  } catch {
+    // localStorage unavailable (private browsing, storage full, etc.) -- expand/collapse state just won't persist.
+  }
+}
+let expandedCategories = loadExpanded();
+
 // Drag state lives across the dragstart/drop event pair -- native HTML5 DnD
 // doesn't hand you the source element in the drop event, only in dragstart.
 let dragSrc = null; // a location descriptor, set on dragstart
@@ -174,7 +200,26 @@ function moveTo(targetLoc) {
   saveTree();
 }
 
+// Auto-opens the category containing `activeId`, but only the first time a
+// given page becomes active -- not on every re-render. Without that guard,
+// clicking a category's header to collapse it while viewing one of its
+// pages would immediately get overridden right back open on the next
+// render (any drag-and-drop, or even just re-rendering after the click
+// itself), since it'd still "contain the active page" -- this is what made
+// collapsing not seem to work at all.
+let lastAutoOpenedFor = null;
+function autoOpenCategoryFor(activeId) {
+  if (activeId === lastAutoOpenedFor) return;
+  lastAutoOpenedFor = activeId;
+  const owner = tree.find((n) => n.type === 'category' && n.children.some((c) => c.id === activeId));
+  if (owner && !expandedCategories.has(owner.id)) {
+    expandedCategories.add(owner.id);
+    saveExpanded();
+  }
+}
+
 function renderNav(activeId) {
+  autoOpenCategoryFor(activeId);
   navList.innerHTML = '';
   tree.forEach((node, index) => {
     if (node.type === 'category') {
@@ -229,9 +274,21 @@ function renderCategory(node, index, activeId) {
   const li = document.createElement('li');
   li.className = 'nav-category';
 
+  // Auto-opening for the active page is handled once, on navigation, by
+  // autoOpenCategoryFor() (called from renderNav()) -- expandedCategories is
+  // the sole source of truth here, so an explicit collapse click sticks even
+  // while still viewing a page inside this category.
+  const isExpanded = expandedCategories.has(node.id);
+
   const header = document.createElement('div');
   header.className = 'nav-category-header';
-  header.textContent = node.label;
+  header.innerHTML = `<span class="nav-category-toggle">${isExpanded ? '▾' : '▸'}</span>${escapeHtml(node.label)}`;
+  header.addEventListener('click', () => {
+    if (expandedCategories.has(node.id)) expandedCategories.delete(node.id);
+    else expandedCategories.add(node.id);
+    saveExpanded();
+    renderNav(activeId);
+  });
 
   if (editable) {
     // The header itself is the "drop into this category" target -- lands
@@ -248,6 +305,10 @@ function renderCategory(node, index, activeId) {
       header.classList.remove('drag-over');
       if (!dragSrc) return;
       moveTo({ kind: 'category', categoryId: node.id, index: node.children.length });
+      // Open it afterward -- otherwise a page just dropped into a collapsed
+      // category would silently disappear from view.
+      expandedCategories.add(node.id);
+      saveExpanded();
       renderNav(activeId);
     });
   }
@@ -255,6 +316,7 @@ function renderCategory(node, index, activeId) {
 
   const childList = document.createElement('ul');
   childList.className = 'nav-category-children';
+  childList.hidden = !isExpanded;
   node.children.forEach((child, childIndex) => {
     childList.appendChild(renderPageItem(child, { kind: 'category', categoryId: node.id, index: childIndex }, activeId));
   });

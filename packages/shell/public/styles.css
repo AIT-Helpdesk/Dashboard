@@ -125,12 +125,24 @@ body {
   letter-spacing: 0.04em;
   color: var(--muted);
   border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.nav-category-header:hover {
+  background: var(--bg);
 }
 
 .nav-category-header.drag-over {
   background: var(--section-header-bg);
   color: var(--fg);
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.nav-category-toggle {
+  display: inline-block;
+  width: 1em;
+  margin-right: 0.1rem;
 }
 
 .nav-category-children {
@@ -145,6 +157,13 @@ body {
      (empty) header + child list combo isn't a zero-height sliver you'd have
      to aim a drag at pixel-perfectly. */
   min-height: 0.25rem;
+}
+
+/* [hidden] alone loses to the plain .nav-category-children rule above at
+   equal specificity (author styles beat the UA default even when an
+   attribute selector would otherwise apply) -- this combined selector wins. */
+.nav-category-children[hidden] {
+  display: none;
 }
 
 .nav-root-dropzone {
@@ -234,6 +253,34 @@ h1 {
 
 .date-form button:hover { opacity: 0.9; }
 .date-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Same look as .date-form button, for an <a> that needs button styling
+   (e.g. an external "Open in new tab" link) rather than an actual <button>. */
+.button-link {
+  display: inline-block;
+  padding: 0.45rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  font-size: 0.95rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button-link:hover { opacity: 0.9; }
+
+/* Fills essentially all remaining vertical space below the page header --
+   an approximation (page-header's own height varies a little with content),
+   not a pixel-perfect calc(), but close enough that an embedded page reads
+   as a real full-height panel rather than a small box. */
+.embedded-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 9rem);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
 
 .inline-checkbox-label {
   display: flex;

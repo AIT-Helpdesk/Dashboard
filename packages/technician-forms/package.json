@@ -1,0 +1,11 @@
+{
+  "name": "@dashboard/technician-forms",
+  "version": "1.0.0",
+  "private": true,
+  "main": "client.js",
+  "dashboardPage": {
+    "id": "technician-forms",
+    "label": "Technician Forms",
+    "client": "client.js"
+  }
+}
