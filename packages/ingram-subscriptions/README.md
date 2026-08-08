@@ -1,6 +1,6 @@
 # @dashboard/ingram-subscriptions
 
-Dashboard page: every active and pending Ingram Micro Cloud Marketplace subscription (Microsoft 365 licenses, etc.), grouped by client. Not date-scoped -- a live snapshot. Unlike most other snapshot pages on this dashboard, it does **not** auto-load on open -- by request, it only fetches when the **Refresh** button is explicitly clicked.
+Dashboard page: Ingram Micro Cloud Marketplace subscriptions (Microsoft 365 licenses, etc.), grouped by client -- **active and pending by default**, with a toggle for every status. Not date-scoped -- a live snapshot. Unlike most other snapshot pages on this dashboard, it does **not** auto-load on open -- by request, it only fetches when the **Refresh** button is explicitly clicked.
 
 - `client.js` - frontend module. Exports `id`, `label`, and `mount(container)`, picked up automatically by the shell.
 - `server.js` - Express router mounted by the shell at `/api/ingram-subscriptions`.
@@ -10,7 +10,7 @@ Dashboard page: every active and pending Ingram Micro Cloud Marketplace subscrip
 Ingram Micro's **Cloud Marketplace API** (`api.cloud.im`) -- a wholly separate system from Autotask, so this page owns its own small API client directly in `server.js` for actual API access, rather than depending on `@dashboard/autotask-client` for that. Credentials (`.env`): `INGRAM_CLOUD_API_BASE`, `INGRAM_CLOUD_USERNAME`, `INGRAM_CLOUD_PASSWORD`, `INGRAM_CLOUD_SUBSCRIPTION_KEY`, `INGRAM_MARKETPLACE`.
 
 - **Auth**: `POST {base}/token` with HTTP Basic auth (`INGRAM_CLOUD_USERNAME`/`INGRAM_CLOUD_PASSWORD`), an `X-Subscription-Key` header, and a JSON body `{"marketplace": "au"}`. Returns a bearer token valid 1500s (25 min) -- cached in-process (`tokenCache`) and refreshed 60s before actual expiry, not re-requested on every page load.
-- **Subscriptions**: `GET {base}/subscriptions?status=active` and a second call with `status=pending` -- confirmed against the real API that `status` takes exactly one value per request (a comma-separated list 400s), so "active and pending" is two requests, not one. Every other status (`hold`, `terminated`, `removed`) is excluded by request.
+- **Subscriptions**: default (the **All statuses** checkbox unchecked) is `GET {base}/subscriptions?status=active` plus a second call with `status=pending` -- confirmed against the real API that `status` takes exactly one value per request (a comma-separated list 400s), so "active and pending" is two requests, not one. Checking **All statuses** instead makes a single call with the `status` param omitted entirely -- confirmed against the real API that this returns every subscription regardless of status (active, pending, `hold`, `terminated`, `removed`) in one paginated set, cheaper than the default two-call case, not more expensive (`fetchSubscriptions()`).
 - **Client names**: a subscription only carries a `customerId`, not a name, so client names come from a *bulk* `GET {base}/customers` (paginated, ~2 requests for ~900 customers) rather than one `GET /customers/{id}` per subscription.
 - **Pagination**: Ingram returns `{ data: [...], pagination: { offset, limit, total } }` -- `fetchAllPages()` walks pages at the max confirmed page size (500) until `offset` covers `pagination.total`, since there's no next-page cursor/URL like Autotask's API has.
 
@@ -41,13 +41,17 @@ License counts are also cached server-side per subscription ID (`licenseCache`, 
 
 Both come straight off the list-endpoint row (`subscriptionPeriod` -> **Term**, `billingPeriod` -> **Billing Period**) -- unlike license count, no extra request needed, so these are always populated in the base report. They can genuinely differ: a subscription can have a 1-year term billed monthly rather than prepaid annually, so they're shown as two separate columns. Both are `{type, duration}` (e.g. `{type: "month", duration: 1}`), formatted client-side (`formatPeriod()`) as "Monthly"/"Annual"/"Daily" for the common duration-1 cases, or "N months"/"N years" otherwise.
 
+## All statuses toggle
+
+Checkbox next to the client filter, unchecked by default (active & pending only, by request). The summary line's status breakdown (e.g. "556 subscriptions (552 active, 2 pending, 2 on hold, 1 terminated, ...)") is built generically client-side (`STATUS_ORDER`/`STATUS_LABELS` in `client.js`, from the server's `statusCounts` map) rather than hardcoded to just active/pending counts, so it reads correctly in both modes without special-casing.
+
 ## Grouping
 
 Subscriptions are grouped by resolved client name, sorted alphabetically; within a client, subscriptions are sorted alphabetically by subscription name. Each client group's header shows its subscription count; each row shows the subscription name, status (pending shown in blue via the shared `.cell-flag-blue` class), license count (blank until that client's name is clicked), term, billing period, and creation/renewal/expiration dates.
 
 ## Caching (base report)
 
-Each search is cached in-process, **keyed by its filter term** (an empty/no filter is its own key) rather than one single global cache slot -- a repeated search for the same client is instant within the cache window, while a different search does its own build. TTL is 20 minutes (`REPORT_CACHE_TTL_MS`). The page's **Refresh** button always sends `force=true`, which bypasses the cache for the current search and rebuilds from Ingram. Two requests landing for the same filter term while it's cold share one in-flight build (`inFlightByKey`) rather than each kicking off their own fetch. The response's `asOf` timestamp is shown in the page summary.
+Each search is cached in-process, **keyed by its filter term AND the all-statuses toggle together** (four independent cache slots for the same client name -- default vs. all statuses, each with/without a filter -- not one) rather than one single global cache slot. TTL is 20 minutes (`REPORT_CACHE_TTL_MS`). The page's **Refresh** button always sends `force=true`, which bypasses the cache for the current search and rebuilds from Ingram. Two requests landing for the same key while it's cold share one in-flight build (`inFlightByKey`) rather than each kicking off their own fetch. The response's `asOf` timestamp is shown in the page summary.
 
 ## No auto-load
 

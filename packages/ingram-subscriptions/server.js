@@ -132,20 +132,31 @@ async function fetchLicenseCount(id, token, attempt = 1) {
 // `licenseCount` is deliberately omitted from each subscription here (not
 // set to null) so the client can tell "not fetched yet" apart from "fetched,
 // turned out to be null" (a real result from the /licenses endpoint).
-async function buildReport(filterTerm) {
-  const token = await getToken();
-
-  // "Active and pending" by request. Ingram's `status` filter takes exactly
-  // one value per request (a comma-separated list 400s -- confirmed against
-  // the real API), so this is two requests, not one.
-  const [activeSubs, pendingSubs, customers] = await Promise.all([
+// "Active and pending" (the default) needs two requests -- Ingram's `status`
+// filter takes exactly one value per request (a comma-separated list 400s --
+// confirmed against the real API). "All" is the opposite case: confirmed
+// that OMITTING `status` entirely returns every subscription regardless of
+// status (active, pending, hold, terminated, removed) in one paginated set
+// -- cheaper than the default case, not more expensive, since it's one
+// list-endpoint pass instead of two.
+async function fetchSubscriptions(token, allStatuses) {
+  if (allStatuses) return fetchAllPages('/subscriptions', token, {});
+  const [activeSubs, pendingSubs] = await Promise.all([
     fetchAllPages('/subscriptions', token, { status: 'active' }),
     fetchAllPages('/subscriptions', token, { status: 'pending' }),
+  ]);
+  return [...activeSubs, ...pendingSubs];
+}
+
+async function buildReport(filterTerm, allStatuses) {
+  const token = await getToken();
+
+  const [subscriptions, customers] = await Promise.all([
+    fetchSubscriptions(token, allStatuses),
     // Bulk customer list, not one GET /customers/{id} per subscription --
     // 2 requests for ~900 customers vs. one per subscription (500+).
     fetchAllPages('/customers', token),
   ]);
-  const subscriptions = [...activeSubs, ...pendingSubs];
   const customerNameById = new Map(customers.map((c) => [c.id, c.name]));
 
   const byClientMap = new Map();
@@ -189,19 +200,25 @@ async function buildReport(filterTerm) {
         customerId: g.customerId,
         clientName: g.clientName,
         count: enrichedSubs.length,
-        activeCount: enrichedSubs.filter((s) => s.status === 'active').length,
-        pendingCount: enrichedSubs.filter((s) => s.status === 'pending').length,
         subscriptions: enrichedSubs,
       };
     })
     .sort((a, b) => a.clientName.localeCompare(b.clientName));
 
+  // Generic per-status breakdown rather than hardcoded active/pending counts
+  // -- covers the "all statuses" case (hold, terminated, removed can all
+  // show up) as well as the default one, with the same shape either way.
+  const statusCounts = {};
+  for (const s of matched) {
+    statusCounts[s.status] = (statusCounts[s.status] || 0) + 1;
+  }
+
   return {
     asOf: new Date().toISOString(),
     filterTerm: filterTerm || null,
+    allStatuses: !!allStatuses,
     totalCount: matched.length,
-    activeCount: matched.filter((s) => s.status === 'active').length,
-    pendingCount: matched.filter((s) => s.status === 'pending').length,
+    statusCounts,
     byClient,
   };
 }
@@ -238,16 +255,16 @@ const reportCacheByKey = new Map(); // key -> { data, expiresAt }
 // each kicking off their own fetch against Ingram.
 const inFlightByKey = new Map(); // key -> Promise
 
-function cacheKeyFor(filterTerm) {
-  return (filterTerm || '').trim().toLowerCase();
+function cacheKeyFor(filterTerm, allStatuses) {
+  return `${(filterTerm || '').trim().toLowerCase()}|${allStatuses ? 'all' : 'default'}`;
 }
 
-async function getReport(filterTerm, force) {
-  const key = cacheKeyFor(filterTerm);
+async function getReport(filterTerm, allStatuses, force) {
+  const key = cacheKeyFor(filterTerm, allStatuses);
   const cached = reportCacheByKey.get(key);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
   if (!inFlightByKey.has(key)) {
-    const build = buildReport(filterTerm)
+    const build = buildReport(filterTerm, allStatuses)
       .then((data) => {
         reportCacheByKey.set(key, { data, expiresAt: Date.now() + REPORT_CACHE_TTL_MS });
         return data;
@@ -264,7 +281,7 @@ const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
-    const data = await getReport(req.query.client, req.query.force === 'true');
+    const data = await getReport(req.query.client, req.query.allStatuses === 'true', req.query.force === 'true');
     res.json(data);
   } catch (err) {
     console.error(err);

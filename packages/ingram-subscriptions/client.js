@@ -8,6 +8,14 @@ export const label = "Ingram Subscriptions";
 // restore instantly instead of coming back blank.
 let lastData = null;
 let lastFilter = '';
+let lastAllStatuses = false; // default: active & pending only, by request
+
+// Fixed display order/labels for Ingram's 5 subscription statuses -- used to
+// build the summary's status breakdown generically (works whether the
+// server returned just active/pending, or all 5 when the toggle is checked)
+// rather than hardcoding two named counts.
+const STATUS_ORDER = ['active', 'pending', 'hold', 'terminated', 'removed'];
+const STATUS_LABELS = { active: 'active', pending: 'pending', hold: 'on hold', terminated: 'terminated', removed: 'removed' };
 
 export function mount(container) {
   container.innerHTML = `
@@ -16,6 +24,9 @@ export function mount(container) {
       <form id="filter-form" class="date-form">
         <label for="client-input">Client</label>
         <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
+        <label for="all-statuses-input" class="inline-checkbox-label">
+          <input type="checkbox" id="all-statuses-input" /> All statuses (not just Active &amp; Pending)
+        </label>
         <button type="submit" id="refresh-button">Refresh</button>
       </form>
     </header>
@@ -26,26 +37,29 @@ export function mount(container) {
 
   const form = container.querySelector('#filter-form');
   const clientInput = container.querySelector('#client-input');
+  const allStatusesInput = container.querySelector('#all-statuses-input');
   const refreshButton = container.querySelector('#refresh-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
   clientInput.value = lastFilter;
+  allStatusesInput.checked = lastAllStatuses;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(clientInput.value);
+    load(clientInput.value, allStatusesInput.checked);
   });
 
-  // The server caches each search (keyed by the filter term, an empty filter
-  // included) for ~20 min. This is the fast base list -- client/subscription
-  // names, status, term, etc. -- NOT license counts, which are fetched
-  // separately per client on demand (see loadLicensesForClient() below).
-  // Refresh always sends `force=true`, which bypasses that cache for the
-  // current search and rebuilds -- a button literally labeled "Refresh"
+  // The server caches each search (keyed by the filter term AND the
+  // all-statuses toggle -- four independent cache slots for the same client
+  // name, not one) for ~20 min. This is the fast base list -- client/
+  // subscription names, status, term, etc. -- NOT license counts, which are
+  // fetched separately per client on demand (see loadLicensesForClient()
+  // below). Refresh always sends `force=true`, which bypasses that cache for
+  // the current search and rebuilds -- a button literally labeled "Refresh"
   // should always get current data, not a cached one.
-  async function load(clientFilter) {
+  async function load(clientFilter, allStatuses) {
     refreshButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
@@ -56,11 +70,13 @@ export function mount(container) {
     try {
       const params = new URLSearchParams({ force: 'true' });
       if (clientFilter) params.set('client', clientFilter);
+      if (allStatuses) params.set('allStatuses', 'true');
       const res = await fetch(`/api/ingram-subscriptions?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
       lastFilter = clientFilter;
+      lastAllStatuses = allStatuses;
       render(data);
     } catch (err) {
       statusEl.className = 'status error';
@@ -74,12 +90,15 @@ export function mount(container) {
     statusEl.hidden = true;
 
     const filterSuffix = data.filterTerm ? ` matching "${escapeHtml(data.filterTerm)}"` : '';
+    const statusBreakdown = STATUS_ORDER.filter((s) => data.statusCounts[s] > 0)
+      .map((s) => `${data.statusCounts[s]} ${STATUS_LABELS[s]}`)
+      .join(', ');
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> subscriptions (${data.activeCount} active, ${data.pendingCount} pending) across ${data.byClient.length} clients${filterSuffix}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> subscriptions (${statusBreakdown}) across ${data.byClient.length} clients${filterSuffix}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
 
     resultsEl.innerHTML = '';
     if (data.byClient.length === 0) {
-      resultsEl.innerHTML = `<p class="status">No active or pending subscriptions${filterSuffix}.</p>`;
+      resultsEl.innerHTML = `<p class="status">No ${data.allStatuses ? '' : 'active or pending '}subscriptions${filterSuffix}.</p>`;
       return;
     }
 
@@ -115,7 +134,7 @@ export function mount(container) {
         (s) => `
       <tr>
         <td>${escapeHtml(s.name)}</td>
-        <td${s.status === 'pending' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(capitalize(s.status))}</td>
+        <td${s.status === 'pending' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(s.status === 'hold' ? 'On Hold' : capitalize(s.status))}</td>
         <td class="ticket-number">${s.licenseCount ?? ''}</td>
         <td class="ticket-number">${formatPeriod(s.term)}</td>
         <td class="ticket-number">${formatPeriod(s.billingPeriod)}</td>
