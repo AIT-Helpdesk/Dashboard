@@ -87,7 +87,7 @@ Every page and every `/api/*` route requires signing in with a Microsoft 365 acc
 1. **App registrations -> New registration.**
    - Name: anything recognizable, e.g. "Ambient IT Dashboard".
    - Supported account types: **Accounts in this organizational directory only (Single tenant)** - this alone is what restricts sign-in to your org; anyone outside the tenant is rejected by Microsoft before your app ever sees them.
-   - Redirect URI: platform **Web**, value `<APP_BASE_URL>/auth/callback` - use the real address other people reach this box at (LAN IP, hostname, or public domain), never `localhost`, once it's shared on the network.
+   - Redirect URI: platform **Web**. Add **one per address this app is reached at** - both `http://localhost:3000/auth/callback` (local dev, and editing the shared sidebar layout - see below) and the real production one, e.g. `https://dashboard.ambientit.com.au/auth/callback`. An app registration can hold several; the app itself picks whichever one matches the request it's currently handling (see "Multiple addresses" below), so all of them need to be registered up front, not just the one you're deploying to right now.
 2. **Certificates & secrets -> New client secret.** Copy the secret's **value** immediately - Entra only shows it once.
 3. **API permissions**: Microsoft Graph -> Delegated -> `openid`, `profile`, `email`, `User.Read`. These are typically pre-consented; no admin-consent button needed for just these four.
 4. Note the **Application (client) ID** and **Directory (tenant) ID** from the app's Overview page.
@@ -95,14 +95,21 @@ Every page and every `/api/*` route requires signing in with a Microsoft 365 acc
 
 ### Config
 
-Fill these into `.env` (see `.env.example` for the full list): `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, `AUTH_TENANT_ID`, `APP_BASE_URL` (must exactly match the redirect URI above, minus `/auth/callback`), `SESSION_SECRET` (any long random string - `openssl rand -hex 32`), and optionally `AUTH_ALLOWED_USERS` (comma-separated exact emails, a second layer of narrowing enforced in the app itself rather than Entra, on top of whatever the "Assignment required" setting above does).
+Fill these into `.env` (see `.env.example` for the full list): `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, `AUTH_TENANT_ID`, `SESSION_SECRET` (any long random string - `openssl rand -hex 32`), and optionally `AUTH_ALLOWED_USERS` (comma-separated exact emails, a second layer of narrowing enforced in the app itself rather than Entra, on top of whatever the "Assignment required" setting above does). There's deliberately no `APP_BASE_URL` - see "Multiple addresses" below.
+
+### Multiple addresses (localhost AND the production domain)
+
+This app is reachable at more than one address **at the same time** - `http://localhost:3000` directly, and the real dashboard domain via Caddy - and needs sign-in to work correctly from both (the sidebar's drag-and-drop editing, further down this README, specifically depends on being able to stay signed in on `localhost` through a full Microsoft sign-in, not get bounced elsewhere). Two things in `auth.js` are derived from each request's own Host header rather than a single fixed value, so this works automatically:
+
+- **Redirect URI** (`redirectUriFor(req)`) - `${req.protocol}://${req.get('host')}/auth/callback`. An earlier version of this pinned the redirect URI to one fixed `APP_BASE_URL` env var; signing in from `localhost:3000` still got redirected to the production URL by Microsoft (Entra sends the browser to whatever redirect URI it was told, and it was always told the production one), silently defeating localhost-only editing. Fixed by computing it per-request instead - both addresses are already registered in Entra (above), so Microsoft accepts either.
+- **Session cookie's `secure` flag** (`cookie.secure: 'auto'`) - same reasoning: a fixed `true` (right for HTTPS production) would mean the browser silently refuses to send the cookie back over plain HTTP on localhost; a fixed `false` would weaken the production cookie. `'auto'` decides per-request from `req.secure`, which respects `X-Forwarded-Proto` (Caddy sends this) since `trust proxy` is enabled.
 
 ### How it behaves
 
 - Visiting any page while signed out redirects to Microsoft's sign-in page, then back to whatever URL was originally requested (`/auth/login`, `/auth/callback` in `auth.js`).
 - Every `/api/*` call from a page's `client.js` goes through a shared `fetch` wrapper (`packages/shell/public/app.js`) that treats a `401` (session expired, or signed out server-side) as "bounce the whole page to sign-in" rather than surfacing it as an error inside whatever page happened to be open.
 - Sessions last 8 hours (`cookie.maxAge` in `auth.js`) - an internal work tool, not a long-lived login.
-- The sidebar shows who's signed in (bottom of the nav) with a **Sign out** link, which also ends the Microsoft session (not just this app's), so it doesn't silently sign back in via SSO on a shared machine.
+- The sidebar shows who's signed in (bottom of the nav) with a **Sign out** link, which also ends the Microsoft session (not just this app's), so it doesn't silently sign back in via SSO on a shared machine. Signing out returns you to whichever address (localhost or the real domain) you were actually signed in from, same request-derived logic as sign-in.
 - Rejects tokens from any tenant other than `AUTH_TENANT_ID` as defense-in-depth, even though the app registration being single-tenant should already prevent that.
 
 ## Notes

@@ -14,15 +14,10 @@ const {
   // allow anyone who can sign in to the tenant (still gate-kept by Entra's
   // own "Assignment required" toggle on the app registration, if you use it).
   AUTH_ALLOWED_USERS,
-  // Must exactly match the Redirect URI registered in Entra, including
-  // scheme and port -- e.g. http://192.168.1.50:3000 for a LAN box, or
-  // https://dashboard.ambientit.internal for a proper hostname. NOT
-  // localhost once this is reachable by other people.
-  APP_BASE_URL,
   SESSION_SECRET,
 } = process.env;
 
-const REQUIRED = { AUTH_CLIENT_ID, AUTH_CLIENT_SECRET, AUTH_TENANT_ID, APP_BASE_URL, SESSION_SECRET };
+const REQUIRED = { AUTH_CLIENT_ID, AUTH_CLIENT_SECRET, AUTH_TENANT_ID, SESSION_SECRET };
 for (const [name, value] of Object.entries(REQUIRED)) {
   if (!value) {
     throw new Error(
@@ -31,8 +26,22 @@ for (const [name, value] of Object.entries(REQUIRED)) {
   }
 }
 
-const redirectUri = `${APP_BASE_URL.replace(/\/$/, '')}/auth/callback`;
 const scopes = ['openid', 'profile', 'email', 'User.Read'];
+
+// Derived from the CURRENT request's own Host header, not a single fixed
+// env var -- this app is reachable at more than one address at once
+// (localhost:3000 directly, and the real dashboard domain via Caddy), and
+// each needs its own matching Redirect URI, both already registered in
+// Entra. A fixed redirectUri (the original design) meant signing in from
+// localhost still got redirected to the production URL by Microsoft --
+// breaking anything (like the sidebar-editing feature) that depends on
+// actually staying on localhost through a full sign-in. `req.protocol`
+// reflects `X-Forwarded-Proto` when behind Caddy (trust proxy is enabled
+// below) so this comes out `https://dashboard...` in production and
+// `http://localhost:3000` for a direct local hit, automatically.
+function redirectUriFor(req) {
+  return `${req.protocol}://${req.get('host')}/auth/callback`;
+}
 
 const msalClient = new ConfidentialClientApplication({
   auth: {
@@ -78,7 +87,16 @@ function registerAuthRoutes(app) {
       cookie: {
         httpOnly: true,
         maxAge: 8 * 60 * 60 * 1000, // 8-hour session -- an internal work tool, not a long-lived login
-        secure: APP_BASE_URL.startsWith('https://'),
+        // 'auto' rather than a fixed true/false -- same reasoning as
+        // redirectUriFor() above: this app is reached over both plain HTTP
+        // (localhost:3000 directly) and real HTTPS (the production domain,
+        // via Caddy) at once. 'auto' sets Secure per-request from
+        // `req.secure` (which respects trust proxy / X-Forwarded-Proto
+        // below), rather than a single startup-time decision that would
+        // either break the localhost cookie (marked Secure, so the browser
+        // silently refuses to send it over plain HTTP) or weaken the
+        // production one.
+        secure: 'auto',
         sameSite: 'lax',
       },
     })
@@ -86,7 +104,7 @@ function registerAuthRoutes(app) {
 
   app.get('/auth/login', async (req, res) => {
     try {
-      const url = await msalClient.getAuthCodeUrl({ scopes, redirectUri });
+      const url = await msalClient.getAuthCodeUrl({ scopes, redirectUri: redirectUriFor(req) });
       res.redirect(url);
     } catch (err) {
       console.error('Failed to build Microsoft login URL:', err);
@@ -101,7 +119,12 @@ function registerAuthRoutes(app) {
       return res.status(403).send(`Sign-in failed: ${req.query.error_description || req.query.error}`);
     }
     try {
-      const tokenResponse = await msalClient.acquireTokenByCode({ code: req.query.code, scopes, redirectUri });
+      // Recomputed from THIS request, not passed through from /auth/login --
+      // but it comes out identical, because Microsoft only ever lands the
+      // browser back here BY navigating it to the exact redirect_uri /auth/login
+      // sent, so the browser's current host at this exact moment always
+      // matches what was requested.
+      const tokenResponse = await msalClient.acquireTokenByCode({ code: req.query.code, scopes, redirectUri: redirectUriFor(req) });
       const email = (tokenResponse.account.username || '').toLowerCase();
 
       // Defense-in-depth on top of the app registration already being
@@ -126,11 +149,15 @@ function registerAuthRoutes(app) {
   });
 
   app.get('/auth/logout', (req, res) => {
+    // Same request-derived origin as sign-in -- signing out from localhost
+    // lands back on localhost, signing out from the real domain lands back
+    // there, rather than always bouncing to one fixed address.
+    const origin = `${req.protocol}://${req.get('host')}`;
     req.session.destroy(() => {
       // Also ends the Microsoft session, not just this app's -- otherwise
       // "sign out" silently signs back in immediately via the still-live
       // Microsoft SSO session on shared/kiosk machines.
-      const logoutUrl = `https://login.microsoftonline.com/${AUTH_TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri=${encodeURIComponent(APP_BASE_URL)}`;
+      const logoutUrl = `https://login.microsoftonline.com/${AUTH_TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri=${encodeURIComponent(origin)}`;
       res.redirect(logoutUrl);
     });
   });
