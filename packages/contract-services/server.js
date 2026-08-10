@@ -1,5 +1,5 @@
 const express = require('express');
-const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getContractUrl, parseWildcard, fetchByFieldIn } = require('@dashboard/autotask-client');
+const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getContractUrl, parseWildcard, fetchByFieldIn, aestToUtcIso } = require('@dashboard/autotask-client');
 
 
 const router = express.Router();
@@ -12,10 +12,10 @@ router.get('/', async (req, res) => {
   const search = (req.query.search || '').trim();
   const clientSearch = (req.query.client || '').trim();
 
-  const monthStart = `${month}-01T00:00:00.000Z`;
-  const endDate = new Date(monthStart);
-  endDate.setUTCMonth(endDate.getUTCMonth() + 1);
-  const monthEnd = endDate.toISOString();
+  // AEST calendar month, not UTC -- see aestToUtcIso() in @dashboard/autotask-client.
+  const [monthY, monthM] = month.split('-').map(Number);
+  const monthStart = aestToUtcIso(monthY, monthM, 1);
+  const monthEnd = aestToUtcIso(monthY, monthM + 1, 1);
 
   try {
     const client = await getClient();

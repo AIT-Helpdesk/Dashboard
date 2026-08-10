@@ -11,8 +11,11 @@ let lastData = null;
 
 // "Beginning of the year before last" is a moving two-year window, not a fixed
 // year -- computed the same way (and independently) as the server's own cutoff,
-// so the dropdown label always matches what the query actually does.
-const noRecentInvoiceCutoffYear = new Date().getFullYear() - 2;
+// so the dropdown label always matches what the query actually does. AEST
+// (UTC+10, no DST in Queensland), not the browser's own local timezone --
+// only actually matters for the ~10 AEST hours spanning New Year's Day, but
+// consistent with the server side now being AEST-anchored too.
+const noRecentInvoiceCutoffYear = new Date(Date.now() + 10 * 60 * 60 * 1000).getUTCFullYear() - 2;
 
 const CRITERIA_OPTIONS = [
   { value: "active", label: "Active Clients" },

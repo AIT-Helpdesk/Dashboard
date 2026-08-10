@@ -30,11 +30,11 @@ export function mount(container) {
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
+  // AEST (UTC+10, no DST in Queensland) "today", not the browser's own local
+  // timezone -- computed explicitly so the date picker defaults to the
+  // business's calendar day regardless of where the browser happens to be.
   function todayISO() {
-    const now = new Date();
-    const offset = now.getTimezoneOffset();
-    const local = new Date(now.getTime() - offset * 60000);
-    return local.toISOString().slice(0, 10);
+    return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 10);
   }
   dateInput.value = todayISO();
 

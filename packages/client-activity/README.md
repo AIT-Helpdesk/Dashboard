@@ -15,7 +15,7 @@ Autotask has a per-status "SLA Event" admin setting (None / First Response / Res
 
 ## Ticket volume table
 
-**Created** counts tickets whose `createDate` falls in the window. **Completed** date: status 5 ("Complete") uses `completedDate`, the one status Autotask actually populates it for; every other done status (per the patterns above) falls back to `resolvedDateTime`.
+**Created** counts tickets whose `createDate` falls in the window. **Completed** date: status 5 ("Complete") uses `completedDate`, the one status Autotask actually populates it for; every other done status (per the patterns above) falls back to `resolvedDateTime`. Both are bucketed into the 12-month window's **AEST** months, not UTC (`monthKeyOf()`, `@dashboard/autotask-client` -- same helper Client Financials uses).
 
 ## Currently Open snapshot
 

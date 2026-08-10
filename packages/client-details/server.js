@@ -1,13 +1,16 @@
 const express = require('express');
-const { getClient, listAll, getCompanyUrl, getInvoiceUrl, parseWildcard, getPicklistLabels, fetchByFieldIn } = require('@dashboard/autotask-client');
+const { getClient, listAll, getCompanyUrl, getInvoiceUrl, parseWildcard, getPicklistLabels, fetchByFieldIn, toAest, aestToUtcIso } = require('@dashboard/autotask-client');
 
 const CRITERIA = new Set(['active', 'inactive', 'any', 'no-primary-contact', 'no-billing-contact', 'no-recent-invoice']);
 
 // "Since the beginning of the year before last" -- a moving two-year window, not
 // a fixed date. Recomputed on every request so it stays correct as years pass
 // (e.g. evaluated in 2026, this is 2024-01-01; in 2027 it becomes 2025-01-01).
+// Anchored to the AEST year, not UTC -- only actually matters for the ~10
+// AEST hours spanning New Year's Day, but consistent with every other date
+// boundary on this dashboard now being AEST-anchored.
 function noRecentInvoiceCutoffISO() {
-  return `${new Date().getUTCFullYear() - 2}-01-01T00:00:00.000Z`;
+  return aestToUtcIso(toAest(new Date()).getUTCFullYear() - 2, 1, 1);
 }
 
 // companyType picklist codes (Autotask-wide, not org-specific config, so safe to

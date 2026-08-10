@@ -7,6 +7,6 @@ Dashboard page: pick a date, see every ticket created that day across all client
 
 ## Behavior notes
 
-- Filters on the ticket's `createDate` field, compared against UTC calendar-day boundaries for the selected date. Any status is included (this is about creation, not completion).
+- Filters on the ticket's `createDate` field, compared against **AEST** calendar-day boundaries for the selected date (`aestDayBoundsIso()`, `@dashboard/autotask-client`) -- not UTC, and not the server's own local clock. Any status is included (this is about creation, not completion).
 - Excludes tickets with issue type 14 ("Monitoring Alert"), same as the Completed Tickets page.
 - Company names are resolved via `@dashboard/autotask-client` and cached in memory for the life of the server process.

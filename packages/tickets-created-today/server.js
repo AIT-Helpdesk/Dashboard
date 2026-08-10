@@ -1,11 +1,9 @@
 const express = require('express');
-const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getTicketUrl } = require('@dashboard/autotask-client');
+const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getTicketUrl, aestDayBoundsIso } = require('@dashboard/autotask-client');
 
 async function fetchTicketsCreatedOn(client, dateStr) {
-  const startISO = `${dateStr}T00:00:00.000Z`;
-  const endDate = new Date(`${dateStr}T00:00:00.000Z`);
-  endDate.setUTCDate(endDate.getUTCDate() + 1);
-  const endISO = endDate.toISOString();
+  // AEST calendar day, not UTC -- see aestDayBoundsIso() for why.
+  const { startISO, endISO } = aestDayBoundsIso(dateStr);
 
   return listAll(client.tickets, [
     { op: 'gte', field: 'createDate', value: startISO },

@@ -37,11 +37,12 @@ export function mount(container) {
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
+  // AEST (UTC+10, no DST in Queensland) "this month", not the browser's own
+  // local timezone -- computed explicitly so the month picker defaults to
+  // the business's calendar month regardless of where the browser happens
+  // to be.
   function currentMonthISO() {
-    const now = new Date();
-    const offset = now.getTimezoneOffset();
-    const local = new Date(now.getTime() - offset * 60000);
-    return local.toISOString().slice(0, 7);
+    return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 7);
   }
   monthInput.value = currentMonthISO();
 
@@ -168,7 +169,7 @@ export function mount(container) {
   function formatMonth(month) {
     if (!month) return '';
     const [y, m] = month.split('-').map(Number);
-    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'Australia/Brisbane' });
   }
 
   function formatDate(iso) {

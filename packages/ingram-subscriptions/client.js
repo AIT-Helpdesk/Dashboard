@@ -192,7 +192,7 @@ export function mount(container) {
 
   function formatDate(isoDateOnly) {
     if (!isoDateOnly) return '';
-    return new Date(`${isoDateOnly}T00:00:00.000Z`).toLocaleDateString(undefined, { timeZone: 'UTC' });
+    return new Date(`${isoDateOnly}T00:00:00.000Z`).toLocaleDateString(undefined, { timeZone: 'Australia/Brisbane' });
   }
 
   function formatDateTime(iso) {

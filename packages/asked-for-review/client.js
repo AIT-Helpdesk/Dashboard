@@ -30,11 +30,11 @@ export function mount(container) {
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
+  // AEST (UTC+10, no DST in Queensland) "today", not the browser's own local
+  // timezone -- computed explicitly so the date picker defaults to the
+  // business's calendar day regardless of where the browser happens to be.
   function todayISO() {
-    const now = new Date();
-    const offset = now.getTimezoneOffset();
-    const local = new Date(now.getTime() - offset * 60000);
-    return local.toISOString().slice(0, 10);
+    return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 10);
   }
   dateInput.value = todayISO();
 
@@ -125,12 +125,14 @@ export function mount(container) {
 
   function formatDate(isoDateOnly) {
     if (!isoDateOnly) return '';
-    // isoDateOnly is a plain YYYY-MM-DD (no time), so parse it as UTC-midnight
-    // explicitly -- new Date('YYYY-MM-DD') is already UTC-midnight per spec,
-    // but toLocaleDateString below needs timeZone: 'UTC' to match, otherwise
-    // a negative UTC offset rolls it back a day.
+    // isoDateOnly is a plain YYYY-MM-DD (no time, and already an AEST
+    // calendar date -- see server.js), parsed as UTC-midnight (per spec)
+    // then displayed with timeZone: 'Australia/Brisbane' to match -- shifts
+    // forward 10 hours within the same day, so the date shown is always the
+    // one in isoDateOnly, never rolled back a day the way a negative-offset
+    // browser timezone could.
     const d = new Date(`${isoDateOnly}T00:00:00.000Z`);
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Australia/Brisbane' });
   }
 
   function escapeHtml(str) {

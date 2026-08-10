@@ -7,13 +7,12 @@ const {
   listAll,
   getTicketUrl,
   getTicketUdf,
+  aestDayBoundsIso,
 } = require('@dashboard/autotask-client');
 
 async function fetchTicketsCompletedOn(client, dateStr) {
-  const startISO = `${dateStr}T00:00:00.000Z`;
-  const endDate = new Date(`${dateStr}T00:00:00.000Z`);
-  endDate.setUTCDate(endDate.getUTCDate() + 1);
-  const endISO = endDate.toISOString();
+  // AEST calendar day, not UTC -- see aestDayBoundsIso() for why.
+  const { startISO, endISO } = aestDayBoundsIso(dateStr);
 
   // status 5 = "Complete", filtered by completedDate as usual.
   const completed = await listAll(client.tickets, [

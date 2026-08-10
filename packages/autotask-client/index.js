@@ -166,12 +166,69 @@ async function resolveSingleCompany(client, clientSearch, companyId) {
   return { status: 'ok', company: matches[0] };
 }
 
+// Ambient iT operates out of Queensland, which does NOT observe daylight
+// saving time -- AEST (UTC+10) year-round, never AEDT. That makes a fixed
+// 10-hour offset correct and safe here, unlike most of the rest of
+// Australia (NSW, VIC, etc.), which would need real DST-aware timezone
+// handling since their offset changes twice a year. Every "which calendar
+// day/week/month does this fall in" computation across the dashboard is
+// anchored to AEST via these helpers, not UTC and not the server's own
+// local clock -- by request, so a ticket/invoice/contract-period near a day
+// or month boundary lands on the day the business actually considers it to
+// be, not whatever day UTC happens to be showing at that exact instant.
+const AEST_OFFSET_MS = 10 * 60 * 60 * 1000;
+
+// Shifts a real instant (a Date, or anything `new Date()` accepts) forward
+// by the AEST offset, so that reading the result's UTC-labeled fields
+// (getUTCFullYear(), getUTCMonth(), getUTCDate(), getUTCDay(), ...) gives
+// AEST wall-clock values instead of UTC ones -- e.g. an instant that's
+// genuinely 2am UTC on the 1st is 12pm AEST on the 1st; toAest(that)
+// .getUTCHours() reads 12, not 2. This is the one primitive every other
+// AEST helper below builds on.
+function toAest(instant) {
+  return new Date(new Date(instant).getTime() + AEST_OFFSET_MS);
+}
+
+// The real UTC instant that a given AEST wall-clock moment represents --
+// e.g. aestToUtcIso(2026, 8, 1) (AEST midnight, August 1st) is
+// "2026-07-31T14:00:00.000Z". This is what actually gets sent to Autotask's
+// API as a gte/lt date-field boundary: Autotask's date fields are real
+// instants, so a boundary meant to mean "AEST midnight" has to be the UTC
+// instant AEST midnight actually falls at, not written as if AEST midnight
+// and UTC midnight were the same moment (they're 10 hours apart). The
+// (year, month, day) args accept overflow (day 32, month 13, ...) the same
+// way `Date.UTC` does, so callers can just add days/months without their
+// own rollover logic.
+function aestToUtcIso(year, month, day, hour = 0, minute = 0, second = 0, ms = 0) {
+  return new Date(Date.UTC(year, month - 1, day, hour, minute, second, ms) - AEST_OFFSET_MS).toISOString();
+}
+
+// [startISO, endISO) UTC bounds for one AEST calendar day ("YYYY-MM-DD") --
+// the shared version of what Completed Tickets, Tickets Created, and Asked
+// for Review each used to compute independently (and incorrectly, against
+// UTC midnight instead of AEST midnight).
+function aestDayBoundsIso(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return { startISO: aestToUtcIso(y, m, d), endISO: aestToUtcIso(y, m, d + 1) };
+}
+
+// AEST "YYYY-MM-DD" for right now -- e.g. a date-picker's default value.
+function todayAestKey() {
+  const d = toAest(new Date());
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
 // Last 12 calendar months (as "YYYY-MM" keys, oldest first), ending with the
 // current (partial) month -- shared moving-window shape for any page reporting
 // a rolling year (Client Financials, Client Activity). Recomputed from the
-// current date on every call, so it stays correct as time passes.
+// current date on every call, so it stays correct as time passes. Anchored
+// to AEST "now", not UTC "now" -- otherwise the window's own idea of
+// "the current month" flips a day early/late for roughly the first/last 10
+// hours of any given AEST day, most consequentially right at a month
+// boundary (e.g. still showing July as "current" for the first 10 hours of
+// August AEST, because UTC hadn't reached August yet).
 function last12MonthKeys() {
-  const now = new Date();
+  const now = toAest(new Date());
   const keys = [];
   for (let i = 11; i >= 0; i--) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
@@ -179,22 +236,28 @@ function last12MonthKeys() {
   }
   return keys;
 }
+// Buckets a real timestamp (e.g. an invoice's invoiceDateTime) into the
+// AEST month it actually falls in, not the UTC month -- otherwise a real
+// AEST-morning event within ~10 hours of midnight gets bucketed into the
+// wrong (previous) month whenever UTC hasn't rolled over yet.
 function monthKeyOf(dateStr) {
-  const d = new Date(dateStr);
+  const d = toAest(dateStr);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 function monthLabel(key) {
   const [y, m] = key.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString(undefined, { month: 'short', year: 'numeric', timeZone: 'Australia/Brisbane' });
 }
-// [windowStart, windowEnd) ISO bounds covering a set of "YYYY-MM" month keys
-// (assumed contiguous, oldest first) -- windowEnd is the 1st of the month
-// AFTER the last key, so the range is a clean half-open interval for `gte`/`lt`
-// date filters.
+// [windowStart, windowEnd) UTC-instant bounds covering a set of "YYYY-MM"
+// AEST month keys (assumed contiguous, oldest first) -- windowEnd is AEST
+// midnight on the 1st of the month AFTER the last key, so the range is a
+// clean half-open interval for `gte`/`lt` date filters, expressed as the
+// real UTC instants those AEST month boundaries fall at.
 function monthKeysWindow(monthKeys) {
-  const windowStart = `${monthKeys[0]}-01T00:00:00.000Z`;
+  const [y0, m0] = monthKeys[0].split('-').map(Number);
+  const windowStart = aestToUtcIso(y0, m0, 1);
   const [y, m] = monthKeys[monthKeys.length - 1].split('-').map(Number);
-  const windowEnd = new Date(Date.UTC(y, m, 1)).toISOString();
+  const windowEnd = aestToUtcIso(y, m + 1, 1);
   return { windowStart, windowEnd };
 }
 
@@ -315,4 +378,8 @@ module.exports = {
   monthKeyOf,
   monthLabel,
   monthKeysWindow,
+  toAest,
+  aestToUtcIso,
+  aestDayBoundsIso,
+  todayAestKey,
 };

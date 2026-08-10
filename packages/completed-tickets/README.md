@@ -17,7 +17,7 @@ Dashboard page: pick a date, see every ticket completed that day across all clie
 - Status 20 tickets typically have no `completedByResourceID` (or `assignedResourceID`)
   in Autotask's data, so they land in the "Unassigned" group.
 - Excludes tickets with issue type 14 ("Monitoring Alert").
-- Date filtering compares against UTC calendar-day boundaries for the selected date.
+- Date filtering compares against **AEST** calendar-day boundaries for the selected date (`aestDayBoundsIso()`, `@dashboard/autotask-client`) -- not UTC, and not the server's own local clock.
 - Resource and company names are resolved via `@dashboard/autotask-client` and cached in memory for the life of the server process.
 
 ## Review? column

@@ -22,7 +22,7 @@ A BillingItem is bucketed into a MONTH by its parent invoice's `invoiceDateTime`
 
 ## Last 12 months
 
-Calendar months, not a rolling 365-day window: from 11 months before the current month through the current (partial) month, inclusive. Recomputed from the current date on every request, same moving-window approach as Client Details' "no invoice since" cutoff.
+Calendar months, not a rolling 365-day window: from 11 months before the current month through the current (partial) month, inclusive. Recomputed from the current date on every request, same moving-window approach as Client Details' "no invoice since" cutoff. "Current month" and each BillingItem's month bucket are both **AEST**, not UTC (`last12MonthKeys()`/`monthKeyOf()`, `@dashboard/autotask-client`) -- otherwise an invoice dated in the first ~10 AEST hours of a new month would still bucket into the previous month, since UTC hadn't reached that month yet.
 
 ## Summary table
 
