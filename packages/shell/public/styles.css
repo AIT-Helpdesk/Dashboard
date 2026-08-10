@@ -477,11 +477,39 @@ h1 {
 }
 .ticket-times-table th:nth-child(2),
 .ticket-times-table td:nth-child(2) {
+  width: 14%;
+}
+.ticket-times-table th:nth-child(3),
+.ticket-times-table td:nth-child(3) {
   width: 12%;
 }
-.ticket-times-table th:nth-child(4),
-.ticket-times-table td:nth-child(4) {
+.ticket-times-table th:nth-child(5),
+.ticket-times-table td:nth-child(5) {
   width: 10%;
+}
+
+/* Ticket Times: the signed-in user's own group is pinned to the top of the
+   page (see server.js) -- this gives it a subtle visual marker too, the same
+   shaded background used elsewhere for "this row/section is different" (e.g.
+   .shaded-row, .bar-row[aria-expanded="true"]), not a loud new color. */
+.resource-group-header--me {
+  background: var(--section-header-bg);
+}
+
+/* Same light green used elsewhere for "this row is green" shading
+   (tr.row-units-changed on Contract Services) rather than a new one-off
+   tint, shading the full width of the heading so it reads as a distinct
+   banded row rather than just colored text. Deliberately lighter-weight
+   than .resource-group-header otherwise (smaller, less padding) since it's
+   a second level of grouping, not a new top-level section. */
+.ticket-category-header {
+  padding: 0.4rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #16a34a;
+  background: var(--row-changed-bg);
 }
 
 table {

@@ -4,9 +4,11 @@ const {
   mapWithConcurrency,
   resolveResourceName,
   resolveCompanyName,
+  resolveResourceIdByEmail,
   listAll,
   fetchByFieldIn,
   getTicketUrl,
+  getPicklistLabels,
 } = require('@dashboard/autotask-client');
 
 // TimeEntries.dateWorked is a date-only field -- Autotask always stores it as
@@ -42,7 +44,11 @@ router.get('/', async (req, res) => {
     }
 
     const ticketIds = [...new Set(entries.map((e) => e.ticketID))];
-    const tickets = await fetchByFieldIn(client.tickets, 'id', ticketIds);
+    const [tickets, statusLabels, categoryLabels] = await Promise.all([
+      fetchByFieldIn(client.tickets, 'id', ticketIds),
+      getPicklistLabels(client.tickets, 'status'),
+      getPicklistLabels(client.tickets, 'ticketCategory'),
+    ]);
     const ticketsById = new Map(tickets.map((t) => [t.id, t]));
 
     const uniqueResourceIDs = [...new Set(entries.map((e) => e.resourceID).filter(Boolean))];
@@ -74,6 +80,8 @@ router.get('/', async (req, res) => {
         ticketNumber: ticket.ticketNumber,
         ticketUrl: await getTicketUrl(ticket.id),
         title: ticket.title,
+        status: statusLabels.get(ticket.status) || `#${ticket.status}`,
+        category: categoryLabels.get(ticket.ticketCategory) || `#${ticket.ticketCategory}`,
         companyID: ticket.companyID,
         company: await resolveCompanyName(client, ticket.companyID),
         resourceId: r.resourceId,
@@ -90,14 +98,50 @@ router.get('/', async (req, res) => {
       }
       byResourceMap.get(key).tickets.push(r);
     }
-    const byResource = [...byResourceMap.values()]
+    // Within each technician's group, tickets are further broken out by
+    // Ticket Category (Autotask's own picklist -- "Standard", "TECH COVER",
+    // "Billing", etc.), category sub-groups ordered Z->A by request. Tickets
+    // within a category keep the same company-name ordering the page always
+    // used before categories existed.
+    function groupByCategory(tickets) {
+      const byCategory = new Map();
+      for (const t of tickets) {
+        if (!byCategory.has(t.category)) byCategory.set(t.category, []);
+        byCategory.get(t.category).push(t);
+      }
+      return [...byCategory.entries()]
+        .map(([category, categoryTickets]) => ({
+          category,
+          tickets: categoryTickets.sort((a, b) => a.company.localeCompare(b.company)),
+        }))
+        .sort((a, b) => b.category.localeCompare(a.category));
+    }
+
+    let byResource = [...byResourceMap.values()]
       .map((g) => ({
         ...g,
         count: g.tickets.length,
         hoursWorked: g.tickets.reduce((sum, t) => sum + t.hoursWorked, 0),
-        tickets: [...g.tickets].sort((a, b) => a.company.localeCompare(b.company)),
+        categories: groupByCategory(g.tickets),
+        tickets: undefined,
       }))
       .sort((a, b) => b.count - a.count);
+
+    // The signed-in user's own group, if they logged any time that day, goes
+    // first -- everyone else stays in the existing count-descending order
+    // behind it. Resolved from the dashboard's own auth session (Entra
+    // email), not a query param, so there's no way to spoof viewing "as"
+    // someone else via the URL.
+    const currentUserResourceId = await resolveResourceIdByEmail(client, req.session?.user?.email);
+    if (currentUserResourceId) {
+      const mineIndex = byResource.findIndex((g) => g.resourceId === currentUserResourceId);
+      if (mineIndex > 0) {
+        const [mine] = byResource.splice(mineIndex, 1);
+        byResource = [{ ...mine, isCurrentUser: true }, ...byResource];
+      } else if (mineIndex === 0) {
+        byResource[0] = { ...byResource[0], isCurrentUser: true };
+      }
+    }
 
     res.json({
       date,

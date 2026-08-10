@@ -86,31 +86,45 @@ export function mount(container) {
       groupEl.className = 'resource-group';
 
       const header = document.createElement('div');
-      header.className = 'resource-group-header';
-      header.innerHTML = `<span>${escapeHtml(group.resourceName)}</span><span class="count">${group.count} ticket${group.count === 1 ? '' : 's'} -- ${formatHours(group.hoursWorked)}</span>`;
+      header.className = group.isCurrentUser ? 'resource-group-header resource-group-header--me' : 'resource-group-header';
+      const nameLabel = escapeHtml(group.resourceName) + (group.isCurrentUser ? ' (You)' : '');
+      header.innerHTML = `<span>${nameLabel}</span><span class="count">${group.count} ticket${group.count === 1 ? '' : 's'} -- ${formatHours(group.hoursWorked)}</span>`;
       groupEl.appendChild(header);
 
-      const table = document.createElement('table');
-      table.className = 'ticket-times-table';
-      table.innerHTML = `
-        <thead>
-          <tr><th>Company</th><th>Ticket #</th><th>Title</th><th>Time</th></tr>
-        </thead>
-        <tbody>
-          ${group.tickets
-            .map(
-              (t) => `
-            <tr>
-              <td>${escapeHtml(t.company)}</td>
-              <td class="ticket-number">${ticketLink(t)}</td>
-              <td>${escapeHtml(t.title)}</td>
-              <td class="ticket-number">${formatHours(t.hoursWorked)}</td>
-            </tr>`
-            )
-            .join('')}
-        </tbody>
-      `;
-      groupEl.appendChild(table);
+      // Sub-grouped by Ticket Category (already ordered Z->A by the server),
+      // each with its own small heading and its own table -- same fixed-width
+      // column CSS (.ticket-times-table) as every other table on this page,
+      // so categories stack in alignment just like the technician tables do.
+      for (const cat of group.categories) {
+        const catHeader = document.createElement('div');
+        catHeader.className = 'ticket-category-header';
+        catHeader.textContent = `${cat.category} (${cat.tickets.length})`;
+        groupEl.appendChild(catHeader);
+
+        const table = document.createElement('table');
+        table.className = 'ticket-times-table';
+        table.innerHTML = `
+          <thead>
+            <tr><th>Company</th><th>Status</th><th>Ticket #</th><th>Title</th><th>Time</th></tr>
+          </thead>
+          <tbody>
+            ${cat.tickets
+              .map(
+                (t) => `
+              <tr>
+                <td>${escapeHtml(t.company)}</td>
+                <td>${escapeHtml(t.status)}</td>
+                <td class="ticket-number">${ticketLink(t)}</td>
+                <td>${escapeHtml(t.title)}</td>
+                <td class="ticket-number">${formatHours(t.hoursWorked)}</td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        `;
+        table.querySelectorAll('a.ticket-link').forEach((a) => a.addEventListener('click', openTicketInNewWindow));
+        groupEl.appendChild(table);
+      }
       resultsEl.appendChild(groupEl);
     }
   }
@@ -131,7 +145,18 @@ export function mount(container) {
   function ticketLink(t) {
     const label = escapeHtml(t.ticketNumber);
     if (!t.ticketUrl) return label;
-    return `<a href="${escapeHtml(t.ticketUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    return `<a href="${escapeHtml(t.ticketUrl)}" class="ticket-link" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  }
+
+  // A bare target="_blank" opens as a new TAB under every modern browser's
+  // default settings, by request this page wants an actual new WINDOW --
+  // passing explicit size features to window.open() is what makes browsers
+  // treat it as a window instead. target="_blank"/rel stay on the <a> itself
+  // as a plain-tab fallback for anything that reaches the link without a
+  // click event (e.g. "open link in new tab" from a context menu).
+  function openTicketInNewWindow(e) {
+    e.preventDefault();
+    window.open(e.currentTarget.href, '_blank', 'noopener,noreferrer,width=1200,height=900');
   }
 
   function escapeHtml(str) {

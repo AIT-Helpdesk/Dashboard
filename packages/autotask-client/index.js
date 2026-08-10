@@ -84,6 +84,24 @@ async function resolveResourceName(client, id) {
   }
 }
 
+// Maps the signed-in user's Entra email (from the dashboard's own auth
+// session) to their Autotask Resource ID -- lets a page single out "my"
+// rows without the user having to pick themselves from a technician list.
+// Cached per email (lowercased -- Autotask's own match is effectively
+// case-insensitive but the cache key shouldn't rely on that) since the
+// mapping is stable for the life of the server process, same rationale as
+// every other resolve*/get* cache in this file.
+const resourceIdByEmailCache = new Map();
+async function resolveResourceIdByEmail(client, email) {
+  if (!email) return null;
+  const key = email.toLowerCase();
+  if (resourceIdByEmailCache.has(key)) return resourceIdByEmailCache.get(key);
+  const matches = await listAll(client.resources, [{ op: 'eq', field: 'email', value: email }]);
+  const id = matches.length > 0 ? matches[0].id : null;
+  resourceIdByEmailCache.set(key, id);
+  return id;
+}
+
 const companyNameCache = new Map();
 async function resolveCompanyName(client, id) {
   if (id === null || id === undefined) return 'Unknown';
@@ -362,6 +380,7 @@ module.exports = {
   mapWithConcurrency,
   resolveResourceName,
   resolveCompanyName,
+  resolveResourceIdByEmail,
   listAll,
   getTicketUrl,
   getContractUrl,
