@@ -119,11 +119,13 @@ body {
 
 .nav-category-header {
   padding: 0.55rem 0.75rem;
-  font-size: 0.75rem;
+  font-size: 0.85rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--muted);
+  /* Same green used elsewhere on the dashboard (.cell-flag-green) rather
+     than a new one-off shade. */
+  color: #16a34a;
   border-radius: 6px;
   cursor: pointer;
   user-select: none;
