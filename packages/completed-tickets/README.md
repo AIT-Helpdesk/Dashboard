@@ -20,9 +20,11 @@ Dashboard page: pick a date, see every ticket completed that day across all clie
 - Date filtering compares against **AEST** calendar-day boundaries for the selected date (`aestDayBoundsIso()`, `@dashboard/autotask-client`) -- not UTC, and not the server's own local clock.
 - Resource and company names are resolved via `@dashboard/autotask-client` and cached in memory for the life of the server process.
 
-## Hours column
+## Time column
 
 Each row shows the sum of `TimeEntries.hoursWorked` logged against that ticket -- **all** of its time entries, not just ones dated the same day as the ticket's completion. A ticket completed today can easily carry time logged on earlier days, and that work still counts toward "how many hours did this ticket take." Fetched via `fetchByFieldIn(client.timeEntries, 'ticketID', ticketIds)` (shared, `@dashboard/autotask-client`), one chunked query rather than a per-ticket lookup. Per-technician group headers and the page summary both total just their own tickets' hours.
+
+Displayed as `HH:MM` (`formatHours()` in `client.js`), not Autotask's raw decimal (e.g. `1.2667`) -- rounded to the nearest minute, rolling over into the next hour rather than ever showing `:60`.
 
 ## Review? column
 

@@ -38,6 +38,10 @@
       {
         "type": "page",
         "id": "completed-tickets"
+      },
+      {
+        "type": "page",
+        "id": "ticket-times"
       }
     ]
   },

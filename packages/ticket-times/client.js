@@ -1,5 +1,5 @@
-export const id = "completed-tickets";
-export const label = "Completed Tickets";
+export const id = "ticket-times";
+export const label = "Ticket Times";
 
 // Module-scope, not inside mount() -- the shell fully tears down and re-mounts a
 // page's DOM on every navigation away and back, but the dynamically-imported
@@ -12,7 +12,7 @@ let lastData = null;
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
-      <h1>Completed Tickets by Technician</h1>
+      <h1>Ticket Times by Technician</h1>
       <form id="date-form" class="date-form">
         <label for="date-input">Date</label>
         <input type="date" id="date-input" name="date" required />
@@ -50,12 +50,12 @@ export function mount(container) {
     button.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
-    statusEl.textContent = `Loading tickets completed on ${date}...`;
+    statusEl.textContent = `Loading time entries for ${date}...`;
     summaryEl.hidden = true;
     resultsEl.innerHTML = '';
 
     try {
-      const res = await fetch(`/api/completed-tickets?date=${encodeURIComponent(date)}`);
+      const res = await fetch(`/api/ticket-times?date=${encodeURIComponent(date)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastDate = date;
@@ -73,10 +73,10 @@ export function mount(container) {
     statusEl.hidden = true;
 
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> ticket${data.totalCount === 1 ? '' : 's'} completed on ${data.date}<span class="inline-subtext"> -- ${formatHours(data.totalHoursWorked)} (h:mm) logged against them</span>`;
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> ticket${data.totalCount === 1 ? '' : 's'} with time logged on ${data.date}<span class="inline-subtext"> -- ${formatHours(data.totalHoursWorked)} (h:mm) total</span>`;
 
     if (data.totalCount === 0) {
-      resultsEl.innerHTML = '<p class="status">No tickets completed on this date.</p>';
+      resultsEl.innerHTML = '<p class="status">No time entries logged against tickets on this date.</p>';
       return;
     }
 
@@ -91,10 +91,10 @@ export function mount(container) {
       groupEl.appendChild(header);
 
       const table = document.createElement('table');
-      table.className = 'completed-tickets-table';
+      table.className = 'ticket-times-table';
       table.innerHTML = `
         <thead>
-          <tr><th>Company</th><th>Ticket #</th><th>Title</th><th>Time</th><th></th></tr>
+          <tr><th>Company</th><th>Ticket #</th><th>Title</th><th>Time</th></tr>
         </thead>
         <tbody>
           ${group.tickets
@@ -105,7 +105,6 @@ export function mount(container) {
               <td class="ticket-number">${ticketLink(t)}</td>
               <td>${escapeHtml(t.title)}</td>
               <td class="ticket-number">${formatHours(t.hoursWorked)}</td>
-              <td>${escapeHtml(t.askForReview || '')}</td>
             </tr>`
             )
             .join('')}
@@ -118,11 +117,10 @@ export function mount(container) {
 
   if (lastData) render(lastData);
 
-  // HH:MM, by request -- Autotask's hoursWorked is a decimal (e.g. 1.2667),
-  // which doesn't read as a duration at a glance. Rounds to the nearest
-  // minute (any sub-minute fraction Autotask itself carries is display noise
-  // here); a minute count that rounds up to 60 rolls over into the next hour
-  // rather than ever showing ":60".
+  // HH:MM, same as Completed Tickets -- Autotask's hoursWorked is a decimal
+  // (e.g. 1.2667), which doesn't read as a duration at a glance. Rounds to
+  // the nearest minute; a minute count that rounds up to 60 rolls over into
+  // the next hour rather than ever showing ":60".
   function formatHours(hours) {
     const totalMinutes = Math.round((hours || 0) * 60);
     const h = Math.floor(totalMinutes / 60);
