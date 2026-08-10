@@ -49,12 +49,10 @@ body {
   padding: 1.5rem 1rem;
 }
 
-.sidebar-title {
-  font-size: 0.8rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
+.sidebar-logo {
+  display: block;
+  max-width: 100%;
+  height: auto;
   margin-bottom: 1rem;
   padding: 0 0.75rem;
 }
@@ -330,6 +328,144 @@ h1 {
   color: var(--muted);
   font-weight: 400;
   font-size: 0.9rem;
+}
+
+/* Completed Tickets: each technician's tickets render as their own separate
+   <table>, sized independently by the browser based only on that table's own
+   content -- without fixed widths, "Company"/"Hours"/etc. drift out of
+   alignment from one technician's table to the next as you scroll down the
+   page. Scoped to this page's own table class (not the shared
+   .resource-group table) so it doesn't affect other pages -- e.g. Ingram
+   Subscriptions reuses .resource-group with a completely different column
+   set. Title has no width set on purpose: with table-layout: fixed, a column
+   left unspecified absorbs whatever space the other columns don't claim.*/
+.completed-tickets-table {
+  table-layout: fixed;
+}
+
+.completed-tickets-table th:nth-child(1),
+.completed-tickets-table td:nth-child(1) {
+  width: 22%;
+}
+
+.completed-tickets-table th:nth-child(2),
+.completed-tickets-table td:nth-child(2) {
+  width: 12%;
+}
+
+.completed-tickets-table th:nth-child(4),
+.completed-tickets-table td:nth-child(4) {
+  width: 8%;
+}
+
+.completed-tickets-table th:nth-child(5),
+.completed-tickets-table td:nth-child(5) {
+  width: 10%;
+}
+
+/* Same fixed-column-width treatment as .completed-tickets-table above, one
+   block per page that stacks several same-shaped tables (one per
+   technician/company/day) down the page -- Contract Services, Asked for
+   Review, Tickets Created Today, Ingram Subscriptions. Each page gets its own
+   class (rather than sharing .resource-group table) because their column
+   sets are all different. The column left with no width absorbs whatever
+   space the others don't claim -- always the one holding the longest/most
+   variable text (service/ticket title, subscription name). */
+
+.contract-services-table {
+  table-layout: fixed;
+}
+.contract-services-table th:nth-child(2),
+.contract-services-table td:nth-child(2) {
+  width: 10%;
+}
+.contract-services-table th:nth-child(3),
+.contract-services-table td:nth-child(3) {
+  width: 7%;
+}
+.contract-services-table th:nth-child(4),
+.contract-services-table td:nth-child(4) {
+  width: 8%;
+}
+.contract-services-table th:nth-child(5),
+.contract-services-table td:nth-child(5) {
+  width: 8%;
+}
+.contract-services-table th:nth-child(6),
+.contract-services-table td:nth-child(6) {
+  width: 8%;
+}
+.contract-services-table th:nth-child(7),
+.contract-services-table td:nth-child(7) {
+  width: 14%;
+}
+.contract-services-table th:nth-child(8),
+.contract-services-table td:nth-child(8) {
+  width: 10%;
+}
+
+.asked-for-review-table {
+  table-layout: fixed;
+}
+.asked-for-review-table th:nth-child(1),
+.asked-for-review-table td:nth-child(1) {
+  width: 22%;
+}
+.asked-for-review-table th:nth-child(2),
+.asked-for-review-table td:nth-child(2) {
+  width: 12%;
+}
+.asked-for-review-table th:nth-child(4),
+.asked-for-review-table td:nth-child(4) {
+  width: 16%;
+}
+
+.tickets-created-table {
+  table-layout: fixed;
+}
+.tickets-created-table th:nth-child(1),
+.tickets-created-table td:nth-child(1) {
+  width: 20%;
+}
+.tickets-created-table th:nth-child(2),
+.tickets-created-table td:nth-child(2) {
+  width: 12%;
+}
+.tickets-created-table th:nth-child(3),
+.tickets-created-table td:nth-child(3) {
+  width: 10%;
+}
+
+.ingram-subscriptions-table {
+  table-layout: fixed;
+}
+.ingram-subscriptions-table th:nth-child(2),
+.ingram-subscriptions-table td:nth-child(2) {
+  width: 8%;
+}
+.ingram-subscriptions-table th:nth-child(3),
+.ingram-subscriptions-table td:nth-child(3) {
+  width: 8%;
+}
+.ingram-subscriptions-table th:nth-child(4),
+.ingram-subscriptions-table td:nth-child(4) {
+  width: 9%;
+}
+.ingram-subscriptions-table th:nth-child(5),
+.ingram-subscriptions-table td:nth-child(5) {
+  width: 11%;
+}
+.ingram-subscriptions-table th:nth-child(6),
+.ingram-subscriptions-table td:nth-child(6) {
+  width: 9%;
+}
+.ingram-subscriptions-table th:nth-child(7),
+.ingram-subscriptions-table td:nth-child(7) {
+  width: 9%;
+}
+.ingram-subscriptions-table th:nth-child(8),
+.ingram-subscriptions-table td:nth-child(8) {
+  width: 9%;
 }
 
 table {

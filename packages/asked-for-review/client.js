@@ -92,6 +92,7 @@ export function mount(container) {
       }
 
       const table = document.createElement('table');
+      table.className = 'asked-for-review-table';
       table.innerHTML = `
         <thead>
           <tr><th>Company</th><th>Ticket #</th><th>Title</th><th>Completed By</th></tr>

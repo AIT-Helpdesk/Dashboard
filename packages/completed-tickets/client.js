@@ -73,7 +73,7 @@ export function mount(container) {
     statusEl.hidden = true;
 
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> ticket${data.totalCount === 1 ? '' : 's'} completed on ${data.date}`;
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> ticket${data.totalCount === 1 ? '' : 's'} completed on ${data.date}<span class="inline-subtext"> -- ${formatHours(data.totalHoursWorked)} hours logged against them</span>`;
 
     if (data.totalCount === 0) {
       resultsEl.innerHTML = '<p class="status">No tickets completed on this date.</p>';
@@ -87,13 +87,14 @@ export function mount(container) {
 
       const header = document.createElement('div');
       header.className = 'resource-group-header';
-      header.innerHTML = `<span>${escapeHtml(group.resourceName)}</span><span class="count">${group.count} ticket${group.count === 1 ? '' : 's'}</span>`;
+      header.innerHTML = `<span>${escapeHtml(group.resourceName)}</span><span class="count">${group.count} ticket${group.count === 1 ? '' : 's'} -- ${formatHours(group.hoursWorked)} hrs</span>`;
       groupEl.appendChild(header);
 
       const table = document.createElement('table');
+      table.className = 'completed-tickets-table';
       table.innerHTML = `
         <thead>
-          <tr><th>Company</th><th>Ticket #</th><th>Title</th><th></th></tr>
+          <tr><th>Company</th><th>Ticket #</th><th>Title</th><th>Hours</th><th></th></tr>
         </thead>
         <tbody>
           ${group.tickets
@@ -103,6 +104,7 @@ export function mount(container) {
               <td>${escapeHtml(t.company)}</td>
               <td class="ticket-number">${ticketLink(t)}</td>
               <td>${escapeHtml(t.title)}</td>
+              <td class="ticket-number">${formatHours(t.hoursWorked)}</td>
               <td>${escapeHtml(t.askForReview || '')}</td>
             </tr>`
             )
@@ -115,6 +117,13 @@ export function mount(container) {
   }
 
   if (lastData) render(lastData);
+
+  // Trims to at most 2 decimal places but drops trailing zeros (Autotask
+  // hoursWorked is often a clean 0.5/1/1.25 -- "1" and "1.5" read better than
+  // "1.00" and "1.50" would on every row).
+  function formatHours(hours) {
+    return (Math.round((hours || 0) * 100) / 100).toString();
+  }
 
   function ticketLink(t) {
     const label = escapeHtml(t.ticketNumber);

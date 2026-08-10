@@ -108,6 +108,7 @@ export function mount(container) {
       groupEl.appendChild(header);
 
       const table = document.createElement('table');
+      table.className = 'contract-services-table';
       table.innerHTML = `
         <thead>
           <tr><th>Service</th><th>Contract</th><th title="Bracketed figure is the unit count for the 1st of next month, where already known">Units</th><th>Cost</th><th>Sell</th><th>Total</th><th>Period</th><th>Last Changed</th></tr>

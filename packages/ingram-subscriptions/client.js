@@ -117,6 +117,7 @@ export function mount(container) {
       groupEl.appendChild(header);
 
       const table = document.createElement('table');
+      table.className = 'ingram-subscriptions-table';
       table.innerHTML = `
         <thead>
           <tr><th>Subscription</th><th>Status</th><th>Licenses</th><th>Term</th><th>Billing Period</th><th>Created</th><th>Renews</th><th>Expires</th></tr>

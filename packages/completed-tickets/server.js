@@ -5,6 +5,7 @@ const {
   resolveResourceName,
   resolveCompanyName,
   listAll,
+  fetchByFieldIn,
   getTicketUrl,
   getTicketUdf,
   aestDayBoundsIso,
@@ -55,6 +56,20 @@ router.get('/', async (req, res) => {
     await mapWithConcurrency(uniqueResourceIDs, 3, (id) => resolveResourceName(client, id));
     await mapWithConcurrency(uniqueCompanyIDs, 3, (id) => resolveCompanyName(client, id));
 
+    // Hours logged against these specific tickets -- ALL of their time entries,
+    // not just ones dated on the ticket's completion day (a ticket completed
+    // today can easily carry time logged on earlier days too, and that work
+    // still counts toward "how many hours did this ticket take"). Grouped by
+    // ticket ID so each row/group below can total just its own tickets.
+    const ticketIds = tickets.map((t) => t.id);
+    const timeEntries = ticketIds.length > 0
+      ? await fetchByFieldIn(client.timeEntries, 'ticketID', ticketIds)
+      : [];
+    const hoursByTicketId = new Map();
+    for (const te of timeEntries) {
+      hoursByTicketId.set(te.ticketID, (hoursByTicketId.get(te.ticketID) || 0) + (te.hoursWorked || 0));
+    }
+
     const enriched = [];
     for (const t of tickets) {
       enriched.push({
@@ -69,6 +84,7 @@ router.get('/', async (req, res) => {
         completedDate: t.completedDate || t.resolvedDateTime,
         priority: t.priority,
         askForReview: getTicketUdf(t, 'Ask For Review'),
+        hoursWorked: hoursByTicketId.get(t.id) || 0,
       });
     }
 
@@ -84,6 +100,7 @@ router.get('/', async (req, res) => {
       .map((g) => ({
         ...g,
         count: g.tickets.length,
+        hoursWorked: g.tickets.reduce((sum, t) => sum + t.hoursWorked, 0),
         tickets: [...g.tickets].sort((a, b) => a.company.localeCompare(b.company)),
       }))
       .sort((a, b) => b.count - a.count);
@@ -91,6 +108,7 @@ router.get('/', async (req, res) => {
     res.json({
       date,
       totalCount: enriched.length,
+      totalHoursWorked: enriched.reduce((sum, t) => sum + t.hoursWorked, 0),
       byResource,
     });
   } catch (err) {

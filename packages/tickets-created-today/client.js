@@ -91,6 +91,7 @@ export function mount(container) {
       groupEl.appendChild(header);
 
       const table = document.createElement('table');
+      table.className = 'tickets-created-table';
       table.innerHTML = `
         <thead>
           <tr><th>Client</th><th>Ticket #</th><th>Created</th><th>Title</th></tr>
