@@ -1,0 +1,74 @@
+[
+  {
+    "type": "category",
+    "id": "client-info",
+    "label": "Client Info",
+    "children": [
+      {
+        "type": "page",
+        "id": "client-details"
+      },
+      {
+        "type": "page",
+        "id": "client-contacts"
+      },
+      {
+        "type": "page",
+        "id": "client-activity"
+      },
+      {
+        "type": "page",
+        "id": "classification-summary"
+      }
+    ]
+  },
+  {
+    "type": "category",
+    "id": "ticket-info",
+    "label": "Ticket Info",
+    "children": [
+      {
+        "type": "page",
+        "id": "asked-for-review"
+      },
+      {
+        "type": "page",
+        "id": "tickets-created-today"
+      },
+      {
+        "type": "page",
+        "id": "completed-tickets"
+      }
+    ]
+  },
+  {
+    "type": "category",
+    "id": "financials",
+    "label": "Client Financials",
+    "children": [
+      {
+        "type": "page",
+        "id": "contract-services"
+      },
+      {
+        "type": "page",
+        "id": "client-financials"
+      }
+    ]
+  },
+  {
+    "type": "category",
+    "id": "licensing",
+    "label": "Licensing",
+    "children": [
+      {
+        "type": "page",
+        "id": "ingram-subscriptions"
+      },
+      {
+        "type": "page",
+        "id": "csp-customers"
+      }
+    ]
+  }
+]

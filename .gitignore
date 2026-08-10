@@ -3,4 +3,3 @@ node_modules/
 *.log
 logs/
 server.pid
-packages/shell/nav-layout.json
