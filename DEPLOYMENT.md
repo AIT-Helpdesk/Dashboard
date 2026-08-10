@@ -137,4 +137,14 @@ Visit `https://dashboard.ambientit.com.au` from a machine that isn't the server 
 
 ## Updating later
 
-There's no git remote configured for this project (checked: local repo, no `origin`), so future updates are the same manual copy: re-zip locally (same exclusions as `autotask-dashboard-deploy.zip`), copy over RDP, extract over the existing folder, `npm install` again if dependencies changed, then `Restart-Service AmbientDashboard`. Worth setting up a real git remote (a private GitHub repo) at some point so this is a `git pull` instead.
+The project now has a real git remote (`AIT-Helpdesk/Dashboard` on GitHub, cloned at `C:\apps\autotask-dashboard-git` on the server), so updates are just:
+
+```powershell
+cd C:\apps\autotask-dashboard-git
+git checkout -- packages/shell/nav-layout.json   # discard any local server-only edits to the sidebar layout -- see below
+git pull
+npm install          # only if dependencies changed
+Restart-Service AmbientDashboard
+```
+
+**Why the `git checkout` line, every time**: `packages/shell/nav-layout.json` (the sidebar layout) is checked into git, and can also be edited directly on the server via its own `localhost:3000` (see README.md "Deploying the sidebar layout"). If that's ever been done since the last deploy, the file now has uncommitted local changes -- and `git pull` refuses to overwrite a tracked file that has those, failing with a "local changes would be overwritten" error instead of silently discarding them. Running `git checkout -- packages/shell/nav-layout.json` first always resolves that ahead of time (a no-op if there are no local changes, a clean discard if there are), so `git pull` never has anything to fail on. This is a deliberate choice, by request -- git is the source of truth for this file; any layout change made only on the server, never committed, is expected to be lost on the next deploy.
