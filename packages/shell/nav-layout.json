@@ -71,6 +71,10 @@
       },
       {
         "type": "page",
+        "id": "subscriptions-expiring"
+      },
+      {
+        "type": "page",
         "id": "csp-customers"
       }
     ]

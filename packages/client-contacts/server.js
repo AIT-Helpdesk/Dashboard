@@ -94,6 +94,8 @@ router.get('/', async (req, res) => {
         firstName: c.firstName,
         lastName: c.lastName,
         email: c.emailAddress || null,
+        phone: c.phone || null,
+        mobilePhone: c.mobilePhone || null,
       });
     }
     rows.sort((a, b) => a.companyName.localeCompare(b.companyName) || a.lastName.localeCompare(b.lastName));

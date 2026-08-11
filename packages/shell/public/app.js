@@ -18,6 +18,43 @@ const navList = document.getElementById('nav-list');
 const content = document.getElementById('page-content');
 const userInfoEl = document.getElementById('user-info');
 
+// Light/dark toggle -- per-browser (localStorage), like expanded-categories
+// above, not the shared server-side nav layout. No stored preference means
+// "follow the OS setting" (styles.css's prefers-color-scheme media query),
+// same as before this button existed; picking a theme here stores an
+// explicit override that wins regardless of the OS setting from then on. The
+// actual attribute for a RETURNING visit is applied by the inline script in
+// index.html's <head>, before this module even runs, to avoid a flash of the
+// wrong theme -- this only needs to handle the click itself and set the
+// button's own label/icon to match on load.
+const THEME_KEY = 'dashboard.theme';
+const themeToggle = document.getElementById('theme-toggle');
+
+function effectiveTheme() {
+  const stored = document.documentElement.getAttribute('data-theme');
+  if (stored === 'light' || stored === 'dark') return stored;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function renderThemeToggle() {
+  const isDark = effectiveTheme() === 'dark';
+  themeToggle.textContent = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
+  themeToggle.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
+}
+
+themeToggle.addEventListener('click', () => {
+  const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    // localStorage unavailable -- the choice still applies for this page load, just won't persist.
+  }
+  renderThemeToggle();
+});
+
+renderThemeToggle();
+
 async function renderUserInfo() {
   try {
     const res = await nativeFetch('/api/me');

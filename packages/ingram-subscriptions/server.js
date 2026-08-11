@@ -1,5 +1,4 @@
 const express = require('express');
-const axios = require('axios');
 // The one piece of @dashboard/autotask-client this page does use -- not for
 // Autotask data (it has none), but to reuse the dashboard-wide wildcard
 // convention (`*` prefix/suffix -> beginsWith/endsWith/contains) so "search
@@ -8,61 +7,15 @@ const axios = require('axios');
 const { matchesWildcard } = require('@dashboard/autotask-client');
 
 // Ingram Micro Cloud Marketplace API (api.cloud.im) -- a wholly separate
-// system from Autotask, so this page owns its own small client rather than
-// reaching into @dashboard/autotask-client for API access. If a second page
-// ever needs this API too, this is the point to promote it into a shared
-// package the same way @dashboard/autotask-client got split out.
-const {
-  INGRAM_CLOUD_API_BASE: BASE,
-  INGRAM_CLOUD_USERNAME: USERNAME,
-  INGRAM_CLOUD_PASSWORD: PASSWORD,
-  INGRAM_CLOUD_SUBSCRIPTION_KEY: SUB_KEY,
-  INGRAM_MARKETPLACE: MARKETPLACE,
-} = process.env;
+// system from Autotask. Auth + pagination plumbing lives in
+// @dashboard/ingram-client, shared with the Subscriptions Expiring page (the
+// point at which this got promoted out of being this page's own private
+// client, per the note that used to live here).
+const { getToken, fetchAllPages, getSubscriptionDetail } = require('@dashboard/ingram-client');
 
 // Subscription NAME patterns excluded from this page entirely, by request --
 // wildcard convention same as the client-name filter (matchesWildcard()).
 const EXCLUDED_NAME_PATTERNS = ['Windows 11 Home to Pro Upgrade *'];
-
-// Bearer token, cached in-process -- Ingram issues these valid for 1500s
-// (25 min) and expects the caller to reuse one rather than re-authenticating
-// per request. Refreshed 60s before actual expiry so a request that starts
-// just before the cutoff doesn't get handed a token that dies mid-flight.
-let tokenCache = null; // { token, expiresAt }
-async function getToken() {
-  if (tokenCache && Date.now() < tokenCache.expiresAt) return tokenCache.token;
-  const res = await axios.post(
-    `${BASE}/token`,
-    { marketplace: MARKETPLACE },
-    {
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${USERNAME}:${PASSWORD}`).toString('base64')}`,
-        'X-Subscription-Key': SUB_KEY,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-  tokenCache = { token: res.data.token, expiresAt: Date.now() + (res.data.expiresInSeconds - 60) * 1000 };
-  return tokenCache.token;
-}
-
-// Ingram paginates every list endpoint via offset/limit + a `pagination.total`
-// in the response body (not a next-page cursor/URL) -- this walks pages at
-// the max page size (500, confirmed against the real API) until `total` is
-// covered. `extraParams` carries endpoint-specific filters, e.g. `status`.
-async function fetchAllPages(path, token, extraParams = {}) {
-  const headers = { Authorization: `Bearer ${token}`, 'X-Subscription-Key': SUB_KEY };
-  const limit = 500;
-  let offset = 0;
-  const all = [];
-  for (;;) {
-    const res = await axios.get(`${BASE}${path}`, { headers, params: { ...extraParams, limit, offset } });
-    all.push(...res.data.data);
-    offset += res.data.data.length;
-    if (res.data.data.length === 0 || offset >= res.data.pagination.total) break;
-  }
-  return all;
-}
 
 // Confirmed against the real API: the list endpoint's rows don't carry
 // license quantity, and there's no fields/include/expand param that adds it
@@ -104,10 +57,8 @@ async function mapWithConcurrency(items, limit, fn) {
 async function fetchLicenseCount(id, token, attempt = 1) {
   const MAX_ATTEMPTS = 6;
   try {
-    const res = await axios.get(`${BASE}/subscriptions/${id}`, {
-      headers: { Authorization: `Bearer ${token}`, 'X-Subscription-Key': SUB_KEY },
-    });
-    const products = res.data.products || [];
+    const detail = await getSubscriptionDetail(id, token);
+    const products = detail.products || [];
     if (products.length === 0) return null;
     return products.reduce((sum, p) => sum + (p.quantity || 0), 0);
   } catch (err) {

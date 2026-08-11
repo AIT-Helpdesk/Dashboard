@@ -12,8 +12,10 @@
   --row-changed-bg: #f2faf3;
 }
 
+/* System-preference dark mode -- guarded so an explicit light choice (the
+   toggle button, see app.js) always wins over the OS setting. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #14161a;
     --fg: #eef0f3;
     --muted: #9aa3af;
@@ -26,6 +28,25 @@
     --row-changed-bg: #161c18;
   }
 }
+
+/* Explicit dark choice -- same values as the media-query block above, but
+   applies regardless of the OS setting so the toggle works in both
+   directions (light OS + dark chosen, and dark OS + light chosen). */
+:root[data-theme="dark"] {
+  --bg: #14161a;
+  --fg: #eef0f3;
+  --muted: #9aa3af;
+  --border: #2a2e35;
+  --card: #1b1e24;
+  --accent: #5b8def;
+  --section-header-bg: #1c2530;
+  --row-alt-bg: #191c21;
+  --row-warn-bg: #21191d;
+  --row-changed-bg: #161c18;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 
@@ -198,6 +219,28 @@ body {
 .user-signout:hover {
   color: var(--accent);
   text-decoration: underline;
+}
+
+/* Sits below user-info, the last thing in the sidebar. */
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .page-content {
@@ -496,20 +539,28 @@ h1 {
   background: var(--section-header-bg);
 }
 
-/* Same light green used elsewhere for "this row is green" shading
-   (tr.row-units-changed on Contract Services) rather than a new one-off
-   tint, shading the full width of the heading so it reads as a distinct
-   banded row rather than just colored text. Deliberately lighter-weight
-   than .resource-group-header otherwise (smaller, less padding) since it's
-   a second level of grouping, not a new top-level section. */
-.ticket-category-header {
+/* Full-width shaded heading for a second level of grouping under a page's
+   main sections -- Ticket Times' per-technician Ticket Category headers,
+   Subscriptions Expiring's Terminating/Renewing split. Deliberately
+   lighter-weight than .resource-group-header (smaller, less padding) since
+   it's a sub-grouping, not a new top-level section. Green/red variants reuse
+   the same light tints already established elsewhere for "this row is
+   green/needs attention" shading (tr.row-units-changed / tr.row-no-next-period
+   on Contract Services), rather than new one-off colors. */
+.section-heading {
   padding: 0.4rem 1rem;
   font-size: 0.95rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.02em;
+}
+.section-heading--green {
   color: #16a34a;
   background: var(--row-changed-bg);
+}
+.section-heading--red {
+  color: #dc2626;
+  background: var(--row-warn-bg);
 }
 
 table {

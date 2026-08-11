@@ -26,11 +26,11 @@ Unlike Client Details, there is no hardcoded restriction to Customer/Prospect co
 
 ## Table columns
 
-Exactly four, per request: **Company Name** (linked to the company's Detail page in Autotask, `getCompanyUrl()`), **First Name**, **Last Name**, **Email** (`Contacts.emailAddress`).
+**Company Name** (linked to the company's Detail page in Autotask, `getCompanyUrl()`), **First Name**, **Last Name**, **Email** (`Contacts.emailAddress`), **Phone** (`Contacts.phone`), **Mobile** (`Contacts.mobilePhone`). Phone/Mobile are shown as Autotask stores them, with no reformatting -- blank when the contact record has no value set.
 
 ## Export CSV
 
-The button next to Search downloads the currently-displayed result set as a CSV (same four columns as the table). Client-side only, same pattern as Client Details: re-serializes `lastData` from the last successful search rather than making a new request, and shows an inline error instead of downloading an empty file if nothing's been searched yet.
+The button next to Search downloads the currently-displayed result set as a CSV (same columns as the table). Client-side only, same pattern as Client Details: re-serializes `lastData` from the last successful search rather than making a new request, and shows an inline error instead of downloading an empty file if nothing's been searched yet.
 
 ## Shared utilities
 

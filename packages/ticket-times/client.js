@@ -97,7 +97,7 @@ export function mount(container) {
       // so categories stack in alignment just like the technician tables do.
       for (const cat of group.categories) {
         const catHeader = document.createElement('div');
-        catHeader.className = 'ticket-category-header';
+        catHeader.className = 'section-heading section-heading--green';
         catHeader.textContent = `${cat.category} (${cat.tickets.length})`;
         groupEl.appendChild(catHeader);
 

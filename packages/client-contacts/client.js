@@ -105,6 +105,8 @@ export function mount(container) {
     { header: 'First Name', value: (c) => c.firstName },
     { header: 'Last Name', value: (c) => c.lastName },
     { header: 'Email', value: (c) => c.email },
+    { header: 'Phone', value: (c) => c.phone },
+    { header: 'Mobile', value: (c) => c.mobilePhone },
   ];
 
   function csvField(value) {
@@ -150,7 +152,7 @@ export function mount(container) {
     const table = document.createElement('table');
     table.innerHTML = `
       <thead>
-        <tr><th>Company Name</th><th>First Name</th><th>Last Name</th><th>Email</th></tr>
+        <tr><th>Company Name</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Phone</th><th>Mobile</th></tr>
       </thead>
       <tbody>
         ${data.contacts
@@ -161,6 +163,8 @@ export function mount(container) {
             <td>${escapeHtml(c.firstName)}</td>
             <td>${escapeHtml(c.lastName)}</td>
             <td>${escapeHtml(c.email)}</td>
+            <td class="ticket-number">${escapeHtml(c.phone)}</td>
+            <td class="ticket-number">${escapeHtml(c.mobilePhone)}</td>
           </tr>`
           )
           .join('')}

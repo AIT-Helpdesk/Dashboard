@@ -1,11 +1,11 @@
 {
-  "name": "@dashboard/ingram-subscriptions",
+  "name": "@dashboard/subscriptions-expiring",
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
   "dashboardPage": {
-    "id": "ingram-subscriptions",
-    "label": "Ingram Subscriptions",
+    "id": "subscriptions-expiring",
+    "label": "Subscriptions Expiring",
     "client": "client.js",
     "server": "server.js"
   },
