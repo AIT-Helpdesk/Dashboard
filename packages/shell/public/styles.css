@@ -736,3 +736,130 @@ tr.row-units-changed {
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+/* Vertical stacked bar chart -- Security Alerts' weekly chart (critical +
+   medium severity per day, Monday-Sunday as 7 columns). column-reverse
+   stacks the two fill segments from the baseline up (medium first/bottom,
+   critical on top), same "2px gap between stacked segments, track does the
+   rounding via its own overflow:hidden" approach as a horizontal stacked
+   bar, just rotated. Colors match the severity flags already used in the
+   table below the chart (.cell-flag-red / .cell-flag-blue), not new ones.
+   Each column is a real <button> (click jumps to that day) so click and
+   keyboard both work, same rationale as the horizontal .bar-row elsewhere. */
+.vbar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  padding-top: 1.5rem;
+}
+
+.vbar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.35rem 0.25rem;
+}
+
+.vbar-col:hover {
+  background: var(--card);
+}
+
+.vbar-col:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Marks each week boundary within the multi-week chart -- a thin rule +
+   extra left margin so consecutive weeks read as visually distinct blocks
+   rather than one ambiguous run of columns. */
+.vbar-col--week-start {
+  margin-left: 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--border);
+}
+
+/* The boundary of the SELECTED week specifically -- same spacing as
+   .vbar-col--week-start, but an accent-colored, slightly thicker rule so it
+   stands out among the other (earlier) week boundaries. */
+.vbar-col--current-week-start {
+  margin-left: 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--accent);
+}
+
+.vbar-col.active {
+  background: var(--section-header-bg);
+}
+.vbar-col.active .vbar-label {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.vbar-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.vbar-track {
+  width: 28px;
+  height: 140px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column-reverse;
+}
+
+.vbar-fill--critical,
+.vbar-fill--medium {
+  display: block;
+  width: 100%;
+}
+.vbar-fill--critical {
+  background: #dc2626;
+}
+.vbar-fill--medium {
+  background: var(--accent);
+}
+
+.vbar-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.legend-swatch--critical {
+  background: #dc2626;
+}
+.legend-swatch--medium {
+  background: var(--accent);
+}

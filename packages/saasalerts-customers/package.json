@@ -1,0 +1,17 @@
+{
+  "name": "@dashboard/saasalerts-customers",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "saasalerts-customers",
+    "label": "SaaS Alerts Customers",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/saasalerts-client": "*",
+    "express": "^4.19.2"
+  }
+}

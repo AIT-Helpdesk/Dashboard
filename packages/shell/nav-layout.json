@@ -78,5 +78,20 @@
         "id": "csp-customers"
       }
     ]
+  },
+  {
+    "type": "category",
+    "id": "security",
+    "label": "Security",
+    "children": [
+      {
+        "type": "page",
+        "id": "saasalerts-alerts"
+      },
+      {
+        "type": "page",
+        "id": "saasalerts-customers"
+      }
+    ]
   }
 ]

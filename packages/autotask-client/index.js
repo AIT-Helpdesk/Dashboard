@@ -230,6 +230,46 @@ function aestDayBoundsIso(dateStr) {
   return { startISO: aestToUtcIso(y, m, d), endISO: aestToUtcIso(y, m, d + 1) };
 }
 
+const WEEKDAY_LABELS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+// The Monday (as {year, month, day} AEST calendar fields) of the week
+// containing `dateStr`. Day-of-week is pure calendar arithmetic -- it
+// doesn't depend on time zone as long as the computation itself doesn't
+// cross a day boundary, so Date.UTC() is used here purely as a neutral
+// calendar calculator, not to mean "UTC" in the AEST-vs-UTC sense; the
+// AEST-specific part only starts once this calendar day gets converted to a
+// real UTC instant for querying, via aestToUtcIso(). getUTCDay() is
+// Sunday=0..Saturday=6, so `(day + 6) % 7` is how many days back from
+// `dateStr` Monday falls (0 when `dateStr` already is a Monday). Shared by
+// Asked for Review and Security Alerts -- both group a day into "the week
+// containing it, Monday-Sunday".
+function mondayOf(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const asCalendar = new Date(Date.UTC(y, m - 1, d));
+  const back = (asCalendar.getUTCDay() + 6) % 7;
+  asCalendar.setUTCDate(asCalendar.getUTCDate() - back);
+  return { year: asCalendar.getUTCFullYear(), month: asCalendar.getUTCMonth() + 1, day: asCalendar.getUTCDate() };
+}
+
+// `days` calendar dates ("YYYY-MM-DD") starting at `monday` (as returned by
+// mondayOf()) -- the default 7 is one Monday..Sunday week; a caller wanting
+// multiple consecutive weeks (e.g. "this week plus the one before it") just
+// passes a multiple of 7, still starting from a real Monday. Pure calendar
+// arithmetic, same Date.UTC()-as-neutral-calculator rationale as mondayOf().
+function weekDatesFrom(monday, days = 7) {
+  return Array.from({ length: days }, (_, i) => {
+    const d = new Date(Date.UTC(monday.year, monday.month - 1, monday.day + i));
+    return d.toISOString().slice(0, 10);
+  });
+}
+
+// "YYYY-MM-DD" for a real timestamp, in AEST -- e.g. bucketing a ticket's
+// completedDate, or a SaaS Alerts event's time, into the AEST day it
+// actually happened on, not the UTC day.
+function isoDateAest(instant) {
+  return toAest(instant).toISOString().slice(0, 10);
+}
+
 // AEST "YYYY-MM-DD" for right now -- e.g. a date-picker's default value.
 function todayAestKey() {
   const d = toAest(new Date());
@@ -401,4 +441,8 @@ module.exports = {
   aestToUtcIso,
   aestDayBoundsIso,
   todayAestKey,
+  WEEKDAY_LABELS,
+  mondayOf,
+  weekDatesFrom,
+  isoDateAest,
 };
