@@ -78,6 +78,25 @@ body {
   padding: 0 0.75rem;
 }
 
+/* The logo PNG has a transparent background, and its own colors (dark
+   navy/purple text) don't hold up against the dark sidebar -- a white box
+   behind it keeps it legible without needing a separate logo asset. Light
+   mode is untouched (the logo already reads fine there, hence no light-mode
+   background/padding added here). Same system-preference + explicit-choice
+   guarding as the color tokens above, so the toggle button affects this too. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sidebar-logo {
+    background: #ffffff;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+  }
+}
+:root[data-theme="dark"] .sidebar-logo {
+  background: #ffffff;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+}
+
 .nav-list {
   list-style: none;
   margin: 0;
