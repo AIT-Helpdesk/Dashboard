@@ -25,6 +25,7 @@ export function mount(container) {
     <p id="status" class="status">Pick a date and click Load. Shows medium and critical severity alerts only -- routine low-severity activity (sign-ins etc.) is left out by design.</p>
     <div id="summary" class="summary" hidden></div>
     <div id="week-chart" class="resource-group" hidden></div>
+    <div id="alert-summary" hidden></div>
     <div id="results" class="results"></div>
   `;
 
@@ -34,6 +35,7 @@ export function mount(container) {
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const weekChartEl = container.querySelector('#week-chart');
+  const alertSummaryEl = container.querySelector('#alert-summary');
   const resultsEl = container.querySelector('#results');
 
   // AEST (UTC+10, no DST in Queensland) "today", not the browser's own local
@@ -58,6 +60,8 @@ export function mount(container) {
     summaryEl.hidden = true;
     weekChartEl.hidden = true;
     weekChartEl.innerHTML = '';
+    alertSummaryEl.hidden = true;
+    alertSummaryEl.innerHTML = '';
     resultsEl.innerHTML = '';
 
     try {
@@ -94,6 +98,7 @@ export function mount(container) {
     summaryEl.innerHTML = `<strong>${data.totalCount}</strong> alert${data.totalCount === 1 ? '' : 's'} on ${data.date}${filterSuffix} (${chartTotal} in the last ${chartDays.length} days)`;
 
     renderWeekChart(data);
+    renderAlertSummary(data);
 
     resultsEl.innerHTML = '';
     if (data.totalCount === 0) {
@@ -202,6 +207,87 @@ export function mount(container) {
         load(date, clientInput.value);
       });
     });
+  }
+
+  // Summary of the SELECTED DAY's alerts (same scope as the detail table
+  // below, not the 28-day chart), grouped by alert name -- each group lists
+  // which client+user combinations triggered that alert and how many times,
+  // sorted busiest-first. Built entirely from data.rows already in hand, no
+  // extra request -- the day's rows are the same data the detail table
+  // renders. Alert names with only one occurrence still get their own group
+  // (a one-off alert is exactly as much "a group" as a repeated one), and a
+  // client+user combo that recurs for the same alert on the same day is
+  // counted once with count > 1, not listed as separate rows.
+  function renderAlertSummary(data) {
+    const rows = data.rows || [];
+    alertSummaryEl.hidden = rows.length === 0;
+    alertSummaryEl.innerHTML = '';
+    if (rows.length === 0) return;
+
+    const byEvent = new Map(); // event name -> Map("client user" -> {customerName, autotaskUrl, user, count})
+    for (const r of rows) {
+      if (!byEvent.has(r.event)) byEvent.set(r.event, new Map());
+      const byComboKey = byEvent.get(r.event);
+      const userLabel = r.user || 'Unknown';
+      const key = `${r.customerName} ${userLabel}`;
+      if (!byComboKey.has(key)) {
+        byComboKey.set(key, { customerName: r.customerName, autotaskUrl: r.autotaskUrl, user: userLabel, count: 0 });
+      }
+      byComboKey.get(key).count += 1;
+    }
+
+    const eventGroups = [...byEvent.entries()]
+      .map(([event, byComboKey]) => {
+        const combos = [...byComboKey.values()].sort(
+          (a, b) => b.count - a.count || a.customerName.localeCompare(b.customerName) || a.user.localeCompare(b.user)
+        );
+        const total = combos.reduce((sum, c) => sum + c.count, 0);
+        return { event, combos, total };
+      })
+      .sort((a, b) => b.total - a.total || a.event.localeCompare(b.event));
+
+    const heading = document.createElement('h2');
+    heading.textContent = `Alert Summary (${eventGroups.length} alert type${eventGroups.length === 1 ? '' : 's'})`;
+    heading.style.fontSize = '1.1rem';
+    heading.style.margin = '1.5rem 0 0.75rem';
+    alertSummaryEl.appendChild(heading);
+
+    for (const g of eventGroups) {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'resource-group';
+
+      const header = document.createElement('div');
+      header.className = 'resource-group-header';
+      header.innerHTML = `<span>${escapeHtml(g.event)}</span><span class="count">${g.total} time${g.total === 1 ? '' : 's'}</span>`;
+      groupEl.appendChild(header);
+
+      const table = document.createElement('table');
+      table.innerHTML = `
+        <thead>
+          <tr><th>Client</th><th>User</th><th>Count</th></tr>
+        </thead>
+        <tbody>
+          ${g.combos
+            .map(
+              (c) => `
+            <tr>
+              <td>${comboClientLink(c)}</td>
+              <td>${escapeHtml(c.user)}</td>
+              <td class="ticket-number">${c.count}</td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      `;
+      groupEl.appendChild(table);
+      alertSummaryEl.appendChild(groupEl);
+    }
+  }
+
+  function comboClientLink(c) {
+    const label = escapeHtml(c.customerName);
+    if (!c.autotaskUrl) return label;
+    return `<a href="${escapeHtml(c.autotaskUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
   }
 
   if (lastData) render(lastData);
