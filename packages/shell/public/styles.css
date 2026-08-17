@@ -546,6 +546,44 @@ h1 {
   width: 9%;
 }
 
+.ingram-orders-table {
+  table-layout: fixed;
+}
+.ingram-orders-table th:nth-child(1),
+.ingram-orders-table td:nth-child(1) {
+  width: 10%;
+}
+.ingram-orders-table th:nth-child(2),
+.ingram-orders-table td:nth-child(2) {
+  width: 8%;
+}
+.ingram-orders-table th:nth-child(3),
+.ingram-orders-table td:nth-child(3) {
+  width: 10%;
+}
+.ingram-orders-table th:nth-child(4),
+.ingram-orders-table td:nth-child(4) {
+  width: 14%;
+}
+.ingram-orders-table th:nth-child(5),
+.ingram-orders-table td:nth-child(5) {
+  width: 14%;
+}
+.ingram-orders-table th:nth-child(6),
+.ingram-orders-table td:nth-child(6) {
+  width: 12%;
+}
+/* Licenses (the last column) is a short value ("+1", "450") -- given a small
+   fixed width like every other column here so it doesn't stretch, unlike the
+   usual convention of leaving the LAST column unset to absorb remaining
+   space. Product (7th, the one genuinely variable-length column) is left
+   unset instead, so IT absorbs the remaining space. */
+.ingram-orders-table th:nth-child(8),
+.ingram-orders-table td:nth-child(8) {
+  width: 8%;
+  text-align: right;
+}
+
 .ticket-times-table {
   table-layout: fixed;
 }

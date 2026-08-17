@@ -105,7 +105,7 @@ async function fetchAlertsInRange(rangeStartISO, rangeEndISO) {
   return bySeverity.flat();
 }
 
-async function buildReport(dateStr, periodKey, filterTerm) {
+async function buildReport(dateStr, periodKey, filterTerm, userFilterTerm) {
   const currentMonday = mondayOf(dateStr); // {year, month, day} -- AEST calendar Monday of the SELECTED week
   // The Monday (CHART_WEEKS - 1) full weeks before currentMonday -- since
   // currentMonday is already a Monday, subtracting a multiple of 7 calendar
@@ -134,13 +134,17 @@ async function buildReport(dateStr, periodKey, filterTerm) {
 
   const [events, autotaskUrlByCustomerId] = await Promise.all([fetchAlertsInRange(rangeStartISO, rangeEndISO), getAutotaskUrlByCustomerId()]);
 
-  // The client-name filter (when given) narrows BOTH the chart and the
-  // detail table to that client -- applied once here, before either is
-  // built, so the two always agree with each other.
+  // The client-name and user-name filters (when given) narrow BOTH the
+  // chart and the detail table, together -- applied once here, before
+  // either is built, so the two always agree with each other. A user filter
+  // with no matching user on the event (userLabel null) never matches --
+  // there's nothing to wildcard-match against.
   const enriched = [];
   for (const e of events) {
     const customerName = e.customer?.name || 'Unknown';
     if (filterTerm && !matchesWildcard(customerName, filterTerm)) continue;
+    const userLabel = e.user?.fullName || e.user?.name || null;
+    if (userFilterTerm && !(userLabel && matchesWildcard(userLabel, userFilterTerm))) continue;
     if (!e.time) continue; // no timestamp to bucket into a day -- shouldn't happen, but don't crash on it
     const ticket = (e.psaTicket || []).find((t) => t.type === 'autotaskpsa' && t.link);
     enriched.push({
@@ -149,7 +153,7 @@ async function buildReport(dateStr, periodKey, filterTerm) {
       severity: e.alertStatus || null,
       event: e.jointDesc || e.jointType || 'Event',
       detail: e.jointDescAdditional || null,
-      user: e.user?.fullName || e.user?.name || null,
+      user: userLabel,
       customerId: e.customer?.id || null,
       customerName,
       autotaskUrl: e.customer?.id ? autotaskUrlByCustomerId.get(e.customer.id) || null : null,
@@ -183,6 +187,7 @@ async function buildReport(dateStr, periodKey, filterTerm) {
     chartEnd: chartDates[chartDates.length - 1],
     currentWeekStart: chartDates[(CHART_WEEKS - 1) * 7], // where the SELECTED week begins within the chart -- lets the client accent that one boundary specifically, distinct from the other (earlier) week boundaries
     filterTerm: filterTerm || null,
+    userFilterTerm: userFilterTerm || null,
     totalCount: rows.length,
     rows,
     chart,
@@ -201,7 +206,7 @@ router.get('/', async (req, res) => {
     return res.status(400).json({ error: `Query param "period" must be one of: ${Object.keys(PERIODS).join(', ')}.` });
   }
   try {
-    const data = await buildReport(date, period, req.query.client);
+    const data = await buildReport(date, period, req.query.client, req.query.user);
     res.json(data);
   } catch (err) {
     console.error(err);

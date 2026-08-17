@@ -1,0 +1,17 @@
+{
+  "name": "@dashboard/ingram-orders",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "ingram-orders",
+    "label": "Ingram Orders",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/ingram-client": "*",
+    "express": "^4.19.2"
+  }
+}

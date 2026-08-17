@@ -71,6 +71,10 @@
       },
       {
         "type": "page",
+        "id": "ingram-orders"
+      },
+      {
+        "type": "page",
         "id": "subscriptions-expiring"
       },
       {

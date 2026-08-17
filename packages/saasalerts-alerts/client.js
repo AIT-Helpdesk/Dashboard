@@ -9,6 +9,7 @@ export const label = "Security Alerts";
 let lastDate = null;
 let lastPeriod = "1d";
 let lastFilter = '';
+let lastUserFilter = '';
 let lastData = null;
 
 // Keys and labels mirror PERIODS in server.js exactly -- kept in sync
@@ -34,6 +35,8 @@ export function mount(container) {
         </select>
         <label for="client-input">Client</label>
         <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
+        <label for="user-input">User</label>
+        <input type="text" id="user-input" name="user" placeholder="optional, e.g. Jane* (wildcards with *)" />
         <button type="submit">Load</button>
       </form>
     </header>
@@ -48,6 +51,7 @@ export function mount(container) {
   const dateInput = container.querySelector('#date-input');
   const periodInput = container.querySelector('#period-input');
   const clientInput = container.querySelector('#client-input');
+  const userInput = container.querySelector('#user-input');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const weekChartEl = container.querySelector('#week-chart');
@@ -62,13 +66,14 @@ export function mount(container) {
   dateInput.value = lastDate || todayISO();
   periodInput.value = lastPeriod;
   clientInput.value = lastFilter;
+  userInput.value = lastUserFilter;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(dateInput.value, periodInput.value, clientInput.value);
+    load(dateInput.value, periodInput.value, clientInput.value, userInput.value);
   });
 
-  async function load(date, period, clientFilter) {
+  async function load(date, period, clientFilter, userFilter) {
     const button = form.querySelector('button');
     button.disabled = true;
     statusEl.hidden = false;
@@ -84,12 +89,14 @@ export function mount(container) {
     try {
       const params = new URLSearchParams({ date, period });
       if (clientFilter) params.set('client', clientFilter);
+      if (userFilter) params.set('user', userFilter);
       const res = await fetch(`/api/saasalerts-alerts?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastDate = date;
       lastPeriod = period;
       lastFilter = clientFilter;
+      lastUserFilter = userFilter;
       lastData = data;
       render(data);
     } catch (err) {
@@ -103,7 +110,13 @@ export function mount(container) {
   function render(data) {
     statusEl.hidden = true;
 
-    const filterSuffix = data.filterTerm ? ` matching "${escapeHtml(data.filterTerm)}"` : '';
+    // Client and User filters are independent -- either, both, or neither
+    // can be set -- so the suffix is built from whichever are actually
+    // present rather than assuming a fixed shape.
+    const filterParts = [];
+    if (data.filterTerm) filterParts.push(`client "${escapeHtml(data.filterTerm)}"`);
+    if (data.userFilterTerm) filterParts.push(`user "${escapeHtml(data.userFilterTerm)}"`);
+    const filterSuffix = filterParts.length ? ` matching ${filterParts.join(' and ')}` : '';
     // "on {date}" for the 1-day period (reads the same as before Period
     // existed); "from {date} to {lastIncludedDate}" for anything longer --
     // periodEnd from the server is EXCLUSIVE, so the last included day is
@@ -177,10 +190,10 @@ export function mount(container) {
     resultsEl.appendChild(group);
   }
 
-  // Two-week-at-a-glance chart: one vertical stacked bar per day (14 days,
-  // by request -- the selected date's Monday-Sunday week, plus the full
-  // week immediately before it), critical stacked on medium, each column
-  // scaled to the busiest day across BOTH weeks so every bar is comparable
+  // Four-week-at-a-glance chart: one vertical stacked bar per day (28 days,
+  // by request -- the selected date's own Monday-Sunday week, plus the 3
+  // weeks immediately before it), critical stacked on medium, each column
+  // scaled to the busiest day across all 4 weeks so every bar is comparable
   // on a shared scale. Renders even on a day with zero alerts -- a quiet day
   // is still meaningful context, not something to hide.
   function renderWeekChart(data) {
@@ -253,7 +266,7 @@ export function mount(container) {
         // clicked day, which isn't what clicking one bar implies.
         dateInput.value = date;
         periodInput.value = '1d';
-        load(date, '1d', clientInput.value);
+        load(date, '1d', clientInput.value, userInput.value);
       });
     });
   }
@@ -306,30 +319,44 @@ export function mount(container) {
       const groupEl = document.createElement('div');
       groupEl.className = 'resource-group';
 
+      // Collapsible per alert type, starting EXPANDED (unlike All Alerts
+      // below, which starts minimized) -- this summary IS the at-a-glance
+      // view, so it stays open by default; minimizing individual alert types
+      // is for decluttering once you've seen enough of a given one, not the
+      // default state.
       const header = document.createElement('div');
-      header.className = 'resource-group-header';
-      header.innerHTML = `<span>${escapeHtml(g.event)}</span><span class="count">${g.total} time${g.total === 1 ? '' : 's'}</span>`;
+      header.className = 'resource-group-header resource-group-header--toggle';
+      header.innerHTML = `<span><span class="toggle-arrow">▾</span>${escapeHtml(g.event)}</span><span class="count">${g.total} time${g.total === 1 ? '' : 's'}</span>`;
       groupEl.appendChild(header);
 
-      const table = document.createElement('table');
-      table.innerHTML = `
-        <thead>
-          <tr><th>Client</th><th>User</th><th>Count</th></tr>
-        </thead>
-        <tbody>
-          ${g.combos
-            .map(
-              (c) => `
-            <tr>
-              <td>${comboClientLink(c)}</td>
-              <td>${escapeHtml(c.user)}</td>
-              <td class="ticket-number">${c.count}</td>
-            </tr>`
-            )
-            .join('')}
-        </tbody>
+      const tableWrap = document.createElement('div');
+      tableWrap.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>Client</th><th>User</th><th>Count</th></tr>
+          </thead>
+          <tbody>
+            ${g.combos
+              .map(
+                (c) => `
+              <tr>
+                <td>${comboClientLink(c)}</td>
+                <td>${escapeHtml(c.user)}</td>
+                <td class="ticket-number">${c.count}</td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
       `;
-      groupEl.appendChild(table);
+      groupEl.appendChild(tableWrap);
+
+      const arrow = header.querySelector('.toggle-arrow');
+      header.addEventListener('click', () => {
+        tableWrap.hidden = !tableWrap.hidden;
+        arrow.textContent = tableWrap.hidden ? '▸' : '▾';
+      });
+
       alertSummaryEl.appendChild(groupEl);
     }
   }

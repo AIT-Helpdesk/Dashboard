@@ -65,4 +65,26 @@ async function getSubscriptionDetail(id, token) {
   return res.data;
 }
 
-module.exports = { getToken, fetchAllPages, getSubscriptionDetail };
+// Single-order detail -- same shape of "one detail endpoint beyond the list
+// view" as getSubscriptionDetail above, used for the per-order product/PO
+// number lookups (Ingram Orders) that only show up here, not on the list
+// endpoint.
+async function getOrderDetail(id, token) {
+  const res = await axios.get(`${BASE}/orders/${id}`, {
+    headers: { Authorization: `Bearer ${token}`, 'X-Subscription-Key': SUB_KEY },
+  });
+  return res.data;
+}
+
+// One page (not walked to completion, unlike fetchAllPages) -- returns the
+// raw { data, pagination } body so a caller can implement its own pagination
+// logic, e.g. Ingram Orders' "stop once past the date threshold" early exit,
+// which fetchAllPages' walk-everything behavior doesn't support.
+async function getPage(path, token, extraParams = {}) {
+  const headers = { Authorization: `Bearer ${token}`, 'X-Subscription-Key': SUB_KEY };
+  const limit = 500;
+  const res = await axios.get(`${BASE}${path}`, { headers, params: { ...extraParams, limit } });
+  return res.data;
+}
+
+module.exports = { getToken, fetchAllPages, getSubscriptionDetail, getOrderDetail, getPage };
