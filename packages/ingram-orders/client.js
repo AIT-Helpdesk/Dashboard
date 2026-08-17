@@ -219,16 +219,24 @@ export function mount(container) {
   //   - A `change` order with exactly one product line and a known
   //     quantity: the signed delta, colored green (added) or red (removed)
   //     -- confirmed against real data: a downgrade shows -1, adding seats
-  //     shows a positive number -- followed by "= {currentTotal}" (the
-  //     subscription's live current quantity, the best available proxy for
-  //     "the new total after this change"; Ingram's API has no
-  //     "resulting quantity" field). The "= N" part is deliberately plain
-  //     text, not colored/bold, by request -- only the delta itself carries
-  //     the color+weight (.cell-flag-green/.cell-flag-red).
+  //     shows a positive number -- followed by "({currentTotal})" (the
+  //     subscription's live CURRENT quantity, not what it was right after
+  //     this particular order -- Ingram's order detail has no "resulting
+  //     quantity" field, and reconstructing a true historical total by
+  //     working backwards through every later change on the subscription
+  //     isn't reliable: real data shows some subscriptions have much larger
+  //     quantity swings between change orders than a simple running total
+  //     would explain, so there's no trustworthy way to derive "the total
+  //     right after this order" from what the API exposes. Shown in
+  //     parentheses rather than "= N", by request, specifically so it doesn't
+  //     read as if it's the total resulting from this exact order. The
+  //     bracketed total is deliberately plain text, not colored/bold -- only
+  //     the delta itself carries the color+weight (.cell-flag-green/
+  //     .cell-flag-red).
   //   - Everything else (multiple product lines, a non-`change` order, or no
   //     quantity info at all): falls back to a plain comma-joined list of
   //     quantities (or blank), same as before -- there's no meaningful
-  //     "delta + new total" concept for a fresh sale or a renewal.
+  //     "delta + current total" concept for a fresh sale or a renewal.
   function licensesCellHtml(o) {
     const products = o.products || [];
     if (o.type === 'change' && products.length === 1 && typeof products[0].quantity === 'number') {
@@ -237,7 +245,7 @@ export function mount(container) {
       const sign = qty > 0 ? '+' : '';
       const deltaHtml = colorClass ? `<span class="${colorClass}">${sign}${qty}</span>` : `${sign}${qty}`;
       const total = o.currentTotal;
-      return total === null || total === undefined ? deltaHtml : `${deltaHtml} = ${total}`;
+      return total === null || total === undefined ? deltaHtml : `${deltaHtml} (${total})`;
     }
     return escapeHtml(products.map((p) => formatLicenseEntry(p, o.type)).join(', '));
   }
@@ -247,7 +255,7 @@ export function mount(container) {
   // sale of 18 seats, or "450" for a renewal's current seat count), or blank
   // when there's no quantity info at all. Used for the fallback (non-colored)
   // Licenses rendering above -- the common single-product `change` case gets
-  // the colored "+1 = 45" treatment instead, via licensesCellHtml().
+  // the colored "+1 (45)" treatment instead, via licensesCellHtml().
   function formatLicenseEntry(p, orderType) {
     if (p.quantity === null || p.quantity === undefined) return '';
     if (orderType === 'change') return `${p.quantity > 0 ? '+' : ''}${p.quantity}`;
