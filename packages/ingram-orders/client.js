@@ -219,9 +219,32 @@ export function mount(container) {
   //   - A `change` order with exactly one product line and a known
   //     quantity: the signed delta, colored green (added) or red (removed)
   //     -- confirmed against real data: a downgrade shows -1, adding seats
-  //     shows a positive number -- followed by "({currentTotal})" (the
-  //     subscription's live CURRENT quantity, not what it was right after
-  //     this particular order -- Ingram's order detail has no "resulting
+  //     shows a positive number -- EXCEPT a positive delta on a still-
+  //     `processing` order, which is colored blue instead of green (same
+  //     "not final yet" blue used in the Status column) and shown without
+  //     its "+" prefix -- a seat addition that hasn't completed isn't a
+  //     confirmed win the way green implies. A negative delta stays red
+  //     (with its "-" prefix) regardless of status, by request -- removing
+  //     seats is presented as noteworthy the moment it's requested, not just
+  //     once it's confirmed.
+  //
+  //     A pending (blue) positive quantity SMALLER than the subscription's
+  //     current live total is recast as a downgrade instead of shown blue --
+  //     confirmed against real data (order CH005810, subscriptionId
+  //     1369491): the order's own `quantity` was 10, `scheduledOn` was
+  //     `"renewal"`, and the subscription's current total was 11. A pending
+  //     order that's genuinely adding seats can't ever be smaller than a
+  //     total that doesn't yet include it, so this only fires for the
+  //     "scheduledOn: renewal" case, where `quantity` actually reads as the
+  //     TARGET total at next renewal rather than a delta to add -- 10 there
+  //     means "seats will be 10 as of renewal", i.e. a reduction of 1 from
+  //     the current 11, not an addition of 10. Shown red, as
+  //     `quantity - currentTotal` (a negative number), same as any other
+  //     removal.
+  //
+  //     Either way, followed by "({currentTotal})" (the subscription's live
+  //     CURRENT quantity, not what it was/will be right after this
+  //     particular order -- Ingram's order detail has no "resulting
   //     quantity" field, and reconstructing a true historical total by
   //     working backwards through every later change on the subscription
   //     isn't reliable: real data shows some subscriptions have much larger
@@ -232,7 +255,7 @@ export function mount(container) {
   //     read as if it's the total resulting from this exact order. The
   //     bracketed total is deliberately plain text, not colored/bold -- only
   //     the delta itself carries the color+weight (.cell-flag-green/
-  //     .cell-flag-red).
+  //     .cell-flag-blue/.cell-flag-red).
   //   - Everything else (multiple product lines, a non-`change` order, or no
   //     quantity info at all): falls back to a plain comma-joined list of
   //     quantities (or blank), same as before -- there's no meaningful
@@ -241,10 +264,21 @@ export function mount(container) {
     const products = o.products || [];
     if (o.type === 'change' && products.length === 1 && typeof products[0].quantity === 'number') {
       const qty = products[0].quantity;
-      const colorClass = qty > 0 ? 'cell-flag-green' : qty < 0 ? 'cell-flag-red' : '';
-      const sign = qty > 0 ? '+' : '';
-      const deltaHtml = colorClass ? `<span class="${colorClass}">${sign}${qty}</span>` : `${sign}${qty}`;
       const total = o.currentTotal;
+      const isPendingAdd = qty > 0 && o.status === 'processing';
+
+      if (isPendingAdd && typeof total === 'number' && qty < total) {
+        const effectiveDelta = qty - total; // negative -- e.g. 10 - 11 = -1
+        return `<span class="cell-flag-red">${effectiveDelta}</span> (${total})`;
+      }
+
+      const colorClass = qty > 0 ? (isPendingAdd ? 'cell-flag-blue' : 'cell-flag-green') : qty < 0 ? 'cell-flag-red' : '';
+      // No "+" prefix on a still-processing addition -- by request, to set
+      // it apart from a confirmed (green) addition, on top of the color
+      // difference. A confirmed addition and any removal both keep their
+      // sign.
+      const sign = qty > 0 && !isPendingAdd ? '+' : '';
+      const deltaHtml = colorClass ? `<span class="${colorClass}">${sign}${qty}</span>` : `${sign}${qty}`;
       return total === null || total === undefined ? deltaHtml : `${deltaHtml} (${total})`;
     }
     return escapeHtml(products.map((p) => formatLicenseEntry(p, o.type)).join(', '));
