@@ -289,6 +289,22 @@ h1 {
   gap: 0.5rem;
 }
 
+/* Opt-in modifier for a form with more fields than comfortably fit on one
+   line -- stacks .date-form-row children vertically instead of the default
+   single flex row. Each row still lays out its own fields left-to-right. */
+.date-form--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.date-form-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .date-form label {
   font-size: 0.85rem;
   color: var(--muted);

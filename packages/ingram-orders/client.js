@@ -10,24 +10,34 @@ let lastData = null;
 let lastSince = null;
 let lastFilter = '';
 let lastIncludeRenewals = false; // off by default, by request -- renewals are the highest-volume, least-actionable order type
+let lastStatusFilter = '';
+let lastProductFilter = '';
 
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
       <h1>Ingram Orders</h1>
-      <form id="filter-form" class="date-form">
-        <label for="include-renewals-input" class="inline-checkbox-label">
-          <input type="checkbox" id="include-renewals-input" /> Show Renewal Orders
-        </label>
-        <label for="since-input">Since</label>
-        <input type="date" id="since-input" name="since" required />
-        <label for="client-input">Client</label>
-        <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
-        <button type="submit" id="refresh-button">Refresh</button>
-        <button type="button" id="load-all-button" hidden>Load All Products &amp; Licenses</button>
+      <form id="filter-form" class="date-form date-form--stacked">
+        <div class="date-form-row">
+          <label for="since-input">Since</label>
+          <input type="date" id="since-input" name="since" required />
+          <label for="client-input">Client</label>
+          <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
+          <label for="include-renewals-input" class="inline-checkbox-label">
+            <input type="checkbox" id="include-renewals-input" /> Show Renewals
+          </label>
+        </div>
+        <div class="date-form-row">
+          <label for="status-input">Status</label>
+          <input type="text" id="status-input" name="status" placeholder="optional, e.g. complet* (wildcards with *)" />
+          <label for="product-input">Product</label>
+          <input type="text" id="product-input" name="product" placeholder="optional, e.g. *Business Basic* (wildcards with *)" />
+          <button type="submit" id="refresh-button">Refresh</button>
+          <button type="button" id="load-all-button" hidden>Load All Products &amp; Licenses</button>
+        </div>
       </form>
     </header>
-    <p id="status" class="status">Pick a date, optionally type a client name (wildcards with *) to narrow the list, then click Refresh. Every order since that date is included, whatever its status -- renewal orders are excluded by default (tick "Show Renewal Orders" to include them). PO numbers and products aren't loaded up front -- click a client's name to fetch theirs, or use "Load All Products &amp; Licenses" above to fetch every client's at once.</p>
+    <p id="status" class="status">Pick a date, optionally filter by client/status/product (wildcards with *), then click Refresh. Every order since that date is included, whatever its status -- renewal orders are excluded by default (tick "Show Renewals" to include them). PO numbers and products aren't loaded up front -- click a client's name to fetch theirs, use "Load All Products &amp; Licenses" above to fetch every client's at once, or set a Product filter (which needs that same detail, so fetches it automatically).</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
   `;
@@ -36,6 +46,8 @@ export function mount(container) {
   const includeRenewalsInput = container.querySelector('#include-renewals-input');
   const sinceInput = container.querySelector('#since-input');
   const clientInput = container.querySelector('#client-input');
+  const statusInput = container.querySelector('#status-input');
+  const productInput = container.querySelector('#product-input');
   const refreshButton = container.querySelector('#refresh-button');
   const loadAllButton = container.querySelector('#load-all-button');
   const statusEl = container.querySelector('#status');
@@ -52,26 +64,34 @@ export function mount(container) {
   sinceInput.value = lastSince || defaultSinceISO();
   clientInput.value = lastFilter;
   includeRenewalsInput.checked = lastIncludeRenewals;
+  statusInput.value = lastStatusFilter;
+  productInput.value = lastProductFilter;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(sinceInput.value, clientInput.value, includeRenewalsInput.checked);
+    load(sinceInput.value, clientInput.value, includeRenewalsInput.checked, statusInput.value, productInput.value);
   });
 
   loadAllButton.addEventListener('click', loadAllDetails);
 
-  // The server caches each search (keyed by the since-date, filter term, AND
-  // the renewals toggle) for ~20 min. This is the fast base list -- client/
-  // order number/type/status/dates -- NOT PO numbers or products, which are
-  // fetched separately per client on demand (see loadDetailForClient()
-  // below). Refresh always sends `force=true`, which bypasses that cache for
-  // the current search and rebuilds -- a button literally labeled "Refresh"
-  // should always get current data, not a cached one.
-  async function load(since, clientFilter, includeRenewals) {
+  // The server caches each search (keyed by the since-date, filter terms,
+  // AND the renewals toggle) for ~20 min. This is the fast base list --
+  // client/order number/type/status/dates -- NOT PO numbers or products,
+  // which are fetched separately per client on demand (see
+  // loadDetailForClient() below), UNLESS a Product filter is set, in which
+  // case the server fetches that detail itself as part of building the
+  // report (see server.js) -- there's no other way to filter by product,
+  // since it isn't on the base list endpoint at all. Refresh always sends
+  // `force=true`, which bypasses that cache for the current search and
+  // rebuilds -- a button literally labeled "Refresh" should always get
+  // current data, not a cached one.
+  async function load(since, clientFilter, includeRenewals, statusFilter, productFilter) {
     refreshButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
-    statusEl.textContent = `Loading orders since ${since}...`;
+    statusEl.textContent = productFilter
+      ? `Loading orders since ${since} (a Product filter needs to look up every matching order's details, so this may take longer)...`
+      : `Loading orders since ${since}...`;
     summaryEl.hidden = true;
     resultsEl.innerHTML = '';
 
@@ -79,6 +99,8 @@ export function mount(container) {
       const params = new URLSearchParams({ since, force: 'true' });
       if (clientFilter) params.set('client', clientFilter);
       if (includeRenewals) params.set('includeRenewals', 'true');
+      if (statusFilter) params.set('status', statusFilter);
+      if (productFilter) params.set('product', productFilter);
       const res = await fetch(`/api/ingram-orders?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -86,6 +108,8 @@ export function mount(container) {
       lastSince = since;
       lastFilter = clientFilter;
       lastIncludeRenewals = includeRenewals;
+      lastStatusFilter = statusFilter;
+      lastProductFilter = productFilter;
       render(data);
     } catch (err) {
       statusEl.className = 'status error';
@@ -98,7 +122,14 @@ export function mount(container) {
   function render(data) {
     statusEl.hidden = true;
 
-    const filterSuffix = data.filterTerm ? ` matching "${escapeHtml(data.filterTerm)}"` : '';
+    // Each active filter gets its own clause -- Client/Status/Product
+    // can all be set at once, so this isn't a single "matching X" string
+    // anymore but a joined list of whichever ones are actually in play.
+    const filterClauses = [];
+    if (data.filterTerm) filterClauses.push(`client "${escapeHtml(data.filterTerm)}"`);
+    if (data.statusTerm) filterClauses.push(`status "${escapeHtml(data.statusTerm)}"`);
+    if (data.productTerm) filterClauses.push(`product "${escapeHtml(data.productTerm)}"`);
+    const filterSuffix = filterClauses.length ? ` matching ${filterClauses.join(', ')}` : '';
     // Generic status breakdown -- built from whatever keys statusCounts
     // actually has, rather than a fixed list, since every order is included
     // regardless of status (no filtering by completion state, by request).
@@ -110,7 +141,17 @@ export function mount(container) {
     summaryEl.hidden = false;
     summaryEl.innerHTML = `<strong>${data.totalCount}</strong> order${data.totalCount === 1 ? '' : 's'} (${statusBreakdown}) across ${data.byClient.length} client${data.byClient.length === 1 ? '' : 's'} since ${data.sinceDate}${filterSuffix}${renewalsSuffix}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
 
-    loadAllButton.hidden = data.byClient.length === 0;
+    // A Product filter forces the server to fetch every matched order's
+    // detail as part of building the report (there's no other way to filter
+    // by product), so those rows arrive already populated -- mark every
+    // client as loaded so the table shows Product/Licenses immediately and
+    // "Load All" (which would be a no-op) stays hidden, rather than
+    // presenting data that's already on screen as still needing a click.
+    if (data.detailPreloaded) {
+      for (const client of data.byClient) client.detailLoaded = true;
+    }
+
+    loadAllButton.hidden = data.byClient.length === 0 || data.detailPreloaded;
 
     resultsEl.innerHTML = '';
     if (data.byClient.length === 0) {

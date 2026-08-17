@@ -48,7 +48,7 @@ async function fetchCustomers(token) {
   return all;
 }
 
-async function buildReport(sinceDate, filterTerm, includeRenewals) {
+async function buildReport(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm) {
   const token = await getToken();
   const { startISO } = aestDayBoundsIso(sinceDate); // AEST midnight of the selected date, not UTC
 
@@ -63,6 +63,7 @@ async function buildReport(sinceDate, filterTerm, includeRenewals) {
     // explicitly asked for, rather than just hidden client-side after the
     // fact (which would still count them in totals/status breakdown).
     if (!includeRenewals && o.type === 'renewal') continue;
+    if (statusTerm && !matchesWildcard(o.status || '', statusTerm)) continue;
     const clientName = customerNameById.get(o.customerId) || `Customer #${o.customerId}`;
     if (filterTerm && !matchesWildcard(clientName, filterTerm)) continue;
     if (!byClientMap.has(o.customerId)) {
@@ -71,9 +72,7 @@ async function buildReport(sinceDate, filterTerm, includeRenewals) {
     byClientMap.get(o.customerId).orders.push(o);
   }
 
-  const matched = [...byClientMap.values()].flatMap((g) => g.orders);
-
-  const byClient = [...byClientMap.values()]
+  let byClient = [...byClientMap.values()]
     .map((g) => {
       // Most-recent-first within a client -- unlike Ingram Subscriptions'
       // alphabetical-by-name ordering, orders don't have a natural name to
@@ -90,7 +89,8 @@ async function buildReport(sinceDate, filterTerm, includeRenewals) {
           // poNumber/products deliberately omitted here (not on the list
           // endpoint) -- fetched on demand per client, see the /detail route
           // below, same "expensive detail is opt-in" pattern as Ingram
-          // Subscriptions' license counts.
+          // Subscriptions' license counts. Overwritten below when a Product
+          // filter forces detail to be fetched as part of building the report.
         }))
         .sort((a, b) => (b.creationDate || '').localeCompare(a.creationDate || ''));
       return {
@@ -101,6 +101,34 @@ async function buildReport(sinceDate, filterTerm, includeRenewals) {
       };
     })
     .sort((a, b) => b.orders[0].creationDate.localeCompare(a.orders[0].creationDate)); // clients with the most recent activity first
+
+  // Product filtering needs detail (the base list endpoint carries no
+  // product info at all -- see fetchOrderDetailWithRetry() below), so it's
+  // the one filter here that isn't free. Only paid for when actually
+  // requested, and only for the ALREADY-narrowed (since/client/status/
+  // renewals) candidate set, not the full history -- the other filters
+  // above run first specifically so this one has as little work to do as
+  // possible. Detail fetched this way is attached directly to the surviving
+  // rows, so the client doesn't need a further click to see PO#/Product/
+  // Licenses for a product-filtered result -- `detailPreloaded: true` in the
+  // response tells it so.
+  let detailPreloaded = false;
+  if (productTerm) {
+    detailPreloaded = true;
+    const candidateOrders = byClient.flatMap((c) => c.orders);
+    const details = await mapWithConcurrency(candidateOrders, 20, (o) => getOrderDetailCached(o.id, token));
+    candidateOrders.forEach((o, i) => {
+      o.poNumber = details[i].poNumber;
+      o.products = details[i].products;
+      o.currentTotal = details[i].currentTotal;
+    });
+    byClient = byClient
+      .map((c) => ({ ...c, orders: c.orders.filter((o) => (o.products || []).some((p) => matchesWildcard(p.name, productTerm))) }))
+      .filter((c) => c.orders.length > 0)
+      .map((c) => ({ ...c, count: c.orders.length }));
+  }
+
+  const matched = byClient.flatMap((g) => g.orders);
 
   // Generic per-status breakdown (completed/processing/whatever else Ingram
   // uses), same rationale as Subscriptions' statusCounts -- no assumption
@@ -116,32 +144,36 @@ async function buildReport(sinceDate, filterTerm, includeRenewals) {
     asOf: new Date().toISOString(),
     sinceDate,
     filterTerm: filterTerm || null,
+    statusTerm: statusTerm || null,
+    productTerm: productTerm || null,
     includeRenewals: !!includeRenewals,
+    detailPreloaded,
     totalCount: matched.length,
     statusCounts,
     byClient,
   };
 }
 
-// Cached per sinceDate+filterTerm+includeRenewals combination (20-min TTL,
-// same convention as Ingram Subscriptions/Subscriptions Expiring) -- repeat
-// views of the same search are instant, a different date/search/toggle
-// state does its own build. Refresh always sends `force=true`, bypassing the
-// cache for that exact key.
+// Cached per sinceDate+filterTerm+includeRenewals+status+product
+// combination (20-min TTL, same convention as Ingram Subscriptions/
+// Subscriptions Expiring) -- repeat views of the same search are instant, a
+// different date/search/toggle/filter state does its own build. Refresh
+// always sends `force=true`, bypassing the cache for that exact key.
 const REPORT_CACHE_TTL_MS = 20 * 60 * 1000;
 const reportCacheByKey = new Map(); // key -> { data, expiresAt }
 const inFlightByKey = new Map(); // key -> Promise, so concurrent cold-cache requests for the same key share one build
 
-function cacheKeyFor(sinceDate, filterTerm, includeRenewals) {
-  return `${sinceDate}|${(filterTerm || '').trim().toLowerCase()}|${includeRenewals ? 'withRenewals' : 'noRenewals'}`;
+function cacheKeyFor(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm) {
+  const norm = (s) => (s || '').trim().toLowerCase();
+  return `${sinceDate}|${norm(filterTerm)}|${includeRenewals ? 'withRenewals' : 'noRenewals'}|${norm(statusTerm)}|${norm(productTerm)}`;
 }
 
-async function getReport(sinceDate, filterTerm, includeRenewals, force) {
-  const key = cacheKeyFor(sinceDate, filterTerm, includeRenewals);
+async function getReport(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm, force) {
+  const key = cacheKeyFor(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm);
   const cached = reportCacheByKey.get(key);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
   if (!inFlightByKey.has(key)) {
-    const build = buildReport(sinceDate, filterTerm, includeRenewals)
+    const build = buildReport(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm)
       .then((data) => {
         reportCacheByKey.set(key, { data, expiresAt: Date.now() + REPORT_CACHE_TTL_MS });
         return data;
@@ -267,7 +299,14 @@ router.get('/', async (req, res) => {
     return res.status(400).json({ error: 'Query param "since" is required in YYYY-MM-DD format.' });
   }
   try {
-    const data = await getReport(sinceDate, req.query.client, req.query.includeRenewals === 'true', req.query.force === 'true');
+    const data = await getReport(
+      sinceDate,
+      req.query.client,
+      req.query.includeRenewals === 'true',
+      req.query.status,
+      req.query.product,
+      req.query.force === 'true'
+    );
     res.json(data);
   } catch (err) {
     console.error(err);
