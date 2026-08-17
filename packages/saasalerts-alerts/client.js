@@ -7,8 +7,19 @@ export const label = "Security Alerts";
 // module-level variable survives across re-mounts and lets the last result
 // restore instantly instead of coming back blank.
 let lastDate = null;
+let lastPeriod = "1d";
 let lastFilter = '';
 let lastData = null;
+
+// Keys and labels mirror PERIODS in server.js exactly -- kept in sync
+// manually (same pattern as WINDOW_OPTIONS on Subscriptions Expiring), since
+// the dropdown needs to render before any request to the server.
+const PERIOD_OPTIONS = [
+  { value: "1d", label: "1 day" },
+  { value: "1w", label: "1 week" },
+  { value: "1m", label: "1 month" },
+  { value: "3m", label: "3 months" },
+];
 
 export function mount(container) {
   container.innerHTML = `
@@ -17,12 +28,16 @@ export function mount(container) {
       <form id="filter-form" class="date-form">
         <label for="date-input">Date</label>
         <input type="date" id="date-input" name="date" required />
+        <label for="period-input">Period</label>
+        <select id="period-input" name="period">
+          ${PERIOD_OPTIONS.map((o) => `<option value="${o.value}">${o.label}</option>`).join('')}
+        </select>
         <label for="client-input">Client</label>
         <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
         <button type="submit">Load</button>
       </form>
     </header>
-    <p id="status" class="status">Pick a date and click Load. Shows medium and critical severity alerts only -- routine low-severity activity (sign-ins etc.) is left out by design.</p>
+    <p id="status" class="status">Pick a date, period, and click Load. Date is the start point; Period is how far forward from it the report runs. Shows medium and critical severity alerts only -- routine low-severity activity (sign-ins etc.) is left out by design.</p>
     <div id="summary" class="summary" hidden></div>
     <div id="week-chart" class="resource-group" hidden></div>
     <div id="alert-summary" hidden></div>
@@ -31,6 +46,7 @@ export function mount(container) {
 
   const form = container.querySelector('#filter-form');
   const dateInput = container.querySelector('#date-input');
+  const periodInput = container.querySelector('#period-input');
   const clientInput = container.querySelector('#client-input');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
@@ -44,14 +60,15 @@ export function mount(container) {
     return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 10);
   }
   dateInput.value = lastDate || todayISO();
+  periodInput.value = lastPeriod;
   clientInput.value = lastFilter;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(dateInput.value, clientInput.value);
+    load(dateInput.value, periodInput.value, clientInput.value);
   });
 
-  async function load(date, clientFilter) {
+  async function load(date, period, clientFilter) {
     const button = form.querySelector('button');
     button.disabled = true;
     statusEl.hidden = false;
@@ -65,12 +82,13 @@ export function mount(container) {
     resultsEl.innerHTML = '';
 
     try {
-      const params = new URLSearchParams({ date });
+      const params = new URLSearchParams({ date, period });
       if (clientFilter) params.set('client', clientFilter);
       const res = await fetch(`/api/saasalerts-alerts?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastDate = date;
+      lastPeriod = period;
       lastFilter = clientFilter;
       lastData = data;
       render(data);
@@ -86,23 +104,30 @@ export function mount(container) {
     statusEl.hidden = true;
 
     const filterSuffix = data.filterTerm ? ` matching "${escapeHtml(data.filterTerm)}"` : '';
+    // "on {date}" for the 1-day period (reads the same as before Period
+    // existed); "from {date} to {lastIncludedDate}" for anything longer --
+    // periodEnd from the server is EXCLUSIVE, so the last included day is
+    // one day before it.
+    const periodPhrase = data.period === '1d' ? `on ${data.date}` : `from ${data.date} to ${subtractOneDay(data.periodEnd)}`;
     // Summed from the same chart data rendered below rather than a separate
     // server field -- it's already the exact (filter-consistent) total for
     // the chart's date range, so re-deriving it here can't drift out of sync
     // with what the chart itself shows. Day count comes from the chart
     // array's own length rather than a hardcoded "28", so this stays correct
-    // if CHART_WEEKS (server.js) is ever retuned.
+    // if CHART_WEEKS (server.js) is ever retuned. Note this chart total is
+    // for the CHART's own always-28-day window, separate from the Period
+    // range above it -- the two can differ once Period is more than a day.
     const chartDays = data.chart || [];
     const chartTotal = chartDays.reduce((sum, d) => sum + d.total, 0);
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> alert${data.totalCount === 1 ? '' : 's'} on ${data.date}${filterSuffix} (${chartTotal} in the last ${chartDays.length} days)`;
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> alert${data.totalCount === 1 ? '' : 's'} ${periodPhrase}${filterSuffix} (${chartTotal} in the last ${chartDays.length} days)`;
 
     renderWeekChart(data);
     renderAlertSummary(data);
 
     resultsEl.innerHTML = '';
     if (data.totalCount === 0) {
-      resultsEl.innerHTML = `<p class="status">No medium/critical alerts${filterSuffix} on this date.</p>`;
+      resultsEl.innerHTML = `<p class="status">No medium/critical alerts${filterSuffix} ${periodPhrase}.</p>`;
       return;
     }
 
@@ -222,21 +247,27 @@ export function mount(container) {
     chart.querySelectorAll('.vbar-col').forEach((col) => {
       col.addEventListener('click', () => {
         const date = col.dataset.date;
+        // Clicking a single day's bar means "show me that one day" -- resets
+        // Period back to 1 day regardless of whatever was selected before,
+        // rather than reusing e.g. a 3-month period starting from the
+        // clicked day, which isn't what clicking one bar implies.
         dateInput.value = date;
-        load(date, clientInput.value);
+        periodInput.value = '1d';
+        load(date, '1d', clientInput.value);
       });
     });
   }
 
-  // Summary of the SELECTED DAY's alerts (same scope as the detail table
-  // below, not the 28-day chart), grouped by alert name -- each group lists
-  // which client+user combinations triggered that alert and how many times,
-  // sorted busiest-first. Built entirely from data.rows already in hand, no
-  // extra request -- the day's rows are the same data the detail table
-  // renders. Alert names with only one occurrence still get their own group
-  // (a one-off alert is exactly as much "a group" as a repeated one), and a
-  // client+user combo that recurs for the same alert on the same day is
-  // counted once with count > 1, not listed as separate rows.
+  // Summary of the SELECTED PERIOD's alerts (same scope as the detail table
+  // below, not the chart's always-28-day window), grouped by alert name --
+  // each group lists which client+user combinations triggered that alert and
+  // how many times, sorted busiest-first. Built entirely from data.rows
+  // already in hand, no extra request -- the period's rows are the same data
+  // the detail table renders. Alert names with only one occurrence still get
+  // their own group (a one-off alert is exactly as much "a group" as a
+  // repeated one), and a client+user combo that recurs for the same alert
+  // within the period is counted once with count > 1, not listed as separate
+  // rows.
   function renderAlertSummary(data) {
     const rows = data.rows || [];
     alertSummaryEl.hidden = rows.length === 0;
@@ -341,6 +372,15 @@ export function mount(container) {
   function formatDate(isoDateOnly) {
     if (!isoDateOnly) return '';
     return new Date(`${isoDateOnly}T00:00:00.000Z`).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'Australia/Brisbane' });
+  }
+
+  // Plain calendar-date arithmetic (no timezone conversion needed -- these
+  // are already AEST calendar dates as plain "YYYY-MM-DD" strings) -- turns
+  // the server's EXCLUSIVE periodEnd into the last day actually included in
+  // the period, for display.
+  function subtractOneDay(isoDateOnly) {
+    const [y, m, d] = isoDateOnly.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
   }
 
   function escapeHtml(str) {

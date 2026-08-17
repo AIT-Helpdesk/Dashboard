@@ -51,6 +51,30 @@ async function getAutotaskUrlByCustomerId() {
 // plus the 3 weeks before it.
 const CHART_WEEKS = 4;
 
+// The report period -- Date is the start point, Period is how far forward
+// from it the report (summary/alert summary/detail table) extends, by
+// request. Independent of the chart above, which always stays anchored to
+// just the selected date's own week regardless of Period (by request).
+const PERIODS = {
+  '1d': { label: '1 day', addMonths: 0, addDays: 1 },
+  '1w': { label: '1 week', addMonths: 0, addDays: 7 },
+  '1m': { label: '1 month', addMonths: 1, addDays: 0 },
+  '3m': { label: '3 months', addMonths: 3, addDays: 0 },
+};
+
+// The exclusive end date ("YYYY-MM-DD") of the period starting at `dateStr`.
+// Month arithmetic via Date.UTC's own overflow handling (e.g. 31 Jan + 1
+// month naturally becomes 3 Mar, not clamped to 28/29 Feb) -- standard JS
+// Date rollover behavior, not custom-clamped, since there's no single "right"
+// answer for a month-end start date and this is a reporting window, not a
+// billing date.
+function addPeriod(dateStr, periodKey) {
+  const period = PERIODS[periodKey];
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const end = new Date(Date.UTC(y, m - 1 + period.addMonths, d + period.addDays));
+  return end.toISOString().slice(0, 10);
+}
+
 // Confirmed against the real API: the `size` param has an undocumented hard
 // ceiling somewhere between 10,000 and 12,000 -- exceeding it doesn't error
 // or clamp, it silently returns ZERO results (discovered the hard way: a
@@ -81,7 +105,7 @@ async function fetchAlertsInRange(rangeStartISO, rangeEndISO) {
   return bySeverity.flat();
 }
 
-async function buildReport(dateStr, filterTerm) {
+async function buildReport(dateStr, periodKey, filterTerm) {
   const currentMonday = mondayOf(dateStr); // {year, month, day} -- AEST calendar Monday of the SELECTED week
   // The Monday (CHART_WEEKS - 1) full weeks before currentMonday -- since
   // currentMonday is already a Monday, subtracting a multiple of 7 calendar
@@ -92,10 +116,21 @@ async function buildReport(dateStr, filterTerm) {
     month: chartStartCalendar.getUTCMonth() + 1,
     day: chartStartCalendar.getUTCDate(),
   };
-
-  const rangeStartISO = aestToUtcIso(chartStartMonday.year, chartStartMonday.month, chartStartMonday.day);
-  const rangeEndISO = aestToUtcIso(currentMonday.year, currentMonday.month, currentMonday.day + 7); // end of the SELECTED week
   const chartDates = weekDatesFrom(chartStartMonday, CHART_WEEKS * 7); // CHART_WEEKS consecutive Mon..Sun weeks, oldest first
+  const chartEndISO = aestToUtcIso(currentMonday.year, currentMonday.month, currentMonday.day + 7); // end of the chart's own (SELECTED) week
+
+  const periodEndDateStr = addPeriod(dateStr, periodKey); // exclusive
+  const [pey, pem, ped] = periodEndDateStr.split('-').map(Number);
+  const periodEndISO = aestToUtcIso(pey, pem, ped);
+
+  // One fetch covers BOTH the chart's always-28-days window and the
+  // (potentially much longer, up to 3 months) report period -- a long
+  // Period can extend well past the chart's own end date, so the actual
+  // upstream range is the union of the two, not just the chart's. ISO
+  // instant strings compare correctly as plain strings (fixed-width, always
+  // UTC), so picking the later end is a plain string comparison.
+  const rangeStartISO = aestToUtcIso(chartStartMonday.year, chartStartMonday.month, chartStartMonday.day); // always <= the period's own start, since the chart's window always begins at or before the selected date
+  const rangeEndISO = periodEndISO > chartEndISO ? periodEndISO : chartEndISO;
 
   const [events, autotaskUrlByCustomerId] = await Promise.all([fetchAlertsInRange(rangeStartISO, rangeEndISO), getAutotaskUrlByCustomerId()]);
 
@@ -134,10 +169,16 @@ async function buildReport(dateStr, filterTerm) {
     return { date: d, label: WEEKDAY_LABELS[i % 7], critical, medium, total: critical + medium };
   });
 
-  const rows = enriched.filter((e) => e.dayKey === dateStr).sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+  // The report (as opposed to the chart above) covers the whole Period, not
+  // just the one day -- dayKey comparison works as plain string comparison
+  // since it's always "YYYY-MM-DD".
+  const rows = enriched.filter((e) => e.dayKey >= dateStr && e.dayKey < periodEndDateStr).sort((a, b) => (b.time || '').localeCompare(a.time || ''));
 
   return {
     date: dateStr,
+    period: periodKey,
+    periodLabel: PERIODS[periodKey].label,
+    periodEnd: periodEndDateStr, // exclusive -- the last INCLUDED day is periodEndDateStr minus one day
     chartStart: chartDates[0],
     chartEnd: chartDates[chartDates.length - 1],
     currentWeekStart: chartDates[(CHART_WEEKS - 1) * 7], // where the SELECTED week begins within the chart -- lets the client accent that one boundary specifically, distinct from the other (earlier) week boundaries
@@ -155,8 +196,12 @@ router.get('/', async (req, res) => {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return res.status(400).json({ error: 'Query param "date" is required in YYYY-MM-DD format.' });
   }
+  const period = req.query.period || '1d';
+  if (!PERIODS[period]) {
+    return res.status(400).json({ error: `Query param "period" must be one of: ${Object.keys(PERIODS).join(', ')}.` });
+  }
   try {
-    const data = await buildReport(date, req.query.client);
+    const data = await buildReport(date, period, req.query.client);
     res.json(data);
   } catch (err) {
     console.error(err);
