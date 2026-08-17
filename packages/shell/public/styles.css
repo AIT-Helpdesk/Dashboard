@@ -386,6 +386,22 @@ h1 {
   font-weight: 600;
 }
 
+/* Clickable variant -- a .resource-group-header that toggles a collapsible
+   section below it (Security Alerts' "All Alerts" list) rather than being
+   static. .toggle-arrow is the ▸/▾ indicator, same convention as the sidebar
+   category headers' own expand/collapse arrow. */
+.resource-group-header--toggle {
+  cursor: pointer;
+  user-select: none;
+}
+.resource-group-header--toggle:hover {
+  background: var(--border);
+}
+.toggle-arrow {
+  display: inline-block;
+  width: 1em;
+}
+
 .resource-group-header .count {
   color: var(--muted);
   font-weight: 400;

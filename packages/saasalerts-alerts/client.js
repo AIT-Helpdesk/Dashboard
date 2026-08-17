@@ -108,7 +108,18 @@ export function mount(container) {
 
     const group = document.createElement('div');
     group.className = 'resource-group';
-    group.innerHTML = `
+
+    // Collapsible, starting minimized -- the Alert Summary above already
+    // gives the at-a-glance view; this full list is the "show me everything"
+    // detail underneath it, so it doesn't need to be open by default.
+    const header = document.createElement('div');
+    header.className = 'resource-group-header resource-group-header--toggle';
+    header.innerHTML = `<span><span class="toggle-arrow">▸</span>All Alerts</span><span class="count">${data.totalCount} alert${data.totalCount === 1 ? '' : 's'}</span>`;
+    group.appendChild(header);
+
+    const tableWrap = document.createElement('div');
+    tableWrap.hidden = true;
+    tableWrap.innerHTML = `
       <table>
         <thead>
           <tr class="shaded-row"><th>Time</th><th>Client</th><th>Severity</th><th>Event</th><th>User</th><th>Ticket</th></tr>
@@ -130,6 +141,14 @@ export function mount(container) {
         </tbody>
       </table>
     `;
+    group.appendChild(tableWrap);
+
+    const arrow = header.querySelector('.toggle-arrow');
+    header.addEventListener('click', () => {
+      tableWrap.hidden = !tableWrap.hidden;
+      arrow.textContent = tableWrap.hidden ? '▸' : '▾';
+    });
+
     resultsEl.appendChild(group);
   }
 

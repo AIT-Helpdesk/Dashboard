@@ -31,6 +31,10 @@ Sits between the week chart and the detail table -- a breakdown of the **selecte
 
 Built entirely client-side (`renderAlertSummary()`) from `data.rows` -- the exact same data the detail table renders, not a separate request -- so it's always consistent with whatever's in the table and respects the client-name filter automatically. A client+user combination that recurs for the same alert on the same day is counted once with `count > 1`, not listed as repeated rows. Verified against real data: group totals summed exactly back to the day's total count.
 
+## All Alerts (collapsible)
+
+The full detail table sits behind an **"All Alerts"** heading, collapsed by default every time a new date/search loads (`.resource-group-header--toggle`, `styles.css`) -- click it (▸/▾) to show or hide the table. Starts minimized because the Alert Summary above it already gives the at-a-glance view; this is the "show me every individual row" detail underneath, not something that needs to be open by default. State isn't persisted between loads -- picking a new date or search always starts collapsed again, same as the state before the click.
+
 ## Table columns
 
 **Time** (browser-local time-of-day, same convention as Tickets Created's `formatTime()` -- this is a same-day view, so only the time-of-day matters), **Client** (linked to the matching Autotask company when SaaS Alerts has that mapping -- see below), **Severity** (critical shown red, medium shown blue), **Event** (`jointDesc`, the human-readable event description, e.g. "IAM Event - Multi-Factor Authentication Disabled" -- with `jointDescAdditional`, when present, shown as smaller subtext underneath for the specific detail, e.g. "jharries@... deleted Authenticator App as an MFA Method"), **User** (`user.fullName`, falling back to `user.name`), **Ticket** (linked to the Autotask ticket SaaS Alerts auto-created for this alert, when one exists -- see below).
