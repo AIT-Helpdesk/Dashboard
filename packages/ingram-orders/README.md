@@ -39,6 +39,10 @@ Both are part of the cache key (`cacheKeyFor()`) alongside since-date/client/ren
 
 Renewals are typically the highest-volume, least-actionable order type (automatic, no real decision behind them -- confirmed against real data: for one test week, 40 of 57 total orders were renewals), so they're excluded by default. Sent as `includeRenewals=true` when checked, filtered server-side (`buildReport()`) before grouping/counting -- excluded orders don't just get hidden client-side, they're left out of `totalCount`/`statusCounts`/client groupings entirely, same as how Ingram Subscriptions' "All Statuses" toggle works. Part of the cache key (`cacheKeyFor()`) alongside the since-date and client filter, so toggling it always fetches/serves the right variant rather than showing stale results from the other state. The summary line and empty-state message both note "(renewals excluded)" when the box is unchecked, so it's clear the totals shown aren't the full picture. There's no filter on Type itself (only this one checkbox for renewals specifically) -- Type is shown as a column but isn't otherwise searchable.
 
+## Show Cancelled (checkbox, off by default)
+
+A second, independent checkbox next to Show Renewals, same off-by-default/outer-gate pattern, but keyed on **status**, not type: hides any order whose `status` is `cancelled`, regardless of its `type`. This is deliberately a *different* concept from `type: 'cancellation'` (an order that cancels a subscription) -- confirmed against real data across a 90-day sample these are mostly disjoint sets (10 `type: 'cancellation'` orders vs. 18 `status: 'cancelled'` orders, only 1 order was both). A `status: 'cancelled'` order is typically a `change`/`sales`/`cancellation`-type order attempt that itself got cancelled/withdrawn before completing -- noise similar in spirit to renewals, just a different axis, which is why it gets its own toggle rather than being folded into Show Renewals or treated as part of the Status filter. Sent as `includeCancelled=true` when checked, part of the cache key alongside `includeRenewals`. When either or both boxes are unchecked, the summary/empty-state suffix lists whichever are excluded, e.g. "(renewals, cancelled excluded)" or just "(cancelled excluded)" if only that one is off.
+
 ## PO number, Product, and Licenses -- on demand, per client
 
 Deliberately not part of the base report, same rationale as Ingram Subscriptions' license counts: the list endpoint's rows don't carry a PO number, product name, or quantity, only the single-order **detail** endpoint (`GET /orders/{id}`) does -- confirmed against the real API, where a detail response also included the full price/tax/discount breakdown per line item (not surfaced here, out of scope for this page). Fetching that for every order up front would mean one request per order regardless of whether anyone looks at it, so instead:
@@ -71,7 +75,7 @@ Grouped by resolved client name. Unlike Ingram Subscriptions (alphabetical by na
 
 ## Caching
 
-Cached in-process, keyed by the since-date, filter term, AND the renewals toggle together (20-min TTL), same convention as Ingram Subscriptions. The page's **Refresh** button always sends `force=true`, bypassing the cache. Order detail (PO#/products) is cached separately, per order ID, same 20-min TTL.
+Cached in-process, keyed by the since-date, filter terms, AND both the renewals and cancelled toggles together (20-min TTL), same convention as Ingram Subscriptions. The page's **Refresh** button always sends `force=true`, bypassing the cache. Order detail (PO#/products) is cached separately, per order ID, same 20-min TTL.
 
 ## No auto-load
 

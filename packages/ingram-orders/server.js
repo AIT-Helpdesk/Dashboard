@@ -48,7 +48,7 @@ async function fetchCustomers(token) {
   return all;
 }
 
-async function buildReport(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm) {
+async function buildReport(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm) {
   const token = await getToken();
   const { startISO } = aestDayBoundsIso(sinceDate); // AEST midnight of the selected date, not UTC
 
@@ -63,6 +63,14 @@ async function buildReport(sinceDate, filterTerm, includeRenewals, statusTerm, p
     // explicitly asked for, rather than just hidden client-side after the
     // fact (which would still count them in totals/status breakdown).
     if (!includeRenewals && o.type === 'renewal') continue;
+    // Also off by default, same rationale, but keyed on STATUS rather than
+    // type -- confirmed against real data these are mostly different orders
+    // (a `status: 'cancelled'` order can be a `change`, `sales`, or
+    // `cancellation` type -- it's a failed/withdrawn order attempt of any
+    // kind, not specifically an order that cancels a subscription, which is
+    // what `type: 'cancellation'` means). Applied independently of the Status
+    // filter below, same "checkbox is an outer gate" pattern as renewals.
+    if (!includeCancelled && o.status === 'cancelled') continue;
     if (statusTerm && !matchesWildcard(o.status || '', statusTerm)) continue;
     const clientName = customerNameById.get(o.customerId) || `Customer #${o.customerId}`;
     if (filterTerm && !matchesWildcard(clientName, filterTerm)) continue;
@@ -106,7 +114,7 @@ async function buildReport(sinceDate, filterTerm, includeRenewals, statusTerm, p
   // product info at all -- see fetchOrderDetailWithRetry() below), so it's
   // the one filter here that isn't free. Only paid for when actually
   // requested, and only for the ALREADY-narrowed (since/client/status/
-  // renewals) candidate set, not the full history -- the other filters
+  // renewals/cancelled) candidate set, not the full history -- the other filters
   // above run first specifically so this one has as little work to do as
   // possible. Detail fetched this way is attached directly to the surviving
   // rows, so the client doesn't need a further click to see PO#/Product/
@@ -147,6 +155,7 @@ async function buildReport(sinceDate, filterTerm, includeRenewals, statusTerm, p
     statusTerm: statusTerm || null,
     productTerm: productTerm || null,
     includeRenewals: !!includeRenewals,
+    includeCancelled: !!includeCancelled,
     detailPreloaded,
     totalCount: matched.length,
     statusCounts,
@@ -154,8 +163,8 @@ async function buildReport(sinceDate, filterTerm, includeRenewals, statusTerm, p
   };
 }
 
-// Cached per sinceDate+filterTerm+includeRenewals+status+product
-// combination (20-min TTL, same convention as Ingram Subscriptions/
+// Cached per sinceDate+filterTerm+includeRenewals+includeCancelled+status+
+// product combination (20-min TTL, same convention as Ingram Subscriptions/
 // Subscriptions Expiring) -- repeat views of the same search are instant, a
 // different date/search/toggle/filter state does its own build. Refresh
 // always sends `force=true`, bypassing the cache for that exact key.
@@ -163,17 +172,17 @@ const REPORT_CACHE_TTL_MS = 20 * 60 * 1000;
 const reportCacheByKey = new Map(); // key -> { data, expiresAt }
 const inFlightByKey = new Map(); // key -> Promise, so concurrent cold-cache requests for the same key share one build
 
-function cacheKeyFor(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm) {
+function cacheKeyFor(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm) {
   const norm = (s) => (s || '').trim().toLowerCase();
-  return `${sinceDate}|${norm(filterTerm)}|${includeRenewals ? 'withRenewals' : 'noRenewals'}|${norm(statusTerm)}|${norm(productTerm)}`;
+  return `${sinceDate}|${norm(filterTerm)}|${includeRenewals ? 'withRenewals' : 'noRenewals'}|${includeCancelled ? 'withCancelled' : 'noCancelled'}|${norm(statusTerm)}|${norm(productTerm)}`;
 }
 
-async function getReport(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm, force) {
-  const key = cacheKeyFor(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm);
+async function getReport(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm, force) {
+  const key = cacheKeyFor(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm);
   const cached = reportCacheByKey.get(key);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
   if (!inFlightByKey.has(key)) {
-    const build = buildReport(sinceDate, filterTerm, includeRenewals, statusTerm, productTerm)
+    const build = buildReport(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm)
       .then((data) => {
         reportCacheByKey.set(key, { data, expiresAt: Date.now() + REPORT_CACHE_TTL_MS });
         return data;
@@ -303,6 +312,7 @@ router.get('/', async (req, res) => {
       sinceDate,
       req.query.client,
       req.query.includeRenewals === 'true',
+      req.query.includeCancelled === 'true',
       req.query.status,
       req.query.product,
       req.query.force === 'true'

@@ -10,6 +10,7 @@ let lastData = null;
 let lastSince = null;
 let lastFilter = '';
 let lastIncludeRenewals = false; // off by default, by request -- renewals are the highest-volume, least-actionable order type
+let lastIncludeCancelled = false; // off by default, by request -- status="cancelled" orders (of any type) are failed/withdrawn attempts
 let lastStatusFilter = '';
 let lastProductFilter = '';
 
@@ -26,6 +27,9 @@ export function mount(container) {
           <label for="include-renewals-input" class="inline-checkbox-label">
             <input type="checkbox" id="include-renewals-input" /> Show Renewals
           </label>
+          <label for="include-cancelled-input" class="inline-checkbox-label">
+            <input type="checkbox" id="include-cancelled-input" /> Show Cancelled
+          </label>
         </div>
         <div class="date-form-row">
           <label for="status-input">Status</label>
@@ -37,13 +41,14 @@ export function mount(container) {
         </div>
       </form>
     </header>
-    <p id="status" class="status">Pick a date, optionally filter by client/status/product (wildcards with *), then click Refresh. Every order since that date is included, whatever its status -- renewal orders are excluded by default (tick "Show Renewals" to include them). PO numbers and products aren't loaded up front -- click a client's name to fetch theirs, use "Load All Products &amp; Licenses" above to fetch every client's at once, or set a Product filter (which needs that same detail, so fetches it automatically).</p>
+    <p id="status" class="status">Pick a date, optionally filter by client/status/product (wildcards with *), then click Refresh. Every order since that date is included, whatever its status -- renewal orders and cancelled orders are excluded by default (tick "Show Renewals"/"Show Cancelled" to include them). PO numbers and products aren't loaded up front -- click a client's name to fetch theirs, use "Load All Products &amp; Licenses" above to fetch every client's at once, or set a Product filter (which needs that same detail, so fetches it automatically).</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
   `;
 
   const form = container.querySelector('#filter-form');
   const includeRenewalsInput = container.querySelector('#include-renewals-input');
+  const includeCancelledInput = container.querySelector('#include-cancelled-input');
   const sinceInput = container.querySelector('#since-input');
   const clientInput = container.querySelector('#client-input');
   const statusInput = container.querySelector('#status-input');
@@ -64,12 +69,13 @@ export function mount(container) {
   sinceInput.value = lastSince || defaultSinceISO();
   clientInput.value = lastFilter;
   includeRenewalsInput.checked = lastIncludeRenewals;
+  includeCancelledInput.checked = lastIncludeCancelled;
   statusInput.value = lastStatusFilter;
   productInput.value = lastProductFilter;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(sinceInput.value, clientInput.value, includeRenewalsInput.checked, statusInput.value, productInput.value);
+    load(sinceInput.value, clientInput.value, includeRenewalsInput.checked, includeCancelledInput.checked, statusInput.value, productInput.value);
   });
 
   loadAllButton.addEventListener('click', loadAllDetails);
@@ -85,7 +91,7 @@ export function mount(container) {
   // `force=true`, which bypasses that cache for the current search and
   // rebuilds -- a button literally labeled "Refresh" should always get
   // current data, not a cached one.
-  async function load(since, clientFilter, includeRenewals, statusFilter, productFilter) {
+  async function load(since, clientFilter, includeRenewals, includeCancelled, statusFilter, productFilter) {
     refreshButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
@@ -99,6 +105,7 @@ export function mount(container) {
       const params = new URLSearchParams({ since, force: 'true' });
       if (clientFilter) params.set('client', clientFilter);
       if (includeRenewals) params.set('includeRenewals', 'true');
+      if (includeCancelled) params.set('includeCancelled', 'true');
       if (statusFilter) params.set('status', statusFilter);
       if (productFilter) params.set('product', productFilter);
       const res = await fetch(`/api/ingram-orders?${params.toString()}`);
@@ -108,6 +115,7 @@ export function mount(container) {
       lastSince = since;
       lastFilter = clientFilter;
       lastIncludeRenewals = includeRenewals;
+      lastIncludeCancelled = includeCancelled;
       lastStatusFilter = statusFilter;
       lastProductFilter = productFilter;
       render(data);
@@ -137,9 +145,15 @@ export function mount(container) {
       .sort((a, b) => b[1] - a[1])
       .map(([status, count]) => `${count} ${capitalize(status)}`)
       .join(', ');
-    const renewalsSuffix = data.includeRenewals ? '' : ' (renewals excluded)';
+    // Both toggles are noted together when off, same "(... excluded)" style
+    // as before -- e.g. "(renewals, cancelled excluded)" when neither box is
+    // checked, or just one word when only one is off.
+    const excludedParts = [];
+    if (!data.includeRenewals) excludedParts.push('renewals');
+    if (!data.includeCancelled) excludedParts.push('cancelled');
+    const exclusionSuffix = excludedParts.length ? ` (${excludedParts.join(', ')} excluded)` : '';
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> order${data.totalCount === 1 ? '' : 's'} (${statusBreakdown}) across ${data.byClient.length} client${data.byClient.length === 1 ? '' : 's'} since ${data.sinceDate}${filterSuffix}${renewalsSuffix}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> order${data.totalCount === 1 ? '' : 's'} (${statusBreakdown}) across ${data.byClient.length} client${data.byClient.length === 1 ? '' : 's'} since ${data.sinceDate}${filterSuffix}${exclusionSuffix}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
 
     // A Product filter forces the server to fetch every matched order's
     // detail as part of building the report (there's no other way to filter
@@ -155,7 +169,7 @@ export function mount(container) {
 
     resultsEl.innerHTML = '';
     if (data.byClient.length === 0) {
-      resultsEl.innerHTML = `<p class="status">No orders${filterSuffix} since ${data.sinceDate}${renewalsSuffix}.</p>`;
+      resultsEl.innerHTML = `<p class="status">No orders${filterSuffix} since ${data.sinceDate}${exclusionSuffix}.</p>`;
       return;
     }
 
