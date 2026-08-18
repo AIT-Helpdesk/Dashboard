@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/unallocated-service-calls",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "unallocated-service-calls",
+    "label": "Unallocated Service Calls",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "express": "^4.19.2"
+  }
+}

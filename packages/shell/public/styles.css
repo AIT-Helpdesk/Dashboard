@@ -705,6 +705,115 @@ td.ticket-number {
   font-size: 0.85em;
 }
 
+/* Plain label color, same tone as .inline-subtext but no size change --
+   for inline "Label: value" pairs where only the label should be muted. */
+.muted {
+  color: var(--muted);
+}
+
+/* Client Summary's company-details header -- three loose columns (address/
+   phone, contacts, UDFs) that stack on narrow screens. */
+.client-summary-header-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem 1.5rem;
+  padding: 0.75rem;
+}
+@media (max-width: 720px) {
+  .client-summary-header-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.client-summary-section-heading {
+  font-size: 1.1rem;
+  margin: 1.5rem 0 0.75rem;
+}
+
+/* Unallocated Service Calls' month calendar. */
+.calendar-nav {
+  gap: 0.75rem;
+}
+.calendar-nav button {
+  padding: 0.35rem 0.75rem;
+}
+.calendar-month-label {
+  font-weight: 600;
+  min-width: 11ch;
+  text-align: center;
+}
+
+.calendar-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.calendar-table th {
+  padding: 0.4rem;
+  text-align: left;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.calendar-cell {
+  vertical-align: top;
+  border: 1px solid var(--border);
+  padding: 0.4rem;
+  height: 6.5rem;
+  width: 14.28%;
+}
+.calendar-cell--outside {
+  background: var(--card);
+  opacity: 0.5;
+}
+.calendar-cell--today {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--accent);
+}
+.calendar-cell-daynum {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+.calendar-cell-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  overflow-y: auto;
+  max-height: 5rem;
+}
+.calendar-entry {
+  display: block;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.3rem;
+  border-radius: 4px;
+  /* Same red as .cell-flag-red, at low opacity as a background fill instead
+     of text color -- these ARE the staffing gaps this page exists to
+     surface, so they're flagged the same way other pages flag "needs
+     attention" rows, just as a fill rather than colored text (there's no
+     single text value here worth coloring the way a status cell has). */
+  background: color-mix(in srgb, #dc2626 15%, transparent);
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.calendar-entry:hover {
+  text-decoration: underline;
+}
+.calendar-entry--no-ticket {
+  cursor: default;
+}
+@media (max-width: 720px) {
+  .calendar-cell {
+    height: auto;
+  }
+  .calendar-table th {
+    font-size: 0.65rem;
+  }
+}
+
 td.ticket-number a {
   color: var(--accent);
   text-decoration: none;
