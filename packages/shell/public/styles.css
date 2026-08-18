@@ -767,7 +767,7 @@ td.ticket-number {
   opacity: 0.5;
 }
 .calendar-cell--today {
-  background: color-mix(in srgb, #eab308 12%, transparent);
+  background: color-mix(in srgb, #eab308 6%, transparent);
   border-color: color-mix(in srgb, #eab308 60%, transparent);
 }
 .calendar-cell-daynum {
