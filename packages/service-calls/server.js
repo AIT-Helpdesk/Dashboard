@@ -7,6 +7,7 @@ const {
   resolveCompanyName,
   resolveResourceName,
   getTicketUrl,
+  getPicklistLabels,
   aestToUtcIso,
   mondayOf,
   weekDatesFrom,
@@ -84,7 +85,17 @@ async function buildReport(monthKey) {
   }
 
   const relatedTicketIds = [...new Set(serviceCalls.flatMap((sc) => ticketIdsByServiceCallId.get(sc.id) || []))];
-  const tickets = relatedTicketIds.length > 0 ? await fetchByFieldIn(client.tickets, 'id', relatedTicketIds) : [];
+  const [tickets, ticketStatusLabels, serviceCallStatusLabels] = await Promise.all([
+    relatedTicketIds.length > 0 ? fetchByFieldIn(client.tickets, 'id', relatedTicketIds) : [],
+    getPicklistLabels(client.tickets, 'status'),
+    // ServiceCalls.status -- confirmed against the real, LIVE picklist
+    // (fetched directly from Autotask's own entityInformation/fields, not
+    // any external tool's cache, which was serving a stale 4-value list
+    // during investigation): 1 New, 2 Complete, 101 Canceled, 102 Canceled
+    // by Client, 103 Onsite Arranged, 104 Onsite TBA -- the last two added
+    // to Autotask after this page was first built.
+    getPicklistLabels(client.serviceCalls, 'status'),
+  ]);
   const ticketById = new Map(tickets.map((t) => [t.id, t]));
 
   const uniqueCompanyIds = [...new Set(serviceCalls.map((sc) => sc.companyID).filter((id) => id !== null && id !== undefined))];
@@ -102,7 +113,13 @@ async function buildReport(monthKey) {
     for (const tid of ticketIds) {
       const t = ticketById.get(tid);
       if (!t) continue;
-      relatedTickets.push({ id: t.id, ticketNumber: t.ticketNumber, title: t.title, ticketUrl: await getTicketUrl(t.id) });
+      relatedTickets.push({
+        id: t.id,
+        ticketNumber: t.ticketNumber,
+        title: t.title,
+        status: ticketStatusLabels.get(t.status) || `#${t.status}`,
+        ticketUrl: await getTicketUrl(t.id),
+      });
     }
     const resourceIds = resourceIdsFor(sc.id);
     const resourceNames = [];
@@ -125,6 +142,12 @@ async function buildReport(monthKey) {
       // flag, same as "Show Unallocated Only" is over `allocated`, so
       // toggling either never needs a refetch.
       isComplete: !!sc.isComplete,
+      // The call's own status label (New/Complete/Onsite Arranged/Onsite
+      // TBA/etc, see the getPicklistLabels() call above) -- distinct from
+      // `isComplete`/`allocated`, which drive the entry's background fill;
+      // this drives a separate left-border accent for the "Onsite" statuses
+      // specifically, by request.
+      serviceCallStatus: serviceCallStatusLabels.get(sc.status) || `#${sc.status}`,
       tickets: relatedTickets,
     });
   }

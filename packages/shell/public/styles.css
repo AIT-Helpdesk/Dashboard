@@ -767,8 +767,8 @@ td.ticket-number {
   opacity: 0.5;
 }
 .calendar-cell--today {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border-color: var(--accent);
+  background: color-mix(in srgb, #eab308 12%, transparent);
+  border-color: color-mix(in srgb, #eab308 60%, transparent);
 }
 .calendar-cell-daynum {
   font-size: 0.8rem;
@@ -784,7 +784,9 @@ td.ticket-number {
 }
 .calendar-entry {
   display: block;
+  box-sizing: border-box;
   padding: 0.15rem 0.3rem;
+  border-left: 4.5px solid transparent; /* 50% wider than the original 3px, by request -- reserves the accent's width always, so the border-left below never shifts the entry's own width when it's added */
   border-radius: 4px;
   color: var(--fg);
   text-decoration: none;
@@ -822,6 +824,16 @@ td.ticket-number {
 }
 .calendar-entry--completed {
   background: color-mix(in srgb, #16a34a 12%, transparent);
+}
+/* Independent of the background fill above -- a left-border accent for
+   Autotask's two "Onsite" service call statuses specifically, by request.
+   Layers on top of whichever fill color the entry already has (allocation/
+   completion state), rather than replacing it. */
+.calendar-entry--onsite-arranged {
+  border-left-color: #d4af37; /* gold */
+}
+.calendar-entry--onsite-tba {
+  border-left-color: #dc2626; /* same red as .cell-flag-red/.calendar-entry--unallocated */
 }
 .calendar-entry:hover {
   text-decoration: underline;

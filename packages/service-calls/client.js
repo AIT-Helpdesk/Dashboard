@@ -211,20 +211,33 @@ export function mount(container) {
     // the work, plus a real linked ticket for it), and hiding the
     // description just because a ticket happened to be linked was losing
     // real information.
-    const titleLines = e.tickets.map((t) => `${t.ticketNumber}: ${t.title}`);
+    const titleLines = e.tickets.flatMap((t) => [`${t.ticketNumber}: ${t.title}`, `  Status: ${t.status}`]);
     if (e.description) titleLines.push(e.description);
     titleLines.push(e.allocated ? `Allocated: ${e.resourceNames.join(', ')}` : 'Unallocated');
     if (e.isComplete) titleLines.push('Complete');
+    titleLines.push(`Service call status: ${e.serviceCallStatus}`);
     const title = escapeHtml(titleLines.join('\n'));
     // Priority order: complete wins regardless of allocation (green --
     // nothing left to staff or review), then allocated-but-not-complete
     // (blue -- staffed, still upcoming/in progress), then unallocated (red
     // -- the staffing gap this page originally existed to surface).
     const colorClass = e.isComplete ? ' calendar-entry--completed' : e.allocated ? ' calendar-entry--allocated' : ' calendar-entry--unallocated';
+    // A left-border accent, independent of the background fill above, for
+    // the two "Onsite" service call statuses specifically -- gold for
+    // Onsite Arranged, red for Onsite TBA (Autotask's own newer statuses,
+    // added after this page was first built; confirmed against real data
+    // via the live picklist, not any cached/stale copy of it).
+    const accentClass =
+      e.serviceCallStatus === 'Onsite Arranged' ? ' calendar-entry--onsite-arranged' : e.serviceCallStatus === 'Onsite TBA' ? ' calendar-entry--onsite-tba' : '';
     if (ticket) {
-      return `<a class="calendar-entry${colorClass}" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}">${inner}</a>`;
+      // A real popup window, not just a new tab -- specifying window
+      // features (width/height/etc.) is what signals that to the browser.
+      // Reads `this.href` rather than re-embedding the URL in the onclick
+      // string, so there's only one place the URL needs escaping. Same
+      // pattern as Client Financials'/Client Details' invoice links.
+      return `<a class="calendar-entry${colorClass}${accentClass}" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${inner}</a>`;
     }
-    return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}" title="${title}">${inner}</div>`;
+    return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}${accentClass}" title="${title}">${inner}</div>`;
   }
 
   if (lastData) {
