@@ -19,7 +19,7 @@ Identical pattern to Client Financials: `resolveSingleCompany()` (`@dashboard/au
 
 ## Financial snapshot
 
-A condensed version of Client Financials' 12-month invoice breakdown: the same category bucketing (Labour, Labour in Charges, Other Charges, Recurring Services, Tech Cover -- see that page's README for the full billingItemType/BillingCode/"Tech Cover" contract-naming rationale, reused here unchanged), but collapsed to a single 12-month total per category rather than a 13-column month-by-month grid -- this page is meant to be a glance, not a repeat of the full report. Also shows the most recent invoice (number, date, total, linked to Autotask) rather than the full invoice list.
+A condensed version of Client Financials' 12-month invoice breakdown: the same category bucketing (Labour, Labour in Charges, Other Charges, Recurring Services, Tech Cover -- see that page's README for the full billingItemType/BillingCode/"Tech Cover" contract-naming rationale, reused here unchanged), shown as the **last 4 months individually, plus a 12-Month Total column** -- narrower than Client Financials' full 13-column (12 months + total) grid, but still shows recent month-to-month trend rather than collapsing straight to one flat number. `buildFinancialSnapshot()` in `server.js` buckets every billing item into its own month first (`monthTotals`, a `Map` keyed by month, same shape Client Financials builds), then derives BOTH the last-4-months slice and the 12-month total from that same per-month data -- the two are never computed two different ways, so they can't disagree with each other. Also shows the most recent invoice (number, date, total, linked to Autotask) rather than the full invoice list.
 
 ## Active contracts
 

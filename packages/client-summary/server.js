@@ -12,6 +12,8 @@ const {
   getTicketUrl,
   matchesWildcard,
   last12MonthKeys,
+  monthKeyOf,
+  monthLabel,
   monthKeysWindow,
   todayAestKey,
   aestToUtcIso,
@@ -33,9 +35,12 @@ function getCompanyUdf(company, udfName) {
 // --- Financial snapshot -----------------------------------------------
 // Same billingItemType bucketing Client Financials uses (see that page's
 // README for the full rationale on the picklist mapping and the "Tech
-// Cover"/"Labour in Charges" splits), condensed here to a single 12-month
-// total per category rather than a month-by-month grid -- this is meant to
-// be a glance, not a repeat of that page.
+// Cover"/"Labour in Charges" splits). Condensed relative to that page's full
+// 13-column (12 months + total) grid -- this shows just the last 4 months
+// individually, plus the 12-month total as its own last column, by request
+// -- a glance at recent trend without repeating the full year Client
+// Financials already covers in detail.
+const RECENT_MONTHS = 4;
 const LABOUR_TYPES = new Set([1, 2]);
 const RECURRING_TYPES = new Set([6]);
 function bucketOf(item, labourInChargesCodeId, contractNameById) {
@@ -72,12 +77,47 @@ async function buildFinancialSnapshot(client, company) {
   const contracts = recurringContractIds.length > 0 ? await fetchByFieldIn(client.contracts, 'id', recurringContractIds) : [];
   const contractNameById = new Map(contracts.map((c) => [c.id, c.contractName]));
 
-  const totals = { labour: 0, recurringTechCover: 0, recurringOther: 0, chargesLabour: 0, chargesOther: 0 };
+  // Bucketed per MONTH (same shape Client Financials uses), not just a flat
+  // 12-month total -- the recent-months table below is a slice of this, and
+  // the 12-Month Total column is this same map's grand sum, so the two
+  // always agree with each other by construction rather than being computed
+  // two different ways.
+  const monthTotals = new Map(
+    monthKeys.map((key) => [key, { labour: 0, recurringTechCover: 0, recurringOther: 0, chargesLabour: 0, chargesOther: 0 }])
+  );
   for (const item of billingItems) {
     const invoice = invoicesById.get(item.invoiceID);
     if (!invoice) continue; // scoped to invoiceIds above, so this shouldn't happen
-    totals[bucketOf(item, labourInChargesCodeId, contractNameById)] += item.totalAmount || 0;
+    const bucket = monthTotals.get(monthKeyOf(invoice.invoiceDateTime));
+    if (!bucket) continue; // shouldn't happen given the invoice date filter, but safe
+    bucket[bucketOf(item, labourInChargesCodeId, contractNameById)] += item.totalAmount || 0;
   }
+
+  const months = monthKeys.map((key) => {
+    const t = monthTotals.get(key);
+    return {
+      key,
+      label: monthLabel(key),
+      labour: t.labour,
+      recurringTechCover: t.recurringTechCover,
+      recurringOther: t.recurringOther,
+      chargesLabour: t.chargesLabour,
+      chargesOther: t.chargesOther,
+      total: t.labour + t.recurringTechCover + t.recurringOther + t.chargesLabour + t.chargesOther,
+    };
+  });
+  const recentMonths = months.slice(-RECENT_MONTHS);
+
+  const totals = months.reduce(
+    (acc, m) => ({
+      labour: acc.labour + m.labour,
+      recurringTechCover: acc.recurringTechCover + m.recurringTechCover,
+      recurringOther: acc.recurringOther + m.recurringOther,
+      chargesLabour: acc.chargesLabour + m.chargesLabour,
+      chargesOther: acc.chargesOther + m.chargesOther,
+    }),
+    { labour: 0, recurringTechCover: 0, recurringOther: 0, chargesLabour: 0, chargesOther: 0 }
+  );
   const total = totals.labour + totals.recurringTechCover + totals.recurringOther + totals.chargesLabour + totals.chargesOther;
 
   let mostRecentInvoice = null;
@@ -93,6 +133,7 @@ async function buildFinancialSnapshot(client, company) {
   }
 
   return {
+    recentMonths,
     twelveMonthTotals: { ...totals, total },
     invoiceCount: invoices.length,
     mostRecentInvoice,

@@ -150,23 +150,29 @@ export function mount(container) {
   // --- Financial snapshot --------------------------------------------------
   function renderFinancialSnapshot(snap) {
     const section = document.createElement('div');
-    section.innerHTML = `<h2 class="client-summary-section-heading">Financial Snapshot <span class="inline-subtext">-- last 12 months</span></h2>`;
+    section.innerHTML = `<h2 class="client-summary-section-heading">Financial Snapshot <span class="inline-subtext">-- last 4 months, plus 12-month total</span></h2>`;
 
     const wrap = document.createElement('div');
     wrap.className = 'resource-group';
+    wrap.style.overflowX = 'auto'; // recent months + total column is wider than a normal table -- scrolls within its own container rather than the page, same as Client Financials' full grid
     const t = snap.twelveMonthTotals;
+    const months = snap.recentMonths;
     wrap.innerHTML = `
       <table>
         <thead>
-          <tr class="shaded-row"><th>Category</th><th class="ticket-number">12-Month Total</th></tr>
+          <tr class="shaded-row">
+            <th>Category</th>
+            ${months.map((m) => `<th class="ticket-number">${escapeHtml(m.label)}</th>`).join('')}
+            <th class="ticket-number">12-Month Total</th>
+          </tr>
         </thead>
         <tbody>
-          <tr><td>Labour</td><td class="ticket-number">${formatPrice(t.labour)}</td></tr>
-          <tr><td>Labour in Charges</td><td class="ticket-number">${formatPrice(t.chargesLabour)}</td></tr>
-          <tr><td>Other Charges</td><td class="ticket-number">${formatPrice(t.chargesOther)}</td></tr>
-          <tr><td>Recurring Services</td><td class="ticket-number">${formatPrice(t.recurringOther)}</td></tr>
-          <tr><td>Tech Cover</td><td class="ticket-number">${formatPrice(t.recurringTechCover)}</td></tr>
-          <tr class="shaded-row" style="font-weight: 600; border-top: 2px solid var(--border);"><td>Total</td><td class="ticket-number">${formatPrice(t.total)}</td></tr>
+          ${financialRow('Labour', months.map((m) => m.labour), t.labour)}
+          ${financialRow('Labour in Charges', months.map((m) => m.chargesLabour), t.chargesLabour)}
+          ${financialRow('Other Charges', months.map((m) => m.chargesOther), t.chargesOther)}
+          ${financialRow('Recurring Services', months.map((m) => m.recurringOther), t.recurringOther)}
+          ${financialRow('Tech Cover', months.map((m) => m.recurringTechCover), t.recurringTechCover)}
+          ${financialRow('Total', months.map((m) => m.total), t.total, true)}
         </tbody>
       </table>
       <p class="inline-subtext" style="margin: 0.5rem 0 0;">
@@ -177,6 +183,17 @@ export function mount(container) {
     `;
     section.appendChild(wrap);
     return section;
+  }
+
+  function financialRow(label, monthValues, total, isTotalRow) {
+    const rowClass = isTotalRow ? ' class="shaded-row"' : '';
+    const rowStyle = isTotalRow ? ' style="font-weight: 600; border-top: 2px solid var(--border);"' : '';
+    return `
+      <tr${rowClass}${rowStyle}>
+        <td>${escapeHtml(label)}</td>
+        ${monthValues.map((v) => `<td class="ticket-number">${formatPrice(v)}</td>`).join('')}
+        <td class="ticket-number">${formatPrice(total)}</td>
+      </tr>`;
   }
 
   // --- Active contracts ------------------------------------------------
