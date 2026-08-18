@@ -1,5 +1,5 @@
-export const id = "unallocated-service-calls";
-export const label = "Unallocated Service Calls";
+export const id = "service-calls";
+export const label = "Service Calls";
 
 // Module-scope, not inside mount() -- the shell fully tears down and re-mounts a
 // page's DOM on every navigation away and back, but the dynamically-imported
@@ -8,6 +8,16 @@ export const label = "Unallocated Service Calls";
 // restore instantly instead of coming back blank.
 let lastMonth = null; // "YYYY-MM"
 let lastData = null;
+// Filter is purely a display concern (the server always returns everything
+// for the month), so it's applied client-side and doesn't trigger a
+// refetch -- toggling it re-renders the already-loaded data instantly.
+// Module-scope so it survives a same-session re-mount too, same as
+// lastMonth/lastData.
+let showUnallocatedOnly = false;
+// Same client-side-only filtering rationale as showUnallocatedOnly above --
+// off by default, so a completed call (nothing left to staff or review)
+// doesn't clutter the calendar unless specifically asked for.
+let showCompleted = false;
 
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -15,16 +25,20 @@ const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
-      <h1>Unallocated Service Calls</h1>
+      <h1>Service Calls</h1>
       <div class="date-form calendar-nav">
         <button type="button" id="prev-button" aria-label="Previous month">&lsaquo;</button>
         <span id="month-label" class="calendar-month-label"></span>
         <button type="button" id="next-button" aria-label="Next month">&rsaquo;</button>
         <button type="button" id="today-button">Today</button>
         <button type="button" id="refresh-button">Refresh</button>
+        <button type="button" id="allocation-toggle" class="link-button"></button>
+        <label for="show-completed-input" class="inline-checkbox-label">
+          <input type="checkbox" id="show-completed-input" /> Show Completed
+        </label>
       </div>
     </header>
-    <p id="status" class="status">Service calls with no resource assigned to any of their linked tickets -- "To Do" items aren't included (Autotask's REST API doesn't expose them; see the README).</p>
+    <p id="status" class="status">Every Autotask Service Call, with the resource(s) assigned to it (if any) -- "To Do" items aren't included (Autotask's REST API doesn't expose them; see the README).</p>
     <div id="summary" class="summary" hidden></div>
     <div id="calendar" class="results"></div>
   `;
@@ -33,10 +47,33 @@ export function mount(container) {
   const nextButton = container.querySelector('#next-button');
   const todayButton = container.querySelector('#today-button');
   const refreshButton = container.querySelector('#refresh-button');
+  const allocationToggle = container.querySelector('#allocation-toggle');
+  const showCompletedInput = container.querySelector('#show-completed-input');
   const monthLabelEl = container.querySelector('#month-label');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const calendarEl = container.querySelector('#calendar');
+
+  function renderToggleLabel() {
+    // The label names the ACTION a click performs, not the current state --
+    // default (showing all) reads "Show Unallocated Only" (what clicking
+    // does), and once filtered it flips to "Show All" (what clicking does
+    // from there), by request.
+    allocationToggle.textContent = showUnallocatedOnly ? 'Show All' : 'Show Unallocated Only';
+  }
+  renderToggleLabel();
+
+  allocationToggle.addEventListener('click', () => {
+    showUnallocatedOnly = !showUnallocatedOnly;
+    renderToggleLabel();
+    if (lastData) render(lastData);
+  });
+
+  showCompletedInput.checked = showCompleted;
+  showCompletedInput.addEventListener('change', () => {
+    showCompleted = showCompletedInput.checked;
+    if (lastData) render(lastData);
+  });
 
   // Browser-local "today" for the initial guess, before the server's own
   // AEST todayKey comes back on first load -- close enough purely to decide
@@ -79,7 +116,7 @@ export function mount(container) {
     try {
       const params = new URLSearchParams({ month: monthKey });
       if (force) params.set('force', 'true');
-      const res = await fetch(`/api/unallocated-service-calls?${params.toString()}`);
+      const res = await fetch(`/api/service-calls?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastMonth = monthKey;
@@ -101,12 +138,32 @@ export function mount(container) {
     return `${MONTH_LABELS[m - 1]} ${y}`;
   }
 
+  // Both toggles are pure client-side filters over the same already-loaded
+  // month, combined with AND (e.g. "Show Unallocated Only" + completed
+  // hidden shows only still-unallocated, not-yet-complete calls). Used both
+  // per-day (for what actually renders in each cell) and across the whole
+  // month (so the summary line's counts always match what's on screen,
+  // rather than the server's raw totals which may include calls the current
+  // filters are hiding).
+  function visibleEntries(entries) {
+    let result = entries;
+    if (showUnallocatedOnly) result = result.filter((e) => !e.allocated);
+    if (!showCompleted) result = result.filter((e) => !e.isComplete);
+    return result;
+  }
+
   function render(data) {
     statusEl.hidden = true;
     monthLabelEl.textContent = monthLabelFor(data.month);
 
+    const allEntries = Object.values(data.byDay).flat();
+    const visible = visibleEntries(allEntries);
+    const visibleUnallocatedCount = visible.filter((e) => !e.allocated).length;
+
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> unallocated service call${data.totalCount === 1 ? '' : 's'} in ${escapeHtml(monthLabelFor(data.month))}`;
+    summaryEl.innerHTML = showUnallocatedOnly
+      ? `<strong>${visibleUnallocatedCount}</strong> unallocated service call${visibleUnallocatedCount === 1 ? '' : 's'} in ${escapeHtml(monthLabelFor(data.month))} <span class="inline-subtext">(${data.totalCount} total, ${data.unallocatedCount} unallocated${showCompleted ? '' : ' -- completed hidden'})</span>`
+      : `<strong>${visible.length}</strong> service call${visible.length === 1 ? '' : 's'} in ${escapeHtml(monthLabelFor(data.month))} <span class="inline-subtext">(${visibleUnallocatedCount} unallocated${showCompleted ? '' : `, ${data.totalCount} total -- completed hidden`})</span>`;
 
     calendarEl.innerHTML = '';
     const table = document.createElement('table');
@@ -127,7 +184,7 @@ export function mount(container) {
         const isToday = dayKey === data.todayKey;
         const td = document.createElement('td');
         td.className = 'calendar-cell' + (inMonth ? '' : ' calendar-cell--outside') + (isToday ? ' calendar-cell--today' : '');
-        const entries = data.byDay[dayKey] || [];
+        const entries = visibleEntries(data.byDay[dayKey] || []);
         td.innerHTML = `
           <div class="calendar-cell-daynum">${dd}</div>
           <div class="calendar-cell-entries">${entries.map((e) => entryHtml(e)).join('')}</div>
@@ -141,14 +198,33 @@ export function mount(container) {
   }
 
   function entryHtml(e) {
-    const time = formatTime(e.startDateTime);
-    const label = `${time} ${escapeHtml(e.companyName)}`;
-    const ticket = e.tickets[0]; // shown ticket is the first linked one -- see README for the rare multi-ticket case
-    const title = e.tickets.length > 0 ? escapeHtml(e.tickets.map((t) => `${t.ticketNumber}: ${t.title}`).join('\n')) : escapeHtml(e.description || '');
+    // Two lines per entry, by request -- the first is the call's time and
+    // company (as before), the second is specifically the allocation state
+    // (the resource name(s), or "Unallocated") so it's visible on the
+    // calendar itself without needing to hover for the tooltip.
+    const line1 = `${formatTime(e.startDateTime)} ${escapeHtml(e.companyName)}`;
+    const line2 = e.allocated ? e.resourceNames.map(escapeHtml).join(', ') : 'Unallocated';
+    const inner = `<span class="calendar-entry-line1">${line1}</span><span class="calendar-entry-line2">${line2}</span>`;
+    const ticket = e.tickets[0]; // linked ticket is the first one -- see README for the rare multi-ticket case
+    // Ticket line(s) and the call's own description are shown together, not
+    // one-or-the-other -- a call can have both (a description explaining
+    // the work, plus a real linked ticket for it), and hiding the
+    // description just because a ticket happened to be linked was losing
+    // real information.
+    const titleLines = e.tickets.map((t) => `${t.ticketNumber}: ${t.title}`);
+    if (e.description) titleLines.push(e.description);
+    titleLines.push(e.allocated ? `Allocated: ${e.resourceNames.join(', ')}` : 'Unallocated');
+    if (e.isComplete) titleLines.push('Complete');
+    const title = escapeHtml(titleLines.join('\n'));
+    // Priority order: complete wins regardless of allocation (green --
+    // nothing left to staff or review), then allocated-but-not-complete
+    // (blue -- staffed, still upcoming/in progress), then unallocated (red
+    // -- the staffing gap this page originally existed to surface).
+    const colorClass = e.isComplete ? ' calendar-entry--completed' : e.allocated ? ' calendar-entry--allocated' : ' calendar-entry--unallocated';
     if (ticket) {
-      return `<a class="calendar-entry" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}">${label}</a>`;
+      return `<a class="calendar-entry${colorClass}" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}">${inner}</a>`;
     }
-    return `<div class="calendar-entry calendar-entry--no-ticket" title="${title}">${label}</div>`;
+    return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}" title="${title}">${inner}</div>`;
   }
 
   if (lastData) {

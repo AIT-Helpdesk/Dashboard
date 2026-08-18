@@ -1,11 +1,11 @@
 {
-  "name": "@dashboard/unallocated-service-calls",
+  "name": "@dashboard/service-calls",
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
   "dashboardPage": {
-    "id": "unallocated-service-calls",
-    "label": "Unallocated Service Calls",
+    "id": "service-calls",
+    "label": "Service Calls",
     "client": "client.js",
     "server": "server.js"
   },

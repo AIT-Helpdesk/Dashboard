@@ -1,6 +1,17 @@
 [
   {
     "type": "category",
+    "id": "daily-dashboards",
+    "label": "Daily Dashboards",
+    "children": [
+      {
+        "type": "page",
+        "id": "service-calls"
+      }
+    ]
+  },
+  {
+    "type": "category",
     "id": "client-info",
     "label": "Client Info",
     "children": [
@@ -42,10 +53,6 @@
       {
         "type": "page",
         "id": "ticket-times"
-      },
-      {
-        "type": "page",
-        "id": "unallocated-service-calls"
       }
     ]
   },
@@ -105,5 +112,9 @@
         "id": "saasalerts-customers"
       }
     ]
+  },
+  {
+    "type": "page",
+    "id": "technician-forms"
   }
 ]

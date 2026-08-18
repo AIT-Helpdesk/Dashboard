@@ -759,7 +759,7 @@ td.ticket-number {
   vertical-align: top;
   border: 1px solid var(--border);
   padding: 0.4rem;
-  height: 6.5rem;
+  height: 9.75rem; /* 50% taller than the original 6.5rem, to fit each entry's 2 lines */
   width: 14.28%;
 }
 .calendar-cell--outside {
@@ -780,24 +780,48 @@ td.ticket-number {
   flex-direction: column;
   gap: 0.2rem;
   overflow-y: auto;
-  max-height: 5rem;
+  max-height: 7.5rem; /* matches .calendar-cell's 50% height increase */
 }
 .calendar-entry {
   display: block;
-  font-size: 0.78rem;
   padding: 0.15rem 0.3rem;
   border-radius: 4px;
-  /* Same red as .cell-flag-red, at low opacity as a background fill instead
-     of text color -- these ARE the staffing gaps this page exists to
-     surface, so they're flagged the same way other pages flag "needs
-     attention" rows, just as a fill rather than colored text (there's no
-     single text value here worth coloring the way a status cell has). */
-  background: color-mix(in srgb, #dc2626 15%, transparent);
   color: var(--fg);
   text-decoration: none;
+}
+/* Two lines per entry -- the call's time/company, and its allocated
+   resource(s) or "Unallocated" -- each independently truncated with an
+   ellipsis rather than the whole entry wrapping/growing unpredictably. */
+.calendar-entry-line1,
+.calendar-entry-line2 {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.calendar-entry-line1 {
+  font-size: 0.78rem;
+}
+.calendar-entry-line2 {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+/* Same red/green/blue as .cell-flag-red/.cell-flag-green/.cell-flag-blue,
+   at low opacity as a background fill instead of text color. Three states,
+   checked in priority order (see entryHtml() in client.js): a COMPLETED
+   call is green regardless of allocation (nothing left to staff or
+   review); an allocated-but-not-yet-complete call is blue (staffed, still
+   upcoming/in progress); an unallocated call is red -- the staffing gap
+   this page originally existed to surface, flagged the same way other
+   pages flag "needs attention" rows. */
+.calendar-entry--unallocated {
+  background: color-mix(in srgb, #dc2626 15%, transparent);
+}
+.calendar-entry--allocated {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.calendar-entry--completed {
+  background: color-mix(in srgb, #16a34a 12%, transparent);
 }
 .calendar-entry:hover {
   text-decoration: underline;

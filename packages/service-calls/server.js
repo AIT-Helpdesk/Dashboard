@@ -5,6 +5,7 @@ const {
   fetchByFieldIn,
   mapWithConcurrency,
   resolveCompanyName,
+  resolveResourceName,
   getTicketUrl,
   aestToUtcIso,
   mondayOf,
@@ -18,38 +19,39 @@ const {
 // is assigned per-TICKET-on-the-call, via ServiceCallTicketResources (keyed
 // by serviceCallTicketID, the ServiceCallTickets join row's own id, not the
 // service call or ticket id directly) -- a call with more than one ticket
-// linked can have some tickets staffed and others not. "Unallocated" here
-// means NONE of a call's linked tickets have any resource assigned at all
-// (confirmed against real data: 5 of 6 real August service calls had a
-// resource on their one ticket link; the 6th -- created fresh, no resource
-// added yet -- had none, and is exactly the kind of gap this page exists to
-// surface).
+// linked can have some tickets staffed and others not, and in principle
+// different tickets on the same call could carry different resources.
+// "Allocated" means at least one resource is assigned across ANY of a
+// call's linked tickets; every distinct resource found across all of them
+// is shown (confirmed against real data: 5 of 6 real August service calls
+// had a resource on their one ticket link; the 6th -- created fresh, no
+// resource added yet -- had none).
 //
 // A call's own `companyID`/`description`/`startDateTime`/`endDateTime` are
 // used directly; there's no distinct "To Do" entity in Autotask's REST API
 // to also include here (checked exhaustively -- see this page's README).
+//
+// Every non-cancelled/non-deleted service call starting in the month is
+// included, regardless of completion state -- this is a full "what's
+// scheduled" calendar, not just a staffing-gap finder, by request. Each row
+// still carries its own `isComplete` so the client can hide completed calls
+// by default ("Show Completed", off by default) without a refetch.
 async function buildReport(monthKey) {
   const client = await getClient();
   const [y, m] = monthKey.split('-').map(Number);
   const monthStartISO = aestToUtcIso(y, m, 1);
   const monthEndISO = aestToUtcIso(y, m + 1, 1);
 
-  // isComplete=false -- a completed service call has nothing left to staff,
-  // so it's not a real "unallocated" gap regardless of whether a resource
-  // was ever assigned. Scoped to calls STARTING in the selected month (a
-  // calendar's natural placement -- a call is shown on the day it begins),
-  // not calls merely overlapping it.
   const serviceCalls = await listAll(client.serviceCalls, [
     { op: 'gte', field: 'startDateTime', value: monthStartISO },
     { op: 'lt', field: 'startDateTime', value: monthEndISO },
-    { op: 'eq', field: 'isComplete', value: false },
   ]);
 
   const todayKey = todayAestKey();
   const gridDates = buildMonthGrid(monthKey);
 
   if (serviceCalls.length === 0) {
-    return { month: monthKey, todayKey, gridDates, totalCount: 0, byDay: {} };
+    return { month: monthKey, todayKey, gridDates, totalCount: 0, unallocatedCount: 0, byDay: {} };
   }
 
   const serviceCallIds = serviceCalls.map((sc) => sc.id);
@@ -66,28 +68,35 @@ async function buildReport(monthKey) {
 
   const allScTicketIds = scTickets.map((t) => t.id);
   const resources = allScTicketIds.length > 0 ? await fetchByFieldIn(client.serviceCallTicketResources, 'serviceCallTicketID', allScTicketIds) : [];
-  const allocatedScTicketIds = new Set(resources.map((r) => r.serviceCallTicketID));
-
-  function isAllocated(serviceCallId) {
-    const scTicketIds = scTicketIdsByServiceCallId.get(serviceCallId) || [];
-    // A call with NO linked ticket at all can never have a resource (the
-    // only resource-assignment path requires a ServiceCallTickets row), so
-    // it counts as unallocated too, same as one whose ticket(s) have zero
-    // resources.
-    return scTicketIds.some((id) => allocatedScTicketIds.has(id));
+  const resourceIdsByScTicketId = new Map(); // serviceCallTicket join row id -> Set<resourceId>
+  for (const r of resources) {
+    if (!resourceIdsByScTicketId.has(r.serviceCallTicketID)) resourceIdsByScTicketId.set(r.serviceCallTicketID, new Set());
+    resourceIdsByScTicketId.get(r.serviceCallTicketID).add(r.resourceID);
   }
 
-  const unallocated = serviceCalls.filter((sc) => !isAllocated(sc.id));
+  function resourceIdsFor(serviceCallId) {
+    const scTicketIds = scTicketIdsByServiceCallId.get(serviceCallId) || [];
+    const ids = new Set();
+    for (const scTicketId of scTicketIds) {
+      for (const rid of resourceIdsByScTicketId.get(scTicketId) || []) ids.add(rid);
+    }
+    return [...ids];
+  }
 
-  const relatedTicketIds = [...new Set(unallocated.flatMap((sc) => ticketIdsByServiceCallId.get(sc.id) || []))];
+  const relatedTicketIds = [...new Set(serviceCalls.flatMap((sc) => ticketIdsByServiceCallId.get(sc.id) || []))];
   const tickets = relatedTicketIds.length > 0 ? await fetchByFieldIn(client.tickets, 'id', relatedTicketIds) : [];
   const ticketById = new Map(tickets.map((t) => [t.id, t]));
 
-  const uniqueCompanyIds = [...new Set(unallocated.map((sc) => sc.companyID).filter((id) => id !== null && id !== undefined))];
-  await mapWithConcurrency(uniqueCompanyIds, 3, (id) => resolveCompanyName(client, id));
+  const uniqueCompanyIds = [...new Set(serviceCalls.map((sc) => sc.companyID).filter((id) => id !== null && id !== undefined))];
+  const uniqueResourceIds = [...new Set(resources.map((r) => r.resourceID))];
+  await Promise.all([
+    mapWithConcurrency(uniqueCompanyIds, 3, (id) => resolveCompanyName(client, id)),
+    mapWithConcurrency(uniqueResourceIds, 3, (id) => resolveResourceName(client, id)),
+  ]);
 
   const rows = [];
-  for (const sc of unallocated) {
+  let unallocatedCount = 0;
+  for (const sc of serviceCalls) {
     const ticketIds = ticketIdsByServiceCallId.get(sc.id) || [];
     const relatedTickets = [];
     for (const tid of ticketIds) {
@@ -95,6 +104,12 @@ async function buildReport(monthKey) {
       if (!t) continue;
       relatedTickets.push({ id: t.id, ticketNumber: t.ticketNumber, title: t.title, ticketUrl: await getTicketUrl(t.id) });
     }
+    const resourceIds = resourceIdsFor(sc.id);
+    const resourceNames = [];
+    for (const rid of resourceIds) resourceNames.push(await resolveResourceName(client, rid));
+    resourceNames.sort((a, b) => a.localeCompare(b));
+    if (resourceNames.length === 0) unallocatedCount++;
+
     rows.push({
       id: sc.id,
       companyId: sc.companyID,
@@ -103,6 +118,13 @@ async function buildReport(monthKey) {
       startDateTime: sc.startDateTime,
       endDateTime: sc.endDateTime,
       dayKey: isoDateAest(sc.startDateTime),
+      allocated: resourceNames.length > 0,
+      resourceNames,
+      // Server always returns every call regardless of completion state --
+      // "Show Completed" (default off) is a client-side filter over this
+      // flag, same as "Show Unallocated Only" is over `allocated`, so
+      // toggling either never needs a refetch.
+      isComplete: !!sc.isComplete,
       tickets: relatedTickets,
     });
   }
@@ -114,7 +136,7 @@ async function buildReport(monthKey) {
     byDay[r.dayKey].push(r);
   }
 
-  return { month: monthKey, todayKey, gridDates, totalCount: rows.length, byDay };
+  return { month: monthKey, todayKey, gridDates, totalCount: rows.length, unallocatedCount, byDay };
 }
 
 // Full Monday-start weeks covering every day of the given month -- e.g.
