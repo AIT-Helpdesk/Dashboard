@@ -8,6 +8,7 @@ export const label = "Ingram Subscriptions";
 // restore instantly instead of coming back blank.
 let lastData = null;
 let lastFilter = '';
+let lastSubscriptionFilter = '';
 let lastAllStatuses = false; // default: active & pending only, by request
 
 // Fixed display order/labels for Ingram's 5 subscription statuses -- used to
@@ -24,19 +25,22 @@ export function mount(container) {
       <form id="filter-form" class="date-form">
         <label for="client-input">Client</label>
         <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
+        <label for="subscription-input">Subscription Name</label>
+        <input type="text" id="subscription-input" name="subscription" placeholder="optional, e.g. *Business Basic* (wildcards with *)" />
         <label for="all-statuses-input" class="inline-checkbox-label">
           <input type="checkbox" id="all-statuses-input" /> All Statuses
         </label>
         <button type="submit" id="refresh-button">Refresh</button>
       </form>
     </header>
-    <p id="status" class="status">Optionally type a client name (wildcards with *) to narrow the list, then click Refresh. License counts aren't loaded up front -- click a client's name to fetch theirs.</p>
+    <p id="status" class="status">Optionally type a client name and/or subscription name (wildcards with *) to narrow the list, then click Refresh. License counts aren't loaded up front -- click a client's name to fetch theirs.</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
   `;
 
   const form = container.querySelector('#filter-form');
   const clientInput = container.querySelector('#client-input');
+  const subscriptionInput = container.querySelector('#subscription-input');
   const allStatusesInput = container.querySelector('#all-statuses-input');
   const refreshButton = container.querySelector('#refresh-button');
   const statusEl = container.querySelector('#status');
@@ -44,11 +48,12 @@ export function mount(container) {
   const resultsEl = container.querySelector('#results');
 
   clientInput.value = lastFilter;
+  subscriptionInput.value = lastSubscriptionFilter;
   allStatusesInput.checked = lastAllStatuses;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(clientInput.value, allStatusesInput.checked);
+    load(clientInput.value, subscriptionInput.value, allStatusesInput.checked);
   });
 
   // The server caches each search (keyed by the filter term AND the
@@ -59,7 +64,7 @@ export function mount(container) {
   // below). Refresh always sends `force=true`, which bypasses that cache for
   // the current search and rebuilds -- a button literally labeled "Refresh"
   // should always get current data, not a cached one.
-  async function load(clientFilter, allStatuses) {
+  async function load(clientFilter, subscriptionFilter, allStatuses) {
     refreshButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
@@ -70,12 +75,14 @@ export function mount(container) {
     try {
       const params = new URLSearchParams({ force: 'true' });
       if (clientFilter) params.set('client', clientFilter);
+      if (subscriptionFilter) params.set('subscription', subscriptionFilter);
       if (allStatuses) params.set('allStatuses', 'true');
       const res = await fetch(`/api/ingram-subscriptions?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
       lastFilter = clientFilter;
+      lastSubscriptionFilter = subscriptionFilter;
       lastAllStatuses = allStatuses;
       render(data);
     } catch (err) {
@@ -89,7 +96,10 @@ export function mount(container) {
   function render(data) {
     statusEl.hidden = true;
 
-    const filterSuffix = data.filterTerm ? ` matching "${escapeHtml(data.filterTerm)}"` : '';
+    const filterClauses = [];
+    if (data.filterTerm) filterClauses.push(`client "${escapeHtml(data.filterTerm)}"`);
+    if (data.subscriptionTerm) filterClauses.push(`subscription "${escapeHtml(data.subscriptionTerm)}"`);
+    const filterSuffix = filterClauses.length ? ` matching ${filterClauses.join(' and ')}` : '';
     const statusBreakdown = STATUS_ORDER.filter((s) => data.statusCounts[s] > 0)
       .map((s) => `${data.statusCounts[s]} ${STATUS_LABELS[s]}`)
       .join(', ');

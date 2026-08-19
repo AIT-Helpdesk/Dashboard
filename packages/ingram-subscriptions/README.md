@@ -22,6 +22,10 @@ Ingram Micro's **Cloud Marketplace API** (`api.cloud.im`) -- a wholly separate s
 
 Optional (not mandatory, by request) -- typing a client name narrows the report to matching clients using the dashboard-wide wildcard convention (`matchesWildcard()`, shared from `@dashboard/autotask-client` -- the one thing this page imports from there, purely for that shared string-matching behavior, not for Autotask data). This is the only dependency this page has on `@dashboard/autotask-client`.
 
+## Subscription Name filter
+
+Same wildcard convention, matched against each subscription's own `name` (e.g. `*Business Basic*` or `*Microsoft 365*`) -- applied in the same per-subscription pass as the excluded-name-pattern check and the client-name filter, before grouping, so a client whose only subscriptions don't match the term doesn't show up as an empty group. Combines with the client filter (both must match when both are set). Part of the cache key alongside the client filter and the all-statuses toggle, so each distinct combination gets its own cached result. Verified against real data: unfiltered 517 subscriptions narrowed to exactly the 305 whose name genuinely contains "Microsoft 365".
+
 ## License counts -- on demand, per client
 
 License count is deliberately **not** part of the base report at all. The list endpoint's rows don't carry a license/seat quantity, and there's no `fields`/`include`/`expand` param that adds one (checked against the real API) -- it only appears in `products[].quantity` on the single-subscription **detail** endpoint (`GET /subscriptions/{id}`), summed across a subscription's products (almost always exactly one, in Ingram's NCE licensing model). Fetching that for every subscription up front meant one detail request per subscription (500+) -- multiple minutes, even with retries -- for data most page visits never actually needed.
@@ -51,7 +55,7 @@ Subscriptions are grouped by resolved client name, sorted alphabetically; within
 
 ## Caching (base report)
 
-Each search is cached in-process, **keyed by its filter term AND the all-statuses toggle together** (four independent cache slots for the same client name -- default vs. all statuses, each with/without a filter -- not one) rather than one single global cache slot. TTL is 20 minutes (`REPORT_CACHE_TTL_MS`). The page's **Refresh** button always sends `force=true`, which bypasses the cache for the current search and rebuilds from Ingram. Two requests landing for the same key while it's cold share one in-flight build (`inFlightByKey`) rather than each kicking off their own fetch. The response's `asOf` timestamp is shown in the page summary.
+Each search is cached in-process, **keyed by the client filter term, the subscription filter term, AND the all-statuses toggle together** (independent cache slots per combination, not one single global cache slot). TTL is 20 minutes (`REPORT_CACHE_TTL_MS`). The page's **Refresh** button always sends `force=true`, which bypasses the cache for the current search and rebuilds from Ingram. Two requests landing for the same key while it's cold share one in-flight build (`inFlightByKey`) rather than each kicking off their own fetch. The response's `asOf` timestamp is shown in the page summary.
 
 ## No auto-load
 

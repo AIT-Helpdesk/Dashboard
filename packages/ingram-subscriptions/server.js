@@ -99,7 +99,7 @@ async function fetchSubscriptions(token, allStatuses) {
   return [...activeSubs, ...pendingSubs];
 }
 
-async function buildReport(filterTerm, allStatuses) {
+async function buildReport(filterTerm, subscriptionTerm, allStatuses) {
   const token = await getToken();
 
   const [subscriptions, customers] = await Promise.all([
@@ -118,6 +118,7 @@ async function buildReport(filterTerm, allStatuses) {
     // than just hidden client-side -- a client whose only subscription is an
     // excluded one doesn't show up as an empty group, and totals stay honest.
     if (EXCLUDED_NAME_PATTERNS.some((pattern) => matchesWildcard(s.name, pattern))) continue;
+    if (subscriptionTerm && !matchesWildcard(s.name, subscriptionTerm)) continue;
     const clientName = customerNameById.get(s.customerId) || `Customer #${s.customerId}`;
     if (filterTerm && !matchesWildcard(clientName, filterTerm)) continue;
     if (!byClientMap.has(s.customerId)) {
@@ -167,6 +168,7 @@ async function buildReport(filterTerm, allStatuses) {
   return {
     asOf: new Date().toISOString(),
     filterTerm: filterTerm || null,
+    subscriptionTerm: subscriptionTerm || null,
     allStatuses: !!allStatuses,
     totalCount: matched.length,
     statusCounts,
@@ -206,16 +208,16 @@ const reportCacheByKey = new Map(); // key -> { data, expiresAt }
 // each kicking off their own fetch against Ingram.
 const inFlightByKey = new Map(); // key -> Promise
 
-function cacheKeyFor(filterTerm, allStatuses) {
-  return `${(filterTerm || '').trim().toLowerCase()}|${allStatuses ? 'all' : 'default'}`;
+function cacheKeyFor(filterTerm, subscriptionTerm, allStatuses) {
+  return `${(filterTerm || '').trim().toLowerCase()}|${(subscriptionTerm || '').trim().toLowerCase()}|${allStatuses ? 'all' : 'default'}`;
 }
 
-async function getReport(filterTerm, allStatuses, force) {
-  const key = cacheKeyFor(filterTerm, allStatuses);
+async function getReport(filterTerm, subscriptionTerm, allStatuses, force) {
+  const key = cacheKeyFor(filterTerm, subscriptionTerm, allStatuses);
   const cached = reportCacheByKey.get(key);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
   if (!inFlightByKey.has(key)) {
-    const build = buildReport(filterTerm, allStatuses)
+    const build = buildReport(filterTerm, subscriptionTerm, allStatuses)
       .then((data) => {
         reportCacheByKey.set(key, { data, expiresAt: Date.now() + REPORT_CACHE_TTL_MS });
         return data;
@@ -232,7 +234,7 @@ const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
-    const data = await getReport(req.query.client, req.query.allStatuses === 'true', req.query.force === 'true');
+    const data = await getReport(req.query.client, req.query.subscription, req.query.allStatuses === 'true', req.query.force === 'true');
     res.json(data);
   } catch (err) {
     console.error(err);
