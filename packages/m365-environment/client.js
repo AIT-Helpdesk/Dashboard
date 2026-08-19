@@ -126,15 +126,15 @@ export function mount(container) {
     `;
     resultsEl.appendChild(infoWrap);
 
-    resultsEl.appendChild(tableSection('Overview', data.overview, { vertical: true }));
-    resultsEl.appendChild(tableSection('Domains', data.domains));
+    resultsEl.appendChild(tableSection('Overview', data.overview, { vertical: true, compact: true }));
+    resultsEl.appendChild(tableSection('Domains', data.domains, { compact: true }));
     resultsEl.appendChild(tableSection('Privileged Group Membership', data.privilegedGroupMembership));
     resultsEl.appendChild(tableSection('Licences', data.licences));
     resultsEl.appendChild(tableSection('User Licence Assignment', data.userLicenceAssignment));
   }
 
   function tableSection(title, table, opts) {
-    const { vertical = false, wide = false } = opts || {};
+    const { vertical = false, wide = false, compact = false } = opts || {};
     const section = document.createElement('div');
     if (!table || !table.headers) {
       section.innerHTML = `<h2 class="client-summary-section-heading">${escapeHtml(title)}</h2><p class="status">No data.</p>`;
@@ -143,7 +143,11 @@ export function mount(container) {
     section.innerHTML = `<h2 class="client-summary-section-heading">${escapeHtml(title)}</h2>`;
 
     const wrap = document.createElement('div');
-    wrap.className = 'resource-group';
+    // Overview and Domains are short, narrow tables (a handful of stats, or
+    // a domain name + a Yes/No flag) -- by request, sized to their own
+    // content instead of stretching to the full page width like every other
+    // table on this dashboard does by default.
+    wrap.className = compact ? 'resource-group m365-table-compact' : 'resource-group';
 
     // Overview's own source data is a single row of many columns (Total
     // Users, Total Enabled Users, ...) -- by request, shown as a vertical

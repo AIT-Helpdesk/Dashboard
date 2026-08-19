@@ -108,13 +108,25 @@ function parseTraitTable(html) {
   let headers = null;
   const rows = [];
   table.find('tr').each((i, tr) => {
-    const ths = $(tr).find('th');
-    if (ths.length > 0 && !headers) {
-      headers = ths.toArray().map((th) => $(th).text().trim());
+    // Every cell (both <th> and <td>, in DOM order), not just <td> --
+    // confirmed against real data that Privileged Group Membership renders
+    // its DATA rows as <th>Role Name</th><td>Members</td>, not the plain
+    // all-<td> shape every other table on this asset uses. Collecting only
+    // <td> silently dropped the role name entirely, leaving just the
+    // Members list, which then landed under the "Role Name" column header
+    // since it was the only cell present -- a real bug, caught against real
+    // data. A row counts as the HEADER row only when EVERY cell in it is a
+    // <th> -- a data row that merely contains one <th> (like Privileged
+    // Group Membership's) doesn't qualify, so it's treated as a normal data
+    // row using all of its cells.
+    const cells = $(tr).find('th, td').toArray();
+    if (cells.length === 0) return;
+    const allHeaderCells = cells.every((c) => $(c).is('th'));
+    if (allHeaderCells && !headers) {
+      headers = cells.map((c) => $(c).text().trim());
       return;
     }
-    const tds = $(tr).find('td');
-    if (tds.length > 0) rows.push(tds.toArray().map((td) => cellText($, td)));
+    rows.push(cells.map((c) => cellText($, c)));
   });
 
   const fullText = $.root().text();

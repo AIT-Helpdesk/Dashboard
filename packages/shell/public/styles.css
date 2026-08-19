@@ -657,6 +657,20 @@ table {
   border-collapse: collapse;
 }
 
+/* M365 Environment's Overview/Domains tables -- short, narrow content (a
+   handful of stats, or a domain name + a Yes/No flag) -- sized to their own
+   content instead of stretching full width like every table does by
+   default, by request. Shrinks both the card and the table itself, not
+   just the table alone, so there's no empty space left inside a
+   still-full-width card. */
+.m365-table-compact {
+  display: inline-block;
+  width: auto;
+}
+.m365-table-compact table {
+  width: auto;
+}
+
 th, td {
   text-align: left;
   padding: 0.5rem 1rem;
