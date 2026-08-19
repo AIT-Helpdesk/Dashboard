@@ -9,6 +9,7 @@
   "dependencies": {
     "@azure/msal-node": "^2.13.1",
     "@dashboard/autotask-client": "*",
+    "@dashboard/strety-client": "*",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-session": "^1.18.0"

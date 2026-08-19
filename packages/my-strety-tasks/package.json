@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/my-strety-tasks",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "my-strety-tasks",
+    "label": "My Strety Tasks",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/strety-client": "*",
+    "express": "^4.19.2"
+  }
+}

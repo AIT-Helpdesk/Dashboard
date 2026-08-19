@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { getClient } = require('@dashboard/autotask-client');
+const { exchangeCodeForTokens, BASE_URL: STRETY_BASE_URL } = require('@dashboard/strety-client');
 const { registerAuthRoutes, requireAuth } = require('./auth');
 
 const PORT = process.env.PORT || 3000;
@@ -77,6 +78,46 @@ const app = express();
 // Microsoft 365 account from the tenant configured in .env.
 registerAuthRoutes(app);
 app.use(requireAuth);
+
+// Strety connection -- a separate, occasional admin-level action (connect
+// the shared Strety integration this dashboard's Strety-backed pages use),
+// distinct from the dashboard's own Microsoft 365 sign-in above. Mounted
+// AFTER requireAuth (unlike the dashboard's own /auth/* routes, which have
+// to work while signed out) -- only an already-signed-in dashboard user can
+// (re)connect Strety. Confirmed against the real API that Strety has no
+// client_credentials grant, so this real browser round-trip is the only way
+// to obtain a token at all, not just a nicety.
+function stretyRedirectUriFor(req) {
+  // Same request-derived-host reasoning as auth.js's redirectUriFor() --
+  // works from localhost during dev and the real domain in production
+  // without a fixed env var, as long as each host's own callback URL is
+  // separately registered with Strety.
+  return `${req.protocol}://${req.get('host')}/auth/strety/callback`;
+}
+
+app.get('/auth/strety/connect', (req, res) => {
+  if (!process.env.STRETY_CLIENT_ID) {
+    return res.status(500).send('STRETY_CLIENT_ID is not configured in .env.');
+  }
+  const url = new URL(`${STRETY_BASE_URL}/oauth/authorize`);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('client_id', process.env.STRETY_CLIENT_ID);
+  url.searchParams.set('redirect_uri', stretyRedirectUriFor(req));
+  res.redirect(url.toString());
+});
+
+app.get('/auth/strety/callback', async (req, res) => {
+  if (req.query.error) {
+    return res.status(403).send(`Strety authorization failed: ${req.query.error_description || req.query.error}`);
+  }
+  try {
+    await exchangeCodeForTokens(req.query.code, stretyRedirectUriFor(req));
+    res.send('Strety connected successfully -- you can close this tab.');
+  } catch (err) {
+    console.error('Strety OAuth callback failed:', err);
+    res.status(500).send('Strety connection failed. Check server logs.');
+  }
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 

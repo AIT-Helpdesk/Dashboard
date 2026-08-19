@@ -3,3 +3,8 @@ node_modules/
 *.log
 logs/
 server.pid
+
+# Strety OAuth tokens -- real bearer credentials for whichever Strety
+# account connected, persisted to disk so the connection survives a
+# restart (see packages/strety-client/index.js). Never committed.
+packages/strety-client/.tokens.json

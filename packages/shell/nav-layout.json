@@ -15,6 +15,10 @@
       {
         "type": "page",
         "id": "technician-forms"
+      },
+      {
+        "type": "page",
+        "id": "my-strety-tasks"
       }
     ]
   },
@@ -38,6 +42,10 @@
       {
         "type": "page",
         "id": "classification-summary"
+      },
+      {
+        "type": "page",
+        "id": "find-passwords"
       }
     ]
   },
