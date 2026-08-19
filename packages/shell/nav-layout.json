@@ -7,6 +7,14 @@
       {
         "type": "page",
         "id": "service-calls"
+      },
+      {
+        "type": "page",
+        "id": "subscriptions-expiring"
+      },
+      {
+        "type": "page",
+        "id": "technician-forms"
       }
     ]
   },
@@ -90,7 +98,7 @@
       },
       {
         "type": "page",
-        "id": "subscriptions-expiring"
+        "id": "m365-environment"
       },
       {
         "type": "page",
@@ -112,9 +120,5 @@
         "id": "saasalerts-customers"
       }
     ]
-  },
-  {
-    "type": "page",
-    "id": "technician-forms"
   }
 ]
