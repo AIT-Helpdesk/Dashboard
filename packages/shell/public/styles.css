@@ -771,9 +771,25 @@ td.ticket-number {
   border-color: color-mix(in srgb, #eab308 60%, transparent);
 }
 .calendar-cell-daynum {
+  /* A <button> now (opens the day's popup detail view), reset to look like
+     the plain text it used to be, plus a pointer cursor and hover/focus
+     cues so it still reads as clickable. */
+  display: block;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
   font-size: 0.8rem;
   color: var(--muted);
   margin-bottom: 0.25rem;
+  cursor: pointer;
+}
+.calendar-cell-daynum:hover:not(:disabled) {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.calendar-cell-daynum:disabled {
+  cursor: default;
 }
 .calendar-cell-entries {
   display: flex;

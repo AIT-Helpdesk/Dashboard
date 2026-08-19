@@ -186,9 +186,12 @@ export function mount(container) {
         td.className = 'calendar-cell' + (inMonth ? '' : ' calendar-cell--outside') + (isToday ? ' calendar-cell--today' : '');
         const entries = visibleEntries(data.byDay[dayKey] || []);
         td.innerHTML = `
-          <div class="calendar-cell-daynum">${dd}</div>
+          <button type="button" class="calendar-cell-daynum" ${entries.length === 0 ? 'disabled' : ''}>${dd}</button>
           <div class="calendar-cell-entries">${entries.map((e) => entryHtml(e)).join('')}</div>
         `;
+        if (entries.length > 0) {
+          td.querySelector('.calendar-cell-daynum').addEventListener('click', () => openDayPopup(dayKey, entries));
+        }
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
@@ -244,6 +247,99 @@ export function mount(container) {
       return `<a class="calendar-entry${colorClass}${accentClass}${mineClass}" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${inner}</a>`;
     }
     return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}${accentClass}${mineClass}" title="${title}">${inner}</div>`;
+  }
+
+  // Opens a real popup window (same "not just a new tab" convention as the
+  // ticket links, via explicit window features) showing every entry
+  // currently visible in that day's cell -- respects whichever filters
+  // (Show Unallocated Only / Show Completed) are active, so it's the same
+  // set the user is already looking at, not the unfiltered full day. Every
+  // detail otherwise only available via hovering an entry (ticket status,
+  // description, full allocation/completion/service-call-status state) is
+  // shown directly here instead, since there's no hover in a list this
+  // detailed. Built and written client-side (`document.write`) rather than
+  // a server round trip -- the data's already loaded in `lastData`.
+  function openDayPopup(dayKey, entries) {
+    // Deliberately NO noopener/noreferrer here, unlike the ticket-link
+    // popups -- those open an external Autotask URL and never need a JS
+    // handle back to the new window, so severing it is the safe default.
+    // This window opens blank and only gets its content from THIS script
+    // writing into it via `popup.document.write()` below, so a null
+    // reference (which is exactly what `noopener` forces) meant the window
+    // Chrome still opened had nothing ever written into it -- a real bug
+    // that shipped once, worth flagging so it doesn't come back.
+    const popup = window.open('', '_blank', 'width=720,height=800,scrollbars=yes');
+    if (!popup) return; // genuinely blocked by the browser's popup blocker -- nothing more to do
+
+    const dateLabel = new Date(`${dayKey}T00:00:00`).toLocaleDateString(undefined, {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    // Same light/dark token values as packages/shell/public/styles.css's
+    // :root -- this window is a standalone document, not part of the shell
+    // page, so it can't inherit those CSS custom properties; picking the
+    // matching literal values keeps it visually consistent with whichever
+    // mode the dashboard itself is currently in rather than defaulting to
+    // one fixed look regardless of the user's actual theme.
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+      (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const colors = isDark
+      ? { bg: '#14161a', fg: '#eef0f3', muted: '#9aa3af', border: '#2a2e35', card: '#1b1e24', accent: '#5b8def' }
+      : { bg: '#ffffff', fg: '#1a1a1a', muted: '#6b7280', border: '#e5e7eb', card: '#f9fafb', accent: '#2563eb' };
+
+    const cardsHtml = entries.map((e) => dayPopupEntryHtml(e, colors)).join('');
+
+    popup.document.open();
+    popup.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Service Calls -- ${escapeHtml(dateLabel)}</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: ${colors.bg}; color: ${colors.fg}; margin: 0; padding: 1rem 1.25rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
+  .card { border: 1px solid ${colors.border}; border-radius: 8px; background: ${colors.card}; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
+  .card h2 { font-size: 1rem; margin: 0 0 0.4rem; }
+  .card dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.75rem; }
+  .card dt { color: ${colors.muted}; }
+  .card dd { margin: 0; }
+  a { color: ${colors.accent}; }
+  .empty { color: ${colors.muted}; }
+</style>
+</head>
+<body>
+<h1>Service Calls -- ${escapeHtml(dateLabel)}</h1>
+${cardsHtml || '<p class="empty">No entries.</p>'}
+</body>
+</html>`);
+    popup.document.close();
+  }
+
+  function dayPopupEntryHtml(e, colors) {
+    const time = `${formatTime(e.startDateTime)}${e.endDateTime ? ` - ${formatTime(e.endDateTime)}` : ''}`;
+    const allocation = e.allocated ? escapeHtml(e.resourceNames.join(', ')) : 'Unallocated';
+    const ticketsHtml = e.tickets.length
+      ? e.tickets
+          .map(
+            (t) =>
+              `<dt>Ticket</dt><dd><a href="${escapeHtml(t.ticketUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.ticketNumber)}</a>: ${escapeHtml(t.title)} (${escapeHtml(t.status)})</dd>`
+          )
+          .join('')
+      : '';
+    return `
+      <div class="card">
+        <h2>${escapeHtml(time)} -- ${escapeHtml(e.companyName)}</h2>
+        <dl>
+          <dt>Allocated to</dt><dd style="${e.isMine ? `color: ${colors.accent}; font-weight: 600;` : ''}">${allocation}${e.isMine ? ' (you)' : ''}</dd>
+          <dt>Completed</dt><dd>${e.isComplete ? 'Yes' : 'No'}</dd>
+          <dt>Service call status</dt><dd>${escapeHtml(e.serviceCallStatus)}</dd>
+          ${e.description ? `<dt>Description</dt><dd>${escapeHtml(e.description)}</dd>` : ''}
+          ${ticketsHtml}
+        </dl>
+      </div>`;
   }
 
   if (lastData) {
