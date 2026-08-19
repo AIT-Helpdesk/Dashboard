@@ -16,6 +16,38 @@ async function findPersonByEmail(email) {
   return res.data[0] || null;
 }
 
+// Every todo has a `relationships.space` pointing at where it lives --
+// confirmed against real data this is always one of three types:
+//   - "team": a real Strety team (Leadership Team, Tech Team, etc.) --
+//     resolved against /teams' own `attributes.name`.
+//   - "person": the todo's own assignee's individual space -- confirmed
+//     against real data the space id equals the assignee's own person id in
+//     this case, i.e. NOT a team at all, just "my personal to-dos" (same
+//     concept as an EOS "Individual" rock). Rendered as "Personal", not
+//     looked up anywhere -- there's no separate entity to resolve.
+//   - "project": a real Strety project -- resolved against /projects' own
+//     `attributes.title` (projects use `title`, not `name`, confirmed
+//     against real data -- unlike teams and people).
+// Both lookups are small (11 teams / 3 projects, confirmed against real
+// data) and fetched live alongside the todos every request, same
+// no-caching stance as the rest of this page.
+async function buildSpaceResolver() {
+  const [teams, projects] = await Promise.all([
+    fetchAllPages('/teams', {}),
+    fetchAllPages('/projects', {}),
+  ]);
+  const teamNames = new Map(teams.map((t) => [t.id, t.attributes.name]));
+  const projectNames = new Map(projects.map((p) => [p.id, p.attributes.title]));
+
+  return function resolveSpace(space) {
+    if (!space) return null;
+    if (space.type === 'person') return { type: 'person', name: 'Personal' };
+    if (space.type === 'team') return { type: 'team', name: teamNames.get(space.id) || 'Unknown Team' };
+    if (space.type === 'project') return { type: 'project', name: projectNames.get(space.id) || 'Unknown Project' };
+    return { type: space.type, name: 'Unknown' };
+  };
+}
+
 // Open == `completed_at` is null, exposed via `filter[completed]=false` --
 // confirmed against real data this is the only working "open" filter
 // (`filter[status]=open` and `filter[completed_at]=null` both 400). Scoped
@@ -24,10 +56,13 @@ async function findPersonByEmail(email) {
 // token's own owner), so this correctly returns THIS person's tasks
 // regardless of which Strety account originally connected the integration.
 async function fetchOpenTasksFor(personId) {
-  const todos = await fetchAllPages('/todos', {
-    'filter[completed]': 'false',
-    'filter[assignee_id]': personId,
-  });
+  const [todos, resolveSpace] = await Promise.all([
+    fetchAllPages('/todos', {
+      'filter[completed]': 'false',
+      'filter[assignee_id]': personId,
+    }),
+    buildSpaceResolver(),
+  ]);
 
   // Sorted here, not via the API's own `sort` param -- confirmed against
   // real data that `sort=due_date` combined with these filters does NOT
@@ -42,6 +77,7 @@ async function fetchOpenTasksFor(personId) {
     description: t.attributes.description || null,
     createdAt: t.attributes.created_at,
     updatedAt: t.attributes.updated_at,
+    space: resolveSpace(t.relationships?.space?.data),
   }));
   rows.sort((a, b) => {
     if (a.dueDate === null && b.dueDate === null) return 0;

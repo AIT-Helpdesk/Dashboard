@@ -89,19 +89,51 @@ export function mount(container) {
     }
 
     const todayKey = todayAestKey();
-    const wrap = document.createElement('div');
-    wrap.className = 'resource-group';
-    wrap.innerHTML = `
-      <table>
-        <thead>
-          <tr class="shaded-row"><th>Due Date</th><th>Title</th><th>Priority</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          ${data.tasks.map((t) => taskRowHtml(t, todayKey)).join('')}
-        </tbody>
-      </table>
+
+    // Grouped by Team (a task's `space` -- Personal, a real team, or a
+    // project, see server.js), each group internally still sorted by due
+    // date -- for free, since data.tasks arrives from the server already
+    // sorted that way and a filter() preserves relative order. Groups
+    // themselves are NOT alphabetical -- they're emitted in the order their
+    // first (soonest-due) task appears in that already-sorted list, so the
+    // team with the most urgent task leads, matching this page's overall
+    // "soonest first" premise instead of fighting it.
+    const groupNames = [];
+    const seen = new Set();
+    for (const t of data.tasks) {
+      const name = t.space ? t.space.name : 'Unknown';
+      if (!seen.has(name)) {
+        seen.add(name);
+        groupNames.push(name);
+      }
+    }
+
+    for (const name of groupNames) {
+      const rows = data.tasks.filter((t) => (t.space ? t.space.name : 'Unknown') === name);
+      resultsEl.appendChild(group(name, rows, todayKey));
+    }
+  }
+
+  function group(name, rows, todayKey) {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'resource-group';
+
+    const headingEl = document.createElement('div');
+    headingEl.className = 'section-heading';
+    headingEl.textContent = `${name} (${rows.length})`;
+    groupEl.appendChild(headingEl);
+
+    const table = document.createElement('table');
+    table.innerHTML = `
+      <thead>
+        <tr class="shaded-row"><th>Due Date</th><th>Title</th><th>Priority</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        ${rows.map((t) => taskRowHtml(t, todayKey)).join('')}
+      </tbody>
     `;
-    resultsEl.appendChild(wrap);
+    groupEl.appendChild(table);
+    return groupEl;
   }
 
   function taskRowHtml(t, todayKey) {
