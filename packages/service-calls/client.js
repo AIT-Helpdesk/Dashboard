@@ -216,6 +216,7 @@ export function mount(container) {
     titleLines.push(e.allocated ? `Allocated: ${e.resourceNames.join(', ')}` : 'Unallocated');
     if (e.isComplete) titleLines.push('Complete');
     titleLines.push(`Service call status: ${e.serviceCallStatus}`);
+    if (e.isMine) titleLines.push('You are an allocated resource on this call');
     const title = escapeHtml(titleLines.join('\n'));
     // Priority order: complete wins regardless of allocation (green --
     // nothing left to staff or review), then allocated-but-not-complete
@@ -229,15 +230,20 @@ export function mount(container) {
     // via the live picklist, not any cached/stale copy of it).
     const accentClass =
       e.serviceCallStatus === 'Onsite Arranged' ? ' calendar-entry--onsite-arranged' : e.serviceCallStatus === 'Onsite TBA' ? ' calendar-entry--onsite-tba' : '';
+    // A full green outline, independent of both the fill and the left-
+    // border accent above, when the signed-in user is one of the call's
+    // allocated resources -- by request, so "mine" stands out regardless of
+    // whatever other state the entry is already showing.
+    const mineClass = e.isMine ? ' calendar-entry--mine' : '';
     if (ticket) {
       // A real popup window, not just a new tab -- specifying window
       // features (width/height/etc.) is what signals that to the browser.
       // Reads `this.href` rather than re-embedding the URL in the onclick
       // string, so there's only one place the URL needs escaping. Same
       // pattern as Client Financials'/Client Details' invoice links.
-      return `<a class="calendar-entry${colorClass}${accentClass}" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${inner}</a>`;
+      return `<a class="calendar-entry${colorClass}${accentClass}${mineClass}" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${inner}</a>`;
     }
-    return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}${accentClass}" title="${title}">${inner}</div>`;
+    return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}${accentClass}${mineClass}" title="${title}">${inner}</div>`;
   }
 
   if (lastData) {

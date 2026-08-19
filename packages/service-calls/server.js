@@ -6,6 +6,7 @@ const {
   mapWithConcurrency,
   resolveCompanyName,
   resolveResourceName,
+  resolveResourceIdByEmail,
   getTicketUrl,
   getPicklistLabels,
   aestToUtcIso,
@@ -37,7 +38,7 @@ const {
 // scheduled" calendar, not just a staffing-gap finder, by request. Each row
 // still carries its own `isComplete` so the client can hide completed calls
 // by default ("Show Completed", off by default) without a refetch.
-async function buildReport(monthKey) {
+async function buildReport(monthKey, currentUserEmail) {
   const client = await getClient();
   const [y, m] = monthKey.split('-').map(Number);
   const monthStartISO = aestToUtcIso(y, m, 1);
@@ -100,9 +101,13 @@ async function buildReport(monthKey) {
 
   const uniqueCompanyIds = [...new Set(serviceCalls.map((sc) => sc.companyID).filter((id) => id !== null && id !== undefined))];
   const uniqueResourceIds = [...new Set(resources.map((r) => r.resourceID))];
-  await Promise.all([
+  const [, , currentUserResourceId] = await Promise.all([
     mapWithConcurrency(uniqueCompanyIds, 3, (id) => resolveCompanyName(client, id)),
     mapWithConcurrency(uniqueResourceIds, 3, (id) => resolveResourceName(client, id)),
+    // Resolved from the dashboard's own auth session (Entra email), not a
+    // query param, so there's no way to spoof "mine" via the URL -- same
+    // pattern Ticket Times uses for pinning the signed-in user's own group.
+    resolveResourceIdByEmail(client, currentUserEmail),
   ]);
 
   const rows = [];
@@ -148,6 +153,11 @@ async function buildReport(monthKey) {
       // this drives a separate left-border accent for the "Onsite" statuses
       // specifically, by request.
       serviceCallStatus: serviceCallStatusLabels.get(sc.status) || `#${sc.status}`,
+      // Whether the signed-in user is one of this call's assigned
+      // resources -- drives a full-outline accent, distinct from the
+      // Onsite-status left-border accent above, so the two can combine
+      // (a call can be both "mine" and Onsite Arranged, e.g.).
+      isMine: !!currentUserResourceId && resourceIds.includes(currentUserResourceId),
       tickets: relatedTickets,
     });
   }
@@ -182,24 +192,29 @@ function buildMonthGrid(monthKey) {
 }
 
 const REPORT_CACHE_TTL_MS = 10 * 60 * 1000; // shorter than most pages' 20 min -- staffing gaps are exactly the kind of thing that gets fixed within the hour, so a stale "still unallocated" is more actively misleading here than elsewhere
-const reportCacheByMonth = new Map(); // monthKey -> { data, expiresAt }
-const inFlightByMonth = new Map();
+const reportCacheByKey = new Map(); // "monthKey|email" -> { data, expiresAt }
+const inFlightByKey = new Map();
 
-async function getReport(monthKey, force) {
-  const cached = reportCacheByMonth.get(monthKey);
+// Cache key includes the signed-in user's email, not just the month -- each
+// row's `isMine` flag depends on who's asking, so caching by month alone
+// would leak one user's "mine" highlighting into another user's view of the
+// same month.
+async function getReport(monthKey, currentUserEmail, force) {
+  const key = `${monthKey}|${(currentUserEmail || '').toLowerCase()}`;
+  const cached = reportCacheByKey.get(key);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
-  if (!inFlightByMonth.has(monthKey)) {
-    const build = buildReport(monthKey)
+  if (!inFlightByKey.has(key)) {
+    const build = buildReport(monthKey, currentUserEmail)
       .then((data) => {
-        reportCacheByMonth.set(monthKey, { data, expiresAt: Date.now() + REPORT_CACHE_TTL_MS });
+        reportCacheByKey.set(key, { data, expiresAt: Date.now() + REPORT_CACHE_TTL_MS });
         return data;
       })
       .finally(() => {
-        inFlightByMonth.delete(monthKey);
+        inFlightByKey.delete(key);
       });
-    inFlightByMonth.set(monthKey, build);
+    inFlightByKey.set(key, build);
   }
-  return inFlightByMonth.get(monthKey);
+  return inFlightByKey.get(key);
 }
 
 const router = express.Router();
@@ -210,7 +225,7 @@ router.get('/', async (req, res) => {
     return res.status(400).json({ error: 'Query param "month" is required in YYYY-MM format.' });
   }
   try {
-    const data = await getReport(month, req.query.force === 'true');
+    const data = await getReport(month, req.session?.user?.email, req.query.force === 'true');
     res.json(data);
   } catch (err) {
     console.error(err);

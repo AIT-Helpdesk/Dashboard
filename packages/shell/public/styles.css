@@ -835,6 +835,15 @@ td.ticket-number {
 .calendar-entry--onsite-tba {
   border-left-color: #dc2626; /* same red as .cell-flag-red/.calendar-entry--unallocated */
 }
+/* A full outline (not a border -- avoids fighting the left-border accent's
+   own color/width, and doesn't shift layout since outline is drawn outside
+   the box) when the signed-in user is one of this call's allocated
+   resources, by request. Independent of every other accent -- combines with
+   whichever fill/left-border the entry already has. */
+.calendar-entry--mine {
+  outline: 3px solid #16a34a;
+  outline-offset: -1px;
+}
 .calendar-entry:hover {
   text-decoration: underline;
 }

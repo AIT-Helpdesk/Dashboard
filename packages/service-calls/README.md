@@ -52,6 +52,12 @@ A separate, independent left-border accent layers on top of that fill for two sp
 
 Hovering an entry shows its linked ticket(s) (number + title, with the ticket's own status on the line beneath it) AND the call's own description, if it has one -- both together, not one-or-the-other, since a call can have both a real linked ticket and a description explaining the work -- plus the allocation state, completion state, and the service call's own status, as a tooltip. Clicking an entry with a linked ticket opens that ticket in Autotask as a real popup window (not just a new tab -- same pattern as Client Financials'/Client Details' invoice links); one with no ticket link isn't clickable.
 
+## "Mine" outline
+
+A full green outline (`outline`, not `border` -- avoids fighting the left-border accent's own color, and doesn't shift layout since an outline draws outside the box) on any entry where the signed-in user is one of the call's allocated resources. Resolved server-side from the dashboard's own auth session (`req.session.user.email` -> `resolveResourceIdByEmail()`, same pattern Ticket Times uses to pin the signed-in user's own group), never a query param, so there's no way to spoof "mine" via the URL. Independent of every other accent on the entry (fill color, Onsite left-border) -- combines with whatever else is already showing rather than replacing it. Verified against real data: two real August calls allocated to the signed-in user both correctly outlined, every other real call (allocated to other technicians, or unallocated) correctly not outlined.
+
+Because `isMine` depends on who's asking, the report cache key (`getReport()`) includes the signed-in user's email alongside the month -- otherwise one user's cached response (with their own "mine" flags baked in) could leak into another user's view of the same month.
+
 ## The calendar grid
 
 `buildMonthGrid()` in `server.js` returns full Monday-start weeks covering the whole month -- e.g. August 2026 (starts Saturday, ends Monday) needs the preceding Monday through the following Sunday, so the grid is always complete weeks (42 or 35 days), never a ragged first/last row. Computed server-side (`gridDates`, an array of plain `"YYYY-MM-DD"` strings) using the same `mondayOf()`/`weekDatesFrom()` AEST-calendar-arithmetic helpers Security Alerts' chart uses, so `client.js` doesn't need to duplicate any calendar math -- it just chunks the array into rows of 7.
