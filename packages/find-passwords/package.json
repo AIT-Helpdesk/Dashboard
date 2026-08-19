@@ -1,0 +1,17 @@
+{
+  "name": "@dashboard/find-passwords",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "find-passwords",
+    "label": "Find Passwords",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/itglue-client": "*",
+    "express": "^4.19.2"
+  }
+}
