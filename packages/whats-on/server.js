@@ -1,5 +1,5 @@
 const express = require('express');
-const { get, fetchAllPages, isConnected } = require('@dashboard/strety-client');
+const { get, fetchAllPages, isConnected, connectedIdentity } = require('@dashboard/strety-client');
 
 const HELPDESK_TEAM_NAME = 'Helpdesk Task Tracker';
 // By request: only these three cadences -- Strety's real `checkin_frequency`
@@ -198,6 +198,21 @@ async function fetchMetricPeriodMap(metric) {
   return byPeriod;
 }
 
+// Strety has no "category" concept on a metric via the API at all --
+// confirmed against real data, every attribute/relationship key on every
+// real metric was dumped and there's nothing resembling one (a category
+// list only exists in Strety's own Scorecard UI, not exposed here). By
+// request, a metric that shouldn't show on this page is instead marked by
+// prefixing its own title with "NOT READY:" directly in Strety -- a manual
+// workaround, not a real API field, so this just filters on that prefix
+// (case-insensitive, tolerant of leading whitespace) before a metric's
+// check-in history is even fetched, saving the API call entirely for a
+// metric that's about to be hidden anyway.
+const NOT_READY_PREFIX = /^not ready\s*:/i;
+function isNotReady(metric) {
+  return NOT_READY_PREFIX.test(metric.attributes.title.trim());
+}
+
 // One space (a team or a person) -> its metrics grouped by cadence, each
 // group sharing one set of period columns per cadence. Daily/Weekly use a
 // FIXED calendar window (today/this week back HISTORY_LIMIT periods, by
@@ -211,7 +226,7 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics) {
 
   const byFrequency = {};
   for (const freq of FREQUENCIES) {
-    const freqMetrics = metrics.filter((m) => m.attributes.checkin_frequency === freq);
+    const freqMetrics = metrics.filter((m) => m.attributes.checkin_frequency === freq && !isNotReady(m));
     if (freqMetrics.length === 0) continue;
 
     // Sequential, not Promise.all -- each metric's history is its own
@@ -266,7 +281,15 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics) {
         const map = periodMaps[i];
         const cells = columnKeys.map((key) => {
           const c = map.get(key);
-          if (!c) return null;
+          // A check-in record can exist for a period with its own value
+          // cleared to null (confirmed against real data -- editing a
+          // check-in in Strety can leave the record in place with no
+          // value, rather than deleting it outright). Treated the same as
+          // no check-in at all for that period -- a blank cell, not a
+          // "populated" cell with an empty display string, which would
+          // otherwise still count as truthy (`Boolean(cell)`) client-side
+          // for the title's green/red "has recent data" highlight.
+          if (!c || c.attributes.value === null || c.attributes.value === undefined) return null;
           return {
             displayValue: formatValue(c.attributes.value, m.attributes.number_format),
             context: c.attributes.context || '',
@@ -340,6 +363,15 @@ router.get('/', async (req, res) => {
   } catch (err) {
     if (err.strety_not_connected) {
       return res.json({ status: 'not-connected' });
+    }
+    // Distinct from 'not-connected' -- this connection WAS working and its
+    // stored refresh token has since gone stale/revoked (confirmed against
+    // real data this happens periodically). Same fix either way (redo the
+    // browser login), but the message should say which situation it is
+    // rather than showing a raw error for something with a known, simple
+    // remedy.
+    if (err.strety_reauth_required) {
+      return res.json({ status: 'reauth-required', connectedAs: connectedIdentity() });
     }
     console.error(err);
     const detail = err.response ? `Strety API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;

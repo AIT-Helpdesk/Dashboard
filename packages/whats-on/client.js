@@ -71,7 +71,23 @@ export function mount(container) {
     if (data.status === 'not-connected') {
       statusEl.hidden = false;
       statusEl.className = 'status error';
-      statusEl.innerHTML = `Strety isn't connected yet. <a href="/auth/strety/connect">Connect Strety</a>, then come back and refresh.`;
+      statusEl.innerHTML = `Strety isn't connected yet.<br><a class="button-link" href="/auth/strety/connect">Connect Strety</a>`;
+      resultsEl.innerHTML = '';
+      return;
+    }
+    if (data.status === 'reauth-required') {
+      // Distinct message from 'not-connected' -- this was working and its
+      // stored refresh token has gone stale/revoked (confirmed this
+      // happens periodically, see @dashboard/strety-client's README). Same
+      // fix (redo the browser login), but says so plainly rather than
+      // surfacing as a raw error someone has to go dig into. Names WHICH
+      // Strety account needs reconnecting, when known (see server.js --
+      // recorded at connect time, since a broken connection can no longer
+      // ask Strety who it belongs to).
+      const who = data.connectedAs ? ` (currently connected as ${escapeHtml(data.connectedAs)})` : '';
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.innerHTML = `Strety's connection${who} has stopped working and needs to be reconnected.<br><a class="button-link" href="/auth/strety/connect">Reconnect Strety</a>`;
       resultsEl.innerHTML = '';
       return;
     }
@@ -121,7 +137,7 @@ export function mount(container) {
       }
       for (const freq of frequenciesPresent) {
         const { columns, rows } = group.byFrequency[freq];
-        resultsEl.appendChild(scorecardTable(`${group.label} -- ${FREQUENCY_LABELS[freq]}`, columns, rows));
+        resultsEl.appendChild(scorecardTable(group.label, FREQUENCY_LABELS[freq], columns, rows));
       }
     });
   }
@@ -133,13 +149,20 @@ export function mount(container) {
     return p;
   }
 
-  function scorecardTable(heading, columns, rows) {
+  function scorecardTable(prefix, suffix, columns, rows) {
     const groupEl = document.createElement('div');
     groupEl.className = 'resource-group';
 
+    // Only the part after "--" (the cadence: Daily/Weekly/Monthly) is
+    // bold+green, by request -- the rest of the heading (the team/person
+    // name) stays plain .section-heading styling. Built from the prefix/
+    // suffix passed in separately, not by splitting the combined text on
+    // "--" after the fact -- Personal's own group.label already contains
+    // its own "--" (e.g. "Personal -- Amber Worth"), so string-splitting
+    // would be ambiguous about which "--" is meant.
     const headingEl = document.createElement('div');
     headingEl.className = 'section-heading';
-    headingEl.textContent = heading;
+    headingEl.innerHTML = `${escapeHtml(prefix)} -- <span class="text-highlight-green">${escapeHtml(suffix)}</span>`;
     groupEl.appendChild(headingEl);
 
     if (columns.length === 0) {
@@ -152,7 +175,7 @@ export function mount(container) {
           <tr class="shaded-row"><th>Metric</th><th>Target</th><th>Check-ins</th></tr>
         </thead>
         <tbody>
-          ${rows.map((m) => `<tr><td>${escapeHtml(m.title)}</td><td class="ticket-number">${escapeHtml(m.target)}</td><td>No check-ins yet</td></tr>`).join('')}
+          ${rows.map((m) => `<tr><td>${titleHtml(m.title, Boolean(m.cells[0]))}</td><td class="ticket-number">${escapeHtml(m.target)}</td><td>No check-ins yet</td></tr>`).join('')}
         </tbody>
       `;
       groupEl.appendChild(table);
@@ -189,10 +212,26 @@ export function mount(container) {
     }
     return `
       <tr>
-        <td>${escapeHtml(m.title)}</td>
+        <td>${titleHtml(m.title, Boolean(m.cells[0]))}</td>
         <td class="ticket-number">${escapeHtml(m.target)}</td>
         ${cells.join('')}
       </tr>`;
+  }
+
+  // Bold+green/red for a title's own leading "PREFIX:" convention (e.g.
+  // "THURSDAY: Check for Errors..."), up to and including the first colon.
+  // By request: green if the metric's most recent column (cells[0] --
+  // columns are always most-recent-first, see server.js) has a real value,
+  // red if that most recent column is empty -- a quick "is this metric
+  // current" signal at a glance, not just decoration. A title with no
+  // colon at all still renders unstyled either way, as before.
+  function titleHtml(title, hasRecentData) {
+    const colonIndex = title.indexOf(':');
+    if (colonIndex === -1) return escapeHtml(title);
+    const prefix = title.slice(0, colonIndex + 1);
+    const rest = title.slice(colonIndex + 1);
+    const cls = hasRecentData ? 'text-highlight-green' : 'text-highlight-red';
+    return `<span class="${cls}">${escapeHtml(prefix)}</span>${escapeHtml(rest)}`;
   }
 
   function checkinCellHtml(c) {

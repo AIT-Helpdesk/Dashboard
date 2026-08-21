@@ -18,6 +18,26 @@ Persisted to `packages/strety-client/.tokens.json` (gitignored -- real bearer cr
 
 Calling `get()`/`fetchAllPages()` before anything has ever been connected throws an error tagged `err.strety_not_connected = true`, so a page's `server.js` can show a real "connect Strety first" message instead of a confusing raw 401 bubbling up from Strety itself.
 
+**A stored refresh token can itself go stale or get revoked** -- confirmed against real data this happens periodically, surfacing as `400 invalid_grant` on the `grant_type=refresh_token` exchange. `refreshTokens()` tags this distinctly, `err.strety_reauth_required = true`, separate from `strety_not_connected` -- "never connected at all" and "was connected, now needs a human to redo the browser login" are different situations even though the fix is the same (`/auth/strety/connect` again), and a page should say which one it is rather than showing a raw error. See What's On's README for the concrete page-level implementation (a `reauth-required` status, distinct wording from `not-connected`).
+
+## Recording WHICH Strety account a connection belongs to
+
+Confirmed against the real API: `GET /me` returns the real person behind whatever token is used (`name`/`email`/`role`, same shape as a `/people` row). `exchangeCodeForTokens()` calls this once, right after a fresh connect, and persists `name (email)` as `connectedAs` alongside the tokens -- **not** looked up on demand later, because a BROKEN connection (the exact situation this is meant to help with) can no longer call the API to ask who it is. `refreshTokens()` preserves whatever `connectedAs` is already on file rather than needing to re-look-it-up every ~2-hour refresh (the identity doesn't change just because the access token was renewed).
+
+`connectedIdentity()` reads this back -- a plain file read, no API call, no auth required, works even when the connection itself is dead -- for exactly the "which account needs reconnecting" message this exists for. A token issued before this feature existed has no `connectedAs` recorded (`connectedIdentity()` returns `null` for it) -- it only starts populating from the next real reconnect onward, not retroactively.
+
+## OAuth scope -- `read write`, not just `read`
+
+`/auth/strety/connect` requests `scope=read write` -- confirmed against the real API this is necessary: a connection that only had `read` (the scope every connection before this had, since nothing had ever written before) got a real `403 INVALID_SCOPE` ("Missing or invalid scopes... re-authorize the app with the required scopes") on a genuine write attempt. **Refreshing an existing token does NOT pick up a newly-added scope** -- a token only carries whatever scope it was originally issued with, so upgrading an existing connection needs a fresh browser re-authorization via `/auth/strety/connect`, not just waiting for the next automatic refresh.
+
+## Writing -- `post()`, real JSON:API, confirmed against a real write
+
+`post(path, body)` mirrors `get()`'s throttle/retry handling (same shared rate-limit defenses -- see below -- apply to writes too). Confirmed against the real API by actually creating a real check-in (see What's On's README, "Writing a check-in"):
+
+- Needs the real JSON:API Content-Type, `application/vnd.api+json` -- confirmed a plain `application/json` body gets a `415 UNSUPPORTED_MEDIA_TYPE`. `post()` sets this by default; callers don't need to.
+- Body shape follows the JSON:API write convention: `{ data: { type: '<resource-type>', attributes: { ... } } }` -- confirmed against a real successful `POST /metrics/:id/check_ins` (`type: 'metric_check_in'`).
+- As of writing, nothing in this codebase calls `post()` except a one-time manual script (see What's On's README) -- there's no ongoing/automated write anywhere yet.
+
 ## Rate limiting -- confirmed real, retried with backoff
 
 Confirmed against the real API: Strety enforces a genuine rate limit -- a 429 `{"errors":[{"status":"429","code":"TOO_MANY_REQUESTS",...}]}` under real, non-abusive dashboard use, not just synthetic load testing (What's On, which makes a dozen-plus Strety calls per page load, hit this repeatedly). `get()` retries a 429 up to 3 times with backoff (a real `Retry-After` header if Strety sends one, otherwise a short exponential wait) before giving up -- any other error status is NOT retried.

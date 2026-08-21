@@ -103,6 +103,14 @@ app.get('/auth/strety/connect', (req, res) => {
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', process.env.STRETY_CLIENT_ID);
   url.searchParams.set('redirect_uri', stretyRedirectUriFor(req));
+  // Both scopes, not just `read` -- confirmed the token this connection had
+  // been issuing was read-only: a real write attempt (POST a check-in) got
+  // a 403 INVALID_SCOPE, "re-authorize the app with the required scopes."
+  // What's On only ever reads, but this connection is shared account-wide
+  // (see this package's own README), so a page that DOES need to write
+  // (a one-time Autotask -> Strety check-in write) needs the token itself
+  // to carry write access too.
+  url.searchParams.set('scope', 'read write');
   res.redirect(url.toString());
 });
 

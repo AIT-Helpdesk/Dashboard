@@ -687,6 +687,22 @@ h1 {
   color: #16a34a;
 }
 
+/* Inline bold+green/red for a highlighted PART of a larger text -- What's
+   On's scorecard heading suffix (just "Daily"/"Weekly"/"Monthly", not the
+   whole heading, always green) and a metric title's own leading "PREFIX:"
+   convention (green/red depending on whether the metric's most recent
+   column has a value -- see titleHtml() in client.js). Same colors as
+   .section-heading--nav/.cell-flag-green/.cell-flag-red, just not
+   block-level. */
+.text-highlight-green {
+  font-weight: 700;
+  color: #16a34a;
+}
+.text-highlight-red {
+  font-weight: 700;
+  color: #dc2626;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

@@ -50,20 +50,36 @@ async function exchangeCodeForTokens(code, redirectUri) {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
   });
   persistTokenResponse(res.data);
+  // Confirmed against the real API: GET /me returns the real person behind
+  // whichever token is used (name/email/role). Recorded now, at connect
+  // time, not looked up on demand later -- a BROKEN connection can no
+  // longer call the API to ask who it is, so this is the only point where
+  // it's askable at all. Non-fatal if it fails for some reason -- the
+  // connection itself still works either way, it just won't have a
+  // friendly identity to show on a later reauth-required message.
+  try {
+    const me = await get('/me', {});
+    persistTokenResponse(res.data, `${me.data.attributes.name} (${me.data.attributes.email})`);
+  } catch {
+    // See above -- not fatal.
+  }
   return res.data;
 }
 
-function persistTokenResponse(data) {
-  // expires_in is seconds-from-now at the moment of THIS response, not an
-  // absolute time -- converted to a real timestamp once, here, so every
-  // later read just compares against Date.now() rather than needing to
-  // remember when the response itself arrived.
+function persistTokenResponse(data, connectedAs) {
+  // connectedAs is only ever passed at connect time (see above) -- a
+  // refresh (see refreshTokens() below) calls this WITHOUT it, and needs to
+  // preserve whatever identity was already recorded rather than wiping it
+  // out, since the identity doesn't change just because the access token
+  // itself was renewed.
+  const existing = readTokens();
   writeTokens({
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
     // Refreshed 5 minutes before actual expiry, same "don't hand out a
     // token that dies mid-flight" reasoning as Ingram's own token cache.
     expiresAt: Date.now() + (data.expires_in - 300) * 1000,
+    connectedAs: connectedAs || existing?.connectedAs || null,
   });
 }
 
@@ -76,11 +92,23 @@ async function refreshTokens(refreshToken) {
     client_secret: CLIENT_SECRET,
     refresh_token: refreshToken,
   });
-  const res = await axios.post(`${BASE_URL}/oauth/token`, form, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  });
-  persistTokenResponse(res.data);
-  return res.data.access_token;
+  try {
+    const res = await axios.post(`${BASE_URL}/oauth/token`, form, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    persistTokenResponse(res.data);
+    return res.data.access_token;
+  } catch (err) {
+    // Confirmed against real data this happens periodically (a stored
+    // refresh token going stale/revoked, `400 invalid_grant`) -- tagged
+    // distinctly from strety_not_connected (which means "never connected at
+    // all") so a caller can tell "this WAS working and now needs a human to
+    // redo the browser login" apart from "nobody has connected yet" and
+    // show the right message for each, rather than lumping both into one
+    // generic error.
+    err.strety_reauth_required = true;
+    throw err;
+  }
 }
 
 // Returns a currently-valid access token, refreshing (and re-persisting)
@@ -108,6 +136,16 @@ async function getAccessToken() {
 
 function isConnected() {
   return readTokens() !== null;
+}
+
+// The recorded "name (email)" for whichever Strety person this connection
+// belongs to (see exchangeCodeForTokens()), or null if never connected or
+// the identity lookup never succeeded. Deliberately just a file read, no
+// API call -- this needs to work even when the connection itself is
+// broken, which is exactly the situation a caller wants this for (naming
+// which account needs reconnecting on a reauth-required message).
+function connectedIdentity() {
+  return readTokens()?.connectedAs || null;
 }
 
 function sleep(ms) {
@@ -164,6 +202,30 @@ async function get(path, params) {
   }
 }
 
+// Writes -- same throttle/retry treatment as get(), since a write can hit
+// the same rate limit a read can. Confirmed against the real API: a plain
+// `application/json` body gets a 415 -- Strety's write endpoints are real
+// JSON:API and require the actual `application/vnd.api+json` media type
+// (unlike the OAuth token endpoint, which needs form-encoding -- a
+// different, unrelated quirk of that one specific endpoint).
+async function post(path, body) {
+  const accessToken = await getAccessToken();
+  for (let attempt = 0; ; attempt++) {
+    await throttle();
+    try {
+      const res = await axios.post(`${BASE_URL}${path}`, body, {
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/vnd.api+json' },
+      });
+      return res.data;
+    } catch (err) {
+      if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
+      const retryAfterHeader = err.response.headers?.['retry-after'];
+      const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
+      await sleep(waitMs);
+    }
+  }
+}
+
 // Walks every page of a list endpoint via `page[size]`/`page[number]` --
 // confirmed against the real API that `page[size]` is capped at 20
 // ("page[size] must be between 1 and 20", a much lower ceiling than Ingram's
@@ -184,4 +246,4 @@ async function fetchAllPages(path, params = {}) {
   return all;
 }
 
-module.exports = { get, fetchAllPages, exchangeCodeForTokens, isConnected, BASE_URL };
+module.exports = { get, post, fetchAllPages, exchangeCodeForTokens, isConnected, connectedIdentity, BASE_URL };
