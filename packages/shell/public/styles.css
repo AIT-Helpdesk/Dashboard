@@ -124,6 +124,32 @@ body {
   color: #fff;
 }
 
+/* Start Here's own sidebar entry -- a root-level page link, but styled to
+   read like a section label (matching .nav-category-header's bold/
+   uppercase/green look) rather than a plain page link, by request.
+   Targeted by its href rather than a class -- app.js builds every nav-link
+   the same way, so this is the least invasive hook onto just this one
+   entry. Split into a :not(.active) rule (green text, no fill -- matches
+   the sidebar category headings) and its own .active rule (green fill,
+   white text, by request -- overrides the default .nav-link.active blue
+   fill for just this one entry, on a more specific selector so no
+   !important is needed here). */
+a.nav-link[href="#start-here"]:not(.active) {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.85rem;
+  color: #16a34a;
+}
+a.nav-link.active[href="#start-here"] {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.85rem;
+  background: #16a34a;
+  color: #fff;
+}
+
 .nav-item {
   border-radius: 6px;
   cursor: grab;
@@ -651,6 +677,15 @@ h1 {
   color: #dc2626;
   background: var(--row-warn-bg);
 }
+/* Start Here's page-group headings ("DAILY DASHBOARDS", "CLIENT INFO", ...)
+   -- matches the sidebar's own .nav-category-header look exactly (same
+   green, same bold weight, same letter-spacing), no background fill unlike
+   .section-heading--green, since the sidebar version doesn't have one either. */
+.section-heading--nav {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #16a34a;
+}
 
 table {
   width: 100%;
@@ -714,9 +749,83 @@ td.ticket-number {
   max-width: 64ch;
 }
 
+/* What's On's scorecard matrix -- one narrow column per real check-in
+   period (a date/week/month in the header, a value in the body cell below
+   it), so text needs to stay centred and put rather than wrapping. */
+.checkin-cell {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 .inline-subtext {
   color: var(--muted);
   font-size: 0.85em;
+}
+
+/* Start Here -- a wider left column listing this dashboard's own pages
+   beside a narrow right column of external-system buttons. Stacks (page
+   list above links) on narrow screens, same breakpoint convention as
+   .client-summary-header-grid. */
+.start-here-layout {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 1.5rem;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .start-here-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.start-here-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+}
+
+.start-here-buttons .button-link {
+  text-align: center;
+}
+
+/* Same look as .button-link, but for a system whose real URL isn't
+   confirmed yet -- greyed out and inert (a plain <span>, not a clickable
+   <a>) rather than ever shipping a guessed link. */
+.button-link--pending {
+  background: var(--row-alt-bg);
+  color: var(--muted);
+  cursor: default;
+}
+
+.start-here-page-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 1rem 0.75rem;
+}
+
+.start-here-page-list li {
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.start-here-page-list li:first-child {
+  border-top: none;
+}
+
+.start-here-page-list a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.start-here-page-list a:hover {
+  text-decoration: underline;
+}
+
+.start-here-page-list .cell-subtext {
+  margin-top: 0.1rem;
 }
 
 /* Plain label color, same tone as .inline-subtext but no size change --
@@ -773,7 +882,7 @@ td.ticket-number {
   vertical-align: top;
   border: 1px solid var(--border);
   padding: 0.4rem;
-  height: 9.75rem; /* 50% taller than the original 6.5rem, to fit each entry's 2 lines */
+  height: 12.875rem; /* was 9.75rem -- grown by the same ratio as .calendar-cell-entries below, by request (was fitting ~3 entries, now ~4.25) */
   width: 14.28%;
 }
 .calendar-cell--outside {
@@ -810,7 +919,26 @@ td.ticket-number {
   flex-direction: column;
   gap: 0.2rem;
   overflow-y: auto;
-  max-height: 7.5rem; /* matches .calendar-cell's 50% height increase */
+  max-height: 10.625rem; /* was 7.5rem -- by request, grown ~3 entries' worth of scroll room to ~4.25 (x17/12, same scale applied to .calendar-cell's height above so the daynum/padding overhead above the entries list stays the same size) */
+  /* Red scrollbar, by request -- a day with enough entries to overflow (and
+     therefore actually show a scrollbar at all) is a busy day worth
+     noticing at a glance, same red as .cell-flag-red/.calendar-entry--
+     unallocated elsewhere on this dashboard. scrollbar-color covers
+     Firefox and modern Chromium; the ::-webkit-scrollbar-* rules below
+     cover older WebKit the same way. Purely cosmetic -- a cell with no
+     overflow shows no scrollbar at all either way, same as before. */
+  scrollbar-width: thin;
+  scrollbar-color: #dc2626 transparent;
+}
+.calendar-cell-entries::-webkit-scrollbar {
+  width: 6px;
+}
+.calendar-cell-entries::-webkit-scrollbar-thumb {
+  background: #dc2626;
+  border-radius: 3px;
+}
+.calendar-cell-entries::-webkit-scrollbar-track {
+  background: transparent;
 }
 .calendar-entry {
   display: block;

@@ -1,5 +1,13 @@
 [
   {
+    "type": "page",
+    "id": "start-here"
+  },
+  {
+    "type": "page",
+    "id": "whats-on"
+  },
+  {
     "type": "category",
     "id": "daily-dashboards",
     "label": "Daily Dashboards",

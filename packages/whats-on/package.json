@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/whats-on",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "whats-on",
+    "label": "What's On",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/strety-client": "*",
+    "express": "^4.19.2"
+  }
+}

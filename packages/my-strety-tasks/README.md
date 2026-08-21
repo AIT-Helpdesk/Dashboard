@@ -43,3 +43,7 @@ Two distinct early-exit states, reported separately:
 ## No caching
 
 Every load is a live fetch (an account-wide `/todos` walk, filtered down to one person) -- this is a personal, low-volume, actionable list a tech would want genuinely current, not a report worth caching. A **Refresh** button re-triggers the same live fetch on demand.
+
+## Sequential, not concurrent, Strety requests
+
+`buildSpaceResolver()` and `fetchOpenTasksFor()` fetch `/teams`/`/projects`/`/todos` one at a time, not via `Promise.all` -- confirmed against real use elsewhere on this same Strety connection (What's On) that firing multiple Strety requests concurrently can come back 200 with a suspiciously empty/short result rather than a clean error. See `@dashboard/strety-client`'s README, "Rate limiting", for the full story.

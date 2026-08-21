@@ -32,10 +32,13 @@ async function findPersonByEmail(email) {
 // data) and fetched live alongside the todos every request, same
 // no-caching stance as the rest of this page.
 async function buildSpaceResolver() {
-  const [teams, projects] = await Promise.all([
-    fetchAllPages('/teams', {}),
-    fetchAllPages('/projects', {}),
-  ]);
+  // Sequential, not Promise.all -- confirmed against real use elsewhere on
+  // this same Strety connection (What's On) that firing two Strety requests
+  // at once can come back 200 with a suspiciously empty/short result rather
+  // than a clean error, under real load. Avoiding concurrent Strety calls
+  // entirely is the more defensive fix -- see What's On's README.
+  const teams = await fetchAllPages('/teams', {});
+  const projects = await fetchAllPages('/projects', {});
   const teamNames = new Map(teams.map((t) => [t.id, t.attributes.name]));
   const projectNames = new Map(projects.map((p) => [p.id, p.attributes.title]));
 
@@ -56,13 +59,12 @@ async function buildSpaceResolver() {
 // token's own owner), so this correctly returns THIS person's tasks
 // regardless of which Strety account originally connected the integration.
 async function fetchOpenTasksFor(personId) {
-  const [todos, resolveSpace] = await Promise.all([
-    fetchAllPages('/todos', {
-      'filter[completed]': 'false',
-      'filter[assignee_id]': personId,
-    }),
-    buildSpaceResolver(),
-  ]);
+  // Sequential here too, same reasoning as buildSpaceResolver() above.
+  const todos = await fetchAllPages('/todos', {
+    'filter[completed]': 'false',
+    'filter[assignee_id]': personId,
+  });
+  const resolveSpace = await buildSpaceResolver();
 
   // Sorted here, not via the API's own `sort` param -- confirmed against
   // real data that `sort=due_date` combined with these filters does NOT

@@ -18,6 +18,12 @@ Persisted to `packages/strety-client/.tokens.json` (gitignored -- real bearer cr
 
 Calling `get()`/`fetchAllPages()` before anything has ever been connected throws an error tagged `err.strety_not_connected = true`, so a page's `server.js` can show a real "connect Strety first" message instead of a confusing raw 401 bubbling up from Strety itself.
 
+## Rate limiting -- confirmed real, retried with backoff
+
+Confirmed against the real API: Strety enforces a genuine rate limit -- a 429 `{"errors":[{"status":"429","code":"TOO_MANY_REQUESTS",...}]}` under real, non-abusive dashboard use, not just synthetic load testing (What's On, which makes a dozen-plus Strety calls per page load, hit this repeatedly). `get()` retries a 429 up to 3 times with backoff (a real `Retry-After` header if Strety sends one, otherwise a short exponential wait) before giving up -- any other error status is NOT retried.
+
+**A tight burst of requests can come back 200 with an empty/short result, not just a clean 429** -- confirmed against real use, and this is the more important finding: even after every page was made fully sequential (no `Promise.all` firing multiple Strety requests at once -- see My Strety Tasks' and What's On's own `server.js`), a single real page load still fired a dozen-plus calls back-to-back in well under a second, and Strety still returned successful-looking-but-empty responses. Retries can't fix that (nothing technically failed to retry) -- the actual fix was pacing, not just serializing: `get()` now enforces a real minimum gap (`MIN_REQUEST_INTERVAL_MS`, 300ms) between the start of any two outgoing requests through this shared client, via a module-level `throttle()`. Every caller benefits automatically regardless of which page/function is making the calls -- a page's own sequential loop now naturally spreads out over real time instead of firing as fast as Node/the network allow. The visible cost is a slower page load (a dozen-plus calls at ~300ms apart adds up), which is the deliberate tradeoff for reliability over speed here.
+
 ## Pagination -- confirmed quirks
 
 - Max page size is **20** (`page[size]`/`page[number]`) -- confirmed against the real API: `page[size]: 100` returns `{"error":"page[size] must be between 1 and 20"}`. Much lower than Ingram's 500 or IT Glue's 1000.

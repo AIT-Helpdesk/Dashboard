@@ -110,13 +110,58 @@ function isConnected() {
   return readTokens() !== null;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Confirmed against real use: even with every caller in this dashboard
+// already made sequential (no Promise.all firing multiple Strety requests
+// at once -- see My Strety Tasks' and What's On's own server.js), a single
+// page load still fires a dozen-plus calls back-to-back in well under a
+// second, and that BURST alone is enough to make Strety return a
+// successful-looking 200 with an empty/short result (not even a 429) --
+// removing simultaneity wasn't enough on its own. This throttle enforces a
+// real minimum gap between the START of any two outgoing requests through
+// this shared client, regardless of which page/function is calling it, so
+// a page's own sequential loop naturally spreads out over real time instead
+// of firing as fast as Node/the network allow.
+const MIN_REQUEST_INTERVAL_MS = 300;
+let earliestNextRequestAt = 0;
+async function throttle() {
+  const now = Date.now();
+  const waitMs = earliestNextRequestAt - now;
+  earliestNextRequestAt = Math.max(now, earliestNextRequestAt) + MIN_REQUEST_INTERVAL_MS;
+  if (waitMs > 0) await sleep(waitMs);
+}
+
+// Confirmed against the real API: Strety enforces a real rate limit (a
+// 429 "Too Many Requests" -- {"errors":[{"status":"429",...}]} -- under
+// normal, non-abusive use of this dashboard, not just synthetic load
+// testing). Rather than let a transient 429 fail an entire page (several of
+// this dashboard's Strety-backed pages make a dozen-plus calls per load,
+// see What's On's README), a 429 here is retried a few times with backoff
+// before giving up -- honoring a real `Retry-After` header if Strety sends
+// one, falling back to a short exponential wait otherwise. Any other error
+// status is NOT retried (retrying a 401/404/etc. would just waste time
+// before failing the same way anyway).
+const MAX_RETRIES = 3;
 async function get(path, params) {
   const accessToken = await getAccessToken();
-  const res = await axios.get(`${BASE_URL}${path}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    params,
-  });
-  return res.data;
+  for (let attempt = 0; ; attempt++) {
+    await throttle();
+    try {
+      const res = await axios.get(`${BASE_URL}${path}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params,
+      });
+      return res.data;
+    } catch (err) {
+      if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
+      const retryAfterHeader = err.response.headers?.['retry-after'];
+      const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
+      await sleep(waitMs);
+    }
+  }
 }
 
 // Walks every page of a list endpoint via `page[size]`/`page[number]` --
