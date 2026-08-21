@@ -118,26 +118,61 @@ function periodKeyFor(attrs, frequency) {
   return null;
 }
 
-// Same AEST-anchoring convention as periodKeyFor()'s daily branch (and
-// every other date-scoped page on this dashboard) -- "today" for a Daily
-// scorecard column, regardless of whether anyone's checked in yet.
-function todayKeyAEST() {
-  return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 10);
+// AEST "today" (same AEST-anchoring convention as periodKeyFor()'s daily
+// branch and every other date-scoped page on this dashboard), as a real
+// UTC-midnight Date -- the anchor Daily/Weekly's fixed column windows below
+// count back from, regardless of whether anyone's checked in yet.
+function todayAestDate() {
+  const aest = new Date(Date.now() + 10 * 60 * 60 * 1000);
+  return new Date(Date.UTC(aest.getUTCFullYear(), aest.getUTCMonth(), aest.getUTCDate()));
 }
 
-function periodLabelFor(key, frequency) {
-  if (frequency === 'daily') {
-    const [, m, d] = key.split('-');
-    return `${d}/${m}`;
-  }
-  if (frequency === 'weekly') {
-    return `Wk ${Number(key.split('-W')[1])}`;
-  }
-  if (frequency === 'monthly') {
-    const [y, m] = key.split('-');
-    return `${MONTH_NAMES[Number(m) - 1]} ${y}`;
-  }
-  return key;
+function dailyKeyForDate(d) {
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+function dailyLabelForDate(d) {
+  const [, m, day] = dailyKeyForDate(d).split('-');
+  return `${day}/${m}`;
+}
+
+// Standard ISO 8601 week algorithm -- the week containing a date's nearest
+// Thursday is that date's ISO week. This has to MATCH Strety's own
+// iso_week/iso_week_year check-in attributes exactly (see periodKeyFor()),
+// since the fixed 8-week column list below and each metric's real
+// check-ins both need to land on the same period keys to line up.
+function isoWeekInfo(d) {
+  const target = new Date(d.getTime());
+  const dayNum = target.getUTCDay() || 7; // Mon=1..Sun=7
+  target.setUTCDate(target.getUTCDate() + 4 - dayNum); // Thursday of this ISO week
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  const isoWeek = Math.ceil((((target - yearStart) / 86400000) + 1) / 7);
+  return { isoWeek, isoWeekYear: target.getUTCFullYear() };
+}
+
+function weeklyKeyForDate(d) {
+  const { isoWeek, isoWeekYear } = isoWeekInfo(d);
+  return `${isoWeekYear}-W${String(isoWeek).padStart(2, '0')}`;
+}
+
+// The Monday of the ISO week containing d -- by request, Weekly's column
+// header shows this instead of the week number. getUTCDay() is Sun=0..
+// Sat=6; days-since-Monday is (day + 6) % 7 (Monday itself -> 0).
+function weeklyLabelForDate(d) {
+  const daysSinceMonday = (d.getUTCDay() + 6) % 7;
+  const monday = new Date(d.getTime());
+  monday.setUTCDate(d.getUTCDate() - daysSinceMonday);
+  const dd = String(monday.getUTCDate()).padStart(2, '0');
+  const mm = String(monday.getUTCMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}`;
+}
+
+// Monthly is still purely data-driven (see fetchScorecardsFor) -- this only
+// needs to turn a "YYYY-MM" key into a label, unlike daily/weekly which now
+// generate their (key, label) pairs directly from real dates.
+function periodLabelFor(key) {
+  const [y, m] = key.split('-');
+  return `${MONTH_NAMES[Number(m) - 1]} ${y}`;
 }
 
 // Walks every page of this metric's check-ins (order is NOT reliable --
@@ -164,9 +199,11 @@ async function fetchMetricPeriodMap(metric) {
 }
 
 // One space (a team or a person) -> its metrics grouped by cadence, each
-// group sharing one real set of period columns (the most recent 8 periods
-// that ANY metric in the group actually has a check-in for -- not the last
-// 8 calendar periods, which could be mostly empty if check-ins lag).
+// group sharing one set of period columns per cadence. Daily/Weekly use a
+// FIXED calendar window (today/this week back HISTORY_LIMIT periods, by
+// request); Monthly is still data-driven (the most recent periods that ANY
+// metric in the group actually has a check-in for) -- see the column-
+// computation branch below for why.
 async function fetchScorecardsFor(spaceType, spaceId, allMetrics) {
   const metrics = allMetrics.filter(
     (m) => m.relationships?.space?.data?.type === spaceType && m.relationships.space.data.id === spaceId
@@ -191,21 +228,38 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics) {
       periodMaps.push(await fetchMetricPeriodMap(m));
     }
 
-    const allKeys = new Set();
-    periodMaps.forEach((map) => {
-      for (const key of map.keys()) allKeys.add(key);
-    });
-    // Daily tables always get a column for today, by request, even with
-    // zero check-ins logged yet today -- added to the set BEFORE sorting,
-    // not appended after, so it naturally takes the "most recent" slot
-    // (today can never be earlier than any real check-in) and the slice
-    // below still correctly caps the total at HISTORY_LIMIT rather than
-    // ever showing 9 columns.
-    if (freq === 'daily') allKeys.add(todayKeyAEST());
-    // Period keys are zero-padded and lexically sortable in every cadence
-    // (YYYY-MM-DD, YYYY-Wnn, YYYY-MM) -- plain string sort gives correct
-    // chronological order, most recent first after reversing.
-    const columnKeys = [...allKeys].sort().reverse().slice(0, HISTORY_LIMIT);
+    let columnKeys;
+    let columnLabels;
+    if (freq === 'daily' || freq === 'weekly') {
+      // Fixed window, by request -- always the most recent HISTORY_LIMIT
+      // real calendar days/ISO weeks counting back from today/this week,
+      // regardless of whether any metric has a check-in in a given one
+      // (unlike Monthly below, which only shows periods that actually have
+      // data). i=0 is today/this week; i=HISTORY_LIMIT-1 is the oldest.
+      const today = todayAestDate();
+      columnKeys = [];
+      columnLabels = [];
+      for (let i = 0; i < HISTORY_LIMIT; i++) {
+        const d = new Date(today.getTime());
+        d.setUTCDate(today.getUTCDate() - i * (freq === 'weekly' ? 7 : 1));
+        columnKeys.push(freq === 'weekly' ? weeklyKeyForDate(d) : dailyKeyForDate(d));
+        columnLabels.push(freq === 'weekly' ? weeklyLabelForDate(d) : dailyLabelForDate(d));
+      }
+    } else {
+      // Monthly -- unchanged: the most recent periods that ANY metric in
+      // this cadence group actually has a check-in for (a union across the
+      // group, not a fixed calendar window), so the columns reflect real
+      // activity rather than mostly-empty calendar slots if check-ins lag.
+      const allKeys = new Set();
+      periodMaps.forEach((map) => {
+        for (const key of map.keys()) allKeys.add(key);
+      });
+      // Period keys are zero-padded and lexically sortable ("YYYY-MM") --
+      // plain string sort gives correct chronological order, most recent
+      // first after reversing.
+      columnKeys = [...allKeys].sort().reverse().slice(0, HISTORY_LIMIT);
+      columnLabels = columnKeys.map(periodLabelFor);
+    }
 
     const rows = freqMetrics
       .map((m, i) => {
@@ -230,7 +284,7 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics) {
       .sort((a, b) => a.title.localeCompare(b.title));
 
     byFrequency[freq] = {
-      columns: columnKeys.map((key) => periodLabelFor(key, freq)),
+      columns: columnLabels,
       rows,
     };
   }

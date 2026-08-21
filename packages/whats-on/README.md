@@ -1,6 +1,6 @@
 # @dashboard/whats-on
 
-Dashboard page (Daily Dashboards, first page the dashboard opens to): Strety **Scorecards** -- the Helpdesk Task Tracker team's daily/weekly/monthly metrics, followed by the signed-in user's own personal-space metrics -- each cadence shown as a matrix with up to the last 8 real check-in periods as columns.
+Dashboard page (first page the dashboard opens to): Strety **Scorecards** -- the Helpdesk Task Tracker team's daily/weekly/monthly metrics, followed by the signed-in user's own personal-space metrics -- each cadence shown as a matrix, up to 8 columns wide (Daily/Weekly on a fixed calendar window; Monthly on real check-in activity -- see "Matrix layout" below).
 
 - `client.js` -- frontend module. Exports `id`, `label`, and `mount(container)`, picked up automatically by the shell.
 - `server.js` -- Express router mounted by the shell at `/api/whats-on`.
@@ -37,19 +37,25 @@ The "Personal" group resolves the dashboard's own signed-in email against Strety
 
 By request, the page has two parallel headline-style headings (`.summary`, same style My Strety Tasks uses for its own single summary line) instead of one generic "Scorecards for `<Name>`": a fixed **"Helpdesk Scorecards"** in `summaryEl` at the top (always visible, matches "as at" wording), and a second **"Your Personal Scorecards"** injected into `resultsEl` itself, positioned right before the Personal group's own content -- `render()` in `client.js` detects this by array index (`data.groups[1]` is always the Personal group; `server.js` pushes Helpdesk first, unconditionally, then Personal, so this ordering is safe to rely on without checking labels). Both carry their own "-- as at `<time>`" using the same `data.asOf` timestamp -- there's only one fetch, so both headings describe the same moment, just placed where each half of the page begins.
 
-## Matrix layout -- real shared period columns, taken from Strety's own data
+## Matrix layout -- real shared period columns; Daily/Weekly on a fixed window, Monthly data-driven
 
-Each scorecard table has one row per metric and up to 8 period columns (dates in the header row), most recent first -- every row lines up against the exact same real periods, not its own independent "last 8 check-ins."
+Each scorecard table has one row per metric and up to 8 period columns (dates in the header row), most recent first -- every row lines up against the exact same real periods, not its own independent "last 8 check-ins" (a naive per-row "last 8" would NOT line up row to row -- confirmed against real data, different metrics in the same cadence check in at different actual times).
 
-A naive "last 8 check-ins per metric" would NOT line up row to row -- confirmed against real data, different metrics in the same cadence check in at different actual times (three "Daily Backup Checks" check-ins landed on the very same calendar day while a sibling daily metric's check-ins didn't). So instead of per-row dates, `server.js` derives one shared **period key** per check-in and groups by that:
+Two different strategies, by request:
 
-- **Weekly/monthly** use the check-in's own `iso_week`/`iso_week_year`/`month`/`year` attributes directly -- confirmed present on every real check-in, so no date math needed or risked here.
-- **Daily** has no such attribute, so its period key is the check-in's `created_at` converted to an AEST calendar day -- same AEST-anchoring convention every other date-scoped page on this dashboard follows.
-- If a period genuinely has more than one check-in for the same metric (confirmed against real data this happens), the most-recently-created one wins as "the" value for that period.
+- **Daily and Weekly get a fixed calendar window**, always exactly `HISTORY_LIMIT` (8) columns, regardless of whether any metric has a check-in in a given one: Daily is today back 8 calendar days; Weekly is this ISO week back 8 weeks. Both are generated directly from real dates in `fetchScorecardsFor()` (`todayAestDate()` stepping backward day-by-day or week-by-week), not derived from check-in data at all -- a metric with zero check-ins in a shown period just renders a blank cell in that column, rather than the column being omitted.
+- **Monthly stays data-driven**, unchanged: the most recent periods that **any** metric in the group actually has a check-in for (a union across the group, not a fixed window) -- so Monthly's columns reflect real activity rather than mostly-empty calendar slots if check-ins lag. Only Daily/Weekly were asked to become fixed windows.
 
-The 8 columns shown are the most recent 8 periods that **any** metric in that cadence group actually has a check-in for (a union across the group, not a fixed calendar window) -- so the columns reflect real activity rather than mostly-empty calendar slots if check-ins lag. A metric with no check-in in a given shown period just renders a blank cell.
+Each check-in still gets one shared **period key** so real data lines up against these columns correctly: Weekly/Monthly use the check-in's own `iso_week`/`iso_week_year`/`month`/`year` attributes directly (confirmed present on every real check-in, so no date math needed or risked for MATCHING real data); Daily has no such attribute, so its period key is `created_at` converted to an AEST calendar day. If a period genuinely has more than one check-in for the same metric (confirmed against real data this happens -- see below), the most-recently-created one wins as "the" value for that period.
 
-**Exception, by request**: a **Daily** table always includes a column for today (`todayKeyAEST()`), even with zero check-ins logged yet today -- added to the period-key set before the most-recent-8 sort/slice, so it naturally takes the "most recent" slot rather than needing separate handling, and the oldest existing column just drops off if that would otherwise make 9. This is also why a Daily group with metrics but literally zero check-ins ever no longer falls into the "No check-ins yet" fallback table (see `scorecardTable()` in `client.js`) -- there's always at least today's column now. Weekly/monthly don't get this treatment -- only Daily was asked for.
+### Weekly's column header is the Monday date, not the week number -- and the ISO week math is now ours, verified against real data
+
+By request, a Weekly column header shows the Monday of that ISO week (e.g. `17/08`) instead of `Wk 34`. Generating the fixed 8-week window requires computing which real calendar week is "this week" and each week before it -- the standard ISO 8601 week algorithm (`isoWeekInfo()` in `server.js`; the week containing a date's nearest Thursday is that date's ISO week), anchored to **AEST** "today" (`todayAestDate()`), same AEST-anchoring convention as Daily and every other date-scoped page on this dashboard.
+
+This was verified against real data before shipping, not just trusted as textbook-correct: fetched a real weekly metric's actual check-in history and compared this dashboard's own `isoWeekInfo()` (fed each check-in's `created_at`) against that check-in's real `iso_week`/`iso_week_year` attributes. Most matched outright; the ones that didn't were informative rather than a bug:
+
+- One mismatch resolved exactly once the AEST offset was applied before computing the week (a check-in logged late Sunday UTC was already Monday AEST) -- confirming Strety's own `iso_week` is computed against something close to AEST/local time, not raw UTC, and validating the AEST-anchoring choice.
+- A few mismatches persisted even with the AEST offset applied -- these turned out to be genuine backdated/catch-up entries (two real check-ins on this account were logged five seconds apart but carry `iso_week` values one week apart -- a deliberate "log a value for a missed week" feature, not a timing artifact). This doesn't affect correctness here at all: real check-in matching (`periodKeyFor()`) always trusts Strety's own `iso_week`/`iso_week_year` directly rather than computing it, so a backdated entry still correctly lands in whichever column matches its own stated period. The fixed-window generator only needs to get "what are the last 8 real weeks counting back from today" right, which the AEST-anchored calculation does.
 
 ## Pass/fail flagging and value formatting
 

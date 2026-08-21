@@ -3,21 +3,22 @@ export const label = "Start Here";
 
 // External systems this dashboard doesn't cover -- opened in a new tab, not
 // navigated to in place (leaving the dashboard entirely would be jarring
-// for something meant as a quick jumping-off point). `url: null` means the
-// real login URL hasn't been confirmed yet -- rendered as a disabled-look
-// placeholder rather than ever shipping a guessed link that might be wrong
-// for this specific account/tenant.
+// for something meant as a quick jumping-off point). Every URL here is a
+// real, confirmed login/portal URL supplied directly -- `url: null` (none
+// currently) would render as a disabled-look placeholder rather than ever
+// shipping a guessed link that might be wrong for this specific
+// account/tenant.
 const EXTERNAL_LINKS = [
-  { label: 'Kaseya One', url: null },
-  { label: "Ambient iT's SharePoint", url: null },
-  { label: 'Ingram Micro', url: null },
-  { label: 'Backup Radar', url: null },
-  { label: 'AutoElevate', url: null },
-  { label: 'Huntress', url: null },
-  { label: 'EasyDMARC', url: null },
-  { label: 'Access4', url: null },
-  { label: 'Aussie Broadband', url: null },
-  { label: 'TPP', url: null },
+  { label: 'Kaseya One', url: 'https://one.kaseya.com/login?companyName=Ambient%20IT' },
+  { label: "Ambient iT's SharePoint", url: 'https://ambientitptyltd.sharepoint.com/' },
+  { label: 'Ingram Micro', url: 'https://au.ingrammicro.com/cep/app/home' },
+  { label: 'Backup Radar', url: 'https://eu.backupradar.com/app/dashboard/tiles' },
+  { label: 'AutoElevate', url: 'https://msp.autoelevate.com/login' },
+  { label: 'Huntress', url: 'https://ambient-it.huntress.io/account/command_center' },
+  { label: 'EasyDMARC', url: 'https://app.easydmarc.com/dashboard' },
+  { label: 'Access4', url: 'https://ambientit.sasboss.com.au' },
+  { label: 'Aussie Broadband', url: 'https://carbon.aussiebroadband.com.au/login' },
+  { label: 'TPP', url: 'https://www.tppwholesale.com.au/sign-in/' },
   { label: 'CloudFlare', url: 'https://dash.cloudflare.com/' },
   { label: 'WP Engine', url: 'https://my.wpengine.com/' },
 ];
