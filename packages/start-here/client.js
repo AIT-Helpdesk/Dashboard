@@ -38,7 +38,7 @@ const EXTERNAL_LINKS = [
 // same as the sidebar itself), so a page id with no entry here just shows
 // with no description rather than silently vanishing from the list.
 const PAGE_DESCRIPTIONS = {
-  'whats-on': "Helpdesk Task Tracker's Strety scorecards, plus your own personal ones.",
+  'whats-on': "Helpdesk Task Tracker, Your personal scorecards, and the Team Shifts quick viewer.",
   'my-strety-tasks': 'Your own open Strety to-dos, sorted by due date.',
   'service-calls': 'Month calendar of every Service Call, showing which technician is assigned.',
   'subscriptions-expiring': 'Ingram Micro subscriptions expiring in a chosen window -- a renewals watch-list.',
@@ -95,6 +95,7 @@ const DAILY_CHECKLIST_HTML = `
           </ul>
         </li>
       </ul>
+	  </br>
       <p class="start-here-checklist-subheading">Other Daily Activities -- check these dashboard pages:</p>
       <ul class="start-here-checklist-other">
         <li><a href="#service-calls">Service Calls</a> <span class="cell-subtext">-- what's scheduled in Autotask</span></li>
