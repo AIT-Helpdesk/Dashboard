@@ -176,10 +176,24 @@ export function mount(container) {
     ttStatusEl.hidden = true;
     ttColumnsEl.innerHTML = '';
     ttColumnsEl.appendChild(
-      ttColumn('Service Calls', data.serviceCalls, (row) => serviceCallRowHtml(row, data.today, data.tomorrow))
+      ttColumn(
+        'Service Calls',
+        data.serviceCalls,
+        (row) => serviceCallRowHtml(row, data.today, data.tomorrow),
+        null,
+        null,
+        { href: '#service-calls', label: 'Show All Service Calls' }
+      )
     );
     ttColumnsEl.appendChild(
-      ttColumn('Subscriptions Expiring', data.subscriptionsExpiring, (row) => subscriptionRowHtml(row, data.today, data.tomorrow))
+      ttColumn(
+        'Subscriptions Expiring',
+        data.subscriptionsExpiring,
+        (row) => subscriptionRowHtml(row, data.today, data.tomorrow),
+        null,
+        null,
+        { href: '#subscriptions-expiring', label: 'Show All Expiring Subscriptions' }
+      )
     );
     // My Strety Tasks' own connection states -- distinct from the shared
     // Strety connection's page-level banner elsewhere on this page (this
@@ -202,7 +216,8 @@ export function mount(container) {
         data.stretyTasks,
         (row) => stretyTaskRowHtml(row, data.today, data.tomorrow),
         data.stretyTasks.personFound === false ? `No Strety account found for you.` : null,
-        stretyOverrideHtml
+        stretyOverrideHtml,
+        { href: '#my-strety-tasks', label: 'Show All of My Strety Tasks' }
       )
     );
   }
@@ -213,8 +228,12 @@ export function mount(container) {
   // than each column inventing its own look. `overrideEmptyHtml`, when
   // given, takes priority over the escaped-text `overrideEmptyMessage` --
   // only ever passed a trusted, hardcoded connect/reconnect link, never
-  // anything from the API response itself.
-  function ttColumn(title, column, rowHtmlFn, overrideEmptyMessage, overrideEmptyHtml) {
+  // anything from the API response itself. `footerLink` ({ href, label }),
+  // when given, adds a "Show All <X>" link to that column's own full page
+  // below the list -- shown regardless of the column's state (error/empty/
+  // populated), since jumping to the full page is useful in every case,
+  // not just when there's today/tomorrow data to show.
+  function ttColumn(title, column, rowHtmlFn, overrideEmptyMessage, overrideEmptyHtml, footerLink) {
     const div = document.createElement('div');
     div.className = 'resource-group tt-column';
     let body;
@@ -232,7 +251,10 @@ export function mount(container) {
     // Count in brackets next to the heading -- only when the column loaded
     // successfully (an error state has no real row count to show).
     const heading = column.ok ? `${title} (${column.rows.length})` : title;
-    div.innerHTML = `<div class="section-heading">${escapeHtml(heading)}</div>${body}`;
+    const footer = footerLink
+      ? `<div class="tt-column-footer"><a class="button-link button-link--small" href="${escapeHtml(footerLink.href)}">${escapeHtml(footerLink.label)}</a></div>`
+      : '';
+    div.innerHTML = `<div class="section-heading">${escapeHtml(heading)}</div>${body}${footer}`;
     return div;
   }
 
@@ -303,7 +325,7 @@ export function mount(container) {
     return `
       <li>
         ${ttDayTag(row.dueDate, today, tomorrow)}
-        ${escapeHtml(row.title)}
+        <span class="tt-strety-title">${escapeHtml(row.title)}</span>
       </li>`;
   }
 
@@ -623,7 +645,7 @@ export function mount(container) {
     // its own "--" (e.g. "Personal -- Amber Worth"), so string-splitting
     // would be ambiguous about which "--" is meant.
     const headingEl = document.createElement('div');
-    headingEl.className = 'section-heading';
+    headingEl.className = 'section-heading section-heading--scorecard';
     headingEl.innerHTML = `${escapeHtml(prefix)} -- <span class="text-highlight-green">${escapeHtml(suffix)}</span>`;
     groupEl.appendChild(headingEl);
 
