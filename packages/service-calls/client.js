@@ -325,7 +325,11 @@ ${cardsHtml || '<p class="empty">No entries.</p>'}
       ? e.tickets
           .map(
             (t) =>
-              `<dt>Ticket</dt><dd><a href="${escapeHtml(t.ticketUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.ticketNumber)}</a>: ${escapeHtml(t.title)} (${escapeHtml(t.status)})</dd>`
+              // Same real-popup-window treatment as this page's own calendar-entry
+              // ticket links above -- this ticket link lives inside the day-popup's
+              // OWN separate window, but should still open the ticket as its own
+              // real window rather than navigating the day-popup away from itself.
+              `<dt>Ticket</dt><dd><a href="${escapeHtml(t.ticketUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(t.ticketNumber)}</a>: ${escapeHtml(t.title)} (${escapeHtml(t.status)})</dd>`
           )
           .join('')
       : '';

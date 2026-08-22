@@ -119,6 +119,22 @@ app.get('/auth/strety/connect', (req, res) => {
   // (a one-time Autotask -> Strety check-in write) needs the token itself
   // to carry write access too.
   url.searchParams.set('scope', 'read write');
+  // A hint, not a hard requirement -- Strety's own login page uses whatever
+  // Strety session is already active in the browser doing the reconnect
+  // (real, confirmed behavior: a browser already signed into strety.com as
+  // a personal account reuses that session instead of prompting fresh), so
+  // this connection's `connectedAs` can end up recording a real employee's
+  // personal login rather than the shared helpdesk account, purely by
+  // accident of whichever browser/session did the reconnecting. `login_hint`
+  // is the standard OAuth2/OIDC convention for "please pre-fill this
+  // address" -- NOT independently confirmed against Strety's own OAuth
+  // implementation (this is a browser-rendered login page, not something
+  // scriptable to verify), but a standards-compliant provider either honors
+  // it or silently ignores an unrecognized param -- no working case gets
+  // worse either way. Doesn't override an existing active session by
+  // itself; logging out of Strety (or using a private window) first is
+  // still the reliable way to guarantee a fresh prompt.
+  url.searchParams.set('login_hint', 'helpdesk@ambientit.com.au');
   res.redirect(url.toString());
 });
 
