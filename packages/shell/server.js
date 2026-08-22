@@ -110,13 +110,33 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-function stretyConnectPage(message) {
+function stretyConnectPage(message, returnHref = '/#whats-on') {
+  // Lands specifically on What's On (#whats-on), not a bare "/" -- this is
+  // a full browser navigation (not a SPA-internal route change), so it
+  // resets every module-level JS variable client.js has, including
+  // lastData/lastTodayTomorrowData. Landing on What's On this way means
+  // its own mount() naturally re-fetches BOTH Scorecards and Today &
+  // Tomorrow (including My Strety Tasks) fresh, correctly reflecting
+  // whichever Strety connection was just (re)authorized -- by request, no
+  // separate refresh-coupling code needed for that at all. A bare "/"
+  // would instead land on whatever page happens to be first in the
+  // sidebar (app.js's currentPageId() fallback), not necessarily this one.
+  //
+  // `returnHref`, when the caller passes one (the personal connect flow's
+  // success case does), adds a real query flag on top of that --
+  // confirmed necessary against real testing: Today & Tomorrow's own
+  // /today-tomorrow response is cached server-side for 10 minutes per
+  // email, so a plain fresh mount() still served the STALE
+  // personalNotConnected result fetched before this connect happened,
+  // even though the client-side reset alone was working correctly. See
+  // whats-on/client.js's own handling of `?strety_connected=1`, which
+  // force-bypasses that cache for this one load.
   return `<!doctype html>
 <html>
 <head><meta charset="utf-8"><title>Strety</title></head>
 <body style="font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1.5rem; text-align: center;">
   <p>${message}</p>
-  <a href="/" style="display: inline-block; padding: 0.6rem 1.4rem; background: #2563eb; color: white; border-radius: 6px; text-decoration: none; font-weight: 600;">Return to Dashboard</a>
+  <a href="${returnHref}" style="display: inline-block; padding: 0.6rem 1.4rem; background: #2563eb; color: white; border-radius: 6px; text-decoration: none; font-weight: 600;">Return to Dashboard</a>
 </body>
 </html>`;
 }
@@ -227,7 +247,7 @@ app.get('/auth/strety-personal/callback', async (req, res) => {
   }
   try {
     await getPersonalClient(req.session.user.email).exchangeCodeForTokens(req.query.code, stretyPersonalRedirectUriFor(req));
-    res.send(stretyConnectPage('Your Strety account is connected.'));
+    res.send(stretyConnectPage('Your Strety account is connected.', '/?strety_connected=1#whats-on'));
   } catch (err) {
     console.error('Strety personal OAuth callback failed:', err);
     res.status(500).send(stretyConnectPage('Strety connection failed. Check server logs.'));
