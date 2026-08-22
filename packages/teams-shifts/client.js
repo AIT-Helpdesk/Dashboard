@@ -1,5 +1,5 @@
 export const id = 'teams-shifts';
-export const label = 'Teams Shifts';
+export const label = 'Shifts and Schedules';
 
 // Module-scope, not inside mount() -- the shell fully tears down and re-mounts a
 // page's DOM on every navigation away and back, but the dynamically-imported
@@ -7,10 +7,18 @@ export const label = 'Teams Shifts';
 // module-level variable survives across re-mounts and lets the last result
 // restore instantly instead of coming back blank. Same pattern as CSP
 // Customers/Service Calls.
-let teams = null;
-let lastTeamId = '';
+let lastTeamId = ''; // resolved automatically now -- see resolveTeamId() -- no longer a user-facing dropdown selection
 let lastMonth = null; // "YYYY-MM"
 let lastData = null;
+
+// Locked to "General", by request -- no team picker anymore. Resolved by
+// NAME against the same GET /api/teams-shifts/teams endpoint the old
+// dropdown used to populate, not a hardcoded team id -- same
+// not-a-hardcoded-id convention What's On's own Team Shifts excerpt uses
+// for this same team (see packages/whats-on/server.js's SHIFTS_TEAM_NAME),
+// so a rename in Teams still surfaces as a clear error here instead of
+// silently showing nothing.
+const TEAM_NAME = 'General';
 
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -39,10 +47,8 @@ const THEME_COLORS = {
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
-      <h1>Teams Shifts</h1>
+      <h1>Shifts and Schedules</h1>
       <div class="date-form calendar-nav">
-        <label for="team-select">Team</label>
-        <select id="team-select"><option value="">Loading teams...</option></select>
         <button type="button" id="prev-button" aria-label="Previous month">&lsaquo;</button>
         <span id="month-label" class="calendar-month-label"></span>
         <button type="button" id="next-button" aria-label="Next month">&rsaquo;</button>
@@ -50,12 +56,11 @@ export function mount(container) {
         <button type="button" id="refresh-button">Refresh</button>
       </div>
     </header>
-    <p id="status" class="status">Pick a team.</p>
+    <p id="status" class="status">Loading...</p>
     <div id="summary" class="summary" hidden></div>
     <div id="calendar" class="results"></div>
   `;
 
-  const teamSelect = container.querySelector('#team-select');
   const prevButton = container.querySelector('#prev-button');
   const nextButton = container.querySelector('#next-button');
   const todayButton = container.querySelector('#today-button');
@@ -81,37 +86,40 @@ export function mount(container) {
     return `${MONTH_LABELS[m - 1]} ${y}`;
   }
 
-  teamSelect.addEventListener('change', () => {
-    lastTeamId = teamSelect.value;
-    lastData = null;
-    if (lastTeamId) load(lastMonth || defaultMonthKey());
-  });
   prevButton.addEventListener('click', () => load(addMonths(lastMonth || defaultMonthKey(), -1)));
   nextButton.addEventListener('click', () => load(addMonths(lastMonth || defaultMonthKey(), 1)));
   todayButton.addEventListener('click', () => load(lastData ? lastData.todayKey.slice(0, 7) : defaultMonthKey()));
   refreshButton.addEventListener('click', () => load(lastMonth || defaultMonthKey(), true));
 
-  async function loadTeams() {
+  // Resolves TEAM_NAME's real id via the same GET /api/teams-shifts/teams
+  // endpoint the old dropdown used to populate -- just filtered to one team
+  // client-side instead of listing all of them for a human to pick. Only
+  // hits the network once per browser tab session (module-scope lastTeamId
+  // survives a re-mount, same restore-instantly reasoning as lastData).
+  async function resolveTeamId() {
+    if (lastTeamId) {
+      if (lastData) render(lastData);
+      else load(lastMonth || defaultMonthKey());
+      return;
+    }
     try {
       const res = await fetch('/api/teams-shifts/teams');
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      teams = data.teams;
-      renderTeamOptions();
+      const team = data.teams.find((t) => t.name === TEAM_NAME);
+      if (!team) {
+        // Surfaced rather than silently showing an empty calendar -- same
+        // notFound convention What's On's own Team Shifts excerpt uses for
+        // this same team.
+        statusEl.className = 'status error';
+        statusEl.textContent = `"${TEAM_NAME}" wasn't found in Teams -- it may have been renamed or removed.`;
+        return;
+      }
+      lastTeamId = team.id;
+      load(defaultMonthKey());
     } catch (err) {
       statusEl.className = 'status error';
-      statusEl.textContent = `Error loading teams: ${err.message}`;
-    }
-  }
-
-  function renderTeamOptions() {
-    teamSelect.innerHTML =
-      '<option value="">Select a team...</option>' +
-      teams.map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`).join('');
-    if (lastTeamId) {
-      teamSelect.value = lastTeamId;
-      if (lastData) render(lastData);
-      else load(lastMonth || defaultMonthKey());
+      statusEl.textContent = `Error resolving "${TEAM_NAME}": ${err.message}`;
     }
   }
 
@@ -241,7 +249,7 @@ export function mount(container) {
 <html>
 <head>
 <meta charset="utf-8">
-<title>Teams Shifts -- ${escapeHtml(dateLabel)}</title>
+<title>Shifts and Schedules -- ${escapeHtml(dateLabel)}</title>
 <style>
   body { font-family: system-ui, sans-serif; background: ${colors.bg}; color: ${colors.fg}; margin: 0; padding: 1rem 1.25rem; }
   h1 { font-size: 1.15rem; margin: 0 0 1rem; }
@@ -255,7 +263,7 @@ export function mount(container) {
 </style>
 </head>
 <body>
-<h1>Teams Shifts -- ${escapeHtml(dateLabel)}</h1>
+<h1>Shifts and Schedules -- ${escapeHtml(dateLabel)}</h1>
 ${cardsHtml || '<p class="empty">No shifts.</p>'}
 </body>
 </html>`);
@@ -284,7 +292,7 @@ ${cardsHtml || '<p class="empty">No shifts.</p>'}
       </div>`;
   }
 
-  loadTeams();
+  resolveTeamId();
 
   function formatTime(iso) {
     if (!iso) return '';
