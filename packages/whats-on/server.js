@@ -1,8 +1,27 @@
 const express = require('express');
 const { get, fetchAllPages, isConnected, connectedIdentity } = require('@dashboard/strety-client');
 const { readLastRunStatus } = require('@dashboard/strety-autotask-sync/status.js');
-const { mondayOf, weekDatesFrom, todayAestKey } = require('@dashboard/autotask-client');
+const {
+  mondayOf,
+  weekDatesFrom,
+  todayAestKey,
+  getClient,
+  listAll,
+  fetchByFieldIn,
+  resolveCompanyName,
+  resolveResourceName,
+  mapWithConcurrency,
+  aestToUtcIso,
+  isoDateAest,
+  matchesWildcard,
+  getTicketUrl,
+} = require('@dashboard/autotask-client');
 const { getTeams, getShiftsByDay } = require('@dashboard/teams-shifts/lib.js');
+// Aliased -- @dashboard/ingram-client's own fetchAllPages/getToken would
+// otherwise collide with @dashboard/strety-client's identically-named
+// exports already imported above (two wholly separate systems that happen
+// to share the same function names).
+const { getToken: getIngramToken, fetchAllPages: fetchIngramPages } = require('@dashboard/ingram-client');
 
 // Reports on the Autotask -> Strety automation's last sync.js run, purely
 // from the status file it writes (see status.js) -- no live API call, so
@@ -435,6 +454,261 @@ function currentWeekMondayKey() {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
+// "TODAY & TOMORROW" section -- three independent columns, by request, each
+// its own separate external system (Autotask, Ingram, Strety). Plain
+// calendar-key arithmetic, same "Date.UTC as a neutral calculator"
+// reasoning as mondayOf()/endKeyExclusive above -- not exported from
+// @dashboard/autotask-client, which has no generic "add N days to a key"
+// helper, just the more specific mondayOf()/weekDatesFrom().
+function addDaysToKey(dateKey, delta) {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+}
+
+// Turns whatever error a column's own fetch threw into a short, real
+// message -- same shape every other page's own catch block already
+// produces, just captured per-column here instead of failing the whole
+// section. A Strety-specific error still gets its own distinct wording
+// (not-connected/reauth-required), since a technician reading this column
+// should be pointed at reconnecting, not a raw stack trace -- though the
+// PAGE-level scorecards section above already shows the real reconnect
+// banner for those same two cases, so this is just a short pointer back to it.
+function describeColumnError(err) {
+  if (err.strety_not_connected) return 'Strety is not connected -- see above.';
+  if (err.strety_reauth_required) return 'Strety needs reconnecting -- see above.';
+  return err.response ? `API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
+}
+
+// Service Calls due today or tomorrow (AEST) -- a leaner, 2-day-scoped
+// version of Service Calls' own buildReport() (packages/service-calls/
+// server.js), not a full month's worth of every ticket/status/priority
+// detail: just enough to show "what's scheduled the next two days" at a
+// glance (time, company, who's allocated). Same Autotask entity spanning
+// (ServiceCalls has no resource field of its own -- see Service Calls' own
+// README for why the ServiceCallTickets/ServiceCallTicketResources join is
+// needed at all) and same sequential-not-Promise.all-for-resolution
+// reasoning as that page.
+async function fetchServiceCallsTodayTomorrow() {
+  const client = await getClient();
+  const today = todayAestKey();
+  const [ty, tm, td] = today.split('-').map(Number);
+  const startISO = aestToUtcIso(ty, tm, td);
+  const endISO = aestToUtcIso(ty, tm, td + 2); // exclusive -- covers today + tomorrow, day-after-tomorrow excluded
+
+  const serviceCalls = await listAll(client.serviceCalls, [
+    { op: 'gte', field: 'startDateTime', value: startISO },
+    { op: 'lt', field: 'startDateTime', value: endISO },
+  ]);
+  if (serviceCalls.length === 0) return [];
+
+  const scTickets = await fetchByFieldIn(client.serviceCallTickets, 'serviceCallID', serviceCalls.map((sc) => sc.id));
+  const scTicketIdsByServiceCallId = new Map();
+  // The linked ticket is "the first one" -- same convention as Service
+  // Calls' own README documents for this exact join (a call can in
+  // principle have more than one ticket linked; real data confirmed there
+  // this is rare enough that picking the first is the accepted tradeoff
+  // rather than showing every one of them in a compact list).
+  const ticketIdByServiceCallId = new Map();
+  for (const t of scTickets) {
+    if (!scTicketIdsByServiceCallId.has(t.serviceCallID)) scTicketIdsByServiceCallId.set(t.serviceCallID, []);
+    scTicketIdsByServiceCallId.get(t.serviceCallID).push(t.id);
+    if (!ticketIdByServiceCallId.has(t.serviceCallID)) ticketIdByServiceCallId.set(t.serviceCallID, t.ticketID);
+  }
+  const allScTicketIds = scTickets.map((t) => t.id);
+  const resources = allScTicketIds.length > 0 ? await fetchByFieldIn(client.serviceCallTicketResources, 'serviceCallTicketID', allScTicketIds) : [];
+  const resourceIdsByScTicketId = new Map();
+  for (const r of resources) {
+    if (!resourceIdsByScTicketId.has(r.serviceCallTicketID)) resourceIdsByScTicketId.set(r.serviceCallTicketID, new Set());
+    resourceIdsByScTicketId.get(r.serviceCallTicketID).add(r.resourceID);
+  }
+  function resourceIdsFor(serviceCallId) {
+    const scTicketIds = scTicketIdsByServiceCallId.get(serviceCallId) || [];
+    const ids = new Set();
+    for (const scTicketId of scTicketIds) {
+      for (const rid of resourceIdsByScTicketId.get(scTicketId) || []) ids.add(rid);
+    }
+    return [...ids];
+  }
+
+  const uniqueCompanyIds = [...new Set(serviceCalls.map((sc) => sc.companyID).filter((id) => id !== null && id !== undefined))];
+  const uniqueResourceIds = [...new Set(resources.map((r) => r.resourceID))];
+  await Promise.all([
+    mapWithConcurrency(uniqueCompanyIds, 3, (id) => resolveCompanyName(client, id)),
+    mapWithConcurrency(uniqueResourceIds, 3, (id) => resolveResourceName(client, id)),
+  ]);
+
+  const rows = [];
+  for (const sc of serviceCalls) {
+    const resourceIds = resourceIdsFor(sc.id);
+    const resourceNames = [];
+    for (const rid of resourceIds) resourceNames.push(await resolveResourceName(client, rid));
+    resourceNames.sort((a, b) => a.localeCompare(b));
+    const ticketId = ticketIdByServiceCallId.get(sc.id) || null;
+    rows.push({
+      id: sc.id,
+      companyName: await resolveCompanyName(client, sc.companyID),
+      description: sc.description || null,
+      startDateTime: sc.startDateTime,
+      dayKey: isoDateAest(sc.startDateTime),
+      allocated: resourceNames.length > 0,
+      resourceNames,
+      // null when this call has no linked ticket at all -- client.js
+      // renders the day tag as plain (non-link) text in that case, same
+      // "no ticket, no link" convention Service Calls' own client.js uses.
+      ticketUrl: ticketId ? await getTicketUrl(ticketId) : null,
+    });
+  }
+  rows.sort((a, b) => new Date(a.startDateTime) - new Date(b.startDateTime));
+  return rows;
+}
+
+// Subscriptions expiring today or tomorrow -- same data/exclusion/AEST-
+// calendar-date reasoning as Subscriptions Expiring's own "Next 2 days"
+// window (packages/subscriptions-expiring/server.js), just tightened to
+// EXACTLY today (0) and tomorrow (1), not today+1+2 the way that page's own
+// "2" preset means. `expirationDate` is a plain YYYY-MM-DD with no time
+// component (confirmed against real data -- see that page's README), so
+// this is pure calendar-day arithmetic, no AEST offset conversion needed
+// for the comparison itself (only for what "today" means).
+const EXCLUDED_SUBSCRIPTION_NAME_PATTERNS = ['Windows 11 Home to Pro Upgrade *']; // same as Subscriptions Expiring
+function daysBetweenKeys(fromDateStr, toDateStr) {
+  const [fy, fm, fd] = fromDateStr.split('-').map(Number);
+  const [ty, tm, td] = toDateStr.split('-').map(Number);
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000);
+}
+async function fetchSubscriptionsExpiringTodayTomorrow() {
+  const token = await getIngramToken();
+  const [subscriptions, customers] = await Promise.all([
+    fetchIngramPages('/subscriptions', token, {}),
+    fetchIngramPages('/customers', token),
+  ]);
+  const customerNameById = new Map(customers.map((c) => [c.id, c.name]));
+  const today = todayAestKey();
+
+  const rows = [];
+  for (const s of subscriptions) {
+    if (!s.expirationDate) continue;
+    if (EXCLUDED_SUBSCRIPTION_NAME_PATTERNS.some((pattern) => matchesWildcard(s.name, pattern))) continue;
+    const daysUntilExpiry = daysBetweenKeys(today, s.expirationDate);
+    if (daysUntilExpiry < 0 || daysUntilExpiry > 1) continue; // today or tomorrow only
+    rows.push({
+      clientName: customerNameById.get(s.customerId) || `Customer #${s.customerId}`,
+      name: s.name,
+      autoRenews: !!s.renewalStatus,
+      expirationDate: s.expirationDate,
+      daysUntilExpiry,
+    });
+  }
+  rows.sort((a, b) => a.expirationDate.localeCompare(b.expirationDate) || a.clientName.localeCompare(b.clientName));
+  return rows;
+}
+
+// My Strety Tasks due today or tomorrow -- same /todos query as My Strety
+// Tasks' own fetchOpenTasksFor() (packages/my-strety-tasks/server.js), just
+// filtered down to a due_date of exactly today or tomorrow (that page shows
+// every open to-do regardless of due date; this is specifically the
+// "what's due right now" subset). findPersonByEmail() above is reused, not
+// re-resolved a second way.
+// By request: also includes OVERDUE to-dos (due_date before today), not
+// just today/tomorrow -- but ordered with today's and tomorrow's own tasks
+// FIRST (in that natural chronological order), overdue ones AFTER (oldest
+// due date first within that group, i.e. still ascending -- the longest-
+// overdue task surfaces at the top of its own group rather than the
+// bottom). A plain string comparison against "today"/"tomorrow" is enough
+// to tell overdue apart from due-soon here, since due_date and today/
+// tomorrow are all the same "YYYY-MM-DD" lexically-sortable shape.
+// Tasks with no due_date at all are excluded either way -- there's no date
+// to judge "overdue" against, and that's a deliberate, different concept
+// from My Strety Tasks' own page (which shows every open to-do regardless
+// of due date, no-due-date included).
+function isOverdue(dueDate, today) {
+  return Boolean(dueDate) && dueDate < today;
+}
+async function fetchStretyTasksDueTodayTomorrow(personId, today, tomorrow) {
+  const todos = await fetchAllPages('/todos', {
+    'filter[completed]': 'false',
+    'filter[assignee_id]': personId,
+  });
+  const rows = todos
+    .filter((t) => t.attributes.due_date === today || t.attributes.due_date === tomorrow || isOverdue(t.attributes.due_date, today))
+    .map((t) => ({
+      id: t.id,
+      title: t.attributes.title,
+      dueDate: t.attributes.due_date,
+      priority: t.attributes.priority || null,
+      overdue: isOverdue(t.attributes.due_date, today),
+    }));
+  rows.sort((a, b) => {
+    if (a.overdue !== b.overdue) return a.overdue ? 1 : -1; // today/tomorrow group first, overdue group after
+    return a.dueDate.localeCompare(b.dueDate);
+  });
+  return rows;
+}
+
+// The three columns run concurrently (Promise.all) -- three wholly separate
+// external systems (Autotask/Ingram/Strety), not three requests hitting the
+// SAME rate-limited API the way multiple Strety calls at once would be
+// (see @dashboard/strety-client's own README, "Rate limiting" -- that
+// caution is specifically about concurrent requests to Strety itself, not
+// about running unrelated systems' own calls in parallel). Each column is
+// independently try/caught -- confirmed the right shape given how many
+// independent systems are involved here: one column's real failure (say,
+// Ingram briefly down) shouldn't blank out the other two, which have
+// nothing to do with it.
+async function buildTodayTomorrow(email) {
+  const today = todayAestKey();
+  const tomorrow = addDaysToKey(today, 1);
+
+  const [serviceCalls, subscriptionsExpiring, stretyTasks] = await Promise.all([
+    fetchServiceCallsTodayTomorrow()
+      .then((rows) => ({ ok: true, rows }))
+      .catch((err) => ({ ok: false, error: describeColumnError(err) })),
+    fetchSubscriptionsExpiringTodayTomorrow()
+      .then((rows) => ({ ok: true, rows }))
+      .catch((err) => ({ ok: false, error: describeColumnError(err) })),
+    (async () => {
+      const person = await findPersonByEmail(email);
+      if (!person) return { ok: true, personFound: false, rows: [] };
+      const rows = await fetchStretyTasksDueTodayTomorrow(person.id, today, tomorrow);
+      return { ok: true, personFound: true, rows };
+    })().catch((err) => ({ ok: false, personFound: true, error: describeColumnError(err) })),
+  ]);
+
+  return { asOf: new Date().toISOString(), today, tomorrow, serviceCalls, subscriptionsExpiring, stretyTasks };
+}
+
+// Cached PER SIGNED-IN USER (keyed by email, lowercased) -- confirmed
+// necessary, not just cautious: the Strety column is entirely personal
+// (the signed-in user's own due-soon to-dos), same "cache key includes the
+// email" reasoning Service Calls' own isMine flag needed -- a shared,
+// email-less cache key would leak one person's own Strety tasks into
+// whoever else happens to load this page within the same cache window.
+// Same 10-minute TTL/reasoning as Service Calls'/Teams Shifts' own report
+// caches -- "what's scheduled today" is exactly the kind of thing that
+// gets fixed within the hour, not something worth staying stale as long as
+// a slower-moving customer list would be fine with.
+const TODAY_TOMORROW_CACHE_TTL_MS = 10 * 60 * 1000;
+const todayTomorrowCacheByEmail = new Map();
+const todayTomorrowInFlightByEmail = new Map();
+
+async function getTodayTomorrow(email, force) {
+  const key = email.toLowerCase();
+  const cached = todayTomorrowCacheByEmail.get(key);
+  if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
+  if (!todayTomorrowInFlightByEmail.has(key)) {
+    const build = buildTodayTomorrow(email)
+      .then((data) => {
+        todayTomorrowCacheByEmail.set(key, { data, expiresAt: Date.now() + TODAY_TOMORROW_CACHE_TTL_MS });
+        return data;
+      })
+      .finally(() => {
+        todayTomorrowInFlightByEmail.delete(key);
+      });
+    todayTomorrowInFlightByEmail.set(key, build);
+  }
+  return todayTomorrowInFlightByEmail.get(key);
+}
+
 const router = express.Router();
 
 // Deliberately a SEPARATE endpoint from the scorecards route below, not
@@ -455,6 +729,22 @@ router.get('/shifts', async (req, res) => {
     console.error(err);
     const detail = err.response ? `Graph API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
     res.status(500).json({ error: detail });
+  }
+});
+
+// Deliberately a SEPARATE endpoint from the scorecards route below, same
+// reasoning as /shifts above -- three real external-system calls (Autotask/
+// Ingram/Strety) is expensive enough on its own without also being
+// re-fetched every time the scorecards or shifts sections reload.
+router.get('/today-tomorrow', async (req, res) => {
+  const email = req.session?.user?.email;
+  if (!email) return res.json({ status: 'no-session-email' });
+  try {
+    const data = await getTodayTomorrow(email, req.query.force === 'true');
+    res.json({ status: 'ok', ...data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
 

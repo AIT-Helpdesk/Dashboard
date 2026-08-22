@@ -17,6 +17,12 @@ let lastData = null;
 let lastShiftsWeekStart = null; // "YYYY-MM-DD" Monday key, or null before the first load (server defaults to the current week)
 let lastShiftsData = null;
 
+// "Today & Tomorrow" section's own state, same wholly-separate-fetch
+// reasoning as the shifts excerpt above -- its own /today-tomorrow route,
+// so its own Refresh never touches the Strety scorecard fetch or the
+// shifts excerpt.
+let lastTodayTomorrowData = null;
+
 const FREQUENCIES = ['daily', 'weekly', 'monthly'];
 const FREQUENCY_LABELS = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
 
@@ -75,23 +81,40 @@ export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
       <h1>What's On</h1>
-      <div class="date-form">
-        <button type="button" id="refresh-button">Refresh</button>
-      </div>
     </header>
     <p id="status" class="status">Helpdesk Task Tracker's scorecards, followed by your own personal scorecards -- up to the last 8 real check-in periods, most recent first. Hover a value for its check-in note.</p>
-    <div id="summary" class="section-heading section-heading--nav" hidden></div>
+    <div id="summary" class="section-heading section-heading--nav section-heading-row" hidden>
+      <span id="summary-text"></span>
+      <div class="date-form">
+        <button type="button" id="refresh-button">Refresh Scorecards</button>
+      </div>
+    </div>
     <div id="results" class="results"></div>
 
     <hr class="section-divider" />
 
-    <div class="section-heading section-heading--nav">Team Shifts -- General</div>
-    <div class="date-form calendar-nav">
-      <button type="button" id="shifts-prev-button" aria-label="Previous week">&lsaquo;</button>
-      <span id="shifts-week-label" class="calendar-month-label"></span>
-      <button type="button" id="shifts-next-button" aria-label="Next week">&rsaquo;</button>
-      <button type="button" id="shifts-today-button">This Week</button>
-      <button type="button" id="shifts-refresh-button">Refresh</button>
+    <div class="tt-section">
+      <div class="section-heading section-heading--nav section-heading-row">
+        <span>Today &amp; Tomorrow</span>
+        <div class="date-form">
+          <button type="button" id="tt-refresh-button">Refresh</button>
+        </div>
+      </div>
+      <p id="tt-status" class="status">Loading...</p>
+      <div id="tt-columns" class="tt-columns"></div>
+    </div>
+
+    <hr class="section-divider" />
+
+    <div class="section-heading section-heading--nav section-heading-row">
+      <span>Team Shifts -- General</span>
+      <div class="date-form calendar-nav">
+        <button type="button" id="shifts-prev-button" aria-label="Previous week">&lsaquo;</button>
+        <span id="shifts-week-label" class="calendar-month-label"></span>
+        <button type="button" id="shifts-next-button" aria-label="Next week">&rsaquo;</button>
+        <button type="button" id="shifts-today-button">This Week</button>
+        <button type="button" id="shifts-refresh-button">Refresh</button>
+      </div>
     </div>
     <p id="shifts-status" class="status">Loading...</p>
     <div id="shifts-calendar" class="results"></div>
@@ -101,7 +124,12 @@ export function mount(container) {
   const refreshButton = container.querySelector('#refresh-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
+  const summaryTextEl = container.querySelector('#summary-text');
   const resultsEl = container.querySelector('#results');
+
+  const ttRefreshButton = container.querySelector('#tt-refresh-button');
+  const ttStatusEl = container.querySelector('#tt-status');
+  const ttColumnsEl = container.querySelector('#tt-columns');
 
   const shiftsPrevButton = container.querySelector('#shifts-prev-button');
   const shiftsNextButton = container.querySelector('#shifts-next-button');
@@ -113,6 +141,149 @@ export function mount(container) {
   const shiftsLegendEl = container.querySelector('#shifts-legend');
 
   refreshButton.addEventListener('click', load);
+
+  ttRefreshButton.addEventListener('click', () => loadTodayTomorrow(true));
+  if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
+  else loadTodayTomorrow(false);
+
+  async function loadTodayTomorrow(force) {
+    ttRefreshButton.disabled = true;
+    ttStatusEl.hidden = false;
+    ttStatusEl.className = 'status';
+    ttStatusEl.textContent = 'Loading...';
+    ttColumnsEl.innerHTML = '';
+
+    try {
+      const res = await fetch(`/api/whats-on/today-tomorrow${force ? '?force=true' : ''}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      lastTodayTomorrowData = data;
+      renderTodayTomorrow(data);
+    } catch (err) {
+      ttStatusEl.hidden = false;
+      ttStatusEl.className = 'status error';
+      ttStatusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      ttRefreshButton.disabled = false;
+    }
+  }
+
+  function renderTodayTomorrow(data) {
+    if (data.status === 'no-session-email') {
+      ttStatusEl.hidden = false;
+      ttStatusEl.className = 'status error';
+      ttStatusEl.textContent = 'Could not determine your signed-in email.';
+      ttColumnsEl.innerHTML = '';
+      return;
+    }
+
+    ttStatusEl.hidden = true;
+    ttColumnsEl.innerHTML = '';
+    ttColumnsEl.appendChild(
+      ttColumn('Service Calls', data.serviceCalls, (row) => serviceCallRowHtml(row, data.today, data.tomorrow))
+    );
+    ttColumnsEl.appendChild(
+      ttColumn('Subscriptions Expiring', data.subscriptionsExpiring, (row) => subscriptionRowHtml(row, data.today, data.tomorrow))
+    );
+    ttColumnsEl.appendChild(
+      ttColumn(
+        'My Strety Tasks',
+        data.stretyTasks,
+        (row) => stretyTaskRowHtml(row, data.today, data.tomorrow),
+        data.stretyTasks.personFound === false ? `No Strety account found for you.` : null
+      )
+    );
+  }
+
+  // One column's card -- shared shell for all three (heading, then either
+  // an error, a "nothing" notice, or the real rows) so the three sources'
+  // very different real failure/empty states all read consistently rather
+  // than each column inventing its own look.
+  function ttColumn(title, column, rowHtmlFn, overrideEmptyMessage) {
+    const div = document.createElement('div');
+    div.className = 'resource-group tt-column';
+    let body;
+    if (!column.ok) {
+      body = `<p class="status error">${escapeHtml(column.error)}</p>`;
+    } else if (overrideEmptyMessage) {
+      body = `<p class="status">${escapeHtml(overrideEmptyMessage)}</p>`;
+    } else if (column.rows.length === 0) {
+      body = `<p class="status">Nothing today or tomorrow.</p>`;
+    } else {
+      body = `<ul class="tt-list">${column.rows.map(rowHtmlFn).join('')}</ul>`;
+    }
+    // Count in brackets next to the heading -- only when the column loaded
+    // successfully (an error state has no real row count to show).
+    const heading = column.ok ? `${title} (${column.rows.length})` : title;
+    div.innerHTML = `<div class="section-heading">${escapeHtml(heading)}</div>${body}`;
+    return div;
+  }
+
+  // "Today"/"Tomorrow"/"Overdue" tag shared by all three row renderers --
+  // green for today (most immediate), amber for tomorrow, same status-color
+  // convention (not a new one) used elsewhere on this dashboard. Anything
+  // that's neither today nor tomorrow only happens for Strety tasks (service
+  // calls/subscriptions rows are always exactly one or the other by
+  // construction) -- that's the overdue case, shown red with its actual due
+  // date since "Overdue" alone doesn't say how overdue. `href`, when given,
+  // renders the tag itself as a link (service call -> its ticket) instead of
+  // a plain span, opened in a new tab like other cross-links on this page.
+  function ttDayTag(dateKey, today, tomorrow, href) {
+    let cls;
+    let label;
+    if (dateKey === today) {
+      cls = 'tt-tag--today';
+      label = 'Today';
+    } else if (dateKey === tomorrow) {
+      cls = 'tt-tag--tomorrow';
+      label = 'Tomorrow';
+    } else {
+      cls = 'tt-tag--overdue';
+      label = `Overdue -- ${formatShortDate(dateKey)}`;
+    }
+    if (href) {
+      return `<a class="tt-tag ${cls}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    }
+    return `<span class="tt-tag ${cls}">${label}</span>`;
+  }
+
+  function formatShortDate(dateKey) {
+    if (!dateKey) return '';
+    return new Date(`${dateKey}T00:00:00`).toLocaleDateString([], { day: 'numeric', month: 'short' });
+  }
+
+  function serviceCallRowHtml(row, today, tomorrow) {
+    const allocation = row.allocated
+      ? escapeHtml(row.resourceNames.join(', '))
+      : '<span class="text-highlight-red">Unallocated</span>';
+    return `
+      <li>
+        ${ttDayTag(row.dayKey, today, tomorrow, row.ticketUrl)}
+        <span class="tt-time">${formatTime(row.startDateTime)}</span>
+        <strong>${escapeHtml(row.companyName)}</strong>
+        <span class="cell-subtext">${allocation}${row.description ? ` -- ${escapeHtml(row.description)}` : ''}</span>
+      </li>`;
+  }
+
+  function subscriptionRowHtml(row, today, tomorrow) {
+    const renew = row.autoRenews
+      ? '<span class="text-highlight-green">auto-renews</span>'
+      : '<span class="text-highlight-red">NOT renewing</span>';
+    return `
+      <li>
+        ${ttDayTag(row.expirationDate, today, tomorrow)}
+        <strong>${escapeHtml(row.clientName)}</strong>
+        <span class="cell-subtext">${escapeHtml(row.name)} -- ${renew}</span>
+      </li>`;
+  }
+
+  function stretyTaskRowHtml(row, today, tomorrow) {
+    return `
+      <li>
+        ${ttDayTag(row.dueDate, today, tomorrow)}
+        ${escapeHtml(row.title)}
+      </li>`;
+  }
 
   renderShiftsLegend();
 
@@ -342,7 +513,13 @@ export function mount(container) {
 
     statusEl.hidden = true;
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `Helpdesk Scorecards<span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>`;
+    // Only the text span is replaced here, not summaryEl's whole innerHTML
+    // -- the Refresh Scorecards button lives as a static sibling inside
+    // #summary (set up once in mount()'s own skeleton, not rebuilt on every
+    // render()), so overwriting the outer element's innerHTML on every
+    // render would silently detach its click listener (a fresh <button>
+    // node each time, not the one addEventListener() was ever called on).
+    summaryTextEl.innerHTML = `Helpdesk Scorecards<span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>`;
 
     resultsEl.innerHTML = '';
 

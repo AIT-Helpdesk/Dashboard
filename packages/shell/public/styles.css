@@ -724,6 +724,14 @@ h1 {
   color: #dc2626;
   background: var(--row-warn-bg);
 }
+/* Today & Tomorrow's three column headings (Service Calls/Subscriptions
+   Expiring/My Strety Tasks), by request -- same --accent blue used
+   elsewhere on this dashboard (e.g. .resource-group's own selected/focus
+   ring), not a new one-off color. Scoped to just these three columns'
+   .section-heading, not a dashboard-wide change. */
+.tt-column .section-heading {
+  color: var(--accent);
+}
 /* Start Here's page-group headings ("DAILY DASHBOARDS", "CLIENT INFO", ...)
    -- matches the sidebar's own .nav-category-header look exactly (same
    green, same bold weight, same letter-spacing), no background fill unlike
@@ -758,6 +766,117 @@ h1 {
   border: none;
   border-top: 1px solid var(--border);
   margin: 1.5rem 0;
+}
+
+/* A .section-heading--nav with inline controls (buttons, a nav bar, a week
+   label, ...) on the same row instead of on their own row below -- used by
+   What's On's "Today & Tomorrow" Refresh button and its "Team Shifts"
+   heading's whole prev/next/This Week/Refresh nav bar. The nested
+   .date-form still matches the plain `.date-form button` selector for its
+   normal button look; .section-heading--nav's own uppercase/green/
+   letter-spacing text styling is scoped to the label text itself (the
+   <span>), not meant to apply to the controls beside it. */
+.section-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+/* text-transform/letter-spacing ARE inherited CSS properties, and nothing
+   in .date-form's own rules resets either -- without this, every button
+   AND the week-label span would render in the heading's own uppercase,
+   wide-letter-spacing style (e.g. "REFRESH", "17 AUG - 30 AUG") unlike
+   every other instance of these same elements elsewhere on this dashboard.
+   color is already safely overridden by .date-form button's own more
+   specific rule, so only these two need resetting, applied to the whole
+   nested .date-form subtree (not just direct button children) to catch
+   the week-label span too. */
+.section-heading-row .date-form,
+.section-heading-row .date-form * {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* What's On's "Today & Tomorrow" section -- three columns (Service Calls,
+   Subscriptions Expiring, My Strety Tasks), each its own .resource-group
+   card, stacking to one column on narrow viewports same as this dashboard's
+   other multi-column layouts. */
+.tt-columns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+@media (max-width: 900px) {
+  .tt-columns {
+    grid-template-columns: 1fr;
+  }
+}
+.tt-section {
+  /* Shaded panel around the whole Today & Tomorrow section (heading +
+     columns) so it reads as one distinct block against the page background,
+     same --card tone used for other panels on this dashboard. */
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem 1rem;
+}
+.tt-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  /* My Strety Tasks can legitimately run to dozens of overdue rows -- cap
+     the column's own height and let it scroll internally rather than
+     stretching the whole three-column row to match it. Same .tt-list class
+     is shared by all three columns' <ul> (see ttColumn() in client.js), so
+     this one cap applies uniformly to Service Calls/Subscriptions Expiring
+     too, by request. */
+  max-height: 15rem;
+  overflow-y: auto;
+}
+.tt-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+.tt-list .cell-subtext {
+  flex-basis: 100%;
+}
+.tt-time {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.tt-tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
+.tt-tag--today {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: #16a34a;
+}
+.tt-tag--tomorrow {
+  background: color-mix(in srgb, #f39c12 18%, transparent);
+  color: #f39c12;
+}
+.tt-tag--overdue {
+  background: color-mix(in srgb, #dc2626 18%, transparent);
+  color: #dc2626;
+}
+/* Tag is a plain <span> for the today/tomorrow/no-link cases, but an <a>
+   when a service call has a resolved ticket URL -- strip the link's default
+   underline/color so it reads identically to the span variants. */
+a.tt-tag {
+  text-decoration: none;
 }
 
 table {
