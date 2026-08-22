@@ -57,9 +57,24 @@ export function mount(container) {
 
   function render(data) {
     if (data.status === 'not-connected') {
+      // This page's own PERSONAL Strety connection (see
+      // @dashboard/strety-client's getPersonalClient()) -- deliberately a
+      // different connect link from What's On's shared-connection banner
+      // (/auth/strety/connect): this one connects as the SIGNED-IN USER
+      // themselves, which is what lets this page see their own todos at
+      // all (a shared/limited account has confirmed-real zero visibility
+      // into anyone's personal Strety data).
       statusEl.hidden = false;
       statusEl.className = 'status error';
-      statusEl.innerHTML = `Strety isn't connected yet. <a href="/auth/strety/connect">Connect Strety</a>, then come back and refresh.`;
+      statusEl.innerHTML = `Your Strety account isn't connected yet. <a href="/auth/strety-personal/connect">Connect Strety</a>, then come back and refresh.`;
+      resultsEl.innerHTML = '';
+      return;
+    }
+    if (data.status === 'reauth-required') {
+      const who = data.connectedAs ? ` (currently connected as ${escapeHtml(data.connectedAs)})` : '';
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.innerHTML = `Your Strety connection${who} has stopped working and needs to be reconnected. <a href="/auth/strety-personal/connect">Reconnect Strety</a>.`;
       resultsEl.innerHTML = '';
       return;
     }

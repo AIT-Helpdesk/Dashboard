@@ -341,4 +341,62 @@ const defaultClient = createClient({
   connectPath: '/auth/strety/connect',
 });
 
-module.exports = { ...defaultClient, createClient, BASE_URL };
+// Per-signed-in-dashboard-user connections -- for anything scoped to an
+// individual's own personal Strety space (their own todos, their own
+// personal scorecard check-ins), as opposed to the single shared
+// `defaultClient` above (kept on the shared helpdesk@ account, used for
+// TEAM-scoped data only). Confirmed against real PRODUCTION data: the
+// shared account has ZERO visibility into personal-space data at all --
+// an unfiltered `/todos` query (no assignee filter) returned 0 rows,
+// despite `filter[email]` on `/people` still finding the person fine (the
+// directory itself is visible; personal-space content isn't). By request,
+// the fix is NOT "connect the shared account to a more privileged Strety
+// account" -- that would mean one connection with visibility into every
+// technician's own tasks, including anything HR/management-sensitive,
+// which was explicitly rejected as too high a risk. Instead each dashboard
+// user connects THEIR OWN Strety account, once, the first time a personal-
+// data feature needs it -- their own login only ever has visibility into
+// their own stuff, so there's no shared elevated-access account at all.
+//
+// One createClient() instance per email, created lazily and cached for the
+// life of this process (not recreated per request) so a given user's own
+// throttle/refresh-in-flight state persists across their own repeated
+// calls -- same reasoning createClient()'s own comment gives for why every
+// connection needs its own state.
+const personalClientsByEmail = new Map();
+const PERSONAL_TOKENS_DIR = path.join(__dirname, '.personal-tokens');
+
+// Tokens are named after the email (so a restart can find the right file
+// back without a database), but an email isn't a safe filename verbatim on
+// every filesystem -- kept to a conservative, unambiguous charset instead
+// of trusting @ and friends to always be fine.
+function sanitizeEmailForFilename(email) {
+  return email.toLowerCase().replace(/[^a-z0-9.]/g, '_');
+}
+
+function getPersonalClient(email) {
+  const key = email.toLowerCase();
+  if (!personalClientsByEmail.has(key)) {
+    if (!fs.existsSync(PERSONAL_TOKENS_DIR)) fs.mkdirSync(PERSONAL_TOKENS_DIR, { recursive: true });
+    personalClientsByEmail.set(
+      key,
+      createClient({
+        // Same registered Strety app/client id as the shared connection --
+        // no separate Strety-side app registration needed just to support
+        // a different real person authorizing it. OAuth's authorization_code
+        // grant already lets many different people each authorize the same
+        // client id, producing their own separate token -- that's exactly
+        // what this is using it for. (The redirect_uri below DOES need to
+        // be added to that Strety app's allowed redirect URIs, same as any
+        // new callback route would.)
+        clientId: process.env.STRETY_CLIENT_ID,
+        clientSecret: process.env.STRETY_CLIENT_SECRET,
+        tokenStorePath: path.join(PERSONAL_TOKENS_DIR, `${sanitizeEmailForFilename(key)}.json`),
+        connectPath: '/auth/strety-personal/connect',
+      })
+    );
+  }
+  return personalClientsByEmail.get(key);
+}
+
+module.exports = { ...defaultClient, createClient, getPersonalClient, BASE_URL };

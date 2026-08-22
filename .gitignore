@@ -15,6 +15,11 @@ packages/strety-client/.tokens.json
 # committed either.
 packages/strety-autotask-sync/.tokens.json
 
+# Same reasoning again, for each signed-in dashboard user's OWN personal
+# Strety connection (see @dashboard/strety-client's getPersonalClient()) --
+# one file per person, all real bearer credentials, none of them committed.
+packages/strety-client/.personal-tokens/
+
 # Runtime state (last sync.js run's outcome), not a credential, but not
 # checked in either -- see packages/strety-autotask-sync/status.js.
 packages/strety-autotask-sync/last-run.json

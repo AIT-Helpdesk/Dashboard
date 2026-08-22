@@ -1,5 +1,5 @@
 const express = require('express');
-const { get, fetchAllPages, isConnected } = require('@dashboard/strety-client');
+const { getPersonalClient } = require('@dashboard/strety-client');
 
 // Strety's own person directory -- matched against the dashboard's signed-in
 // email (`req.session.user.email`, the same Microsoft 365 identity every
@@ -10,9 +10,14 @@ const { get, fetchAllPages, isConnected } = require('@dashboard/strety-client');
 // matching the dashboard's own Entra email one-for-one -- `filter[email]`
 // is an exact match (same convention as every other exact-match filter
 // found on this integration), so no wildcard/fuzzy matching is needed or
-// attempted here.
-async function findPersonByEmail(email) {
-  const res = await get('/people', { 'filter[email]': email });
+// attempted here. `client` is the signed-in user's OWN personal Strety
+// connection (see @dashboard/strety-client's getPersonalClient()), not a
+// single shared one -- confirmed against real production data that a
+// shared/limited-visibility account can see the /people directory fine but
+// has ZERO visibility into anyone's actual todos, so every personal-space
+// lookup on this page goes through this same per-user connection.
+async function findPersonByEmail(email, client) {
+  const res = await client.get('/people', { 'filter[email]': email });
   return res.data[0] || null;
 }
 
@@ -31,14 +36,14 @@ async function findPersonByEmail(email) {
 // Both lookups are small (11 teams / 3 projects, confirmed against real
 // data) and fetched live alongside the todos every request, same
 // no-caching stance as the rest of this page.
-async function buildSpaceResolver() {
+async function buildSpaceResolver(client) {
   // Sequential, not Promise.all -- confirmed against real use elsewhere on
   // this same Strety connection (What's On) that firing two Strety requests
   // at once can come back 200 with a suspiciously empty/short result rather
   // than a clean error, under real load. Avoiding concurrent Strety calls
   // entirely is the more defensive fix -- see What's On's README.
-  const teams = await fetchAllPages('/teams', {});
-  const projects = await fetchAllPages('/projects', {});
+  const teams = await client.fetchAllPages('/teams', {});
+  const projects = await client.fetchAllPages('/projects', {});
   const teamNames = new Map(teams.map((t) => [t.id, t.attributes.name]));
   const projectNames = new Map(projects.map((p) => [p.id, p.attributes.title]));
 
@@ -54,17 +59,24 @@ async function buildSpaceResolver() {
 // Open == `completed_at` is null, exposed via `filter[completed]=false` --
 // confirmed against real data this is the only working "open" filter
 // (`filter[status]=open` and `filter[completed_at]=null` both 400). Scoped
-// to just this person's todos via `filter[assignee_id]`, confirmed against
-// real data that /todos is account-wide (not scoped to the connected
-// token's own owner), so this correctly returns THIS person's tasks
-// regardless of which Strety account originally connected the integration.
-async function fetchOpenTasksFor(personId) {
+// to just this person's todos via `filter[assignee_id]` -- confirmed
+// against real data the FILTER itself is honored correctly for any person
+// regardless of which account is connected (querying a different person's
+// assignee_id while connected as someone else still returns THAT person's
+// real todos, verified against the returned relationships.assignee data).
+// BUT a connected account with no team/space membership at all (e.g. a
+// shared/limited account) was also confirmed, against real PRODUCTION
+// data, to see ZERO todos company-wide -- filtered or not. So `client`
+// here has to be the signed-in user's OWN personal connection (see
+// @dashboard/strety-client's getPersonalClient()), not a single shared one
+// -- see this package's README for the full story.
+async function fetchOpenTasksFor(personId, client) {
   // Sequential here too, same reasoning as buildSpaceResolver() above.
-  const todos = await fetchAllPages('/todos', {
+  const todos = await client.fetchAllPages('/todos', {
     'filter[completed]': 'false',
     'filter[assignee_id]': personId,
   });
-  const resolveSpace = await buildSpaceResolver();
+  const resolveSpace = await buildSpaceResolver(client);
 
   // Sorted here, not via the API's own `sort` param -- confirmed against
   // real data that `sort=due_date` combined with these filters does NOT
@@ -94,21 +106,28 @@ const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
-    if (!isConnected()) {
-      return res.json({ status: 'not-connected' });
-    }
-
     const email = req.session?.user?.email;
     if (!email) {
       return res.json({ status: 'no-session-email' });
     }
 
-    const person = await findPersonByEmail(email);
+    // The signed-in user's OWN Strety connection -- see
+    // @dashboard/strety-client's getPersonalClient() for why this page
+    // can't use a single shared connection. Checked explicitly rather than
+    // letting a not-connected error surface generically, so this page can
+    // point at its own connect link (this account, not a shared one that
+    // might already be fine for other pages).
+    const client = getPersonalClient(email);
+    if (!client.isConnected()) {
+      return res.json({ status: 'not-connected' });
+    }
+
+    const person = await findPersonByEmail(email, client);
     if (!person) {
       return res.json({ status: 'person-not-found', email });
     }
 
-    const tasks = await fetchOpenTasksFor(person.id);
+    const tasks = await fetchOpenTasksFor(person.id, client);
     res.json({
       status: 'ok',
       personName: person.attributes.name,
@@ -120,6 +139,9 @@ router.get('/', async (req, res) => {
   } catch (err) {
     if (err.strety_not_connected) {
       return res.json({ status: 'not-connected' });
+    }
+    if (err.strety_reauth_required) {
+      return res.json({ status: 'reauth-required', connectedAs: getPersonalClient(req.session.user.email).connectedIdentity() });
     }
     console.error(err);
     const detail = err.response ? `Strety API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;

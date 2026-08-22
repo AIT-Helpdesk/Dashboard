@@ -91,8 +91,6 @@ export function mount(container) {
     </div>
     <div id="results" class="results"></div>
 
-    <hr class="section-divider" />
-
     <div class="tt-section">
       <div class="section-heading section-heading--nav section-heading-row">
         <span>Today &amp; Tomorrow</span>
@@ -103,8 +101,6 @@ export function mount(container) {
       <p id="tt-status" class="status">Loading...</p>
       <div id="tt-columns" class="tt-columns"></div>
     </div>
-
-    <hr class="section-divider" />
 
     <div class="section-heading section-heading--nav section-heading-row">
       <span>Team Shifts -- General</span>
@@ -185,12 +181,28 @@ export function mount(container) {
     ttColumnsEl.appendChild(
       ttColumn('Subscriptions Expiring', data.subscriptionsExpiring, (row) => subscriptionRowHtml(row, data.today, data.tomorrow))
     );
+    // My Strety Tasks' own connection states -- distinct from the shared
+    // Strety connection's page-level banner elsewhere on this page (this
+    // column depends on the SIGNED-IN USER'S OWN personal connection, see
+    // @dashboard/strety-client's getPersonalClient(); the shared one can be
+    // perfectly healthy while this signed-in user just hasn't connected
+    // their own yet). Checked before the generic personFound-false message
+    // below, since "not connected at all" and "connected, but no matching
+    // person" are different situations worth telling apart.
+    let stretyOverrideHtml = null;
+    if (data.stretyTasks.personalNotConnected) {
+      stretyOverrideHtml = `Your Strety account isn't connected yet. <a class="button-link" href="/auth/strety-personal/connect">Connect Strety</a>`;
+    } else if (data.stretyTasks.personalReauthRequired) {
+      const who = data.stretyTasks.personalConnectedAs ? ` (currently connected as ${escapeHtml(data.stretyTasks.personalConnectedAs)})` : '';
+      stretyOverrideHtml = `Your Strety connection${who} has stopped working and needs to be reconnected. <a class="button-link" href="/auth/strety-personal/connect">Reconnect Strety</a>`;
+    }
     ttColumnsEl.appendChild(
       ttColumn(
         'My Strety Tasks',
         data.stretyTasks,
         (row) => stretyTaskRowHtml(row, data.today, data.tomorrow),
-        data.stretyTasks.personFound === false ? `No Strety account found for you.` : null
+        data.stretyTasks.personFound === false ? `No Strety account found for you.` : null,
+        stretyOverrideHtml
       )
     );
   }
@@ -198,13 +210,18 @@ export function mount(container) {
   // One column's card -- shared shell for all three (heading, then either
   // an error, a "nothing" notice, or the real rows) so the three sources'
   // very different real failure/empty states all read consistently rather
-  // than each column inventing its own look.
-  function ttColumn(title, column, rowHtmlFn, overrideEmptyMessage) {
+  // than each column inventing its own look. `overrideEmptyHtml`, when
+  // given, takes priority over the escaped-text `overrideEmptyMessage` --
+  // only ever passed a trusted, hardcoded connect/reconnect link, never
+  // anything from the API response itself.
+  function ttColumn(title, column, rowHtmlFn, overrideEmptyMessage, overrideEmptyHtml) {
     const div = document.createElement('div');
     div.className = 'resource-group tt-column';
     let body;
     if (!column.ok) {
       body = `<p class="status error">${escapeHtml(column.error)}</p>`;
+    } else if (overrideEmptyHtml) {
+      body = `<p class="status error">${overrideEmptyHtml}</p>`;
     } else if (overrideEmptyMessage) {
       body = `<p class="status">${escapeHtml(overrideEmptyMessage)}</p>`;
     } else if (column.rows.length === 0) {
@@ -479,9 +496,14 @@ export function mount(container) {
 
   function render(data) {
     if (data.status === 'not-connected') {
+      // The SIGNED-IN USER'S OWN Strety connection now (both the Helpdesk
+      // team group and Personal group use it, by request -- see
+      // server.js), not the old shared one -- points at
+      // /auth/strety-personal/connect, which authorizes as whoever's
+      // currently signed into the dashboard.
       statusEl.hidden = false;
       statusEl.className = 'status error';
-      statusEl.innerHTML = `Strety isn't connected yet.<br><a class="button-link" href="/auth/strety/connect">Connect Strety</a>`;
+      statusEl.innerHTML = `Your Strety account isn't connected yet.<br><a class="button-link" href="/auth/strety-personal/connect">Connect Strety</a>`;
       resultsEl.innerHTML = '';
       return;
     }
@@ -497,7 +519,7 @@ export function mount(container) {
       const who = data.connectedAs ? ` (currently connected as ${escapeHtml(data.connectedAs)})` : '';
       statusEl.hidden = false;
       statusEl.className = 'status error';
-      statusEl.innerHTML = `Strety's connection${who} has stopped working and needs to be reconnected.<br><a class="button-link" href="/auth/strety/connect">Reconnect Strety</a>`;
+      statusEl.innerHTML = `Your Strety connection${who} has stopped working and needs to be reconnected.<br><a class="button-link" href="/auth/strety-personal/connect">Reconnect Strety</a>`;
       resultsEl.innerHTML = '';
       return;
     }
@@ -556,6 +578,14 @@ export function mount(container) {
       }
       if (group.notFound) {
         resultsEl.appendChild(notice(`"${group.label}" wasn't found in Strety -- it may have been renamed or removed.`));
+        return;
+      }
+      // The connected-but-no-matching-Strety-person case -- unlike a
+      // not-yet-connected/broken connection (both handled at the page
+      // level above, since both groups share one connection now), this can
+      // only be known once fetchPersonByEmail() actually runs.
+      if (group.personNotFound) {
+        resultsEl.appendChild(notice(`No Strety account found matching your signed-in email.`));
         return;
       }
       // group.byFrequency[f] is { columns, rows } (see server.js), NOT an
