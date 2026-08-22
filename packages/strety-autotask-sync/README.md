@@ -2,7 +2,7 @@
 
 An automated job (not a dashboard page -- no `dashboardPage` in `package.json`, so the shell never tries to mount it) that counts things in Autotask and writes them as Strety check-ins on a schedule, without a human in the loop. Built to replace the one-time manual write done earlier for "NOT READY: EOD - Tickets at Set Priority - Should be None" (see What's On's README) with something that keeps itself current.
 
-**Status as of writing**: connection plumbing and all four current metrics built and verified working end-to-end against real data (`sync.js` run for real, all four written successfully -- see `metrics.js` below). The actual periodic trigger (Windows Task Scheduler) is not yet set up on production -- every run so far has been manual.
+**Status as of writing**: fully live on production -- connected, all four metrics in `metrics.js` verified against real data, running hourly and unattended via Windows Task Scheduler (see "Production setup" below), with its own health surfaced on What's On (see `status.js` below) if it ever stops working.
 
 ## A deliberately SEPARATE Strety connection, not the dashboard's own
 
@@ -62,8 +62,19 @@ Verified against real data: a real run wrote `3`, `188`, `11`, and `10` respecti
 
 **Strety enforces ONE check-in per metric per period** -- confirmed against the real API: a second `POST` for a period that already has a check-in (e.g. a second run the same day) gets a real `409 CONFLICT`. This isn't an edge case worth ignoring -- verified against real data it happens on literally the second-ever run, since the very first metric synced already had a manual one-time check-in from earlier the same day. `createOrUpdateCheckIn()` tries `POST` first; on a `409`, it reads the existing check-in's id straight out of the error body (`errors[0].meta.existing_check_in.id`, which Strety hands back for exactly this reason) and `PATCH`es that instead -- see `@dashboard/strety-client`'s README for the `patch()`/`If-Match` details this required adding to the shared client.
 
+## `status.js` -- how What's On knows the automation is still working
+
+After every run, `sync.js` writes its outcome to `last-run.json` (gitignored, like `.tokens.json` -- runtime state, not a credential, but still not checked in) via `writeLastRunStatus()` -- when it ran, whether it succeeded overall, and each metric's own individual result. What's On's `server.js` reads this back via `readLastRunStatus()` and surfaces a warning banner (with a `/auth/strety-automation/connect` button) if either:
+
+- the last run **failed** (a real error, most likely this connection needing reconnecting -- same underlying cause as the main connection's own `reauth-required`, just a separate connection with its own separate failure), or
+- the last run was **too long ago** (more than 3 hours, generous slack over the hourly schedule) -- catching a DIFFERENT failure mode a pure success/failure check can't see: the scheduled task itself has stopped firing entirely (disabled, box rebooted and it didn't come back, etc.), so there's no recent run to even check the success of.
+
+Deliberately a plain file read, not a live API call from What's On -- checking this costs nothing extra against Strety's rate limit (see `@dashboard/strety-client`'s README, "Rate limiting"), unlike a proactive health-check request would. A healthy, current automation shows nothing at all -- same "silent when fine, loud when not" convention as the main connection's own `not-connected`/`reauth-required` messages.
+
+## Production setup (Windows Task Scheduler)
+
+Set up and verified working on the real production box -- see `DEPLOYMENT.md`'s own dedicated section for the full six-step walkthrough (`.env`, redirect URI, pull+restart, one-time connect, `Register-ScheduledTask`, verifying it actually ran). Two real gotchas hit and now documented there: `[TimeSpan]::MaxValue` is too large for Task Scheduler's own XML duration format (use a large-but-finite duration like 10 years instead), and `package-lock.json` can pick up local-only drift from running `npm install` on a different OS/npm version than wherever the lockfile was generated, which blocks `git pull` the same way `nav-layout.json` already could.
+
 ## Not yet built
 
-- The scheduling mechanism -- planned as Windows Task Scheduler running `node packages/strety-autotask-sync/sync.js` periodically on the production box, not an in-process timer inside the dashboard's own server (so a hung or crashing sync run can't take the dashboard down, and vice versa -- genuinely separate failure domains).
-- Any status/health surfacing for THIS connection specifically on the dashboard (What's On's `reauth-required` handling, see its own README, currently only covers the dashboard's own default connection -- this one needs its own equivalent).
-- Any more metrics beyond the four in `metrics.js` -- add an entry there, following the existing pattern, whenever one is specified.
+Any more metrics beyond the four in `metrics.js` -- add an entry there, following the existing pattern, whenever one is specified.

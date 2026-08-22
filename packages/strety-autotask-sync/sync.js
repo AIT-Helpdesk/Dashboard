@@ -23,6 +23,7 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', 
 const { getClient, listAll } = require('@dashboard/autotask-client');
 const stretyClient = require('./client.js');
 const { METRICS } = require('./metrics.js');
+const { writeLastRunStatus } = require('./status.js');
 
 // Same AEST-anchoring convention as every other date-scoped page on this
 // dashboard (see What's On's README) -- "today" for a daily check-in.
@@ -95,7 +96,7 @@ async function main() {
       const value = await config.countTickets({ listAll, client: autotaskClient });
       await createOrUpdateCheckIn(metric.id, { value, context: config.contextNote, date: today });
       console.log(`[OK] ${config.title}: ${value}`);
-      results.push({ title: config.title, ok: true });
+      results.push({ title: config.title, ok: true, value });
     } catch (err) {
       const detail = err.response ? `HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
       console.error(`[FAILED] ${config.title}: ${detail}`);
@@ -104,6 +105,11 @@ async function main() {
   }
 
   const failed = results.filter((r) => !r.ok);
+  // Written even on partial failure -- What's On (see status.js) reports
+  // on the LAST run's real outcome, not just "did it complete", so a run
+  // where 3 of 4 metrics succeeded still needs this to reflect the one
+  // that didn't.
+  writeLastRunStatus({ ranAt: new Date().toISOString(), success: failed.length === 0, results });
   if (failed.length > 0) {
     console.error(`\n${failed.length}/${results.length} metric(s) failed.`);
     process.exitCode = 1;
@@ -114,5 +120,14 @@ async function main() {
 
 main().catch((err) => {
   console.error('Sync run failed entirely:', err);
+  // A TOTAL failure (e.g. Autotask/Strety unreachable before any metric was
+  // even attempted) still needs recording -- otherwise What's On would keep
+  // reporting whatever the last PARTIAL run's status.js said, which could
+  // be an arbitrarily long time ago and no longer true.
+  try {
+    writeLastRunStatus({ ranAt: new Date().toISOString(), success: false, results: [], fatalError: err.message });
+  } catch {
+    // Best-effort -- if even this fails, the exit code below is still set.
+  }
   process.exitCode = 1;
 });

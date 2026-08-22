@@ -111,6 +111,22 @@ export function mount(container) {
     summaryEl.innerHTML = `<strong>Helpdesk Scorecards</strong><span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>`;
 
     resultsEl.innerHTML = '';
+
+    // The Autotask -> Strety automation's own health, distinct from THIS
+    // page's own (main) Strety connection above -- reported purely from a
+    // status file the automation writes after each run (see
+    // @dashboard/strety-autotask-sync's status.js), no extra live API call
+    // needed to check it. Only shown when something's actually wrong --
+    // a healthy/current automation is silent, same as the main connection's
+    // own not-connected/reauth-required messages only showing on a real
+    // problem.
+    if (data.automationStatus && !data.automationStatus.ok) {
+      const banner = document.createElement('p');
+      banner.className = 'status error';
+      banner.innerHTML = `${escapeHtml(data.automationStatus.message)}<br><a class="button-link" href="/auth/strety-automation/connect">Reconnect automation</a>`;
+      resultsEl.appendChild(banner);
+    }
+
     data.groups.forEach((group, i) => {
       // The Personal group is always second (see server.js -- Helpdesk is
       // pushed first, unconditionally) -- a fresh heading here marks the

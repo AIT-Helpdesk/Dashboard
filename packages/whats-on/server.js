@@ -1,5 +1,41 @@
 const express = require('express');
 const { get, fetchAllPages, isConnected, connectedIdentity } = require('@dashboard/strety-client');
+const { readLastRunStatus } = require('@dashboard/strety-autotask-sync/status.js');
+
+// Reports on the Autotask -> Strety automation's last sync.js run, purely
+// from the status file it writes (see status.js) -- no live API call, so
+// checking this costs nothing extra against Strety's rate limit. Two
+// distinct failure modes, not just one: the run itself failed (a real
+// error, e.g. its own connection needs reconnecting), OR nothing has run
+// in far longer than the hourly schedule implies (the scheduled task
+// itself may have stopped firing entirely, which a pure success/failure
+// check on the last run wouldn't catch since there'd BE no last run to
+// check).
+const AUTOMATION_STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours -- hourly schedule, generous buffer before alarming
+function formatAge(ms) {
+  const hours = Math.floor(ms / (60 * 60 * 1000));
+  if (hours >= 1) return `${hours} hour${hours === 1 ? '' : 's'}`;
+  const minutes = Math.max(1, Math.round(ms / (60 * 1000)));
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+function evaluateAutomationStatus() {
+  const lastRun = readLastRunStatus();
+  if (!lastRun) {
+    return { ok: false, message: 'The automated Autotask sync has never run yet.' };
+  }
+  const ageMs = Date.now() - new Date(lastRun.ranAt).getTime();
+  if (!lastRun.success) {
+    const detail = lastRun.fatalError || lastRun.results.find((r) => !r.ok)?.detail || 'unknown error';
+    return { ok: false, message: `The automated Autotask sync last ran ${formatAge(ageMs)} ago and failed: ${detail}` };
+  }
+  if (ageMs > AUTOMATION_STALE_THRESHOLD_MS) {
+    return {
+      ok: false,
+      message: `The automated Autotask sync hasn't run in ${formatAge(ageMs)} (expected hourly) -- these EOD numbers may be stale.`,
+    };
+  }
+  return { ok: true };
+}
 
 const HELPDESK_TEAM_NAME = 'Helpdesk Task Tracker';
 // By request: only these three cadences -- Strety's real `checkin_frequency`
@@ -359,6 +395,7 @@ router.get('/', async (req, res) => {
       personName: person.attributes.name,
       asOf: new Date().toISOString(),
       groups,
+      automationStatus: evaluateAutomationStatus(),
     });
   } catch (err) {
     if (err.strety_not_connected) {

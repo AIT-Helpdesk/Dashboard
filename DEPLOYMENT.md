@@ -179,13 +179,15 @@ $action = New-ScheduledTaskAction -Execute "cmd.exe" `
   -Argument '/c node packages\strety-autotask-sync\sync.js > logs\strety-autotask-sync.log 2>&1' `
   -WorkingDirectory "C:\apps\autotask-dashboard-git"
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-  -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
+  -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 3650)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
 Register-ScheduledTask -TaskName "AmbientStretyAutotaskSync" -Action $action -Trigger $trigger -Settings $settings `
   -Description "Hourly: sync Autotask ticket counts into Strety Helpdesk Task Tracker scorecards"
 ```
 
 Runs as SYSTEM by default (no `-User` specified) -- fine here, since it only needs filesystem access to its own package folder and outbound HTTPS, nothing more privileged. The log is overwritten each run, not appended (`>` not `>>`) -- Strety's own check-in `context` notes are already the real audit trail of every value actually written, so this log is only for diagnosing a failed run, not a permanent record; unbounded growth wasn't worth it. Switch to `>>` if you want history instead.
+
+`-RepetitionDuration (New-TimeSpan -Days 3650)` (~10 years), not `[TimeSpan]::MaxValue` -- confirmed against a real run `MaxValue` is too large to serialize into Task Scheduler's own XML duration format and gets rejected outright (`Register-ScheduledTask : The task XML contains a value which is incorrectly formatted or out of range`). A large-but-finite duration is the standard workaround for "repeat indefinitely" here -- 10 years is far longer than this box will run unattended before someone touches it again anyway.
 
 ### 6. Verify it actually works before waiting for the first real hourly run
 
@@ -202,10 +204,15 @@ The project now has a real git remote (`AIT-Helpdesk/Dashboard` on GitHub, clone
 
 ```powershell
 cd C:\apps\autotask-dashboard-git
-git checkout -- packages/shell/nav-layout.json   # discard any local server-only edits to the sidebar layout -- see below
+git checkout -- packages/shell/nav-layout.json package-lock.json   # discard local-only changes to these two -- see below
 git pull
 npm install          # only if dependencies changed
 Restart-Service AmbientDashboard
 ```
 
-**Why the `git checkout` line, every time**: `packages/shell/nav-layout.json` (the sidebar layout) is checked into git, and can also be edited directly on the server via its own `localhost:3000` (see README.md "Deploying the sidebar layout"). If that's ever been done since the last deploy, the file now has uncommitted local changes -- and `git pull` refuses to overwrite a tracked file that has those, failing with a "local changes would be overwritten" error instead of silently discarding them. Running `git checkout -- packages/shell/nav-layout.json` first always resolves that ahead of time (a no-op if there are no local changes, a clean discard if there are), so `git pull` never has anything to fail on. This is a deliberate choice, by request -- git is the source of truth for this file; any layout change made only on the server, never committed, is expected to be lost on the next deploy.
+**Why the `git checkout` line, every time**: two files reliably drift out of sync with git on their own, for two different reasons, and either one blocks `git pull` outright ("Your local changes to the following files would be overwritten by merge... Aborting") if left uncommitted:
+
+- `packages/shell/nav-layout.json` (the sidebar layout) can be edited directly on the server via its own `localhost:3000` (see README.md "Deploying the sidebar layout"). If that's happened since the last deploy, the file has local changes uncommitted.
+- `package-lock.json` can end up with a local diff purely from running `npm install` on the server -- a different OS/npm version than wherever the committed lockfile was last generated can normalize/reorder it slightly, with no real dependency change involved. Confirmed against a real deploy: this alone was enough to abort a `git pull`.
+
+Running `git checkout -- <path>` on both first always resolves this ahead of time (a no-op if there are no local changes, a clean discard if there are), so `git pull` never has anything to fail on. Deliberate for `nav-layout.json`, by request -- git is the source of truth for that file, any layout change made only on the server and never committed is expected to be lost on the next deploy. Just a practical necessity for `package-lock.json` -- its local drift is never a real deliberate edit worth keeping.
