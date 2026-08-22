@@ -1,5 +1,13 @@
 const express = require('express');
-const { get, fetchAllPages, isConnected, connectedIdentity } = require('@dashboard/strety-client');
+// This page no longer uses the shared default Strety connection at all --
+// by request, every fetch here (Helpdesk team scorecards, Personal
+// scorecards, and Today & Tomorrow's Strety Tasks column) goes through the
+// signed-in user's OWN connection instead (see getPersonalClient() below,
+// and @dashboard/strety-client's README, "Per-signed-in-user connections",
+// for why). The shared connection/its own /auth/strety/connect route still
+// exist (used by nothing in this file anymore, but kept -- see that
+// README) rather than removed outright.
+const { getPersonalClient } = require('@dashboard/strety-client');
 const { readLastRunStatus } = require('@dashboard/strety-autotask-sync/status.js');
 const {
   mondayOf,
@@ -91,9 +99,14 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 
 // Same email-match convention as My Strety Tasks -- see that package's
 // README for why this is safe (every real Ambient iT person's Strety email
-// matches their Microsoft 365 one exactly).
-async function findPersonByEmail(email) {
-  const res = await get('/people', { 'filter[email]': email });
+// matches their Microsoft 365 one exactly). Takes an explicit client (the
+// signed-in user's own personal connection, see getPersonalClient()) rather
+// than always using the shared module-level `get` -- the /people directory
+// itself does appear visible either way (confirmed real data), but this
+// keeps every personal-space lookup consistently going through the same
+// per-user connection rather than mixing the two for no reason.
+async function findPersonByEmail(email, client) {
+  const res = await client.get('/people', { 'filter[email]': email });
   return res.data[0] || null;
 }
 
@@ -112,7 +125,14 @@ async function findPersonByEmail(email) {
 const CATALOG_CACHE_TTL_MS = 60_000;
 let catalogCache = null; // { teams, metrics, fetchedAt }
 
-async function getCatalog() {
+// `client` is whichever signed-in user's own personal connection happens to
+// trigger the refresh -- by request, this page now uses ONE personal
+// connection for both groups (Helpdesk team AND Personal), not a separate
+// shared connection for the team one (see the '/' route below for why).
+// The cached VALUE is still shared globally across every user, same as
+// before -- team/metric DEFINITIONS aren't user-specific, only the
+// connection used to fetch them changed.
+async function getCatalog(client) {
   if (catalogCache && Date.now() - catalogCache.fetchedAt < CATALOG_CACHE_TTL_MS) {
     return catalogCache;
   }
@@ -125,8 +145,8 @@ async function getCatalog() {
   // a suspiciously empty body -- avoiding concurrent Strety requests
   // entirely, here and in fetchScorecardsFor's per-metric loop below, is
   // the more defensive fix.
-  const teams = await fetchAllPages('/teams', {});
-  const metrics = await fetchAllPages('/metrics', {});
+  const teams = await client.fetchAllPages('/teams', {});
+  const metrics = await client.fetchAllPages('/metrics', {});
   catalogCache = { teams, metrics, fetchedAt: Date.now() };
   return catalogCache;
 }
@@ -263,8 +283,8 @@ function periodLabelFor(key) {
 // (confirmed against real data this happens -- multiple same-day check-ins
 // on one daily metric -- the latest logged one wins as "the" value for that
 // period).
-async function fetchMetricPeriodMap(metric) {
-  const checkins = await fetchAllPages(`/metrics/${metric.id}/check_ins`, {});
+async function fetchMetricPeriodMap(metric, client) {
+  const checkins = await client.fetchAllPages(`/metrics/${metric.id}/check_ins`, {});
   const byPeriod = new Map();
   for (const c of checkins) {
     const key = periodKeyFor(c.attributes, metric.attributes.checkin_frequency);
@@ -298,7 +318,7 @@ function isNotReady(metric) {
 // request); Monthly is still data-driven (the most recent periods that ANY
 // metric in the group actually has a check-in for) -- see the column-
 // computation branch below for why.
-async function fetchScorecardsFor(spaceType, spaceId, allMetrics) {
+async function fetchScorecardsFor(spaceType, spaceId, allMetrics, client) {
   const metrics = allMetrics.filter(
     (m) => m.relationships?.space?.data?.type === spaceType && m.relationships.space.data.id === spaceId
   );
@@ -319,7 +339,7 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics) {
     // ends up with.
     const periodMaps = [];
     for (const m of freqMetrics) {
-      periodMaps.push(await fetchMetricPeriodMap(m));
+      periodMaps.push(await fetchMetricPeriodMap(m, client));
     }
 
     let columnKeys;
@@ -591,12 +611,12 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
 // handful. 2 weeks keeps that "actionable, not noise" property without
 // hardcoding a totally arbitrary cutoff.
 //
-// Placed AFTER the today/tomorrow rows in the returned list, oldest first
-// within that trailing group -- same "second group, oldest-first" ordering
-// My Strety Tasks' own overdue rows use below. client.js's ttDayTag()
-// already renders any dayKey that isn't today/tomorrow as an "Overdue"
-// tag with no further server-side flag needed -- a past dayKey naturally
-// falls into that branch.
+// Placed AFTER the today/tomorrow rows in the returned list, latest first
+// within that trailing group (by request) -- same ordering My Strety
+// Tasks' own overdue rows use below. client.js's ttDayTag() already
+// renders any dayKey that isn't today/tomorrow as an overdue tag with no
+// further server-side flag needed -- a past dayKey naturally falls into
+// that branch.
 async function fetchServiceCallsTodayTomorrow() {
   const client = await getClient();
   const today = todayAestKey();
@@ -627,6 +647,11 @@ async function fetchServiceCallsTodayTomorrow() {
     const aOverdue = a.dayKey < today;
     const bOverdue = b.dayKey < today;
     if (aOverdue !== bOverdue) return aOverdue ? 1 : -1; // today/tomorrow group first, overdue group after
+    // Within the overdue group: latest first, oldest last, by request --
+    // reversed from the today/tomorrow group's own ascending order (kept
+    // as-is below), which stays chronological since those are naturally
+    // read "today, then tomorrow."
+    if (aOverdue) return new Date(b.startDateTime) - new Date(a.startDateTime);
     return new Date(a.startDateTime) - new Date(b.startDateTime);
   });
   return rows;
@@ -681,12 +706,12 @@ async function fetchSubscriptionsExpiringTodayTomorrow() {
 // re-resolved a second way.
 // By request: also includes OVERDUE to-dos (due_date before today), not
 // just today/tomorrow -- but ordered with today's and tomorrow's own tasks
-// FIRST (in that natural chronological order), overdue ones AFTER (oldest
-// due date first within that group, i.e. still ascending -- the longest-
-// overdue task surfaces at the top of its own group rather than the
-// bottom). A plain string comparison against "today"/"tomorrow" is enough
-// to tell overdue apart from due-soon here, since due_date and today/
-// tomorrow are all the same "YYYY-MM-DD" lexically-sortable shape.
+// FIRST (in that natural chronological order), overdue ones AFTER (latest
+// due date first within that group, by request -- the most recently-missed
+// task surfaces at the top of its own group rather than the bottom). A
+// plain string comparison against "today"/"tomorrow" is enough to tell
+// overdue apart from due-soon here, since due_date and today/tomorrow are
+// all the same "YYYY-MM-DD" lexically-sortable shape.
 // Tasks with no due_date at all are excluded either way -- there's no date
 // to judge "overdue" against, and that's a deliberate, different concept
 // from My Strety Tasks' own page (which shows every open to-do regardless
@@ -694,8 +719,12 @@ async function fetchSubscriptionsExpiringTodayTomorrow() {
 function isOverdue(dueDate, today) {
   return Boolean(dueDate) && dueDate < today;
 }
-async function fetchStretyTasksDueTodayTomorrow(personId, today, tomorrow) {
-  const todos = await fetchAllPages('/todos', {
+// `client` is the signed-in user's own personal Strety connection (see
+// getPersonalClient()), not the shared one -- confirmed against real
+// production data the shared connection has zero visibility into anyone's
+// personal todos.
+async function fetchStretyTasksDueTodayTomorrow(client, personId, today, tomorrow) {
+  const todos = await client.fetchAllPages('/todos', {
     'filter[completed]': 'false',
     'filter[assignee_id]': personId,
   });
@@ -710,6 +739,10 @@ async function fetchStretyTasksDueTodayTomorrow(personId, today, tomorrow) {
     }));
   rows.sort((a, b) => {
     if (a.overdue !== b.overdue) return a.overdue ? 1 : -1; // today/tomorrow group first, overdue group after
+    // Within the overdue group: latest first, oldest last, by request --
+    // reversed from the today/tomorrow group's own ascending order (kept
+    // as-is below).
+    if (a.overdue) return b.dueDate.localeCompare(a.dueDate);
     return a.dueDate.localeCompare(b.dueDate);
   });
   return rows;
@@ -737,11 +770,27 @@ async function buildTodayTomorrow(email) {
       .then((rows) => ({ ok: true, rows }))
       .catch((err) => ({ ok: false, error: describeColumnError(err) })),
     (async () => {
-      const person = await findPersonByEmail(email);
+      // The signed-in user's OWN Strety connection, not the shared one --
+      // see @dashboard/strety-client's getPersonalClient() for why. Checked
+      // explicitly (not just letting a stretyTasks_not_connected-shaped
+      // error fall through to describeColumnError()) so this column can
+      // show its own real "Connect your Strety" link rather than the
+      // generic "see above" wording that error message uses for the
+      // SHARED connection's own not-connected state (there's no "above" to
+      // point to here -- the shared connection can be perfectly healthy
+      // while this signed-in user just hasn't connected their own yet).
+      const personalClient = getPersonalClient(email);
+      if (!personalClient.isConnected()) return { ok: true, personalNotConnected: true, rows: [] };
+      const person = await findPersonByEmail(email, personalClient);
       if (!person) return { ok: true, personFound: false, rows: [] };
-      const rows = await fetchStretyTasksDueTodayTomorrow(person.id, today, tomorrow);
+      const rows = await fetchStretyTasksDueTodayTomorrow(personalClient, person.id, today, tomorrow);
       return { ok: true, personFound: true, rows };
-    })().catch((err) => ({ ok: false, personFound: true, error: describeColumnError(err) })),
+    })().catch((err) => {
+      if (err.strety_reauth_required) {
+        return { ok: true, personalReauthRequired: true, personalConnectedAs: getPersonalClient(email).connectedIdentity(), rows: [] };
+      }
+      return { ok: false, personFound: true, error: describeColumnError(err) };
+    }),
   ]);
 
   return { asOf: new Date().toISOString(), today, tomorrow, serviceCalls, subscriptionsExpiring, stretyTasks };
@@ -820,21 +869,28 @@ router.get('/today-tomorrow', async (req, res) => {
 
 router.get('/', async (req, res) => {
   try {
-    if (!isConnected()) {
-      return res.json({ status: 'not-connected' });
-    }
-
     const email = req.session?.user?.email;
     if (!email) {
       return res.json({ status: 'no-session-email' });
     }
 
-    const person = await findPersonByEmail(email);
-    if (!person) {
-      return res.json({ status: 'person-not-found', email });
+    // Both groups below -- Helpdesk Task Tracker team AND Personal -- use
+    // the SIGNED-IN USER'S OWN Strety connection (see
+    // @dashboard/strety-client's getPersonalClient()), not a separate
+    // shared one for the team group. By request: everyone already has
+    // permission to see the team's own scorecards (unlike personal-space
+    // data, where visibility is deliberately per-person), so there's no
+    // reason to maintain a second connection just for that -- and doing so
+    // previously meant the WHOLE page (including the team group) broke
+    // whenever the shared connection's own token happened to need
+    // reconnecting, even though the Personal group never depended on it.
+    // One connection, one gate, one real failure point to reconnect.
+    const personalClient = getPersonalClient(email);
+    if (!personalClient.isConnected()) {
+      return res.json({ status: 'not-connected' });
     }
 
-    const { teams, metrics: allMetrics } = await getCatalog();
+    const { teams, metrics: allMetrics } = await getCatalog(personalClient);
     const helpdeskTeam = teams.find((t) => t.attributes.name === HELPDESK_TEAM_NAME) || null;
 
     const groups = [];
@@ -842,7 +898,7 @@ router.get('/', async (req, res) => {
     if (helpdeskTeam) {
       groups.push({
         label: HELPDESK_TEAM_NAME,
-        byFrequency: await fetchScorecardsFor('team', helpdeskTeam.id, allMetrics),
+        byFrequency: await fetchScorecardsFor('team', helpdeskTeam.id, allMetrics, personalClient),
       });
     } else {
       // Surfaced to the user rather than silently dropped -- a renamed or
@@ -851,14 +907,18 @@ router.get('/', async (req, res) => {
       groups.push({ label: HELPDESK_TEAM_NAME, notFound: true, byFrequency: {} });
     }
 
-    groups.push({
-      label: `Personal -- ${person.attributes.name}`,
-      byFrequency: await fetchScorecardsFor('person', person.id, allMetrics),
-    });
+    const person = await findPersonByEmail(email, personalClient);
+    if (!person) {
+      groups.push({ label: 'Personal', personNotFound: true, byFrequency: {} });
+    } else {
+      groups.push({
+        label: `Personal -- ${person.attributes.name}`,
+        byFrequency: await fetchScorecardsFor('person', person.id, allMetrics, personalClient),
+      });
+    }
 
     res.json({
       status: 'ok',
-      personName: person.attributes.name,
       asOf: new Date().toISOString(),
       groups,
       // null on localhost -- client.js's own banner render is already
@@ -877,7 +937,7 @@ router.get('/', async (req, res) => {
     // rather than showing a raw error for something with a known, simple
     // remedy.
     if (err.strety_reauth_required) {
-      return res.json({ status: 'reauth-required', connectedAs: connectedIdentity() });
+      return res.json({ status: 'reauth-required', connectedAs: getPersonalClient(req.session.user.email).connectedIdentity() });
     }
     console.error(err);
     const detail = err.response ? `Strety API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;

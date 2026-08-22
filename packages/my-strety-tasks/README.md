@@ -5,9 +5,11 @@ Dashboard page: the signed-in user's own **open Strety to-dos**, sorted by due d
 - `client.js` - frontend module. Exports `id`, `label`, and `mount(container)`, picked up automatically by the shell.
 - `server.js` - Express router mounted by the shell at `/api/my-strety-tasks`.
 
-## "Logged in user" -- matched by email, not the connection owner
+## "Logged in user" -- matched by email, against the signed-in user's OWN Strety connection
 
-Strety's OAuth connection is tied to whichever ONE person originally approved it (see `@dashboard/strety-client`'s README) -- but `/todos` turned out to be account-wide, not scoped to that person specifically, confirmed against real data (multiple distinct real assignees showed up through the one shared connection). So this page doesn't just show the connector's own tasks -- it resolves the **dashboard's own signed-in email** (`req.session.user.email`, the same Microsoft 365 identity every other "my X" feature on this dashboard uses, e.g. Ticket Times' current-user pinning) against Strety's `/people` directory via `filter[email]` (an exact match, confirmed), then fetches THAT person's open todos. Every real Ambient iT person in Strety uses their exact `@ambientit.com.au` address, matching the dashboard's own Entra email one-for-one, confirmed against real data (14 real people, all but a couple with populated emails matching that pattern) -- so no fuzzy/wildcard matching is needed or attempted.
+This page resolves the **dashboard's own signed-in email** (`req.session.user.email`, the same Microsoft 365 identity every other "my X" feature on this dashboard uses, e.g. Ticket Times' current-user pinning) against Strety's `/people` directory via `filter[email]` (an exact match, confirmed), then fetches THAT person's open todos. Every real Ambient iT person in Strety uses their exact `@ambientit.com.au` address, matching the dashboard's own Entra email one-for-one, confirmed against real data (14 real people, all but a couple with populated emails matching that pattern) -- so no fuzzy/wildcard matching is needed or attempted.
+
+**The `/people` lookup and the `/todos` fetch both go through the signed-in user's OWN personal Strety connection** (`getPersonalClient(email)`, `@dashboard/strety-client`), not the shared connection every other Strety-backed page on this dashboard uses. This was a real, production-confirmed fix, not a design preference from the start: `filter[assignee_id]` on `/todos` is genuinely honored for any person regardless of which account is connected (confirmed -- querying a different person's id while connected as someone else still returns that person's real todos), but a connected account with no Strety team/space membership at all was ALSO confirmed to see **zero** todos company-wide, filtered or not -- the shared `helpdesk@ambientit.com.au` connection is exactly that kind of account. The fix isn't "connect the shared account as someone more privileged" -- that would mean one connection with visibility into every technician's own personal todos, including anything HR/management-sensitive, rejected by request as too high a risk. Instead each dashboard user connects their OWN Strety account, once -- see `@dashboard/strety-client`'s README, "Per-signed-in-user connections", for the full mechanism.
 
 If the signed-in email has no matching Strety person, the page says so plainly (`status: 'person-not-found'`) rather than silently showing nothing or someone else's tasks.
 
@@ -36,8 +38,9 @@ A task whose due date is before **today (AEST)** is flagged the same "needs atte
 
 ## Not connected / not signed in
 
-Two distinct early-exit states, reported separately:
-- `status: 'not-connected'` -- nobody has been through the Strety authorization flow yet (or the token store is missing/corrupt). The page shows a direct link to `/auth/strety/connect`.
+Distinct early-exit states, reported separately:
+- `status: 'not-connected'` -- the SIGNED-IN USER hasn't connected their own personal Strety account yet (or their token store is missing/corrupt) -- normal and expected the first time any given person uses this page (or What's On's Strety-backed sections), not an error condition to alarm about. The page shows a direct link to `/auth/strety-personal/connect`, which authorizes as whoever's currently signed into the dashboard.
+- `status: 'reauth-required'` -- this person's OWN connection was working and has since gone stale (same periodic real-world occurrence as the shared connection -- see `@dashboard/strety-client`'s README). Same fix, same link.
 - `status: 'no-session-email'` -- shouldn't normally happen (the dashboard's own `requireAuth` guarantees a signed-in session before any page loads), but handled defensively rather than assumed impossible.
 
 ## No caching

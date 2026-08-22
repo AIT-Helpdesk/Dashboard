@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { getClient } = require('@dashboard/autotask-client');
-const { exchangeCodeForTokens, BASE_URL: STRETY_BASE_URL } = require('@dashboard/strety-client');
+const { exchangeCodeForTokens, BASE_URL: STRETY_BASE_URL, getPersonalClient } = require('@dashboard/strety-client');
 // A wholly separate Strety connection, deliberately -- its own limited-
 // access account, own OAuth client id/secret (packages/strety-autotask-
 // sync/.env, not the repo-root .env every other package shares), own token
@@ -147,6 +147,55 @@ app.get('/auth/strety/callback', async (req, res) => {
     res.send('Strety connected successfully -- you can close this tab.');
   } catch (err) {
     console.error('Strety OAuth callback failed:', err);
+    res.status(500).send('Strety connection failed. Check server logs.');
+  }
+});
+
+// The signed-in dashboard user's OWN personal Strety connection -- see
+// @dashboard/strety-client's getPersonalClient() for the full "why a
+// second connection at all" story. Unlike /auth/strety/connect above
+// (one shared connection, same for everyone), THIS one's whole point is
+// that it's per-person: the callback below has to know WHICH dashboard
+// user just authorized, so it can store the resulting token under their
+// own file rather than one shared one. That comes from req.session.user
+// itself, not a query param -- both routes only ever run inside the same
+// signed-in browser session that started the redirect round trip (mounted
+// after requireAuth below, same as /auth/strety/connect), so there's
+// nothing to pass through Strety and back.
+function stretyPersonalRedirectUriFor(req) {
+  return `${req.protocol}://${req.get('host')}/auth/strety-personal/callback`;
+}
+
+app.get('/auth/strety-personal/connect', (req, res) => {
+  if (!process.env.STRETY_CLIENT_ID) {
+    return res.status(500).send('STRETY_CLIENT_ID is not configured in .env.');
+  }
+  const url = new URL(`${STRETY_BASE_URL}/oauth/authorize`);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('client_id', process.env.STRETY_CLIENT_ID);
+  url.searchParams.set('redirect_uri', stretyPersonalRedirectUriFor(req));
+  // Read-only -- every personal-data feature this connection powers (My
+  // Strety Tasks, Today & Tomorrow, Personal scorecards) only ever reads.
+  url.searchParams.set('scope', 'read');
+  // Hints Strety's login page toward the CURRENT dashboard user's own
+  // email, so the right account is pre-filled -- same "hint, not a hard
+  // requirement" caveat as the shared connection's own login_hint above
+  // (an already-active Strety session in that browser gets reused
+  // regardless). Unlike that one, this hint is genuinely correct for
+  // whoever's clicking it, not a fixed guess.
+  url.searchParams.set('login_hint', req.session.user.email);
+  res.redirect(url.toString());
+});
+
+app.get('/auth/strety-personal/callback', async (req, res) => {
+  if (req.query.error) {
+    return res.status(403).send(`Strety authorization failed: ${req.query.error_description || req.query.error}`);
+  }
+  try {
+    await getPersonalClient(req.session.user.email).exchangeCodeForTokens(req.query.code, stretyPersonalRedirectUriFor(req));
+    res.send('Your Strety account is connected -- you can close this tab.');
+  } catch (err) {
+    console.error('Strety personal OAuth callback failed:', err);
     res.status(500).send('Strety connection failed. Check server logs.');
   }
 });

@@ -815,11 +815,17 @@ h1 {
 .tt-section {
   /* Shaded panel around the whole Today & Tomorrow section (heading +
      columns) so it reads as one distinct block against the page background,
-     same --card tone used for other panels on this dashboard. */
+     same --card tone used for other panels on this dashboard. Green border,
+     by request, now that this panel is its own visually distinct block --
+     the .section-divider <hr>s that used to separate it from its neighbors
+     were removed as redundant once this had its own shaded background, so
+     this margin replaces the vertical spacing those dividers used to give
+     (same 1.5rem as .section-divider's own margin). */
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid #16a34a;
   border-radius: 0.5rem;
   padding: 0.75rem 1rem 1rem;
+  margin: 1.5rem 0;
 }
 .tt-list {
   list-style: none;
