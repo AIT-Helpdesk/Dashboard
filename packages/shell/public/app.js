@@ -55,6 +55,44 @@ themeToggle.addEventListener('click', () => {
 
 renderThemeToggle();
 
+// Collapse the sidebar down to a slim rail -- per-browser (localStorage),
+// same "personal viewing preference, not the shared server-side nav tree"
+// reasoning as expandedCategories below, and the same flash-avoidance
+// pattern as the theme toggle above: the actual attribute for a RETURNING
+// visit is applied by the inline script in index.html's <head>, before this
+// module even runs; this only handles the click itself and the button's own
+// icon/label to match on load. The collapsed state hides the logo/nav
+// list/user info/theme toggle via CSS (html[data-sidebar-collapsed="true"]
+// rules in styles.css) -- this button stays visible either way, it's the
+// only way back out of the collapsed state.
+const SIDEBAR_COLLAPSED_KEY = 'dashboard.sidebarCollapsed';
+const sidebarToggle = document.getElementById('sidebar-toggle');
+
+function isSidebarCollapsed() {
+  return document.documentElement.getAttribute('data-sidebar-collapsed') === 'true';
+}
+
+function renderSidebarToggle() {
+  const collapsed = isSidebarCollapsed();
+  sidebarToggle.textContent = collapsed ? '»' : '«';
+  sidebarToggle.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  sidebarToggle.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+}
+
+sidebarToggle.addEventListener('click', () => {
+  const next = !isSidebarCollapsed();
+  if (next) document.documentElement.setAttribute('data-sidebar-collapsed', 'true');
+  else document.documentElement.removeAttribute('data-sidebar-collapsed');
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+  } catch {
+    // localStorage unavailable -- the choice still applies for this page load, just won't persist.
+  }
+  renderSidebarToggle();
+});
+
+renderSidebarToggle();
+
 async function renderUserInfo() {
   try {
     const res = await nativeFetch('/api/me');
