@@ -323,7 +323,11 @@ export function mount(container) {
   function ticketLink(t) {
     const label = escapeHtml(t.ticketNumber);
     if (!t.ticketUrl) return label;
-    return `<a href="${escapeHtml(t.ticketUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    // A real popup window, not just a new tab -- specifying window features
+    // (width/height/etc.) is what signals that to the browser. Same pattern
+    // as Service Calls' own ticket links. target/rel kept as a fallback for
+    // JS-disabled or a manual middle-click/right-click "open in new tab".
+    return `<a href="${escapeHtml(t.ticketUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
   }
 
   function formatDate(iso) {

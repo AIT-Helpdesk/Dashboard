@@ -145,6 +145,11 @@ export function mount(container) {
   function ticketLink(t) {
     const label = escapeHtml(t.ticketNumber);
     if (!t.ticketUrl) return label;
+    // No inline onclick here, unlike the other pages' own ticketLink() --
+    // this page already gets the same real-popup-window treatment via
+    // openTicketInNewWindow(), bound with addEventListener to every
+    // a.ticket-link after the table renders (see below). Adding an inline
+    // onclick too would double-fire and open two windows per click.
     return `<a href="${escapeHtml(t.ticketUrl)}" class="ticket-link" target="_blank" rel="noopener noreferrer">${label}</a>`;
   }
 

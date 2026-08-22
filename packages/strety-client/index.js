@@ -152,14 +152,24 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
   // labeled error if nothing has ever been connected yet, so a caller (a
   // page's server.js) can show a real "connect Strety first" message
   // instead of a confusing raw 401 from Strety itself.
-  async function getAccessToken() {
+  //
+  // `force` bypasses the expiresAt check and refreshes unconditionally --
+  // confirmed necessary against real production data: Strety can reject a
+  // real API call with a genuine `401 INVALID_TOKEN` for a token this
+  // client's own bookkeeping still believes has time left (`expiresAt`
+  // hasn't passed), if Strety itself invalidated it server-side for some
+  // reason not visible from here. The proactive expiry check alone can't
+  // catch that -- only a real 401 from Strety can -- see get()/post()/
+  // patch()'s own one-time force-refresh-and-retry below, which is what
+  // actually calls this with force: true.
+  async function getAccessToken(force = false) {
     const tokens = readTokens();
     if (!tokens) {
       const err = new Error(`Strety is not connected yet -- visit ${connectPath} while signed in to the dashboard.`);
       err.strety_not_connected = true;
       throw err;
     }
-    if (Date.now() < tokens.expiresAt) return tokens.accessToken;
+    if (!force && Date.now() < tokens.expiresAt) return tokens.accessToken;
     // Concurrent requests landing while the token is stale share ONE
     // refresh rather than each firing their own -- same shape as Ingram's
     // own token cache.
@@ -194,7 +204,7 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
     if (waitMs > 0) await sleep(waitMs);
   }
 
-  async function get(path, params) {
+  async function get(path, params, retriedAuth = false) {
     const accessToken = await getAccessToken();
     for (let attempt = 0; ; attempt++) {
       await throttle();
@@ -205,6 +215,19 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
         });
         return res.data;
       } catch (err) {
+        // Confirmed against real production data -- see getAccessToken()'s
+        // own comment on `force`. One retry only (retriedAuth guards
+        // against looping if Strety keeps saying 401 even with a freshly
+        // forced token): force a real refresh, then retry the WHOLE
+        // request once. If the refresh token itself is also dead,
+        // refreshTokens() throws its own strety_reauth_required-tagged
+        // error from inside getAccessToken(), which is the right thing to
+        // surface either way -- this isn't swallowed, just given one real
+        // chance to self-heal first.
+        if (err.response?.status === 401 && !retriedAuth) {
+          await getAccessToken(true);
+          return get(path, params, true);
+        }
         if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
         const retryAfterHeader = err.response.headers?.['retry-after'];
         const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
@@ -220,7 +243,7 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
   // media type (unlike the OAuth token endpoint, which needs
   // form-encoding -- a different, unrelated quirk of that one specific
   // endpoint).
-  async function post(path, body) {
+  async function post(path, body, retriedAuth = false) {
     const accessToken = await getAccessToken();
     for (let attempt = 0; ; attempt++) {
       await throttle();
@@ -230,6 +253,12 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
         });
         return res.data;
       } catch (err) {
+        // Same one-time force-refresh-and-retry as get() -- see that
+        // function's own comment, and getAccessToken()'s, for why.
+        if (err.response?.status === 401 && !retriedAuth) {
+          await getAccessToken(true);
+          return post(path, body, true);
+        }
         if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
         const retryAfterHeader = err.response.headers?.['retry-after'];
         const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
@@ -251,7 +280,7 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
   // dashboard is the only writer to any check-in it manages, so there's no
   // real concurrent-edit case worth the extra fetch-then-conditional-update
   // complexity for.
-  async function patch(path, body) {
+  async function patch(path, body, retriedAuth = false) {
     const accessToken = await getAccessToken();
     for (let attempt = 0; ; attempt++) {
       await throttle();
@@ -261,6 +290,12 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
         });
         return res.data;
       } catch (err) {
+        // Same one-time force-refresh-and-retry as get() -- see that
+        // function's own comment, and getAccessToken()'s, for why.
+        if (err.response?.status === 401 && !retriedAuth) {
+          await getAccessToken(true);
+          return patch(path, body, true);
+        }
         if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
         const retryAfterHeader = err.response.headers?.['retry-after'];
         const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
