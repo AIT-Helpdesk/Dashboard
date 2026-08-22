@@ -1208,6 +1208,50 @@ ul.start-here-checklist-other {
   color: var(--muted);
   border-bottom: 1px solid var(--border);
 }
+/* Thin sideways "This Week"/"Last Week"/"Next Week" label column, by
+   request -- one cell per week-row, in front of that row's 7 day cells.
+   Fixed narrow width so it reads as a thin strip, not a real 8th day
+   column; the day cells' own 14.28% (below) then get their share of
+   whatever width is left over, same as table-layout: fixed already does
+   for any mix of fixed + percentage column widths. Text is set/left blank
+   per-row in client.js depending on whether that row's own Monday is
+   actually the real current/previous/next AEST week -- an empty cell here
+   (not a hidden one) is what makes the label "vanish" when navigation
+   moves a row away from being any of the three. position: relative (safe
+   on a <td> -- unlike a display override, it doesn't break table-cell
+   layout) turns this cell into the positioning context for the inner
+   .shifts-week-label-text span below, which is centered via absolute
+   top/left: 50% + translate(-50%, -50%) -- confirmed the more reliable
+   centering than text-align/vertical-align on the td: vertical-align
+   centers based on the SPAN's un-rotated inline-box metrics (transform
+   doesn't affect layout, only paint), which left the rotated text visibly
+   off-center. Absolute positioning centers the actual painted box instead,
+   regardless of what transform is applied to it. */
+.shifts-week-label-cell {
+  width: 1.75rem;
+  border: 1px solid var(--border);
+  position: relative;
+  /* Same green as .tt-tag--today (Today & Tomorrow's Service Calls column
+     "Today" tag), but at 1/3 the strength (6% vs. that tag's 18%), by
+     request -- not conditional on which label text is showing, the column
+     itself is shaded this way throughout. */
+  background: color-mix(in srgb, #16a34a 6%, transparent);
+}
+/* writing-mode: vertical-rl + rotate(180deg) is the standard way to get
+   bottom-to-top reading direction (vertical-rl alone reads top-to-bottom).
+   Both included in the one transform (with the centering translate) so
+   they compose around the same already-centered point. */
+.shifts-week-label-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  writing-mode: vertical-rl;
+  transform: translate(-50%, -50%) rotate(180deg);
+  white-space: nowrap;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
 .calendar-cell {
   vertical-align: top;
   border: 1px solid var(--border);
@@ -1233,6 +1277,7 @@ ul.start-here-checklist-other {
   padding: 0;
   font: inherit;
   font-size: 0.8rem;
+  font-weight: 700;
   color: var(--muted);
   margin-bottom: 0.25rem;
   cursor: pointer;

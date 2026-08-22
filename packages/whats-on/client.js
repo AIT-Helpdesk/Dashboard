@@ -336,6 +336,18 @@ export function mount(container) {
     return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
   }
 
+  // The Monday of the ISO week containing dateKey -- used to find "this
+  // week"'s own real Monday from data.todayKey, then compare each rendered
+  // week-row's own first day against it (see renderShifts()'s "This Week"/
+  // "Last Week" label). getUTCDay() is Sun=0..Sat=6; days-since-Monday is
+  // (day + 6) % 7 (Monday itself -> 0) -- same math as server.js's own
+  // weeklyLabelForDate().
+  function mondayOfKey(dateKey) {
+    const [y, m, d] = dateKey.split('-').map(Number);
+    const daysSinceMonday = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
+    return addDaysKey(dateKey, -daysSinceMonday);
+  }
+
   shiftsPrevButton.addEventListener('click', () => loadShifts(addDaysKey(lastShiftsWeekStart, -7)));
   shiftsNextButton.addEventListener('click', () => loadShifts(addDaysKey(lastShiftsWeekStart, 7)));
   shiftsTodayButton.addEventListener('click', () => loadShifts(null)); // null -- let the server default to the current AEST week, same as the very first load
@@ -391,12 +403,43 @@ export function mount(container) {
     shiftsStatusEl.hidden = true;
     shiftsCalendarEl.innerHTML = '';
 
+    // Real current/previous/next AEST week's own Monday -- NOT necessarily
+    // either of the two rows below, which are whatever window the prev/
+    // next arrows have navigated to. Compared against each row's own first
+    // day (its Monday) so the sideways "This Week"/"Last Week"/"Next Week"
+    // label below only ever shows on the row it's actually true for, and
+    // is blank (vanishes) the moment navigation moves a row away from
+    // being any of the three -- computed fresh every render, not cached,
+    // since "this week" changes out from under a long-open tab as real
+    // time passes.
+    const thisWeekMonday = mondayOfKey(data.todayKey);
+    const lastWeekMonday = addDaysKey(thisWeekMonday, -7);
+    const nextWeekMonday = addDaysKey(thisWeekMonday, 7);
+
     const table = document.createElement('table');
     table.className = 'calendar-table';
     const tbody = document.createElement('tbody');
     for (let i = 0; i < data.days.length; i += 7) {
       const week = data.days.slice(i, i + 7);
       const tr = document.createElement('tr');
+      // Thin sideways label column, by request -- one per week-row, not
+      // per page, since only ONE of the two rows can ever actually BE
+      // "This Week" (or "Last"/"Next Week") at a time. The rotated text
+      // lives on an INNER <span>, not the <td> itself -- transform/
+      // writing-mode applied directly to a table cell doesn't interact
+      // cleanly with table layout in real browsers (confirmed: the text
+      // visually escaped onto the border between cells rather than
+      // staying inside its own cell). The <td> stays a plain, normally-
+      // laid-out cell and just centers the inner span (see
+      // .shifts-week-label-cell's flex centering in styles.css).
+      const weekLabelTd = document.createElement('td');
+      weekLabelTd.className = 'shifts-week-label-cell';
+      let weekLabel = '';
+      if (week[0] === thisWeekMonday) weekLabel = 'This Week';
+      else if (week[0] === lastWeekMonday) weekLabel = 'Last Week';
+      else if (week[0] === nextWeekMonday) weekLabel = 'Next Week';
+      if (weekLabel) weekLabelTd.innerHTML = `<span class="shifts-week-label-text">${weekLabel}</span>`;
+      tr.appendChild(weekLabelTd);
       for (const dayKey of week) {
         const isToday = dayKey === data.todayKey;
         const td = document.createElement('td');
