@@ -135,6 +135,67 @@ Get-Service AmbientDashboard, AmbientCaddy
 
 Visit `https://dashboard.ambientit.com.au` from a machine that isn't the server itself. You should land on Microsoft sign-in, and land back on the dashboard signed in afterward -- same flow as the local `localhost:3000` test, just on the real domain.
 
+## Setting up the Autotask -> Strety automation (Windows Task Scheduler)
+
+A separate one-time setup, additional to steps 0-9 above -- automatically syncs Autotask ticket counts into Strety Helpdesk Task Tracker scorecards on a schedule, using its own limited-access Strety connection (see `packages/strety-autotask-sync`'s own README for the full story: why it's a separate connection, what each metric's criteria is, the `409`/`PATCH` upsert behavior, etc.). Do this once the main dashboard is already deployed and running.
+
+### 1. Create the automation's own `.env`
+
+`packages/strety-autotask-sync/.env` is never in a `git pull` (gitignored, like the main `.env`) -- create it fresh on the server:
+
+```
+STRETY_AUTOMATION_CLIENT_ID=...
+STRETY_AUTOMATION_CLIENT_SECRET=...
+```
+
+### 2. Add the production redirect URI in Strety
+
+The automation's Strety OAuth app needs `https://dashboard.ambientit.com.au/auth/strety-automation/callback` added to its allowed redirect URIs -- confirmed Strety validates this exactly, not loosely (a mismatch fails with "The requested redirect uri is malformed or doesn't match client redirect URI"). Already done if this was added when the app was first created (see the package's own README).
+
+### 3. Pull and restart
+
+The new automation routes and the `@dashboard/strety-autotask-sync` package only take effect after a restart, same as any other code change -- but this particular update DOES need `npm install` (unlike most), since it's a brand-new workspace package that has to be linked:
+
+```powershell
+cd C:\apps\autotask-dashboard-git
+git checkout -- packages/shell/nav-layout.json
+git pull
+npm install
+Restart-Service AmbientDashboard
+```
+
+### 4. Connect the automation, once, via a real browser
+
+Visit `https://dashboard.ambientit.com.au/auth/strety-automation/connect`, signed into the dashboard, and log in as the limited-access Strety account (not your own) to approve it. This writes `packages/strety-autotask-sync/.tokens.json` on the server -- separate from local's own copy of that file, and separate from the main dashboard connection's own token file.
+
+### 5. Create the scheduled task
+
+Runs `sync.js` hourly, unattended, forever, logging its output (`sync.js`'s own `[OK]`/`[FAILED]` detail per metric -- Task Scheduler's own history only shows a numeric exit code, not that detail, so redirecting to a real log file is the only way to actually diagnose a failed run later):
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\apps\autotask-dashboard-git\logs | Out-Null
+
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c node packages\strety-autotask-sync\sync.js > logs\strety-autotask-sync.log 2>&1' `
+  -WorkingDirectory "C:\apps\autotask-dashboard-git"
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+  -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "AmbientStretyAutotaskSync" -Action $action -Trigger $trigger -Settings $settings `
+  -Description "Hourly: sync Autotask ticket counts into Strety Helpdesk Task Tracker scorecards"
+```
+
+Runs as SYSTEM by default (no `-User` specified) -- fine here, since it only needs filesystem access to its own package folder and outbound HTTPS, nothing more privileged. The log is overwritten each run, not appended (`>` not `>>`) -- Strety's own check-in `context` notes are already the real audit trail of every value actually written, so this log is only for diagnosing a failed run, not a permanent record; unbounded growth wasn't worth it. Switch to `>>` if you want history instead.
+
+### 6. Verify it actually works before waiting for the first real hourly run
+
+```powershell
+Start-ScheduledTask -TaskName "AmbientStretyAutotaskSync"
+Start-Sleep -Seconds 15
+Get-ScheduledTaskInfo -TaskName "AmbientStretyAutotaskSync"   # LastTaskResult: 0 means success
+Get-Content C:\apps\autotask-dashboard-git\logs\strety-autotask-sync.log
+```
+
 ## Updating later
 
 The project now has a real git remote (`AIT-Helpdesk/Dashboard` on GitHub, cloned at `C:\apps\autotask-dashboard-git` on the server), so updates are just:

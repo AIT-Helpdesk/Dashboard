@@ -1,0 +1,11 @@
+{
+  "name": "@dashboard/strety-autotask-sync",
+  "version": "1.0.0",
+  "private": true,
+  "main": "sync.js",
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/strety-client": "*",
+    "dotenv": "^16.4.5"
+  }
+}

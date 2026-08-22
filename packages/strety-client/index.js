@@ -13,140 +13,6 @@ const path = require('path');
 // /auth/strety/connect + /auth/strety/callback routes for that one-time (or
 // occasional re-auth) step.
 const BASE_URL = 'https://2.strety.com/api/v1';
-const { STRETY_CLIENT_ID: CLIENT_ID, STRETY_CLIENT_SECRET: CLIENT_SECRET } = process.env;
-
-// Tokens are real credentials (bearer access to whichever Strety account
-// connected), so this file is NOT committed -- see .gitignore. Persisted to
-// disk, not just kept in memory, because access tokens only last 2 hours
-// (confirmed against the real API: `expires_in: 7200`) and this server
-// process needs to keep working across restarts without a human re-doing
-// the browser login every time -- the refresh_token is what makes that
-// possible, but only if it survives a restart itself.
-const TOKEN_STORE_PATH = path.join(__dirname, '.tokens.json');
-
-function readTokens() {
-  try {
-    return JSON.parse(fs.readFileSync(TOKEN_STORE_PATH, 'utf8'));
-  } catch {
-    return null; // not connected yet -- see /auth/strety/connect
-  }
-}
-
-function writeTokens(tokens) {
-  fs.writeFileSync(TOKEN_STORE_PATH, JSON.stringify(tokens));
-}
-
-// Called by the /auth/strety/callback route after a real browser
-// authorization -- the ONE place a fresh authorization_code gets exchanged.
-async function exchangeCodeForTokens(code, redirectUri) {
-  const form = new URLSearchParams({
-    grant_type: 'authorization_code',
-    client_id: CLIENT_ID,
-    client_secret: CLIENT_SECRET,
-    code,
-    redirect_uri: redirectUri,
-  });
-  const res = await axios.post(`${BASE_URL}/oauth/token`, form, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  });
-  persistTokenResponse(res.data);
-  // Confirmed against the real API: GET /me returns the real person behind
-  // whichever token is used (name/email/role). Recorded now, at connect
-  // time, not looked up on demand later -- a BROKEN connection can no
-  // longer call the API to ask who it is, so this is the only point where
-  // it's askable at all. Non-fatal if it fails for some reason -- the
-  // connection itself still works either way, it just won't have a
-  // friendly identity to show on a later reauth-required message.
-  try {
-    const me = await get('/me', {});
-    persistTokenResponse(res.data, `${me.data.attributes.name} (${me.data.attributes.email})`);
-  } catch {
-    // See above -- not fatal.
-  }
-  return res.data;
-}
-
-function persistTokenResponse(data, connectedAs) {
-  // connectedAs is only ever passed at connect time (see above) -- a
-  // refresh (see refreshTokens() below) calls this WITHOUT it, and needs to
-  // preserve whatever identity was already recorded rather than wiping it
-  // out, since the identity doesn't change just because the access token
-  // itself was renewed.
-  const existing = readTokens();
-  writeTokens({
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    // Refreshed 5 minutes before actual expiry, same "don't hand out a
-    // token that dies mid-flight" reasoning as Ingram's own token cache.
-    expiresAt: Date.now() + (data.expires_in - 300) * 1000,
-    connectedAs: connectedAs || existing?.connectedAs || null,
-  });
-}
-
-let refreshInFlight = null;
-
-async function refreshTokens(refreshToken) {
-  const form = new URLSearchParams({
-    grant_type: 'refresh_token',
-    client_id: CLIENT_ID,
-    client_secret: CLIENT_SECRET,
-    refresh_token: refreshToken,
-  });
-  try {
-    const res = await axios.post(`${BASE_URL}/oauth/token`, form, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
-    persistTokenResponse(res.data);
-    return res.data.access_token;
-  } catch (err) {
-    // Confirmed against real data this happens periodically (a stored
-    // refresh token going stale/revoked, `400 invalid_grant`) -- tagged
-    // distinctly from strety_not_connected (which means "never connected at
-    // all") so a caller can tell "this WAS working and now needs a human to
-    // redo the browser login" apart from "nobody has connected yet" and
-    // show the right message for each, rather than lumping both into one
-    // generic error.
-    err.strety_reauth_required = true;
-    throw err;
-  }
-}
-
-// Returns a currently-valid access token, refreshing (and re-persisting)
-// first if the stored one is expired or close to it. Throws a clearly-
-// labeled error if nothing has ever been connected yet, so a caller (a
-// page's server.js) can show a real "connect Strety first" message instead
-// of a confusing raw 401 from Strety itself.
-async function getAccessToken() {
-  const tokens = readTokens();
-  if (!tokens) {
-    const err = new Error('Strety is not connected yet -- visit /auth/strety/connect while signed in to the dashboard.');
-    err.strety_not_connected = true;
-    throw err;
-  }
-  if (Date.now() < tokens.expiresAt) return tokens.accessToken;
-  // Concurrent requests landing while the token is stale share ONE refresh
-  // rather than each firing their own -- same shape as Ingram's token cache.
-  if (!refreshInFlight) {
-    refreshInFlight = refreshTokens(tokens.refreshToken).finally(() => {
-      refreshInFlight = null;
-    });
-  }
-  return refreshInFlight;
-}
-
-function isConnected() {
-  return readTokens() !== null;
-}
-
-// The recorded "name (email)" for whichever Strety person this connection
-// belongs to (see exchangeCodeForTokens()), or null if never connected or
-// the identity lookup never succeeded. Deliberately just a file read, no
-// API call -- this needs to work even when the connection itself is
-// broken, which is exactly the situation a caller wants this for (naming
-// which account needs reconnecting on a reauth-required message).
-function connectedIdentity() {
-  return readTokens()?.connectedAs || null;
-}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -158,19 +24,12 @@ function sleep(ms) {
 // page load still fires a dozen-plus calls back-to-back in well under a
 // second, and that BURST alone is enough to make Strety return a
 // successful-looking 200 with an empty/short result (not even a 429) --
-// removing simultaneity wasn't enough on its own. This throttle enforces a
-// real minimum gap between the START of any two outgoing requests through
-// this shared client, regardless of which page/function is calling it, so
-// a page's own sequential loop naturally spreads out over real time instead
-// of firing as fast as Node/the network allow.
+// removing simultaneity wasn't enough on its own. Every client created by
+// createClient() gets its OWN throttle state (deliberately -- two separate
+// Strety connections, e.g. this dashboard's own and the Autotask -> Strety
+// automation's limited-access one, are two separate accounts and shouldn't
+// have to share a rate-limit budget that doesn't actually apply across them).
 const MIN_REQUEST_INTERVAL_MS = 300;
-let earliestNextRequestAt = 0;
-async function throttle() {
-  const now = Date.now();
-  const waitMs = earliestNextRequestAt - now;
-  earliestNextRequestAt = Math.max(now, earliestNextRequestAt) + MIN_REQUEST_INTERVAL_MS;
-  if (waitMs > 0) await sleep(waitMs);
-}
 
 // Confirmed against the real API: Strety enforces a real rate limit (a
 // 429 "Too Many Requests" -- {"errors":[{"status":"429",...}]} -- under
@@ -183,67 +42,268 @@ async function throttle() {
 // status is NOT retried (retrying a 401/404/etc. would just waste time
 // before failing the same way anyway).
 const MAX_RETRIES = 3;
-async function get(path, params) {
-  const accessToken = await getAccessToken();
-  for (let attempt = 0; ; attempt++) {
-    await throttle();
+
+// Creates a fully independent Strety client -- its own OAuth credentials,
+// its own token file on disk, its own throttle/refresh state, entirely
+// isolated from any other client created this way. This dashboard's own
+// default connection (the plain `get`/`post`/etc. this module exports
+// directly, below) is just one instance of this; the Autotask -> Strety
+// automation (packages/strety-autotask-sync) creates a SEPARATE instance
+// with its own limited-access credentials and its own token file, so the
+// two connections can never share, clobber, or leak into each other.
+function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/auth/strety/connect' }) {
+  // Tokens are real credentials (bearer access to whichever Strety account
+  // connected), so this file is NOT committed -- see .gitignore. Persisted
+  // to disk, not just kept in memory, because access tokens only last 2
+  // hours (confirmed against the real API: `expires_in: 7200`) and this
+  // server process needs to keep working across restarts without a human
+  // re-doing the browser login every time -- the refresh_token is what
+  // makes that possible, but only if it survives a restart itself.
+  function readTokens() {
     try {
-      const res = await axios.get(`${BASE_URL}${path}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params,
-      });
-      return res.data;
-    } catch (err) {
-      if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
-      const retryAfterHeader = err.response.headers?.['retry-after'];
-      const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
-      await sleep(waitMs);
+      return JSON.parse(fs.readFileSync(tokenStorePath, 'utf8'));
+    } catch {
+      return null; // not connected yet -- see connectPath above
     }
   }
-}
 
-// Writes -- same throttle/retry treatment as get(), since a write can hit
-// the same rate limit a read can. Confirmed against the real API: a plain
-// `application/json` body gets a 415 -- Strety's write endpoints are real
-// JSON:API and require the actual `application/vnd.api+json` media type
-// (unlike the OAuth token endpoint, which needs form-encoding -- a
-// different, unrelated quirk of that one specific endpoint).
-async function post(path, body) {
-  const accessToken = await getAccessToken();
-  for (let attempt = 0; ; attempt++) {
-    await throttle();
+  function writeTokens(tokens) {
+    fs.writeFileSync(tokenStorePath, JSON.stringify(tokens));
+  }
+
+  // Called by this connection's own /callback route after a real browser
+  // authorization -- the ONE place a fresh authorization_code gets exchanged.
+  async function exchangeCodeForTokens(code, redirectUri) {
+    const form = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    });
+    const res = await axios.post(`${BASE_URL}/oauth/token`, form, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    persistTokenResponse(res.data);
+    // Confirmed against the real API: GET /me returns the real person
+    // behind whichever token is used (name/email/role). Recorded now, at
+    // connect time, not looked up on demand later -- a BROKEN connection
+    // can no longer call the API to ask who it is, so this is the only
+    // point where it's askable at all. Non-fatal if it fails for some
+    // reason -- the connection itself still works either way, it just
+    // won't have a friendly identity to show on a later reauth-required
+    // message.
     try {
-      const res = await axios.post(`${BASE_URL}${path}`, body, {
-        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/vnd.api+json' },
+      const me = await get('/me', {});
+      persistTokenResponse(res.data, `${me.data.attributes.name} (${me.data.attributes.email})`);
+    } catch {
+      // See above -- not fatal.
+    }
+    return res.data;
+  }
+
+  function persistTokenResponse(data, connectedAs) {
+    // connectedAs is only ever passed at connect time (see above) -- a
+    // refresh (see refreshTokens() below) calls this WITHOUT it, and needs
+    // to preserve whatever identity was already recorded rather than
+    // wiping it out, since the identity doesn't change just because the
+    // access token itself was renewed.
+    const existing = readTokens();
+    writeTokens({
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      // Refreshed 5 minutes before actual expiry, same "don't hand out a
+      // token that dies mid-flight" reasoning as Ingram's own token cache.
+      expiresAt: Date.now() + (data.expires_in - 300) * 1000,
+      connectedAs: connectedAs || existing?.connectedAs || null,
+    });
+  }
+
+  let refreshInFlight = null;
+
+  async function refreshTokens(refreshToken) {
+    const form = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+    });
+    try {
+      const res = await axios.post(`${BASE_URL}/oauth/token`, form, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       });
-      return res.data;
+      persistTokenResponse(res.data);
+      return res.data.access_token;
     } catch (err) {
-      if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
-      const retryAfterHeader = err.response.headers?.['retry-after'];
-      const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
-      await sleep(waitMs);
+      // Confirmed against real data this happens periodically (a stored
+      // refresh token going stale/revoked, `400 invalid_grant`) -- tagged
+      // distinctly from strety_not_connected (which means "never connected
+      // at all") so a caller can tell "this WAS working and now needs a
+      // human to redo the browser login" apart from "nobody has connected
+      // yet" and show the right message for each, rather than lumping both
+      // into one generic error.
+      err.strety_reauth_required = true;
+      throw err;
     }
   }
-}
 
-// Walks every page of a list endpoint via `page[size]`/`page[number]` --
-// confirmed against the real API that `page[size]` is capped at 20
-// ("page[size] must be between 1 and 20", a much lower ceiling than Ingram's
-// 500 or IT Glue's 1000), and that the `sort` query param is NOT reliable
-// when combined with `filter[...]` params (confirmed against real data: a
-// `sort=due_date` request came back in no discernible order at all) -- so
-// this deliberately does NOT expose a `sort` passthrough; callers sort the
-// fully-collected results themselves in JS instead of trusting the API to.
-async function fetchAllPages(path, params = {}) {
-  const all = [];
-  let page = 1;
-  for (;;) {
-    const res = await get(path, { ...params, 'page[size]': 20, 'page[number]': page });
-    all.push(...res.data);
-    if (all.length >= res.meta.total_count || res.data.length === 0) break;
-    page++;
+  // Returns a currently-valid access token, refreshing (and re-persisting)
+  // first if the stored one is expired or close to it. Throws a clearly-
+  // labeled error if nothing has ever been connected yet, so a caller (a
+  // page's server.js) can show a real "connect Strety first" message
+  // instead of a confusing raw 401 from Strety itself.
+  async function getAccessToken() {
+    const tokens = readTokens();
+    if (!tokens) {
+      const err = new Error(`Strety is not connected yet -- visit ${connectPath} while signed in to the dashboard.`);
+      err.strety_not_connected = true;
+      throw err;
+    }
+    if (Date.now() < tokens.expiresAt) return tokens.accessToken;
+    // Concurrent requests landing while the token is stale share ONE
+    // refresh rather than each firing their own -- same shape as Ingram's
+    // own token cache.
+    if (!refreshInFlight) {
+      refreshInFlight = refreshTokens(tokens.refreshToken).finally(() => {
+        refreshInFlight = null;
+      });
+    }
+    return refreshInFlight;
   }
-  return all;
+
+  function isConnected() {
+    return readTokens() !== null;
+  }
+
+  // The recorded "name (email)" for whichever Strety person this
+  // connection belongs to (see exchangeCodeForTokens()), or null if never
+  // connected or the identity lookup never succeeded. Deliberately just a
+  // file read, no API call -- this needs to work even when the connection
+  // itself is broken, which is exactly the situation a caller wants this
+  // for (naming which account needs reconnecting on a reauth-required
+  // message).
+  function connectedIdentity() {
+    return readTokens()?.connectedAs || null;
+  }
+
+  let earliestNextRequestAt = 0;
+  async function throttle() {
+    const now = Date.now();
+    const waitMs = earliestNextRequestAt - now;
+    earliestNextRequestAt = Math.max(now, earliestNextRequestAt) + MIN_REQUEST_INTERVAL_MS;
+    if (waitMs > 0) await sleep(waitMs);
+  }
+
+  async function get(path, params) {
+    const accessToken = await getAccessToken();
+    for (let attempt = 0; ; attempt++) {
+      await throttle();
+      try {
+        const res = await axios.get(`${BASE_URL}${path}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          params,
+        });
+        return res.data;
+      } catch (err) {
+        if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
+        const retryAfterHeader = err.response.headers?.['retry-after'];
+        const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
+        await sleep(waitMs);
+      }
+    }
+  }
+
+  // Writes -- same throttle/retry treatment as get(), since a write can hit
+  // the same rate limit a read can. Confirmed against the real API: a
+  // plain `application/json` body gets a 415 -- Strety's write endpoints
+  // are real JSON:API and require the actual `application/vnd.api+json`
+  // media type (unlike the OAuth token endpoint, which needs
+  // form-encoding -- a different, unrelated quirk of that one specific
+  // endpoint).
+  async function post(path, body) {
+    const accessToken = await getAccessToken();
+    for (let attempt = 0; ; attempt++) {
+      await throttle();
+      try {
+        const res = await axios.post(`${BASE_URL}${path}`, body, {
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/vnd.api+json' },
+        });
+        return res.data;
+      } catch (err) {
+        if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
+        const retryAfterHeader = err.response.headers?.['retry-after'];
+        const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
+        await sleep(waitMs);
+      }
+    }
+  }
+
+  // Updates -- confirmed necessary against the real API: Strety enforces
+  // ONE check-in per metric per period (a second POST for a period that
+  // already has one gets a real `409 CONFLICT`, "Fetch and update it if
+  // needed" -- helpfully including the existing check-in's id in the error
+  // body). Same throttle/retry/Content-Type treatment as post().
+  //
+  // `If-Match: *` -- confirmed necessary too: PATCH alone gets a real `428
+  // PRECONDITION_REQUIRED` ("requires an If-Match header for concurrency
+  // control... use If-Match: * to skip the check"). Always skipping the
+  // check (not fetching a real ETag first) is a deliberate choice -- this
+  // dashboard is the only writer to any check-in it manages, so there's no
+  // real concurrent-edit case worth the extra fetch-then-conditional-update
+  // complexity for.
+  async function patch(path, body) {
+    const accessToken = await getAccessToken();
+    for (let attempt = 0; ; attempt++) {
+      await throttle();
+      try {
+        const res = await axios.patch(`${BASE_URL}${path}`, body, {
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/vnd.api+json', 'If-Match': '*' },
+        });
+        return res.data;
+      } catch (err) {
+        if (err.response?.status !== 429 || attempt >= MAX_RETRIES) throw err;
+        const retryAfterHeader = err.response.headers?.['retry-after'];
+        const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
+        await sleep(waitMs);
+      }
+    }
+  }
+
+  // Walks every page of a list endpoint via `page[size]`/`page[number]` --
+  // confirmed against the real API that `page[size]` is capped at 20
+  // ("page[size] must be between 1 and 20", a much lower ceiling than
+  // Ingram's 500 or IT Glue's 1000), and that the `sort` query param is NOT
+  // reliable when combined with `filter[...]` params (confirmed against
+  // real data: a `sort=due_date` request came back in no discernible order
+  // at all) -- so this deliberately does NOT expose a `sort` passthrough;
+  // callers sort the fully-collected results themselves in JS instead of
+  // trusting the API to.
+  async function fetchAllPages(path, params = {}) {
+    const all = [];
+    let page = 1;
+    for (;;) {
+      const res = await get(path, { ...params, 'page[size]': 20, 'page[number]': page });
+      all.push(...res.data);
+      if (all.length >= res.meta.total_count || res.data.length === 0) break;
+      page++;
+    }
+    return all;
+  }
+
+  return { get, post, patch, fetchAllPages, exchangeCodeForTokens, isConnected, connectedIdentity };
 }
 
-module.exports = { get, post, fetchAllPages, exchangeCodeForTokens, isConnected, connectedIdentity, BASE_URL };
+// This dashboard's own default, pre-existing connection -- unchanged
+// behavior for every existing caller (My Strety Tasks, What's On,
+// packages/shell/server.js's /auth/strety/* routes). Backward compatible:
+// `require('@dashboard/strety-client')` still gives get/post/etc. directly,
+// spread onto module.exports below, exactly as before this file supported
+// more than one connection at all.
+const defaultClient = createClient({
+  clientId: process.env.STRETY_CLIENT_ID,
+  clientSecret: process.env.STRETY_CLIENT_SECRET,
+  tokenStorePath: path.join(__dirname, '.tokens.json'),
+  connectPath: '/auth/strety/connect',
+});
+
+module.exports = { ...defaultClient, createClient, BASE_URL };

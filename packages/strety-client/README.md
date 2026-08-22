@@ -2,6 +2,12 @@
 
 Shared client for **Strety** (an EOS -- Entrepreneurial Operating System -- operating platform: Rocks, Scorecards, To-Dos, the Issues List/IDS), a wholly separate system from Autotask. Mirrors the shape of `@dashboard/ingram-client`/`@dashboard/itglue-client` (a thin `get()` wrapper other pages import), but with a real OAuth2 flow underneath instead of a static API key.
 
+## Multiple independent connections -- `createClient()`
+
+This module's default export (`get`/`post`/`fetchAllPages`/`exchangeCodeForTokens`/`isConnected`/`connectedIdentity`) is this dashboard's own single default connection -- unchanged behavior for every existing caller (My Strety Tasks, What's On, `packages/shell/server.js`'s `/auth/strety/*` routes). Under the hood it's just one call to `createClient({ clientId, clientSecret, tokenStorePath, connectPath })`, which anyone can call again to get a **fully independent** second (or third...) connection -- its own credentials, its own token file on disk, its own throttle/refresh state, unable to share, clobber, or leak into any other client created this way.
+
+This exists specifically for `packages/strety-autotask-sync` (an automated Autotask -> Strety write job, by request using its own limited-access Strety account rather than sharing the dashboard's own broader access) -- see that package's README for a real second-connection example, including where its own `/connect`/`/callback` routes have to live (on this dashboard's own already-running server, since the automation's own code has no server of its own to catch an OAuth redirect with).
+
 ## Auth is real OAuth2, not a static key
 
 Confirmed against the real API: Strety does **not** support the `client_credentials` grant (`POST /oauth/token` with that grant type returns `{"error":"unsupported_grant_type",...}`). Only `authorization_code` works -- a human has to approve access once via a real browser login before this package has any token to use at all. There's no simpler personal-access-token option either (checked).
@@ -30,13 +36,14 @@ Confirmed against the real API: `GET /me` returns the real person behind whateve
 
 `/auth/strety/connect` requests `scope=read write` -- confirmed against the real API this is necessary: a connection that only had `read` (the scope every connection before this had, since nothing had ever written before) got a real `403 INVALID_SCOPE` ("Missing or invalid scopes... re-authorize the app with the required scopes") on a genuine write attempt. **Refreshing an existing token does NOT pick up a newly-added scope** -- a token only carries whatever scope it was originally issued with, so upgrading an existing connection needs a fresh browser re-authorization via `/auth/strety/connect`, not just waiting for the next automatic refresh.
 
-## Writing -- `post()`, real JSON:API, confirmed against a real write
+## Writing -- `post()`/`patch()`, real JSON:API, confirmed against real writes
 
-`post(path, body)` mirrors `get()`'s throttle/retry handling (same shared rate-limit defenses -- see below -- apply to writes too). Confirmed against the real API by actually creating a real check-in (see What's On's README, "Writing a check-in"):
+`post(path, body)` and `patch(path, body)` mirror `get()`'s throttle/retry handling (same shared rate-limit defenses -- see below -- apply to writes too). Confirmed against the real API by actually creating and updating real check-ins (see `packages/strety-autotask-sync`):
 
-- Needs the real JSON:API Content-Type, `application/vnd.api+json` -- confirmed a plain `application/json` body gets a `415 UNSUPPORTED_MEDIA_TYPE`. `post()` sets this by default; callers don't need to.
-- Body shape follows the JSON:API write convention: `{ data: { type: '<resource-type>', attributes: { ... } } }` -- confirmed against a real successful `POST /metrics/:id/check_ins` (`type: 'metric_check_in'`).
-- As of writing, nothing in this codebase calls `post()` except a one-time manual script (see What's On's README) -- there's no ongoing/automated write anywhere yet.
+- Needs the real JSON:API Content-Type, `application/vnd.api+json` -- confirmed a plain `application/json` body gets a `415 UNSUPPORTED_MEDIA_TYPE`. Both set this by default; callers don't need to.
+- Body shape follows the JSON:API write convention: `{ data: { type: '<resource-type>', attributes: { ... } } }` -- confirmed against real successful `POST`/`PATCH /metrics/:id/check_ins[/:id]` calls (`type: 'metric_check_in'`).
+- **`patch()` always sends `If-Match: *`** -- confirmed necessary against the real API: a PATCH without it gets a real `428 PRECONDITION_REQUIRED` ("requires an If-Match header for concurrency control... use If-Match: * to skip the check"). Always skipping the check (not fetching a real ETag first) is deliberate -- this dashboard is the only writer to any check-in it manages, so there's no real concurrent-edit case worth the extra fetch-then-conditional-update complexity for.
+- **Strety enforces ONE check-in per metric per period** -- confirmed against the real API: a second `POST` for a period that already has a check-in (e.g. a second automated run the same day) gets a real `409 CONFLICT`, "Fetch and update it if needed" -- and helpfully includes the existing check-in's id directly in the error body (`errors[0].meta.existing_check_in.id`), so a caller can catch the 409 and `PATCH` that id instead of needing a separate lookup. See `packages/strety-autotask-sync/sync.js`'s `createOrUpdateCheckIn()` for the concrete pattern -- this isn't optional upsert-for-convenience, without it every run after the first for a given period would simply fail.
 
 ## Rate limiting -- confirmed real, retried with backoff
 

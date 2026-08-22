@@ -8,3 +8,9 @@ server.pid
 # account connected, persisted to disk so the connection survives a
 # restart (see packages/strety-client/index.js). Never committed.
 packages/strety-client/.tokens.json
+
+# Same reasoning, for the separate limited-access Strety connection the
+# Autotask -> Strety automation uses (see packages/strety-autotask-sync) --
+# deliberately a DIFFERENT token file from the main connection above, never
+# committed either.
+packages/strety-autotask-sync/.tokens.json

@@ -5,6 +5,14 @@ const path = require('path');
 const express = require('express');
 const { getClient } = require('@dashboard/autotask-client');
 const { exchangeCodeForTokens, BASE_URL: STRETY_BASE_URL } = require('@dashboard/strety-client');
+// A wholly separate Strety connection, deliberately -- its own limited-
+// access account, own OAuth client id/secret (packages/strety-autotask-
+// sync/.env, not the repo-root .env every other package shares), own token
+// file. See that package's README for why. Requiring this module has the
+// side effect of loading ITS .env into process.env (same pattern as this
+// file's own dotenv.config() call above), which is what makes
+// STRETY_AUTOMATION_CLIENT_ID below resolve correctly.
+const stretyAutomationClient = require('@dashboard/strety-autotask-sync/client.js');
 const { registerAuthRoutes, requireAuth } = require('./auth');
 
 const PORT = process.env.PORT || 3000;
@@ -124,6 +132,43 @@ app.get('/auth/strety/callback', async (req, res) => {
   } catch (err) {
     console.error('Strety OAuth callback failed:', err);
     res.status(500).send('Strety connection failed. Check server logs.');
+  }
+});
+
+// The Autotask -> Strety automation's OWN connect/callback pair -- same
+// shape as /auth/strety/connect above, just pointed at the automation's
+// separate client id/token file (see stretyAutomationClient, above). Lives
+// here (on this already-running, already-HTTPS-terminated server) rather
+// than in packages/strety-autotask-sync itself, because the automation's
+// own code is a periodic standalone script with no server of its own to
+// catch an OAuth redirect with -- this one-time browser round-trip needs a
+// real running endpoint, and this server already is one.
+function stretyAutomationRedirectUriFor(req) {
+  return `${req.protocol}://${req.get('host')}/auth/strety-automation/callback`;
+}
+
+app.get('/auth/strety-automation/connect', (req, res) => {
+  if (!process.env.STRETY_AUTOMATION_CLIENT_ID) {
+    return res.status(500).send('STRETY_AUTOMATION_CLIENT_ID is not configured in packages/strety-autotask-sync/.env.');
+  }
+  const url = new URL(`${STRETY_BASE_URL}/oauth/authorize`);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('client_id', process.env.STRETY_AUTOMATION_CLIENT_ID);
+  url.searchParams.set('redirect_uri', stretyAutomationRedirectUriFor(req));
+  url.searchParams.set('scope', 'read write');
+  res.redirect(url.toString());
+});
+
+app.get('/auth/strety-automation/callback', async (req, res) => {
+  if (req.query.error) {
+    return res.status(403).send(`Strety authorization failed: ${req.query.error_description || req.query.error}`);
+  }
+  try {
+    await stretyAutomationClient.exchangeCodeForTokens(req.query.code, stretyAutomationRedirectUriFor(req));
+    res.send('Strety (Autotask sync automation account) connected successfully -- you can close this tab.');
+  } catch (err) {
+    console.error('Strety automation OAuth callback failed:', err);
+    res.status(500).send('Strety automation connection failed. Check server logs.');
   }
 });
 
