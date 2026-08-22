@@ -222,12 +222,15 @@ export function mount(container) {
   // "Today"/"Tomorrow"/"Overdue" tag shared by all three row renderers --
   // green for today (most immediate), amber for tomorrow, same status-color
   // convention (not a new one) used elsewhere on this dashboard. Anything
-  // that's neither today nor tomorrow only happens for Strety tasks (service
-  // calls/subscriptions rows are always exactly one or the other by
-  // construction) -- that's the overdue case, shown red with its actual due
-  // date since "Overdue" alone doesn't say how overdue. `href`, when given,
+  // that's neither today nor tomorrow (Strety's own overdue to-dos, and
+  // Service Calls' past-scheduled-and-still-incomplete rows) is the overdue
+  // case -- shown red with just its actual date (no "Overdue" text label,
+  // by request -- the red already says that on its own). `href`, when given,
   // renders the tag itself as a link (service call -> its ticket) instead of
-  // a plain span, opened in a new tab like other cross-links on this page.
+  // a plain span -- opened as a real popup window, same explicit
+  // window.open(..., 'width=1200,height=900') convention every other ticket
+  // link on this dashboard uses (see e.g. service-calls/client.js), not just
+  // target="_blank" (which only opens a new tab).
   function ttDayTag(dateKey, today, tomorrow, href) {
     let cls;
     let label;
@@ -239,10 +242,12 @@ export function mount(container) {
       label = 'Tomorrow';
     } else {
       cls = 'tt-tag--overdue';
-      label = `Overdue -- ${formatShortDate(dateKey)}`;
+      // By request: just the date, no "Overdue" prefix -- the red
+      // .tt-tag--overdue color already says that on its own.
+      label = formatShortDate(dateKey);
     }
     if (href) {
-      return `<a class="tt-tag ${cls}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+      return `<a class="tt-tag ${cls}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
     }
     return `<span class="tt-tag ${cls}">${label}</span>`;
   }
