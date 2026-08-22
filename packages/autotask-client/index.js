@@ -34,6 +34,24 @@ function matchesWildcard(value, term) {
   return v.includes(needle);
 }
 
+// "Monitoring Alert" tickets (issueType 14) are excluded dashboard-wide, by
+// request, from every ticket-listing page. Confirmed against real data this
+// CANNOT be done as a `{ op: 'noteq', field: 'issueType', value: 14 }`
+// Autotask query filter, even though five separate pages were doing exactly
+// that: Autotask's REST API applies standard SQL three-valued-logic NULL
+// semantics to `noteq` -- `NULL != 14` evaluates to unknown, not true, so a
+// ticket whose issueType has never been set (very common right after
+// creation, before triage -- confirmed against real data: 6 of 10 tickets
+// created on one real day had a null issueType) gets silently dropped by
+// the query itself, not just hidden by mistake in application code. A real
+// production undercount (60% of that one real day's tickets) traced back to
+// exactly this. Fixed by NOT filtering issueType in the Autotask query at
+// all -- fetch normally, then exclude client-side in plain JS, where
+// `null !== 14` behaves the way anyone reading the code would expect.
+function excludeMonitoringAlerts(tickets) {
+  return tickets.filter((t) => t.issueType !== 14);
+}
+
 let clientPromise = null;
 function getClient() {
   if (!clientPromise) {
@@ -417,6 +435,7 @@ async function getInvoiceUrl(invoiceId) {
 
 module.exports = {
   getClient,
+  excludeMonitoringAlerts,
   mapWithConcurrency,
   resolveResourceName,
   resolveCompanyName,

@@ -12,6 +12,7 @@ const {
   monthKeyOf,
   monthLabel,
   monthKeysWindow,
+  excludeMonitoringAlerts,
 } = require('@dashboard/autotask-client');
 
 // Statuses treated as "done" (closed for Currently Open / Completed purposes).
@@ -69,16 +70,18 @@ router.get('/', async (req, res) => {
     // ticket opened long ago can still be sitting open today (the snapshot
     // below), and (2) it can have fresh TimeEntries logged against it this
     // month even though the ticket itself is old, so the full ticket-ID set is
-    // what scopes the time-entry lookup. Excludes "Monitoring Alert" (issueType
-    // 14), same convention as Completed Tickets / Tickets Created.
-    const [allTickets, statusLabels, priorityLabels] = await Promise.all([
-      listAll(client.tickets, [
-        { op: 'eq', field: 'companyID', value: company.id },
-        { op: 'noteq', field: 'issueType', value: 14 },
-      ]),
+    // what scopes the time-entry lookup. Excludes "Monitoring Alert"
+    // (issueType 14), same convention as Completed Tickets / Tickets
+    // Created -- client-side via excludeMonitoringAlerts(), not an Autotask
+    // query filter (see that function's own comment for why: a `noteq`
+    // filter silently drops every not-yet-triaged ticket too, confirmed a
+    // real production bug).
+    const [rawAllTickets, statusLabels, priorityLabels] = await Promise.all([
+      listAll(client.tickets, [{ op: 'eq', field: 'companyID', value: company.id }]),
       getPicklistLabels(client.tickets, 'status'),
       getPicklistLabels(client.tickets, 'priority'),
     ]);
+    const allTickets = excludeMonitoringAlerts(rawAllTickets);
     const doneStatusIds = computeDoneStatusIds(statusLabels);
 
     // Created / Completed per month. "Completed" date: status 5 ("Complete")

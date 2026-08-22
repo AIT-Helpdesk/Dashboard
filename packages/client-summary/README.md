@@ -27,7 +27,7 @@ A condensed version of Client Financials' 12-month invoice breakdown: the same c
 
 ## Recent ticket activity
 
-"Open" is the same definition Completed Tickets uses for "done", inverted: any ticket whose status is **not** 5 (Complete) or 20 (Billing - Contract) counts as open here, rather than a separately-invented list. `issueType = 14` (Monitoring Alert) is excluded, same as every other ticket-listing page on this dashboard. The open-ticket count reflects every open ticket for the company; the table below it shows only the 8 most recently active (`lastActivityDate` descending), with a note when there are more than that.
+"Open" is the same definition Completed Tickets uses for "done", inverted: any ticket whose status is **not** 5 (Complete) or 20 (Billing - Contract) counts as open here, rather than a separately-invented list. `issueType = 14` (Monitoring Alert) is excluded, same as every other ticket-listing page on this dashboard -- client-side via `excludeMonitoringAlerts()` (`@dashboard/autotask-client`), not an Autotask query filter, since a `noteq` query filter was confirmed to silently drop every not-yet-triaged ticket too (Autotask's REST API treats `NULL != 14` as unknown, not true -- see Tickets Created's README for the real-data story). The open-ticket count reflects every open ticket for the company; the table below it shows only the 8 most recently active (`lastActivityDate` descending), with a note when there are more than that.
 
 ## Security Alerts (1 month)
 

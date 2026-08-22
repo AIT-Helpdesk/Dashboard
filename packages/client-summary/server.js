@@ -17,6 +17,7 @@ const {
   monthKeysWindow,
   todayAestKey,
   aestToUtcIso,
+  excludeMonitoringAlerts,
 } = require('@dashboard/autotask-client');
 const { get: saasAlertsGet } = require('@dashboard/saasalerts-client');
 
@@ -174,19 +175,22 @@ async function buildActiveContracts(client, company) {
 // status 5 (Complete) and 20 (Billing - Contract) -- inverted: anything
 // NOT one of those two counts as open, rather than inventing a separate
 // list for this page. issueType 14 (Monitoring Alert) is excluded
-// dashboard-wide, same as every other ticket-listing page.
+// dashboard-wide, same as every other ticket-listing page -- client-side via
+// excludeMonitoringAlerts(), not an Autotask query filter (see that
+// function's own comment for why: a `noteq` filter silently drops every
+// not-yet-triaged ticket too, confirmed a real production bug).
 const CLOSED_STATUSES = [5, 20];
 const RECENT_TICKET_LIMIT = 8;
 
 async function buildRecentTickets(client, company) {
-  const [openTickets, statusLabels] = await Promise.all([
+  const [rawOpenTickets, statusLabels] = await Promise.all([
     listAll(client.tickets, [
       { op: 'eq', field: 'companyID', value: company.id },
       { op: 'notIn', field: 'status', value: CLOSED_STATUSES },
-      { op: 'noteq', field: 'issueType', value: 14 },
     ]),
     getPicklistLabels(client.tickets, 'status'),
   ]);
+  const openTickets = excludeMonitoringAlerts(rawOpenTickets);
 
   const recent = [...openTickets]
     .sort((a, b) => new Date(b.lastActivityDate || 0) - new Date(a.lastActivityDate || 0))
