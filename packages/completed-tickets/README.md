@@ -16,7 +16,7 @@ Dashboard page: pick a date, see every ticket completed that day across all clie
   the two statuses need two separate API queries, merged in `server.js`.
 - Status 20 tickets typically have no `completedByResourceID` (or `assignedResourceID`)
   in Autotask's data, so they land in the "Unassigned" group.
-- Excludes tickets with issue type 14 ("Monitoring Alert").
+- Excludes tickets with issue type 14 ("Monitoring Alert") -- client-side via `excludeMonitoringAlerts()` (`@dashboard/autotask-client`), NOT an Autotask query filter. A `noteq` query filter was confirmed (via a real user report on Tickets Created) to silently drop every not-yet-triaged ticket too, since Autotask's REST API treats `NULL != 14` as unknown rather than true -- see that function's own comment, and Tickets Created's README, for the full story (a real 6-of-7 undercount on one real day).
 - Date filtering compares against **AEST** calendar-day boundaries for the selected date (`aestDayBoundsIso()`, `@dashboard/autotask-client`) -- not UTC, and not the server's own local clock.
 - Resource and company names are resolved via `@dashboard/autotask-client` and cached in memory for the life of the server process.
 

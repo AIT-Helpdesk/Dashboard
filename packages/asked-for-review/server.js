@@ -12,6 +12,7 @@ const {
   mondayOf,
   weekDatesFrom,
   isoDateAest,
+  excludeMonitoringAlerts,
 } = require('@dashboard/autotask-client');
 
 // Same "completed" definition as Completed Tickets: status 5 (Complete) by
@@ -19,22 +20,24 @@ const {
 // since that status never gets a `completedDate` set. Both queries scoped to
 // the whole Monday-Sunday week in one shot rather than per-day, since a
 // single ticket only needs classifying by day once the results are back.
+// issueType 14 (Monitoring Alert) excluded client-side via
+// excludeMonitoringAlerts(), not an Autotask query filter -- see that
+// function's own comment for why (confirmed a real production bug: a
+// `noteq` query filter silently drops every not-yet-triaged ticket too).
 async function fetchTicketsCompletedInWeek(client, weekStartISO, weekEndISO) {
   const completed = await listAll(client.tickets, [
     { op: 'eq', field: 'status', value: 5 },
     { op: 'gte', field: 'completedDate', value: weekStartISO },
     { op: 'lt', field: 'completedDate', value: weekEndISO },
-    { op: 'noteq', field: 'issueType', value: 14 },
   ]);
 
   const billing = await listAll(client.tickets, [
     { op: 'eq', field: 'status', value: 20 },
     { op: 'gte', field: 'resolvedDateTime', value: weekStartISO },
     { op: 'lt', field: 'resolvedDateTime', value: weekEndISO },
-    { op: 'noteq', field: 'issueType', value: 14 },
   ]);
 
-  return [...completed, ...billing];
+  return excludeMonitoringAlerts([...completed, ...billing]);
 }
 
 const router = express.Router();

@@ -7,7 +7,7 @@ Dashboard page: type a client name, see ticket volume and logged hours for the l
 
 ## Ticket scope
 
-Every ticket ever raised for the resolved company is fetched up front (not just ones in the 12-month window), excluding "Monitoring Alert" (`issueType = 14`, same convention as Completed Tickets / Tickets Created). The full set is needed for two reasons beyond the "Created" count: a ticket opened well before the window can still be open today (the snapshot section), and it can have fresh `TimeEntries` logged against it this month even though the ticket itself is old.
+Every ticket ever raised for the resolved company is fetched up front (not just ones in the 12-month window), excluding "Monitoring Alert" (`issueType = 14`, same convention as Completed Tickets / Tickets Created) -- client-side via `excludeMonitoringAlerts()` (`@dashboard/autotask-client`), not an Autotask query filter (a `noteq` filter was confirmed to silently drop every not-yet-triaged ticket too -- see Tickets Created's README for the real-data story). The full set is needed for two reasons beyond the "Created" count: a ticket opened well before the window can still be open today (the snapshot section), and it can have fresh `TimeEntries` logged against it this month even though the ticket itself is old.
 
 ## What counts as "done"
 

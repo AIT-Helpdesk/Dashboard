@@ -1,17 +1,19 @@
 const express = require('express');
-const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getTicketUrl, aestDayBoundsIso } = require('@dashboard/autotask-client');
+const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getTicketUrl, aestDayBoundsIso, excludeMonitoringAlerts } = require('@dashboard/autotask-client');
 
 async function fetchTicketsCreatedOn(client, dateStr) {
   // AEST calendar day, not UTC -- see aestDayBoundsIso() for why.
   const { startISO, endISO } = aestDayBoundsIso(dateStr);
 
-  return listAll(client.tickets, [
+  const tickets = await listAll(client.tickets, [
     { op: 'gte', field: 'createDate', value: startISO },
     { op: 'lt', field: 'createDate', value: endISO },
-    // issueType 14 = "Monitoring Alert" -- excluded from the dashboard by request,
-    // same as the Completed Tickets page.
-    { op: 'noteq', field: 'issueType', value: 14 },
   ]);
+  // "Monitoring Alert" (issueType 14) excluded client-side, not via an
+  // Autotask query filter -- see excludeMonitoringAlerts()'s own comment
+  // for why a `noteq` query filter silently drops every not-yet-triaged
+  // ticket too (confirmed a real production bug on this exact page).
+  return excludeMonitoringAlerts(tickets);
 }
 
 const router = express.Router();

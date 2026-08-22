@@ -9,6 +9,7 @@ const {
   getTicketUrl,
   getTicketUdf,
   aestDayBoundsIso,
+  excludeMonitoringAlerts,
 } = require('@dashboard/autotask-client');
 
 async function fetchTicketsCompletedOn(client, dateStr) {
@@ -20,8 +21,6 @@ async function fetchTicketsCompletedOn(client, dateStr) {
     { op: 'eq', field: 'status', value: 5 },
     { op: 'gte', field: 'completedDate', value: startISO },
     { op: 'lt', field: 'completedDate', value: endISO },
-    // issueType 14 = "Monitoring Alert" -- excluded from the dashboard by request.
-    { op: 'noteq', field: 'issueType', value: 14 },
   ]);
 
   // status 20 = "Billing - Contract" -- included as completed by request, but these
@@ -32,10 +31,13 @@ async function fetchTicketsCompletedOn(client, dateStr) {
     { op: 'eq', field: 'status', value: 20 },
     { op: 'gte', field: 'resolvedDateTime', value: startISO },
     { op: 'lt', field: 'resolvedDateTime', value: endISO },
-    { op: 'noteq', field: 'issueType', value: 14 },
   ]);
 
-  return [...completed, ...billing];
+  // "Monitoring Alert" (issueType 14) excluded client-side, not via an
+  // Autotask query filter -- see excludeMonitoringAlerts()'s own comment
+  // (@dashboard/autotask-client) for why a `noteq` query filter silently
+  // drops every not-yet-triaged ticket too (confirmed a real production bug).
+  return excludeMonitoringAlerts([...completed, ...billing]);
 }
 
 const router = express.Router();
