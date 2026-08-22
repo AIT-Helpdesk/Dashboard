@@ -20,6 +20,20 @@ function formatAge(ms) {
   const minutes = Math.max(1, Math.round(ms / (60 * 1000)));
   return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
+// Same isLocalhostRequest() convention as packages/shell/server.js's own
+// (nav-layout editability) -- checked against the Host header a request
+// actually arrived with, not the TCP peer address, since Caddy reverse-
+// proxies every real production request to this same box, making every
+// request look locally-sourced at the socket level regardless of who's
+// really on the other end. By request: the automation is only ever
+// SCHEDULED on the production server (see DEPLOYMENT.md's Windows Task
+// Scheduler setup, a production-only step) -- a local dev copy has no
+// scheduled task at all, so this banner would otherwise always show a
+// stale/never-run warning locally that isn't actually meaningful there.
+function isLocalhostRequest(req) {
+  return req.hostname === 'localhost' || req.hostname === '127.0.0.1';
+}
+
 function evaluateAutomationStatus() {
   const lastRun = readLastRunStatus();
   if (!lastRun) {
@@ -487,7 +501,10 @@ router.get('/', async (req, res) => {
       personName: person.attributes.name,
       asOf: new Date().toISOString(),
       groups,
-      automationStatus: evaluateAutomationStatus(),
+      // null on localhost -- client.js's own banner render is already
+      // gated on `data.automationStatus && !data.automationStatus.ok`, so
+      // null suppresses it with no client-side change needed.
+      automationStatus: isLocalhostRequest(req) ? null : evaluateAutomationStatus(),
     });
   } catch (err) {
     if (err.strety_not_connected) {

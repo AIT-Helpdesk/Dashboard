@@ -1,6 +1,6 @@
 const express = require('express');
 const { mapWithConcurrency } = require('@dashboard/autotask-client');
-const { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails } = require('./lib.js');
+const { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts } = require('./lib.js');
 
 // A live snapshot -- Total Devices, Open Alerts, and one card per real
 // Datto RMM filter -- not date-scoped, same convention as CSP Customers/
@@ -50,6 +50,18 @@ router.get('/devices', async (req, res) => {
   if (!hasDattoCredentials()) return res.status(503).json({ error: 'Datto RMM is not configured.' });
   try {
     const data = await getDevicesForFilter(req.query.filterId || undefined);
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    const detail = err.response ? `Datto API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
+    res.status(500).json({ error: detail });
+  }
+});
+
+router.get('/alerts', async (req, res) => {
+  if (!hasDattoCredentials()) return res.status(503).json({ error: 'Datto RMM is not configured.' });
+  try {
+    const data = await getOpenAlerts();
     res.json(data);
   } catch (err) {
     console.error(err);

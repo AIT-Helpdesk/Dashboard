@@ -75,10 +75,10 @@ export function mount(container) {
 
     cardsEl.innerHTML = '';
     // filterId: null (not undefined) marks Total Devices -- "clickable, no
-    // filter" -- distinct from Open Alerts below, which passes no filterId
-    // at all and stays un-clickable (an alert isn't a device-filter
-    // concept, and Datto's /devices endpoint has no "alerting devices"
-    // filter to drill into the same way).
+    // filter". Open Alerts is clickable too, but via a distinct `alerts:
+    // true` flag rather than a filterId -- an alert isn't a device-filter
+    // concept, so it opens its own alerts-list popup (openAlertsPopup())
+    // instead of the devices-list one.
     cardsEl.appendChild(
       donutCard({
         name: 'Total Devices',
@@ -96,6 +96,7 @@ export function mount(container) {
         total: Math.max(data.totalDevices, data.openAlerts.count),
         status: data.openAlerts.status,
         subtext: `${data.openAlerts.count} open`,
+        alerts: true,
       })
     );
     for (const f of data.filters) {
@@ -126,9 +127,9 @@ export function mount(container) {
     return div;
   }
 
-  function donutCard({ name, count, total, status, subtext, filterId }) {
+  function donutCard({ name, count, total, status, subtext, filterId, alerts }) {
     const color = STATUS_COLORS[status] || STATUS_COLORS.neutral;
-    const clickable = filterId !== undefined;
+    const clickable = filterId !== undefined || alerts;
     const div = document.createElement('div');
     div.className = 'datto-card' + (clickable ? ' datto-card--clickable' : '');
     div.innerHTML = `
@@ -139,7 +140,10 @@ export function mount(container) {
       <div class="datto-card-label">${escapeHtml(name)}</div>
       <div class="datto-card-sub">${escapeHtml(subtext)}</div>
     `;
-    if (clickable) {
+    if (alerts) {
+      div.title = `Click to see the ${count} open alert${count === 1 ? '' : 's'}`;
+      div.addEventListener('click', () => openAlertsPopup(name));
+    } else if (clickable) {
       div.title = `Click to see the ${count} device${count === 1 ? '' : 's'}`;
       div.addEventListener('click', () => openDevicesPopup(name, filterId));
     }
@@ -284,6 +288,145 @@ export function mount(container) {
 <body>
 <h1>${escapeHtml(title)}</h1>
 <p id="status">Loading devices...</p>
+<div id="content"></div>
+<script>${script}<\/script>
+</body>
+</html>`);
+    popup.document.close();
+  }
+
+  // Same real-popup-window/live-embedded-script convention as
+  // openDevicesPopup() above -- a separate function (not a generalized
+  // shared one) because alert rows are a genuinely different shape (no
+  // hostname/OS/patch, but priority/source/message instead), even though
+  // the click-to-expand-into-device-detail behavior underneath is
+  // identical and duplicated here rather than shared, since sharing it
+  // between two independent backtick-free embedded-script strings would
+  // cost more in fragility than the duplication itself.
+  function openAlertsPopup(title) {
+    const popup = window.open('', '_blank', 'width=980,height=800,scrollbars=yes');
+    if (!popup) return;
+
+    const isDark =
+      document.documentElement.getAttribute('data-theme') === 'dark' ||
+      (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const colors = isDark
+      ? { bg: '#14161a', fg: '#eef0f3', muted: '#9aa3af', border: '#2a2e35', card: '#1b1e24', accent: '#5b8def' }
+      : { bg: '#ffffff', fg: '#1a1a1a', muted: '#6b7280', border: '#e5e7eb', card: '#f9fafb', accent: '#2563eb' };
+
+    const script = [
+      '(function () {',
+      '  var statusEl = document.getElementById("status");',
+      '  var contentEl = document.getElementById("content");',
+      '  var detailCache = {};',
+      '  function esc(s) {',
+      '    if (s === null || s === undefined) return "";',
+      '    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");',
+      '  }',
+      '  function fmtDate(ms) { return ms ? new Date(ms).toLocaleString() : "—"; }',
+      '  function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + "…" : (s || ""); }',
+      '  fetch("/api/datto-rmm/alerts")',
+      '    .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })',
+      '    .then(function (res) {',
+      '      if (!res.ok) throw new Error(res.data.error || "Request failed");',
+      '      renderList(res.data);',
+      '    })',
+      '    .catch(function (err) { statusEl.textContent = "Error: " + err.message; statusEl.className = "err"; });',
+      '  function renderList(data) {',
+      '    statusEl.style.display = "none";',
+      '    var note = data.truncated',
+      '      ? "Showing " + data.alerts.length + " of " + data.totalCount + " High/Critical alerts (most recent first)."',
+      '      : data.totalCount + " High/Critical alert(s). Click a row for the affected device\'s detail.";',
+      '    var rows = data.alerts.map(function (a) {',
+      '      var badgeClass = a.priority === "Critical" ? "badge-critical" : "badge-high";',
+      '      var badge = "<span class=\\"badge " + badgeClass + "\\">" + esc(a.priority) + "</span>";',
+      '      var msg = truncate((a.message || "").replace(/[\\r\\n]+/g, " "), 80);',
+      '      return "<tr data-uid=\\"" + esc(a.deviceUid) + "\\" title=\\"" + esc(a.message || "") + "\\"><td>" + badge + "</td><td>" + esc(a.deviceName) + "</td><td>" + esc(a.siteName) + "</td><td>" + esc(a.source || "—") + "</td><td>" + fmtDate(a.timestamp) + "</td><td>" + esc(msg) + "</td></tr>";',
+      '    }).join("");',
+      '    contentEl.innerHTML =',
+      '      "<p class=\\"muted\\">" + note + "</p><table><thead><tr><th>Priority</th><th>Device</th><th>Site</th><th>Source</th><th>Time</th><th>Message</th></tr></thead><tbody>" + rows + "</tbody></table>";',
+      '    var trs = contentEl.querySelectorAll("tr[data-uid]");',
+      '    for (var i = 0; i < trs.length; i++) {',
+      '      if (!trs[i].getAttribute("data-uid")) continue;',
+      '      trs[i].addEventListener("click", (function (tr) { return function () { toggleDetail(tr); }; })(trs[i]));',
+      '    }',
+      '  }',
+      '  function toggleDetail(tr) {',
+      '    var uid = tr.getAttribute("data-uid");',
+      '    var existing = document.getElementById("detail-" + uid);',
+      '    if (existing) { existing.parentNode.removeChild(existing); return; }',
+      '    var row = document.createElement("tr");',
+      '    row.id = "detail-" + uid;',
+      '    var cell = document.createElement("td");',
+      '    cell.colSpan = 6;',
+      '    cell.className = "detail-cell";',
+      '    cell.innerHTML = "<p class=\\"muted\\">Loading device detail…</p>";',
+      '    row.appendChild(cell);',
+      '    tr.parentNode.insertBefore(row, tr.nextSibling);',
+      '    if (detailCache[uid]) { renderDetail(cell, detailCache[uid]); return; }',
+      '    fetch("/api/datto-rmm/device/" + encodeURIComponent(uid))',
+      '      .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })',
+      '      .then(function (res) {',
+      '        if (!res.ok) throw new Error(res.data.error || "Failed to load device");',
+      '        detailCache[uid] = res.data.device;',
+      '        renderDetail(cell, res.data.device);',
+      '      })',
+      '      .catch(function (err) { cell.innerHTML = "<p class=\\"err\\">Error: " + esc(err.message) + "</p>"; });',
+      '  }',
+      '  function renderDetail(cell, d) {',
+      '    var disksHtml = (d.disks && d.disks.length)',
+      '      ? d.disks.map(function (disk) {',
+      '          return "<div class=\\"disk" + (disk.lowSpace ? " disk-low" : "") + "\\">" + esc(disk.drive) + (disk.fileSystem ? " (" + esc(disk.fileSystem) + ")" : "") + " — " + esc(disk.freeFormatted || "?") + " free of " + esc(disk.totalFormatted || "?") + (disk.freePercent != null ? " (" + disk.freePercent + "%)" : "") + "</div>";',
+      '        }).join("")',
+      '      : "<p class=\\"muted\\">No disk data.</p>";',
+      '    cell.innerHTML =',
+      '      "<dl>" +',
+      '      "<dt>Hostname</dt><dd>" + esc(d.hostname || "—") + "</dd>" +',
+      '      "<dt>Site</dt><dd>" + esc(d.site || "—") + "</dd>" +',
+      '      "<dt>OS</dt><dd>" + esc(d.os || "—") + "</dd>" +',
+      '      "<dt>Model</dt><dd>" + esc([d.manufacturer, d.model].filter(Boolean).join(" ") || "—") + "</dd>" +',
+      '      "<dt>Processor</dt><dd>" + esc(d.processor || "—") + "</dd>" +',
+      '      "<dt>Memory</dt><dd>" + esc(d.memoryFormatted || "—") + "</dd>" +',
+      '      "<dt>IP address</dt><dd>" + esc(d.ipAddress || "—") + "</dd>" +',
+      '      "<dt>Last user</dt><dd>" + esc(d.lastUser || "—") + "</dd>" +',
+      '      "<dt>Last seen</dt><dd>" + fmtDate(d.lastSeen) + "</dd>" +',
+      '      "<dt>Total open alerts on this device</dt><dd>" + d.openAlertCount + "</dd>" +',
+      '      "</dl><h3>Disks</h3>" + disksHtml;',
+      '  }',
+      '})();',
+    ].join('\n');
+
+    popup.document.open();
+    popup.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Datto RMM -- ${escapeHtml(title)}</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: ${colors.bg}; color: ${colors.fg}; margin: 0; padding: 1rem 1.25rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 0.75rem; }
+  h3 { font-size: 0.9rem; margin: 0.75rem 0 0.35rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid ${colors.border}; }
+  thead th { color: ${colors.muted}; font-weight: 600; }
+  tbody tr[data-uid] { cursor: pointer; }
+  tbody tr[data-uid]:hover { background: ${colors.card}; }
+  .detail-cell { background: ${colors.card}; }
+  .muted { color: ${colors.muted}; font-size: 0.85rem; }
+  .err { color: #dc3545; }
+  .badge { display: inline-block; font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px; }
+  .badge-critical { background: color-mix(in srgb, #dc3545 20%, transparent); color: #dc3545; }
+  .badge-high { background: color-mix(in srgb, #f39c12 20%, transparent); color: #f39c12; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.75rem; font-size: 0.85rem; }
+  dt { color: ${colors.muted}; }
+  dd { margin: 0; }
+  .disk { font-size: 0.85rem; padding: 0.15rem 0; }
+  .disk-low { color: #dc3545; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>${escapeHtml(title)}</h1>
+<p id="status">Loading alerts (this can take several seconds -- Datto's own API has no cheap way to filter/count alerts server-side)...</p>
 <div id="content"></div>
 <script>${script}<\/script>
 </body>
