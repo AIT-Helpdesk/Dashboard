@@ -156,9 +156,71 @@ async function countDevicesForFilter(filterId) {
   return Number(payload.pageDetails?.totalCount ?? payload.devices?.length ?? 0);
 }
 
-async function getOpenAlertsCount() {
-  const payload = await dattoRequest('/v2/account/alerts/open', { max: 1, page: 0 });
-  return Number(payload.pageDetails?.totalCount ?? payload.alerts?.length ?? 0);
+// "Open Alerts" means High + Critical priority only, by request -- NOT
+// literally every alert Datto's API calls "open". Confirmed against real
+// data this is necessary, not just a preference: `/v2/account/alerts/open`
+// has NO real `pageDetails.totalCount` at all (confirmed always
+// `undefined`) -- the ORIGINAL client's own count logic (ported here in an
+// earlier pass) silently fell back to `alerts.length`, which just reflects
+// whatever `max` was requested (1), not a real total.
+//
+// The genuine total is enormous, and this was fully confirmed, not
+// estimated: paginating all the way to the real end (122 pages, ~20s) gives
+// **30,410 total real open alerts**, of which **1,734 are High/Critical**.
+// The vast majority of the rest are "Information" priority -- routine
+// notifications (e.g. "Backup Finished... successfully"), not things
+// needing attention, and each carries a real `autoresolveMins: 1` field
+// that suggests a genuine Datto RMM configuration issue on the account
+// itself (they're evidently not actually auto-resolving) -- separate from
+// anything fixable here, and worth raising with whoever administers Datto
+// RMM directly. `MAX_ALERT_PAGES` (200) is set with real margin above the
+// confirmed-sufficient 122 -- if this account's raw alert volume keeps
+// growing, that margin may eventually not be enough again; `truncated`
+// stays honest about whether the cap was hit.
+//
+// No server-side priority filter exists on this endpoint either -- tested
+// several real parameter name guesses (`priority`, `Priority`,
+// `alertPriority`), Datto silently ignored all of them and returned the
+// same unfiltered results regardless. So this fetches broadly (accepting
+// the real ~20s cost, tolerable since it's cached 20 minutes same as the
+// rest of the overview, not paid on every page view) and filters
+// client-side.
+const ALERT_PRIORITY_FILTER = new Set(['High', 'Critical']);
+const MAX_ALERT_PAGES = 200; // confirmed real total needs 122; this is a comfortable margin above that, not the confirmed number itself
+const MAX_ALERTS_RETURNED = 250; // same display-list cap/reasoning as getDevicesForFilter() -- 1,734 real rows is too many for one popup list
+
+function mapAlert(a) {
+  return {
+    alertUid: a.alertUid,
+    priority: a.priority || 'Unknown',
+    timestamp: a.timestamp || null,
+    source: a.alertContext?.source || null,
+    message: a.alertContext?.description || a.diagnostics || null,
+    deviceUid: a.alertSourceInfo?.deviceUid || null,
+    deviceName: a.alertSourceInfo?.deviceName || 'Unknown device',
+    siteName: a.alertSourceInfo?.siteName || '—',
+  };
+}
+
+// The one real fetch behind both the Open Alerts card's count AND its own
+// drill-down list -- there's no cheaper "just the count" path anymore (see
+// above), so both are served from the same full fetch rather than
+// duplicating the expensive pagination. Sorted newest-first (most likely
+// to matter right now) before capping the RETURNED list at
+// MAX_ALERTS_RETURNED -- `totalCount` is still the real, uncapped
+// High/Critical count (confirmed accurate, not itself truncated, as long
+// as `truncated` below is false).
+async function getOpenAlerts() {
+  const rawAlerts = await fetchAllPages('/v2/account/alerts/open', {}, 'alerts', MAX_ALERT_PAGES);
+  const hitSafetyCap = rawAlerts.length >= MAX_ALERT_PAGES * 250;
+  const matched = rawAlerts.filter((a) => ALERT_PRIORITY_FILTER.has(a.priority)).map(mapAlert);
+  matched.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  const alerts = matched.slice(0, MAX_ALERTS_RETURNED);
+  return {
+    alerts,
+    totalCount: matched.length,
+    truncated: hitSafetyCap || matched.length > alerts.length,
+  };
 }
 
 // Deliberately NOT the original client's own metricStatus() -- confirmed
@@ -197,11 +259,12 @@ function metricStatus(count, type) {
 // way -- one broken card is shown as unavailable rather than taking down
 // every other card on the page.
 async function getOverview(mapWithConcurrency) {
-  const [total, openAlertsCount, curatedFilters] = await Promise.all([
+  const [total, openAlertsResult, curatedFilters] = await Promise.all([
     getTotalDeviceCount(),
-    getOpenAlertsCount(),
+    getOpenAlerts(),
     loadCuratedFilters(),
   ]);
+  const openAlertsCount = openAlertsResult.totalCount;
 
   const filters = await mapWithConcurrency(curatedFilters, 3, async (filter) => {
     try {
@@ -420,4 +483,4 @@ async function getDeviceDetails(deviceUid) {
   };
 }
 
-module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails };
+module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts };
