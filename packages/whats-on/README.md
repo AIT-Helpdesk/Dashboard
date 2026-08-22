@@ -134,11 +134,11 @@ This is a deliberate exception -- given how expensive this page's per-load reque
 
 ## "Team Shifts" excerpt -- a completely separate data source below the scorecards
 
-By request: a 2-week rolling calendar of the **General** Team's Microsoft Teams Shifts, below the Strety scorecards, with a fixed color-coded legend. This is Microsoft Graph data (via `@dashboard/teams-shifts/lib.js`, the same shared plumbing the dedicated Teams Shifts page uses -- see that package's README for the Graph API quirks confirmed while building it), not Strety -- deliberately kept as a **separate `/api/whats-on/shifts` endpoint**, not folded into the main scorecards response, so paging a week forward/back never re-triggers a Strety fetch (the expensive, rate-limited part of this page).
+By request: a 2-week rolling calendar of the **General** Team's Microsoft Teams Shifts, below the Strety scorecards, with a fixed color-coded legend. This is Microsoft Graph data (via `@dashboard/teams-shifts/lib.js`, the same shared plumbing the dedicated "Shifts and Schedules" page uses -- see that package's README for the Graph API quirks confirmed while building it), not Strety -- deliberately kept as a **separate `/api/whats-on/shifts` endpoint**, not folded into the main scorecards response, so paging a week forward/back never re-triggers a Strety fetch (the expensive, rate-limited part of this page).
 
-- **Team is fixed to "General"**, resolved by name (`SHIFTS_TEAM_NAME`, same not-a-hardcoded-id convention as `HELPDESK_TEAM_NAME` above) -- no team picker on this page, unlike the dedicated Teams Shifts page.
+- **Team is fixed to "General"**, resolved by name (`SHIFTS_TEAM_NAME`, same not-a-hardcoded-id convention as `HELPDESK_TEAM_NAME` above) -- no team picker on this page, unlike the dedicated "Shifts and Schedules" page (well, that page doesn't have one either anymore, by a later request -- both are locked to General now).
 - **A rolling 2-week window, not a paginated fortnight**, by request: Prev/Next moves exactly **one week** at a time (`weekStart+7`/`weekStart-7`), so the window becomes `[week+1, week+2]` or `[week-1, week]` rather than jumping between non-overlapping fortnights. Defaults to the current AEST week (`mondayOf(todayAestKey())`) on first load and via the **This Week** button.
-- **Cached 10 minutes per window** (`SHIFTS_CACHE_TTL_MS`, keyed by the window's own start Monday), same TTL and reasoning as Service Calls'/Teams Shifts' own report caches. Refresh bypasses it.
+- **Cached 10 minutes per window** (`SHIFTS_CACHE_TTL_MS`, keyed by the window's own start Monday), same TTL and reasoning as Service Calls'/Shifts and Schedules' own report caches. Refresh bypasses it.
 
 ### Post-mortem: a real Vacation entry was invisible -- root cause was `/shifts` vs. `/timesOff`, not the legend matching
 
@@ -156,7 +156,7 @@ An entry whose label matches none of the 7 categories (confirmed real examples: 
 
 ### Public Holiday's box is deliberately NOT a translucent tint
 
-Every other category's calendar entry uses the same `color-mix(in srgb, <color> 22%, transparent)` translucent-fill convention as the dedicated Teams Shifts page's own calendar entries. Public Holiday is a special case: a translucent **white** tint over a light page background is visually indistinguishable from an empty cell. Its entries and legend swatch instead get a solid white fill plus a visible gray border, so it's still identifiable regardless of the page's light/dark theme.
+Every other category's calendar entry uses the same `color-mix(in srgb, <color> 22%, transparent)` translucent-fill convention as the dedicated Shifts and Schedules page's own calendar entries. Public Holiday is a special case: a translucent **white** tint over a light page background is visually indistinguishable from an empty cell. Its entries and legend swatch instead get a solid white fill plus a visible gray border, so it's still identifiable regardless of the page's light/dark theme.
 
 ## Two distinct connection-broken states, not one generic error
 
