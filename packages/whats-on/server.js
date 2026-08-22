@@ -479,26 +479,29 @@ function describeColumnError(err) {
   return err.response ? `API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
 }
 
-// Service Calls due today or tomorrow (AEST) -- a leaner, 2-day-scoped
-// version of Service Calls' own buildReport() (packages/service-calls/
-// server.js), not a full month's worth of every ticket/status/priority
-// detail: just enough to show "what's scheduled the next two days" at a
-// glance (time, company, who's allocated). Same Autotask entity spanning
-// (ServiceCalls has no resource field of its own -- see Service Calls' own
-// README for why the ServiceCallTickets/ServiceCallTicketResources join is
-// needed at all) and same sequential-not-Promise.all-for-resolution
-// reasoning as that page.
-async function fetchServiceCallsTodayTomorrow() {
-  const client = await getClient();
-  const today = todayAestKey();
-  const [ty, tm, td] = today.split('-').map(Number);
-  const startISO = aestToUtcIso(ty, tm, td);
-  const endISO = aestToUtcIso(ty, tm, td + 2); // exclusive -- covers today + tomorrow, day-after-tomorrow excluded
+// Ticket status IDs that count as "closed" -- same [5, 20] convention as
+// client-summary/server.js and strety-autotask-sync/metrics.js (5 =
+// "Complete", 20 = "Billing - Contract", which per completed-tickets'
+// README never transitions back out once reached). Used below to decide
+// whether a stale, still-incomplete service call is "on an open ticket"
+// (worth surfacing) or just linked to a ticket that's since been closed
+// (the call record itself was simply never marked complete -- noise, not
+// something anyone still needs to act on).
+const CLOSED_TICKET_STATUSES = [5, 20];
 
-  const serviceCalls = await listAll(client.serviceCalls, [
-    { op: 'gte', field: 'startDateTime', value: startISO },
-    { op: 'lt', field: 'startDateTime', value: endISO },
-  ]);
+// Shared join/resolution logic behind both service call groups below --
+// same Autotask entity spanning as Service Calls' own buildReport()
+// (packages/service-calls/server.js: ServiceCalls has no resource field of
+// its own, so ServiceCallTickets/ServiceCallTicketResources have to be
+// joined to find who's allocated -- see that page's README for the full
+// story), just trimmed to what a compact list needs.
+//
+// `requireOpenTicket`, when true, additionally drops any call with no
+// linked ticket at all (can't judge "open" with nothing to check) or whose
+// linked ticket has since closed -- only used for the past-incomplete group
+// below; the today/tomorrow group shows every scheduled call regardless of
+// ticket linkage/status, same as it always has.
+async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } = {}) {
   if (serviceCalls.length === 0) return [];
 
   const scTickets = await fetchByFieldIn(client.serviceCallTickets, 'serviceCallID', serviceCalls.map((sc) => sc.id));
@@ -514,6 +517,21 @@ async function fetchServiceCallsTodayTomorrow() {
     scTicketIdsByServiceCallId.get(t.serviceCallID).push(t.id);
     if (!ticketIdByServiceCallId.has(t.serviceCallID)) ticketIdByServiceCallId.set(t.serviceCallID, t.ticketID);
   }
+
+  let eligibleServiceCalls = serviceCalls;
+  if (requireOpenTicket) {
+    const ticketIds = [...new Set([...ticketIdByServiceCallId.values()].filter((id) => id !== null && id !== undefined))];
+    const tickets = ticketIds.length > 0 ? await fetchByFieldIn(client.tickets, 'id', ticketIds) : [];
+    const statusByTicketId = new Map(tickets.map((t) => [t.id, t.status]));
+    eligibleServiceCalls = serviceCalls.filter((sc) => {
+      const ticketId = ticketIdByServiceCallId.get(sc.id);
+      if (ticketId === undefined || ticketId === null) return false;
+      const status = statusByTicketId.get(ticketId);
+      return status !== undefined && !CLOSED_TICKET_STATUSES.includes(status);
+    });
+  }
+  if (eligibleServiceCalls.length === 0) return [];
+
   const allScTicketIds = scTickets.map((t) => t.id);
   const resources = allScTicketIds.length > 0 ? await fetchByFieldIn(client.serviceCallTicketResources, 'serviceCallTicketID', allScTicketIds) : [];
   const resourceIdsByScTicketId = new Map();
@@ -530,7 +548,7 @@ async function fetchServiceCallsTodayTomorrow() {
     return [...ids];
   }
 
-  const uniqueCompanyIds = [...new Set(serviceCalls.map((sc) => sc.companyID).filter((id) => id !== null && id !== undefined))];
+  const uniqueCompanyIds = [...new Set(eligibleServiceCalls.map((sc) => sc.companyID).filter((id) => id !== null && id !== undefined))];
   const uniqueResourceIds = [...new Set(resources.map((r) => r.resourceID))];
   await Promise.all([
     mapWithConcurrency(uniqueCompanyIds, 3, (id) => resolveCompanyName(client, id)),
@@ -538,7 +556,7 @@ async function fetchServiceCallsTodayTomorrow() {
   ]);
 
   const rows = [];
-  for (const sc of serviceCalls) {
+  for (const sc of eligibleServiceCalls) {
     const resourceIds = resourceIdsFor(sc.id);
     const resourceNames = [];
     for (const rid of resourceIds) resourceNames.push(await resolveResourceName(client, rid));
@@ -558,7 +576,59 @@ async function fetchServiceCallsTodayTomorrow() {
       ticketUrl: ticketId ? await getTicketUrl(ticketId) : null,
     });
   }
-  rows.sort((a, b) => new Date(a.startDateTime) - new Date(b.startDateTime));
+  return rows;
+}
+
+// Service Calls due today or tomorrow (AEST), plus -- by request -- still-
+// incomplete calls scheduled in the past 2 weeks whose linked ticket is
+// still open (the "fell through the cracks" case: an appointment that was
+// never marked complete and the work item behind it is still live).
+// Confirmed against real data before picking the 2-week window: an
+// unbounded "isComplete = false, any date" query returned 1574 rows going
+// back to 2007 (old calls simply never marked complete on tickets that
+// closed ages ago -- noise, not anything actionable), while requiring the
+// linked ticket to still be open cuts that to a small, genuinely actionable
+// handful. 2 weeks keeps that "actionable, not noise" property without
+// hardcoding a totally arbitrary cutoff.
+//
+// Placed AFTER the today/tomorrow rows in the returned list, oldest first
+// within that trailing group -- same "second group, oldest-first" ordering
+// My Strety Tasks' own overdue rows use below. client.js's ttDayTag()
+// already renders any dayKey that isn't today/tomorrow as an "Overdue"
+// tag with no further server-side flag needed -- a past dayKey naturally
+// falls into that branch.
+async function fetchServiceCallsTodayTomorrow() {
+  const client = await getClient();
+  const today = todayAestKey();
+  const [ty, tm, td] = today.split('-').map(Number);
+  const startISO = aestToUtcIso(ty, tm, td);
+  const endISO = aestToUtcIso(ty, tm, td + 2); // exclusive -- covers today + tomorrow, day-after-tomorrow excluded
+  const pastStartISO = aestToUtcIso(ty, tm, td - 14);
+
+  const [todayTomorrowCalls, pastIncompleteCalls] = await Promise.all([
+    listAll(client.serviceCalls, [
+      { op: 'gte', field: 'startDateTime', value: startISO },
+      { op: 'lt', field: 'startDateTime', value: endISO },
+    ]),
+    listAll(client.serviceCalls, [
+      { op: 'gte', field: 'startDateTime', value: pastStartISO },
+      { op: 'lt', field: 'startDateTime', value: startISO },
+      { op: 'eq', field: 'isComplete', value: false },
+    ]),
+  ]);
+
+  const [todayTomorrowRows, pastIncompleteRows] = await Promise.all([
+    buildServiceCallRows(client, todayTomorrowCalls),
+    buildServiceCallRows(client, pastIncompleteCalls, { requireOpenTicket: true }),
+  ]);
+
+  const rows = [...todayTomorrowRows, ...pastIncompleteRows];
+  rows.sort((a, b) => {
+    const aOverdue = a.dayKey < today;
+    const bOverdue = b.dayKey < today;
+    if (aOverdue !== bOverdue) return aOverdue ? 1 : -1; // today/tomorrow group first, overdue group after
+    return new Date(a.startDateTime) - new Date(b.startDateTime);
+  });
   return rows;
 }
 
