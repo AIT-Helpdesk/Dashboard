@@ -410,6 +410,15 @@ h1 {
   cursor: pointer;
 }
 
+/* Smaller variant, by request -- What's On's Today & Tomorrow "Show All
+   <X>" links under each column, deliberately less prominent than a normal
+   .button-link since they're a secondary "see more" action, not the
+   primary thing on the page. */
+.button-link--small {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+}
+
 /* Start Here's external-system buttons -- a plain emoji before the label,
    same lightweight-icon convention as the sidebar's own theme toggle
    ('☀️ Light Mode'/'🌙 Dark Mode'). aria-hidden on the icon span itself
@@ -724,6 +733,14 @@ h1 {
   color: #dc2626;
   background: var(--row-warn-bg);
 }
+/* What's On's scorecard group headings ("Helpdesk Task Tracker -- Daily",
+   "Personal -- <Name> -- Weekly", etc.) -- by request, shaded the same
+   blue as the table's own column-header row (.shaded-row, both drawing
+   from --section-header-bg) so the two read as one connected block rather
+   than a plain heading sitting above an unrelated-looking table. */
+.section-heading--scorecard {
+  background: var(--section-header-bg);
+}
 /* Today & Tomorrow's three column headings (Service Calls/Subscriptions
    Expiring/My Strety Tasks), by request -- same --accent blue used
    elsewhere on this dashboard (e.g. .resource-group's own selected/focus
@@ -812,6 +829,13 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+/* "Show All <X>" link under each column's own list, by request --
+   separated from .tt-list by a hairline rather than just whitespace so it
+   reads as this column's own footer action, not another list-adjacent row. */
+.tt-column-footer {
+  padding: 0.5rem 1rem 0.6rem;
+  border-top: 1px solid var(--border);
+}
 .tt-section {
   /* Shaded panel around the whole Today & Tomorrow section (heading +
      columns) so it reads as one distinct block against the page background,
@@ -856,6 +880,13 @@ h1 {
 .tt-time {
   color: var(--muted);
   font-size: 0.85rem;
+}
+/* By request: My Strety Tasks' own title text sized to match .cell-subtext
+   (the muted allocation/subscription-detail line the other two columns
+   show) -- same 0.8rem, color left as the row's normal (non-muted) text
+   since only the size was asked to match. */
+.tt-strety-title {
+  font-size: 0.8rem;
 }
 .tt-tag {
   display: inline-block;
