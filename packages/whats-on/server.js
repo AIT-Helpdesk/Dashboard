@@ -1,6 +1,8 @@
 const express = require('express');
 const { get, fetchAllPages, isConnected, connectedIdentity } = require('@dashboard/strety-client');
 const { readLastRunStatus } = require('@dashboard/strety-autotask-sync/status.js');
+const { mondayOf, weekDatesFrom, todayAestKey } = require('@dashboard/autotask-client');
+const { getTeams, getShiftsByDay } = require('@dashboard/teams-shifts/lib.js');
 
 // Reports on the Autotask -> Strety automation's last sync.js run, purely
 // from the status file it writes (see status.js) -- no live API call, so
@@ -36,6 +38,14 @@ function evaluateAutomationStatus() {
   }
   return { ok: true };
 }
+
+// The "Team Shifts" excerpt below the scorecards -- a completely separate
+// data source (Microsoft Graph, via @dashboard/teams-shifts/lib.js) from
+// everything else on this page (Strety). Resolved by NAME, not a hardcoded
+// team id, same convention as HELPDESK_TEAM_NAME above -- if "General" is
+// ever renamed in Teams, this says so explicitly rather than silently
+// showing nothing.
+const SHIFTS_TEAM_NAME = 'General';
 
 const HELPDESK_TEAM_NAME = 'Helpdesk Task Tracker';
 // By request: only these three cadences -- Strety's real `checkin_frequency`
@@ -350,7 +360,89 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics) {
   return byFrequency;
 }
 
+// A rolling TWO-WEEK window (14 real calendar days, Monday-start), not a
+// paginated fortnight -- by request, "forward"/"back" move exactly one week
+// at a time (the window becomes [week+1, week+2] or [week-1, week]), not
+// jumping in non-overlapping 2-week chunks. `mondayWeekKey` is the AEST
+// Monday key of the FIRST of the two weeks shown; defaults to the Monday of
+// the current AEST week when not supplied (client's own "This Week" reset).
+async function buildShiftsWeek(mondayWeekKey) {
+  const [y, m, d] = mondayWeekKey.split('-').map(Number);
+  const days = weekDatesFrom({ year: y, month: m, day: d }, 14);
+  // The day right after the 14-day window -- getShiftsByDay's range end is
+  // exclusive. Plain UTC-instant math (not weekDatesFrom again just to
+  // throw 14 of its 15 results away) since this is pure calendar arithmetic,
+  // same "Date.UTC as a neutral calculator" reasoning as mondayOf() itself.
+  const endKeyExclusive = new Date(Date.UTC(y, m - 1, d) + 14 * 86400000).toISOString().slice(0, 10);
+
+  const teams = await getTeams();
+  const team = teams.find((t) => t.name === SHIFTS_TEAM_NAME) || null;
+  const todayKey = todayAestKey();
+
+  if (!team) {
+    // Surfaced rather than silently dropped -- same convention as
+    // HELPDESK_TEAM_NAME's own notFound handling below.
+    return { weekStart: mondayWeekKey, days, todayKey, totalCount: 0, byDay: {}, teamName: SHIFTS_TEAM_NAME, notFound: true };
+  }
+
+  const { byDay, totalCount } = await getShiftsByDay(team.id, mondayWeekKey, endKeyExclusive);
+  return { weekStart: mondayWeekKey, days, todayKey, totalCount, byDay, teamName: team.name, notFound: false };
+}
+
+// Same reasoning as service-calls'/teams-shifts' own report caches -- a
+// roster fix should show up within the hour, not stay stale. Cached
+// separately from the Strety catalog/scorecard caches above (this is a
+// wholly separate data source), keyed by the window's own start Monday so
+// paging forward/back a week doesn't share (or collide with) another
+// window's cache entry.
+const SHIFTS_CACHE_TTL_MS = 10 * 60 * 1000;
+const shiftsCacheByKey = new Map(); // mondayWeekKey -> { data, expiresAt }
+const shiftsInFlightByKey = new Map();
+
+async function getShiftsWeek(mondayWeekKey, force) {
+  const cached = shiftsCacheByKey.get(mondayWeekKey);
+  if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
+  if (!shiftsInFlightByKey.has(mondayWeekKey)) {
+    const build = buildShiftsWeek(mondayWeekKey)
+      .then((data) => {
+        shiftsCacheByKey.set(mondayWeekKey, { data, expiresAt: Date.now() + SHIFTS_CACHE_TTL_MS });
+        return data;
+      })
+      .finally(() => {
+        shiftsInFlightByKey.delete(mondayWeekKey);
+      });
+    shiftsInFlightByKey.set(mondayWeekKey, build);
+  }
+  return shiftsInFlightByKey.get(mondayWeekKey);
+}
+
+function currentWeekMondayKey() {
+  const { year, month, day } = mondayOf(todayAestKey());
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 const router = express.Router();
+
+// Deliberately a SEPARATE endpoint from the scorecards route below, not
+// folded into the same response -- paging this section forward/back a week
+// would otherwise force a full Strety re-fetch (the expensive, rate-limited
+// part of this page -- see "Rate limiting" in @dashboard/strety-client's
+// README) just to change which 14 days of an entirely unrelated Graph API
+// are shown.
+router.get('/shifts', async (req, res) => {
+  const week = req.query.week || currentWeekMondayKey();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(week)) {
+    return res.status(400).json({ error: 'Query param "week" must be a YYYY-MM-DD Monday date.' });
+  }
+  try {
+    const data = await getShiftsWeek(week, req.query.force === 'true');
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    const detail = err.response ? `Graph API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
+    res.status(500).json({ error: detail });
+  }
+});
 
 router.get('/', async (req, res) => {
   try {

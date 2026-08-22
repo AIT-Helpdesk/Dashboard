@@ -1,6 +1,6 @@
 # @dashboard/whats-on
 
-Dashboard page (first page the dashboard opens to): Strety **Scorecards** -- the Helpdesk Task Tracker team's daily/weekly/monthly metrics, followed by the signed-in user's own personal-space metrics -- each cadence shown as a matrix, up to 8 columns wide (Daily/Weekly on a fixed calendar window; Monthly on real check-in activity -- see "Matrix layout" below).
+Dashboard page (first page the dashboard opens to): Strety **Scorecards** -- the Helpdesk Task Tracker team's daily/weekly/monthly metrics, followed by the signed-in user's own personal-space metrics -- each cadence shown as a matrix, up to 8 columns wide (Daily/Weekly on a fixed calendar window; Monthly on real check-in activity -- see "Matrix layout" below). Below that: a 2-week **Team Shifts** excerpt (Microsoft Teams Shifts, General team only, week-at-a-time navigation, a fixed color-coded legend) -- a completely separate Graph API data source, see its own section below.
 
 - `client.js` -- frontend module. Exports `id`, `label`, and `mount(container)`, picked up automatically by the shell.
 - `server.js` -- Express router mounted by the shell at `/api/whats-on`.
@@ -131,6 +131,32 @@ The tradeoff is deliberately narrow: team names and metric **definitions** (titl
 Unlike every other page on this dashboard (which all re-fetch live every time the page is opened -- see My Strety Tasks' "No caching"), `client.js`'s module-scope `lastData` isn't just a flash-avoidance cache here: `mount()` only calls `load()` when `lastData` is still `null` (a genuinely first visit this browser tab session, or after an error that never produced real data). Navigating away and back to a page that already loaded real scorecard data just re-renders `lastData` instantly with **no new request at all**. The **Refresh** button still always forces a real live fetch regardless of `lastData`.
 
 This is a deliberate exception -- given how expensive this page's per-load request count already is (see "Catalog caching" and "Rate limiting" above), and that scorecard data changes on the order of "someone checked in a metric," not from one page navigation to the next a few seconds later, re-fetching on every single revisit was pure waste, not freshness anyone actually needed.
+
+## "Team Shifts" excerpt -- a completely separate data source below the scorecards
+
+By request: a 2-week rolling calendar of the **General** Team's Microsoft Teams Shifts, below the Strety scorecards, with a fixed color-coded legend. This is Microsoft Graph data (via `@dashboard/teams-shifts/lib.js`, the same shared plumbing the dedicated Teams Shifts page uses -- see that package's README for the Graph API quirks confirmed while building it), not Strety -- deliberately kept as a **separate `/api/whats-on/shifts` endpoint**, not folded into the main scorecards response, so paging a week forward/back never re-triggers a Strety fetch (the expensive, rate-limited part of this page).
+
+- **Team is fixed to "General"**, resolved by name (`SHIFTS_TEAM_NAME`, same not-a-hardcoded-id convention as `HELPDESK_TEAM_NAME` above) -- no team picker on this page, unlike the dedicated Teams Shifts page.
+- **A rolling 2-week window, not a paginated fortnight**, by request: Prev/Next moves exactly **one week** at a time (`weekStart+7`/`weekStart-7`), so the window becomes `[week+1, week+2]` or `[week-1, week]` rather than jumping between non-overlapping fortnights. Defaults to the current AEST week (`mondayOf(todayAestKey())`) on first load and via the **This Week** button.
+- **Cached 10 minutes per window** (`SHIFTS_CACHE_TTL_MS`, keyed by the window's own start Monday), same TTL and reasoning as Service Calls'/Teams Shifts' own report caches. Refresh bypasses it.
+
+### Post-mortem: a real Vacation entry was invisible -- root cause was `/shifts` vs. `/timesOff`, not the legend matching
+
+Shipped, then a real user report: Grant's real, correctly-booked Vacation on a specific day wasn't showing at all -- the day cell showed an unrelated real On Call shift for someone else instead, which looked like a miscategorization but wasn't one. The real cause: Microsoft Teams Shifts keeps regular shifts (On Call, Helpdesk Handler) and time-off bookings (Vacation, Sick/Other Leave, Unpaid, RDO/Time in Lieu) in **two separate Graph resources**, `/shifts` and `/timesOff`, and `@dashboard/teams-shifts/lib.js` originally only queried the first -- the Vacation entry was real and correctly entered, just never fetched. Fixed in `lib.js` (`getResolvedShifts()` now fetches and merges both) -- see that package's README, "Shifts vs. time off," for the full story including a real, confirmed Graph API restriction (no "overlaps the window" filter is possible, only "contained in the window") and the multi-day-entry day-expansion this required.
+
+That same investigation also confirmed the legend was matching the RIGHT field all along, just missing an entire data source: `GET /teams/{id}/schedule/timeOffReasons` returned 11 real reasons on the General team, several literally spelling out their own intended color in the name (`"Vacation (green)"`, `"Sick/Other Leave (purple)"`, `"RDO / Time in Lieu (grey)"`, `"Helpdesk Handler (blue)"`, `"ON CALL (yellow)"`) -- strong confirmation this page's 7-category legend matches the account's real, deliberate setup, not a guessed taxonomy. One real mismatch found and fixed in the process: the real reason is spelled literally `"Unpaid"`, not `"Unpaid leave"` -- `categorizeShift()`'s `unpaidLeave` pattern was loosened from requiring `"leave"` to matching `"unpaid"` alone.
+
+### The legend is a business-defined mapping, not Graph's own `theme`
+
+The 7-box legend (On Call/yellow, Helpdesk Handler/blue, Vacation/green, Unpaid leave/red, Sick/Other Leave/purple, RDO/Time in Lieu/grey, Public Holiday/white) is matched against each entry's own **`displayName`** text (`SHIFT_CATEGORIES` in `client.js`) -- for a shift, its own label; for a time-off entry, its resolved reason name (see above) -- never Graph's `theme` field. This was a deliberate choice, confirmed necessary against real data: a full-year pull of the General team's real 2026 shifts showed **7 different label variants** all meaning "public holiday" (`"Public Holiday"`, `"Pub Hol"`, `"Sri Lanka - Pub Hol"`, `"Australia Day"`, `"Good Friday"`, `"Easter Monday"`, `"Labour Day"`) using **5 different, inconsistent `theme` values** (`blue`, `pink`, `green`, `purple`, `darkPink`) across them -- `theme` cannot reliably identify a category here, only the label text can.
+
+Confirmed against real data: `"On Call"` (237 real shifts) and `"Helpdesk Handler"` (31 real shifts) are exact literal `/shifts` `displayName` values; `"Vacation (green)"`, `"Unpaid"`, `"Sick/Other Leave (purple)"`, `"RDO / Time in Lieu (grey)"` are exact literal `/timesOff` reason names (see above) -- every one of the 7 legend categories is now confirmed against a real entry.
+
+An entry whose label matches none of the 7 categories (confirmed real examples: a shift labelled `"Working "`, 9 real shifts with `displayName: null`, and time-off reasons `"Unavailable"`/`"Special"`/`"Parental Leave"`/`"ON CALL WEEKEND"`, none of which are one of the 7 requested categories) renders with a plain, uncolored look -- its raw label (or "(unlabeled)") is still visible in the entry's tooltip, just not part of the fixed legend.
+
+### Public Holiday's box is deliberately NOT a translucent tint
+
+Every other category's calendar entry uses the same `color-mix(in srgb, <color> 22%, transparent)` translucent-fill convention as the dedicated Teams Shifts page's own calendar entries. Public Holiday is a special case: a translucent **white** tint over a light page background is visually indistinguishable from an empty cell. Its entries and legend swatch instead get a solid white fill plus a visible gray border, so it's still identifiable regardless of the page's light/dark theme.
 
 ## Two distinct connection-broken states, not one generic error
 

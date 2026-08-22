@@ -8,19 +8,26 @@ export const label = "Start Here";
 // currently) would render as a disabled-look placeholder rather than ever
 // shipping a guessed link that might be wrong for this specific
 // account/tenant.
+//
+// `icon` is a plain emoji, by request -- same lightweight-icon convention
+// already used for the sidebar's own theme toggle ('☀️ Light Mode'/'🌙 Dark
+// Mode' in app.js), not a real per-brand logo. Fetching each service's real
+// favicon was deliberately not done -- would mean a live request out to
+// ~12 different third-party domains just to render this page, for a purely
+// cosmetic label decoration.
 const EXTERNAL_LINKS = [
-  { label: 'Kaseya One', url: 'https://one.kaseya.com/login?companyName=Ambient%20IT' },
-  { label: "Ambient iT's SharePoint", url: 'https://ambientitptyltd.sharepoint.com/' },
-  { label: 'Ingram Micro', url: 'https://au.ingrammicro.com/cep/app/home' },
-  { label: 'Backup Radar', url: 'https://eu.backupradar.com/app/dashboard/tiles' },
-  { label: 'AutoElevate', url: 'https://msp.autoelevate.com/login' },
-  { label: 'Huntress', url: 'https://ambient-it.huntress.io/account/command_center' },
-  { label: 'EasyDMARC', url: 'https://app.easydmarc.com/dashboard' },
-  { label: 'Access4', url: 'https://ambientit.sasboss.com.au' },
-  { label: 'Aussie Broadband', url: 'https://carbon.aussiebroadband.com.au/login' },
-  { label: 'TPP', url: 'https://www.tppwholesale.com.au/sign-in/' },
-  { label: 'CloudFlare', url: 'https://dash.cloudflare.com/' },
-  { label: 'WP Engine', url: 'https://my.wpengine.com/' },
+  { label: 'Kaseya One', icon: '🖥️', url: 'https://one.kaseya.com/login?companyName=Ambient%20IT' },
+  { label: 'AIT Intranet', icon: '📁', url: 'https://ambientitptyltd.sharepoint.com/' },
+  { label: 'Ingram Micro', icon: '📦', url: 'https://au.ingrammicro.com/cep/app/home' },
+  { label: 'Backup Radar', icon: '💾', url: 'https://eu.backupradar.com/app/dashboard/tiles' },
+  { label: 'AutoElevate', icon: '🔐', url: 'https://msp.autoelevate.com/login' },
+  { label: 'Huntress', icon: '🛡️', url: 'https://ambient-it.huntress.io/account/command_center' },
+  { label: 'EasyDMARC', icon: '✉️', url: 'https://app.easydmarc.com/dashboard' },
+  { label: 'Access4', icon: '☎️', url: 'https://ambientit.sasboss.com.au' },
+  { label: 'Aussie Broadband', icon: '📶', url: 'https://carbon.aussiebroadband.com.au/login' },
+  { label: 'TPP', icon: '🌐', url: 'https://www.tppwholesale.com.au/sign-in/' },
+  { label: 'CloudFlare', icon: '☁️', url: 'https://dash.cloudflare.com/' },
+  { label: 'WP Engine', icon: '🔧', url: 'https://my.wpengine.com/' },
 ];
 
 // One-line descriptions for the internal page list -- kept
@@ -31,7 +38,7 @@ const EXTERNAL_LINKS = [
 // same as the sidebar itself), so a page id with no entry here just shows
 // with no description rather than silently vanishing from the list.
 const PAGE_DESCRIPTIONS = {
-  'whats-on': "Helpdesk Task Tracker's Strety scorecards, plus your own personal ones.",
+  'whats-on': "Helpdesk Task Tracker, Your personal scorecards, and the Team Shifts quick viewer.",
   'my-strety-tasks': 'Your own open Strety to-dos, sorted by due date.',
   'service-calls': 'Month calendar of every Service Call, showing which technician is assigned.',
   'subscriptions-expiring': 'Ingram Micro subscriptions expiring in a chosen window -- a renewals watch-list.',
@@ -59,6 +66,46 @@ const PAGE_DESCRIPTIONS = {
 const INTRO_TEXT =
   "This dashboard pulls together Autotask (tickets, clients, financials), Ingram Micro licensing, IT Glue, SaaS Alerts, and Strety scorecards into one place for Ambient iT's day-to-day work -- daily checks, client look-ups, and ticket/financial reporting, all in one app instead of jumping between systems.";
 
+// A curated "start your day" callout, by request -- distinct from (and
+// separate to) PAGE_DESCRIPTIONS' plain one-liners below: What's On is
+// featured prominently with the real detail of what to actually DO there
+// (not just what it shows), then three more daily-check pages are called
+// out underneath with their own short reason-to-check-it blurbs. Static,
+// same "never lost or flashed away by a slow load" reasoning as INTRO_TEXT
+// -- lives in mount()'s initial render, not the live-fetched #page-groups
+// region. Hrefs are plain `#pageId` hash links, same in-app navigation
+// convention as pageItemHtml() below, just hardcoded here since this is a
+// fixed, curated list rather than the live/reconciled full page list.
+const DAILY_CHECKLIST_HTML = `
+  <div class="resource-group start-here-checklist">
+    <div class="section-heading section-heading--nav">Daily Checklist</div>
+    <div class="start-here-checklist-featured">
+      <a href="#whats-on" class="start-here-checklist-title">What's On</a>
+      <p>Check this page for:</p>
+      <ul>
+        <li>Helpdesk Task Tracker, plus your own personal To Dos.
+          <ul>
+            <li>Complete any Helpdesk Daily, Weekly, Monthly metrics and Jobs.</li>
+            <li>Jobs marked as <strong>AUTO:</strong> are managed/filled by automated processes.</li>
+          </ul>
+        </li>
+        <li>Team Shifts: know who's On Call, who's Helpdesk Handler, who's away, etc.
+          <ul>
+            <li>Apply for leave in Autotask, but make sure it's also entered in Shifts.</li>
+          </ul>
+        </li>
+      </ul>
+	  </br>
+      <p class="start-here-checklist-subheading">Other Daily Activities -- check these dashboard pages:</p>
+      <ul class="start-here-checklist-other">
+        <li><a href="#service-calls">Service Calls</a> <span class="cell-subtext">-- what's scheduled in Autotask</span></li>
+        <li><a href="#subscriptions-expiring">Subscriptions Expiring</a> <span class="cell-subtext">-- Ingram Micro / Microsoft licenses</span></li>
+        <li><a href="#my-strety-tasks">My Strety Tasks</a> <span class="cell-subtext">-- your to-dos. Don't leave it till the last moment.</span></li>
+      </ul>
+    </div>
+  </div>
+`;
+
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
@@ -67,6 +114,7 @@ export function mount(container) {
     <div class="start-here-layout">
       <div class="start-here-pages">
         <p class="status">${INTRO_TEXT}</p>
+        ${DAILY_CHECKLIST_HTML}
         <div id="page-groups"><p class="status">Loading page list...</p></div>
       </div>
       <div class="start-here-links">
@@ -81,12 +129,13 @@ export function mount(container) {
 }
 
 function externalLinkHtml(link) {
+  const iconHtml = link.icon ? `<span class="button-link-icon" aria-hidden="true">${link.icon}</span>` : '';
   if (!link.url) {
     // Not a real disabled <button> -- an <a> with no href isn't focusable/
     // clickable at all by default, which is enough here without extra ARIA.
-    return `<span class="button-link button-link--pending" title="URL not confirmed yet">${escapeHtml(link.label)}</span>`;
+    return `<span class="button-link button-link--pending" title="URL not confirmed yet">${iconHtml}${escapeHtml(link.label)}</span>`;
   }
-  return `<a class="button-link" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`;
+  return `<a class="button-link" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${iconHtml}${escapeHtml(link.label)}</a>`;
 }
 
 // Pulled live from the same two sources the sidebar itself uses
