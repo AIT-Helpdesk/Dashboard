@@ -372,6 +372,15 @@ h1 {
   cursor: pointer;
 }
 
+/* Start Here's external-system buttons -- a plain emoji before the label,
+   same lightweight-icon convention as the sidebar's own theme toggle
+   ('☀️ Light Mode'/'🌙 Dark Mode'). aria-hidden on the icon span itself
+   (set in start-here/client.js) since the label text alone is the
+   accessible name -- the emoji is decoration, not information. */
+.button-link-icon {
+  margin-right: 0.4rem;
+}
+
 .button-link:hover { opacity: 0.9; }
 
 /* Fills essentially the whole page -- no page-header on this page at all
@@ -703,6 +712,16 @@ h1 {
   color: #dc2626;
 }
 
+/* A plain full-width rule between two otherwise-unrelated page sections
+   (e.g. What's On's Scorecards vs. its Team Shifts excerpt below) -- an
+   actual <hr>, not a bordered div, so it's usable anywhere without a
+   wrapping container. */
+.section-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5rem 0;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -793,6 +812,49 @@ td.ticket-number {
   .start-here-layout {
     grid-template-columns: 1fr;
   }
+}
+
+/* Start Here's "Daily Checklist" callout -- a curated, static block above
+   the live page list, by request. Reuses .resource-group for its
+   border/rounded-corner card look (same as every scorecard/calendar group
+   elsewhere on this dashboard), then adds its own emphasis on top so it
+   doesn't just look like one more plain list. */
+.start-here-checklist-featured {
+  border-left: 4px solid #16a34a;
+  background: var(--row-changed-bg);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0 1rem;
+}
+.start-here-checklist-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #16a34a;
+  text-decoration: none;
+}
+.start-here-checklist-title:hover {
+  text-decoration: underline;
+}
+.start-here-checklist-featured p {
+  margin: 0.3rem 0;
+}
+.start-here-checklist-featured ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1.25rem;
+}
+.start-here-checklist-featured ul ul {
+  margin-top: 0.15rem;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.start-here-checklist-subheading {
+  font-weight: 600;
+  margin: 0 0 0.3rem;
+}
+ul.start-here-checklist-other {
+  margin: 0;
+  padding-left: 1.25rem;
 }
 
 .start-here-buttons {
@@ -1031,6 +1093,35 @@ td.ticket-number {
   .calendar-table th {
     font-size: 0.65rem;
   }
+}
+
+/* What's On's "Team Shifts" excerpt -- a fixed key of button-sized colored
+   boxes below the 2-week calendar, one per shift category (see
+   SHIFT_CATEGORIES in whats-on/client.js). Swatch colors are set inline per
+   category (not fixed classes here) since the category list/colors are a
+   business-defined legend specific to that one page, not a reusable
+   dashboard-wide status palette. */
+.shifts-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.1rem;
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+.shifts-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.shifts-legend-swatch {
+  display: inline-block;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 
 td.ticket-number a {

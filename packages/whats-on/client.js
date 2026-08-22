@@ -10,8 +10,66 @@ export const label = "What's On";
 // see mount() below.
 let lastData = null;
 
+// Team Shifts excerpt's own state, deliberately separate from lastData
+// above -- it's a wholly separate fetch (see server.js's dedicated /shifts
+// route) so paging a week forward/back never touches the Strety scorecard
+// data or re-triggers its own rate-limited fetch.
+let lastShiftsWeekStart = null; // "YYYY-MM-DD" Monday key, or null before the first load (server defaults to the current week)
+let lastShiftsData = null;
+
 const FREQUENCIES = ['daily', 'weekly', 'monthly'];
 const FREQUENCY_LABELS = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
+
+// Fixed legend, by request -- matched against each entry's own `displayName`
+// (case-insensitive), which for a regular shift is the shift's own label and
+// for a time-off entry is its RESOLVED timeOffReason name (see
+// @dashboard/teams-shifts/lib.js's getResolvedShifts() -- both kinds share
+// this one field in the resolved row shape, so one match function covers
+// both without the caller needing to know which `kind` it's looking at).
+//
+// Order here is the order the legend renders in. Confirmed against real
+// data: "On Call" and "Helpdesk Handler" are exact real /shifts labels; the
+// holiday patterns cover 7 real label variants seen across 2026's real
+// shifts ("Public Holiday", "Pub Hol", "Sri Lanka - Pub Hol", "Australia
+// Day", "Good Friday", "Easter Monday", "Labour Day" -- Graph's own `theme`
+// field was NOT consistent across these, so matching is on the label text,
+// never the theme). Vacation/Unpaid/Sick-Other-Leave/RDO-Time-in-Lieu are
+// real timeOffReason names, NOT shift labels -- confirmed against real data
+// this account has 11 real reasons configured, several spelling their own
+// intended legend color directly in the name (e.g. "Vacation (green)",
+// "Sick/Other Leave (purple)", "RDO / Time in Lieu (grey)"), a strong
+// confirmation this category list matches real intent, not a guessed
+// taxonomy. This was found (and fixed) after a real report that a real
+// booked Vacation wasn't showing -- root cause was /shifts and /timesOff
+// being two entirely separate Graph resources, and this page originally
+// only ever queried /shifts; not a matching-logic bug at all.
+const SHIFT_CATEGORIES = [
+  { key: 'onCall', label: 'On Call', color: '#eab308', match: (dn) => /^on\s*call/i.test(dn) },
+  { key: 'helpdesk', label: 'Helpdesk Handler', color: '#3b82f6', match: (dn) => /helpdesk\s*handler/i.test(dn) },
+  { key: 'vacation', label: 'Vacation', color: '#22c55e', match: (dn) => /vacation/i.test(dn) },
+  // "leave" is NOT required in the match -- confirmed against real data the
+  // actual timeOffReason is spelled literally "Unpaid" (see
+  // @dashboard/teams-shifts/lib.js's fetchTimeOffReasonNames() -- these
+  // reason names are the real source of Vacation/Unpaid/Sick-Other/RDO-TIL
+  // categories, not a shift's own displayName; matching stays on
+  // displayName either way since both shifts and time-off entries share
+  // that field name in the resolved row shape).
+  { key: 'unpaidLeave', label: 'Unpaid leave', color: '#dc2626', match: (dn) => /unpaid/i.test(dn) },
+  { key: 'sickOther', label: 'Sick/Other Leave', color: '#8b5cf6', match: (dn) => /\bsick\b|other\s*leave/i.test(dn) },
+  { key: 'rdoTil', label: 'RDO/Time in Lieu', color: '#9ca3af', match: (dn) => /\brdo\b|time\s*in\s*lieu/i.test(dn) },
+  {
+    key: 'publicHoliday',
+    label: 'Public Holiday',
+    color: '#ffffff',
+    match: (dn) => /pub(lic)?\s*hol|australia\s*day|good\s*friday|easter\s*monday|labour\s*day|christmas|boxing\s*day|anzac\s*day|new\s*year/i.test(dn),
+  },
+];
+
+function categorizeShift(entry) {
+  const dn = (entry.displayName || '').trim();
+  if (!dn) return null;
+  return SHIFT_CATEGORIES.find((cat) => cat.match(dn)) || null;
+}
 
 export function mount(container) {
   container.innerHTML = `
@@ -22,8 +80,22 @@ export function mount(container) {
       </div>
     </header>
     <p id="status" class="status">Helpdesk Task Tracker's scorecards, followed by your own personal scorecards -- up to the last 8 real check-in periods, most recent first. Hover a value for its check-in note.</p>
-    <div id="summary" class="summary" hidden></div>
+    <div id="summary" class="section-heading section-heading--nav" hidden></div>
     <div id="results" class="results"></div>
+
+    <hr class="section-divider" />
+
+    <div class="section-heading section-heading--nav">Team Shifts -- General</div>
+    <div class="date-form calendar-nav">
+      <button type="button" id="shifts-prev-button" aria-label="Previous week">&lsaquo;</button>
+      <span id="shifts-week-label" class="calendar-month-label"></span>
+      <button type="button" id="shifts-next-button" aria-label="Next week">&rsaquo;</button>
+      <button type="button" id="shifts-today-button">This Week</button>
+      <button type="button" id="shifts-refresh-button">Refresh</button>
+    </div>
+    <p id="shifts-status" class="status">Loading...</p>
+    <div id="shifts-calendar" class="results"></div>
+    <div id="shifts-legend" class="shifts-legend"></div>
   `;
 
   const refreshButton = container.querySelector('#refresh-button');
@@ -31,7 +103,169 @@ export function mount(container) {
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
+  const shiftsPrevButton = container.querySelector('#shifts-prev-button');
+  const shiftsNextButton = container.querySelector('#shifts-next-button');
+  const shiftsTodayButton = container.querySelector('#shifts-today-button');
+  const shiftsRefreshButton = container.querySelector('#shifts-refresh-button');
+  const shiftsWeekLabelEl = container.querySelector('#shifts-week-label');
+  const shiftsStatusEl = container.querySelector('#shifts-status');
+  const shiftsCalendarEl = container.querySelector('#shifts-calendar');
+  const shiftsLegendEl = container.querySelector('#shifts-legend');
+
   refreshButton.addEventListener('click', load);
+
+  renderShiftsLegend();
+
+  function addDaysKey(dateKey, delta) {
+    const [y, m, d] = dateKey.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+  }
+
+  shiftsPrevButton.addEventListener('click', () => loadShifts(addDaysKey(lastShiftsWeekStart, -7)));
+  shiftsNextButton.addEventListener('click', () => loadShifts(addDaysKey(lastShiftsWeekStart, 7)));
+  shiftsTodayButton.addEventListener('click', () => loadShifts(null)); // null -- let the server default to the current AEST week, same as the very first load
+  shiftsRefreshButton.addEventListener('click', () => loadShifts(lastShiftsWeekStart, true));
+
+  if (lastShiftsData) renderShifts(lastShiftsData);
+  else loadShifts(null);
+
+  async function loadShifts(weekKey, force) {
+    shiftsPrevButton.disabled = true;
+    shiftsNextButton.disabled = true;
+    shiftsTodayButton.disabled = true;
+    shiftsRefreshButton.disabled = true;
+    shiftsStatusEl.hidden = false;
+    shiftsStatusEl.className = 'status';
+    shiftsStatusEl.textContent = 'Loading...';
+    shiftsCalendarEl.innerHTML = '';
+
+    try {
+      const params = new URLSearchParams();
+      if (weekKey) params.set('week', weekKey);
+      if (force) params.set('force', 'true');
+      const qs = params.toString();
+      const res = await fetch(`/api/whats-on/shifts${qs ? `?${qs}` : ''}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      lastShiftsWeekStart = data.weekStart;
+      lastShiftsData = data;
+      renderShifts(data);
+    } catch (err) {
+      shiftsStatusEl.hidden = false;
+      shiftsStatusEl.className = 'status error';
+      shiftsStatusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      shiftsPrevButton.disabled = false;
+      shiftsNextButton.disabled = false;
+      shiftsTodayButton.disabled = false;
+      shiftsRefreshButton.disabled = false;
+    }
+  }
+
+  function renderShifts(data) {
+    shiftsWeekLabelEl.textContent = shiftsRangeLabel(data.days[0], data.days[data.days.length - 1]);
+
+    if (data.notFound) {
+      shiftsStatusEl.hidden = false;
+      shiftsStatusEl.className = 'status error';
+      shiftsStatusEl.textContent = `"${data.teamName}" wasn't found in Teams -- it may have been renamed or removed.`;
+      shiftsCalendarEl.innerHTML = '';
+      return;
+    }
+
+    shiftsStatusEl.hidden = true;
+    shiftsCalendarEl.innerHTML = '';
+
+    const table = document.createElement('table');
+    table.className = 'calendar-table';
+    const tbody = document.createElement('tbody');
+    for (let i = 0; i < data.days.length; i += 7) {
+      const week = data.days.slice(i, i + 7);
+      const tr = document.createElement('tr');
+      for (const dayKey of week) {
+        const isToday = dayKey === data.todayKey;
+        const td = document.createElement('td');
+        td.className = 'calendar-cell' + (isToday ? ' calendar-cell--today' : '');
+        const entries = data.byDay[dayKey] || [];
+        // Day+month, not a bare day number -- unlike a single-month
+        // calendar, this 14-day window routinely spans two different
+        // months (sometimes two different years), so the month has to be
+        // shown on every cell, not just implied by a shared header.
+        const dayLabel = shiftsDayNumLabel(dayKey);
+        td.innerHTML = `
+          <span class="calendar-cell-daynum" style="cursor: default;">${dayLabel}</span>
+          <div class="calendar-cell-entries">${entries.map((e) => shiftEntryHtml(e)).join('')}</div>
+        `;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    shiftsCalendarEl.appendChild(table);
+  }
+
+  function shiftEntryHtml(e) {
+    const cat = categorizeShift(e);
+    const line1 = `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
+    const line2 = e.userName || '(Open shift)';
+    // Type -- the matched legend category's own clean label when there is
+    // one (e.g. "Vacation", not the raw underlying reason text "Vacation
+    // (green)"), otherwise the raw displayName so an uncategorized entry
+    // still shows something rather than nothing. By request -- previously
+    // this was tooltip-only ("Type: ..."); now shown directly on the entry
+    // itself, one line taller.
+    const line3 = cat ? cat.label : e.displayName || '(unlabeled)';
+    const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2">${escapeHtml(line2)}</span><span class="calendar-entry-line2">${escapeHtml(line3)}</span>`;
+    const titleLines = [
+      `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
+      `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
+      `Type: ${e.displayName || '(unlabeled)'}${cat ? ` -- ${cat.label}` : ''}`,
+    ];
+    if (e.notes) titleLines.push(`Notes: ${e.notes}`);
+    if (!e.published) titleLines.push('Not yet published (draft)');
+    const title = escapeHtml(titleLines.join('\n'));
+
+    // Public Holiday's box is white -- a translucent color-mix tint (the
+    // convention every other category uses) would be indistinguishable
+    // from an empty cell on a light background, so it gets a solid fill
+    // plus a visible border instead, same special-case as the legend swatch
+    // below.
+    const style = !cat
+      ? '' // unmatched label (e.g. real data's "Working ", or an unlabeled shift) -- plain default look, not falsely colored
+      : cat.key === 'publicHoliday'
+        ? `background: #ffffff; color: #1a1a1a; border: 1px solid var(--border); border-left: 4.5px solid #9ca3af;`
+        : `background: color-mix(in srgb, ${cat.color} 22%, transparent); border-left-color: ${cat.color};`;
+    return `<div class="calendar-entry calendar-entry--allocated" style="${style}" title="${title}">${inner}</div>`;
+  }
+
+  function renderShiftsLegend() {
+    shiftsLegendEl.innerHTML = SHIFT_CATEGORIES.map((cat) => {
+      const swatchStyle =
+        cat.key === 'publicHoliday'
+          ? `background: #ffffff; border: 1px solid var(--border);`
+          : `background: ${cat.color}; border: 1px solid color-mix(in srgb, ${cat.color} 60%, black);`;
+      return `<span class="shifts-legend-item"><span class="shifts-legend-swatch" style="${swatchStyle}"></span>${escapeHtml(cat.label)}</span>`;
+    }).join('');
+  }
+
+  function shiftsDayNumLabel(dayKey) {
+    const [, m, d] = dayKey.split('-').map(Number);
+    const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${d} ${MONTH_ABBR[m - 1]}`;
+  }
+
+  function shiftsRangeLabel(startKey, endKey) {
+    const [sy] = startKey.split('-').map(Number);
+    const [ey] = endKey.split('-').map(Number);
+    const start = shiftsDayNumLabel(startKey);
+    const end = shiftsDayNumLabel(endKey);
+    // Only shows a year at all when the window's end year differs from the
+    // browser's current year -- keeps the common case ("17 Aug - 30 Aug")
+    // short, without hiding the year in the rarer case a window straddles a
+    // real year boundary (sy !== ey) or is being viewed well into another year.
+    const showYear = sy !== ey || sy !== new Date().getFullYear();
+    return showYear ? `${start} ${sy} - ${end} ${ey}` : `${start} - ${end}`;
+  }
 
   // Auto-loads on mount only when there's nothing to show yet -- by
   // request. Unlike My Strety Tasks/SaaS Alerts Customers (which re-fetch
@@ -108,7 +342,7 @@ export function mount(container) {
 
     statusEl.hidden = true;
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>Helpdesk Scorecards</strong><span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>`;
+    summaryEl.innerHTML = `Helpdesk Scorecards<span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>`;
 
     resultsEl.innerHTML = '';
 
@@ -133,9 +367,9 @@ export function mount(container) {
       // shift from Helpdesk's scorecards to the signed-in user's own,
       // since summaryEl above only introduces the Helpdesk half.
       if (i === 1) {
-        const personalHeading = document.createElement('p');
-        personalHeading.className = 'summary';
-        personalHeading.innerHTML = `<strong>Your Personal Scorecards</strong><span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>`;
+        const personalHeading = document.createElement('div'); // was <p class="summary"> -- section-heading is styled as a block div elsewhere on this dashboard (Start Here's, Ticket Times', Team Shifts' own heading above)
+        personalHeading.className = 'section-heading section-heading--nav';
+        personalHeading.innerHTML = `Your Personal Scorecards<span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>`;
         resultsEl.appendChild(personalHeading);
       }
       if (group.notFound) {
@@ -263,6 +497,11 @@ export function mount(container) {
   function formatDateTime(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleString();
+  }
+
+  function formatTime(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   }
 
   function escapeHtml(str) {

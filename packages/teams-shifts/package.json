@@ -1,18 +1,16 @@
 {
-  "name": "@dashboard/whats-on",
+  "name": "@dashboard/teams-shifts",
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
   "dashboardPage": {
-    "id": "whats-on",
-    "label": "What's On",
+    "id": "teams-shifts",
+    "label": "Teams Shifts",
     "client": "client.js",
     "server": "server.js"
   },
   "dependencies": {
-    "@dashboard/autotask-client": "*",
-    "@dashboard/strety-client": "*",
-    "@dashboard/teams-shifts": "*",
+    "axios": "^1.7.2",
     "express": "^4.19.2"
   }
 }
