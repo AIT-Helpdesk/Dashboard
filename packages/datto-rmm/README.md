@@ -1,0 +1,54 @@
+# @dashboard/datto-rmm
+
+Dashboard page: a live Datto RMM overview -- Total Devices, Open Alerts, and a curated shortlist of "needs attention" filters (Offline Devices, STALE Devices, Reboot Required, Antivirus Disabled, Suspended Devices, No MS Office), each as a donut-ring card (count vs. total, colored by status). Not date-scoped -- a live snapshot, same convention as CSP Customers/Ingram Subscriptions. Click a card (Total Devices or any filter, not Open Alerts) for a real popup listing the matching devices; click a device row for its full detail -- model, processor, memory, IP/domain, and real disk free-space per drive.
+
+- `client.js` - frontend module: a card grid of donut rings (plain SVG, no chart library). Exports `id`, `label`, and `mount(container)`, picked up automatically by the shell.
+- `server.js` - Express router mounted by the shell at `/api/datto-rmm`.
+- `lib.js` - the actual Datto RMM API v2 client (OAuth token, filter listing, device/alert counts).
+
+## Ported from a previous employee's separate app, not built from scratch
+
+This is adapted from `C:\Code\Improved-Dashboards` (a separate React/Vite + Express project, "AIT Dashboard", built by a previous employee -- Roman) -- specifically its `server/dattoClient.js` and `server/services/dattoDataService.js`. The real Datto auth flow and endpoint shapes are preserved as-is (that part was already confirmed working against the real account by that earlier work); everything else was rewritten to fit this dashboard's own conventions:
+
+- **ESM + native `fetch()` -> CommonJS + axios.** That project uses `import`/`export` and the browser-standard `fetch()` API directly; this one uses `require`/`module.exports` and `axios`, matching every other page on this dashboard (CSP Customers, Teams Shifts, etc.).
+- **React drag-and-drop widget grid -> a fixed page.** The original lets a user build their own dashboard from a widget palette (`react-grid-layout`, persisted to `config/dashboards.json`) -- a real architectural departure from every other page here, which are all fixed, single-purpose, no per-user layout. By request, this page is fixed: the same handful of cards every time, no picker.
+- **All 125 real filters -> a curated 6.** Confirmed against the real account: it has 125 saved Datto filters (custom + Datto's own "default" ones), mostly OS/hardware/software inventory (`MS Win Server 2003`, `Veeam`, `Webroot`, ...), not health-style signals. Rendering all 125 would mean 125 API calls on every page load and mostly clutter. `CURATED_FILTER_NAMES` in `lib.js` narrows this to six that actually read as "does something need attention," matched by name (not a hardcoded id), same not-a-hardcoded-id convention as this dashboard's other pages.
+
+## Two real bugs found while porting, not invented here
+
+- **A genuine Datto API bug.** Confirmed against the real account: `GET /api/v2/account/devices?filterId=2275` (`filterId=2275` is Datto's own built-in "Google Chrome" filter) returns a real `500 Internal Server Error` from Datto's own server -- nothing wrong on this end. That filter isn't in the curated shortlist, but `getOverview()` still wraps each filter's own count call in a try/catch regardless (`available: false` on failure, rendered as a distinct "Unavailable" card rather than failing the whole page) -- any filter could 500 the same way, not just this one.
+- **The original's status-color logic was backwards for this use case.** The ported `metricStatus()` flagged a filter as "warning" when it matched **under** half the account's devices -- reasonable for a filter like "Compliant Devices" (low match = bad), but backwards for every filter in `CURATED_FILTER_NAMES`, which are all "count of devices with a problem." Confirmed against real data: a real run showed **Offline Devices at 1163/1616 (72%) coming back "healthy"** under the original rule -- exactly the kind of thing this page exists to surface, mis-flagged as fine. Rewritten to a simple `count > 0 -> warning` rule for filter cards (matching the binary rule Open Alerts already used), red (`danger`) reserved for Open Alerts specifically since an actually-firing alert reads as more urgent than "236 devices are due a reboot."
+
+## Credentials (`.env`)
+
+`DATTO_API_URL`, `DATTO_API_KEY`, `DATTO_API_SECRET` -- reused directly from `C:\Code\Improved-Dashboards\.env` (the same Datto RMM account), by request, rather than a fresh API key. `DATTO_API_SECRET` is optional -- some tenants' API keys have no paired secret, in which case the key is used as both username and password against Datto's OAuth token endpoint (the original client's own "key-only" fallback, preserved here).
+
+**Auth**: OAuth password-grant against `{DATTO_API_URL}/auth/oauth/token` (`Authorization: Basic <base64 "public-client:public">`, `grant_type=password`, the API key as `username`, the API secret -- or the key again, key-only mode -- as `password`). Token cached in-process, refreshed on a 401 (one retry) rather than tracked by expiry alone, since Datto's `expires_in` behavior wasn't independently reverified here -- inherited from the original client's own retry-on-401 handling.
+
+## Device drill-down -- and three more real bugs found while wiring it up
+
+By later request, clicking a card (Total Devices or any filter card -- not Open Alerts, which isn't a device-filter concept) opens a real popup window listing the matching devices (hostname, site, OS, online/offline, patch status), and clicking a device row expands it into full detail. This popup is genuinely different from Service Calls'/Teams Shifts' own day-popups: those just dump already-loaded client data into a static document, but a filter can match hundreds of devices and each device's full detail is its own separate API call -- prefetching everything before opening the popup isn't practical here. So the popup embeds real, live JavaScript that fetches from this dashboard's own `/api/datto-rmm/devices`/`/device/:uid` endpoints directly (same-origin, so the existing session cookie covers it, no separate auth). Built via string concatenation inside `client.js`, not a nested template literal -- the popup's own script lives inside this file's own outer template literal, and an unescaped backtick in the inner script would terminate the outer one early.
+
+Porting the actual device-detail FIELDS surfaced real, confirmed bugs in the original client's own code -- not just here, genuinely present in `C:\Code\Improved-Dashboards\server\lib\deviceDetails.js` too, found by dumping a real raw `/v2/audit/device/{uid}` payload and comparing it against what the original's field-guessing was actually looking for:
+
+- **Disk free space was silently always null.** The real field is `freespace` (lowercase, one word) on each entry in a top-level `logicalDisks` array, with `diskIdentifier` (e.g. `"C:"`) as the real drive-letter field. The original's own `parseDisksFromAudit()` (and this port's first draft, copied from it) checked `freeSpace`/`driveLetter` -- neither ever matched, so every device's free space came back null even though the real number was sitting right there in the response the whole time. Confirmed fixed against a real device: `C:` now correctly shows `80.3 GB free of 126.4 GB (63%)`.
+- **Real RAM modules were being shown as fake disks.** The original's disk-detection walked the ENTIRE audit object looking for anything "disk-shaped" (any object with a `size` key, among others). Datto's real audit payload has a separate `physicalMemory[]` array (actual RAM stick entries, each with its own `size` field) that matches that same heuristic -- confirmed against real data, a real device's disk list included two bogus ~4GB entries that were actually memory modules, not disks. Fixed by reading the confirmed real `logicalDisks` key directly first, and excluding known non-disk keys (`physicalMemory`, `processors`, `nics`, etc. -- see `NON_DISK_KEYS` in `lib.js`) from the recursive fallback that's kept for a shape that doesn't have `logicalDisks` at all (unconfirmed against real data -- every device tested here had it).
+- **Processor was silently always null too.** Real field is `processors` (plural, an array of `{name}`); the original checked `audit?.processor?.name` (singular) -- never matched. Confirmed fixed: a real device now shows `Intel(R) Xeon(R) Gold 6126 CPU @ 2.60GHz` instead of nothing.
+- A real logicalDisks entry with no size AND no free space at all (confirmed real example: a CD-ROM drive, `"D:"`, both null) is filtered out rather than shown as an empty row.
+
+**Not ported**: the original's `parseDiskAlerts()`, which merges in free-space data from any currently-ACTIVE disk-usage alert on a device (`perf_disk_usage_ctx`/`fs_object_ctx` alert classes). Checked against the real account's actual current alerts (10 open, none disk-related) and none would have been affected either way, so this wasn't exercised -- worth adding if a real disk-space alert ever needs to show up here and the audit-based `logicalDisks` data for that specific device turns out to be missing/stale.
+
+## Every request Datto makes per page load
+
+`getOverview()` fires, per load (or cache miss): 1 call for total device count, 1 for open alerts, 2 for the filter list (`custom-filters` + `default-filters`, both small/cheap), and 1 per curated filter (6) for its own device count -- 10 real Datto API calls total, confirmed against real data at ~5 seconds end to end. The 6 filter-count calls run with limited concurrency (3 at a time, via `@dashboard/autotask-client`'s shared `mapWithConcurrency()` -- a generic utility, not Autotask-specific, reused here rather than duplicated) rather than fully sequential or fully parallel.
+
+## Caching
+
+Cached in-process for 20 minutes (`CACHE_TTL_MS`), same convention as CSP Customers -- a live snapshot, not date-scoped, but expensive enough (10 real API calls) that re-fetching on every page visit would be wasteful. `?force=true` (the Refresh button) bypasses it.
+
+## Still open
+
+- Whether Datto's real token `expires_in` is reliable enough to trust an expiry-based cache instead of retry-on-401 -- not independently reverified, inherited from the original client's own handling.
+- The other 119 real filters on the account, if a case comes up for adding one to `CURATED_FILTER_NAMES` -- easy to extend (just add the exact real name), but nothing beyond the current six was requested.
+- `parseDiskAlerts()` (see above) -- not ported, unexercised against real data since the account's current alerts happen to be non-disk-related.
+- The `logicalDisks`-shape assumption is confirmed only against Windows devices (a real Server 2016 VM) -- a real macOS device tested here had a different, unconfirmed audit shape (no top-level `logicalDisks`, disk detection fell back to the recursive heuristic and found nothing reliable). Disk space on non-Windows devices may still be incomplete.

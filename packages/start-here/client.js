@@ -37,6 +37,7 @@ const EXTERNAL_LINKS = [
 // that's still `/pages-registry.js` + `/api/nav-layout` (fetched live below,
 // same as the sidebar itself), so a page id with no entry here just shows
 // with no description rather than silently vanishing from the list.
+
 const PAGE_DESCRIPTIONS = {
   'whats-on': "Helpdesk Task Tracker, Your personal scorecards, and the Team Shifts quick viewer.",
   'my-strety-tasks': 'Your own open Strety to-dos, sorted by due date.',

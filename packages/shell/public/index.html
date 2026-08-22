@@ -15,8 +15,14 @@
       try {
         var theme = localStorage.getItem('dashboard.theme');
         if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
+        // Same flash-avoidance reasoning as the theme read above -- applied
+        // to <html> (available immediately, before <body> is even parsed),
+        // not .sidebar, since that element doesn't exist yet at this point.
+        if (localStorage.getItem('dashboard.sidebarCollapsed') === 'true') {
+          document.documentElement.setAttribute('data-sidebar-collapsed', 'true');
+        }
       } catch (e) {
-        // localStorage unavailable (private browsing, storage full, etc.) -- falls back to the OS setting.
+        // localStorage unavailable (private browsing, storage full, etc.) -- falls back to the OS setting / expanded sidebar.
       }
     })();
   </script>
@@ -25,6 +31,7 @@
   <div class="layout">
     <nav class="sidebar">
       <img src="logo.png" alt="Ambient iT" class="sidebar-logo" />
+      <button id="sidebar-toggle" class="sidebar-toggle" type="button"></button>
       <ul id="nav-list" class="nav-list"></ul>
       <div id="user-info" class="user-info"></div>
       <button id="theme-toggle" class="theme-toggle" type="button"></button>
