@@ -87,6 +87,40 @@ const app = express();
 registerAuthRoutes(app);
 app.use(requireAuth);
 
+// Every Strety connect/callback route below (three separate connections --
+// shared, personal, automation) used to just res.send() a bare line of
+// text on success/failure, leaving whoever just finished the real browser
+// OAuth round trip with no way back to the dashboard except the browser's
+// own back button. By request: a real "Return to Dashboard" button,
+// wrapped around whatever plain message each call site already had.
+// Plain <a>, not a JS reload -- navigating back to "/" is itself already a
+// full fresh page load, so whichever page they land on (the shell's
+// default) re-mounts and re-fetches live, no separate "refresh" step
+// needed on top of the navigation itself.
+// req.query.error/.error_description (used below) come straight off the
+// OAuth redirect's own query string -- attacker-craftable, unlike every
+// other message passed to stretyConnectPage() below, which are all
+// hardcoded strings. Escaped before ever reaching stretyConnectPage()'s
+// raw HTML interpolation.
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function stretyConnectPage(message) {
+  return `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Strety</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1.5rem; text-align: center;">
+  <p>${message}</p>
+  <a href="/" style="display: inline-block; padding: 0.6rem 1.4rem; background: #2563eb; color: white; border-radius: 6px; text-decoration: none; font-weight: 600;">Return to Dashboard</a>
+</body>
+</html>`;
+}
+
 // Strety connection -- a separate, occasional admin-level action (connect
 // the shared Strety integration this dashboard's Strety-backed pages use),
 // distinct from the dashboard's own Microsoft 365 sign-in above. Mounted
@@ -140,14 +174,14 @@ app.get('/auth/strety/connect', (req, res) => {
 
 app.get('/auth/strety/callback', async (req, res) => {
   if (req.query.error) {
-    return res.status(403).send(`Strety authorization failed: ${req.query.error_description || req.query.error}`);
+    return res.status(403).send(stretyConnectPage(`Strety authorization failed: ${escapeHtml(req.query.error_description || req.query.error)}`));
   }
   try {
     await exchangeCodeForTokens(req.query.code, stretyRedirectUriFor(req));
-    res.send('Strety connected successfully -- you can close this tab.');
+    res.send(stretyConnectPage('Strety connected successfully.'));
   } catch (err) {
     console.error('Strety OAuth callback failed:', err);
-    res.status(500).send('Strety connection failed. Check server logs.');
+    res.status(500).send(stretyConnectPage('Strety connection failed. Check server logs.'));
   }
 });
 
@@ -189,14 +223,14 @@ app.get('/auth/strety-personal/connect', (req, res) => {
 
 app.get('/auth/strety-personal/callback', async (req, res) => {
   if (req.query.error) {
-    return res.status(403).send(`Strety authorization failed: ${req.query.error_description || req.query.error}`);
+    return res.status(403).send(stretyConnectPage(`Strety authorization failed: ${escapeHtml(req.query.error_description || req.query.error)}`));
   }
   try {
     await getPersonalClient(req.session.user.email).exchangeCodeForTokens(req.query.code, stretyPersonalRedirectUriFor(req));
-    res.send('Your Strety account is connected -- you can close this tab.');
+    res.send(stretyConnectPage('Your Strety account is connected.'));
   } catch (err) {
     console.error('Strety personal OAuth callback failed:', err);
-    res.status(500).send('Strety connection failed. Check server logs.');
+    res.status(500).send(stretyConnectPage('Strety connection failed. Check server logs.'));
   }
 });
 
@@ -226,14 +260,14 @@ app.get('/auth/strety-automation/connect', (req, res) => {
 
 app.get('/auth/strety-automation/callback', async (req, res) => {
   if (req.query.error) {
-    return res.status(403).send(`Strety authorization failed: ${req.query.error_description || req.query.error}`);
+    return res.status(403).send(stretyConnectPage(`Strety authorization failed: ${escapeHtml(req.query.error_description || req.query.error)}`));
   }
   try {
     await stretyAutomationClient.exchangeCodeForTokens(req.query.code, stretyAutomationRedirectUriFor(req));
-    res.send('Strety (Autotask sync automation account) connected successfully -- you can close this tab.');
+    res.send(stretyConnectPage('Strety (Autotask sync automation account) connected successfully.'));
   } catch (err) {
     console.error('Strety automation OAuth callback failed:', err);
-    res.status(500).send('Strety automation connection failed. Check server logs.');
+    res.status(500).send(stretyConnectPage('Strety automation connection failed. Check server logs.'));
   }
 });
 

@@ -1116,8 +1116,15 @@ ul.start-here-checklist-other {
   padding: 0.75rem;
 }
 
+/* Much lighter than a plain .button-link, by request -- a light accent
+   tint instead of the solid fill, since this is a whole stacked column of
+   them (Start Here's right-hand external-link list), not a single call-to-
+   action button. .button-link--pending (below) is untouched -- still its
+   own distinct greyed-out/inert look for an unconfirmed URL. */
 .start-here-buttons .button-link {
   text-align: center;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
 }
 
 /* Same look as .button-link, but for a system whose real URL isn't
