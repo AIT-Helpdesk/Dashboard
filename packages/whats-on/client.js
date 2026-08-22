@@ -136,7 +136,20 @@ export function mount(container) {
   const shiftsCalendarEl = container.querySelector('#shifts-calendar');
   const shiftsLegendEl = container.querySelector('#shifts-legend');
 
-  refreshButton.addEventListener('click', load);
+  // Refreshing Scorecards also force-refreshes Today & Tomorrow, by
+  // request -- one-directional (Today & Tomorrow's own Refresh button
+  // below does NOT trigger a scorecards refresh back). Only wired to the
+  // explicit button click, not to load()'s own auto-bootstrap on first
+  // mount (see below) -- Today & Tomorrow already does its own initial
+  // fetch there, so coupling it to every load() call would double-fetch
+  // on a fresh page visit. Refreshes the WHOLE Today & Tomorrow section
+  // (all three columns), not just My Strety Tasks in isolation -- all
+  // three share one /today-tomorrow request/cache server-side, so there's
+  // no cheap way to force-refresh just the Strety column on its own.
+  refreshButton.addEventListener('click', async () => {
+    await load();
+    loadTodayTomorrow(true);
+  });
 
   ttRefreshButton.addEventListener('click', () => loadTodayTomorrow(true));
   if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
