@@ -296,6 +296,14 @@ node -e "const {db}=require('./db.js'); db.exec('PRAGMA wal_checkpoint(TRUNCATE)
 
 **Then copy just that one file** -- `data.db` (not any `-shm`/`-wal` sidecars; they should be gone/empty after the checkpoint above and aren't needed) -- to `C:\apps\autotask-dashboard-git\packages\tc-elite-rollout\data.db` on the production server. Do this **before** `Restart-Service AmbientDashboard` where possible -- if the service already started against an empty `data.db`, dropping a new file into place won't be picked up until it's restarted again anyway.
 
+**If the page still looks empty after copying (confirmed against a real deploy)**: if `AmbientDashboard` had already started once and created its own empty `data.db` *before* the real file got copied over, leftover `data.db-shm`/`data.db-wal` from that empty version can still be sitting in the folder alongside the new file -- SQLite replays those on next open, effectively reverting the real data back to empty (or close to it). The page reads as "Nothing outstanding -- everything tracked is Done or N/A" rather than an obvious error, since an empty filtered result looks the same either way -- click "Show All" to tell the two apart (shows the real 27 clients if the data's actually there; shows "Nothing tracked yet" if the database is genuinely empty). Fix:
+
+```powershell
+Stop-Service AmbientDashboard
+Remove-Item C:\apps\autotask-dashboard-git\packages\tc-elite-rollout\data.db-shm, C:\apps\autotask-dashboard-git\packages\tc-elite-rollout\data.db-wal -ErrorAction SilentlyContinue
+Start-Service AmbientDashboard
+```
+
 ### 4. Verify
 
 Visit the TC Elite Rollout page on the real domain and confirm the real client list shows up (not an empty grid) -- spot-check a client you recognize against what you know is actually true for them.
