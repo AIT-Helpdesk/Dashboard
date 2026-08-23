@@ -23,3 +23,11 @@ packages/strety-client/.personal-tokens/
 # Runtime state (last sync.js run's outcome), not a credential, but not
 # checked in either -- see packages/strety-autotask-sync/status.js.
 packages/strety-autotask-sync/last-run.json
+
+# TC Elite Rollout's own SQLite database -- real, live application data
+# (client rollout statuses, the full audit trail), not source, never
+# committed. WAL mode (see db.js) also creates -shm/-wal sidecar files
+# alongside the main one.
+packages/tc-elite-rollout/data.db
+packages/tc-elite-rollout/data.db-shm
+packages/tc-elite-rollout/data.db-wal
