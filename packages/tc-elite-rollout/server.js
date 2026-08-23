@@ -9,6 +9,8 @@ const {
   seedNewStage,
   bulkSetCells,
   bulkSetStages,
+  bulkSetColumnCells,
+  bulkSetStageColumn,
   deleteClient,
   deleteStage,
 } = require('./db.js');
@@ -53,6 +55,17 @@ function slugify(label) {
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
 }
+// Validates the optional `clientIds` field a "Set Column" request can
+// send to restrict a bulk-column-set to a specific set of clients (in
+// practice: whichever rows client.js currently has rendered, respecting
+// the Show All toggle -- see wireBulkColumnButtons()). true/array means
+// valid (array is null for "field omitted -- every client", the
+// pre-existing behaviour); false means malformed, caller should 400.
+function isValidOptionalClientIds(body) {
+  if (body.clientIds === undefined) return true;
+  return Array.isArray(body.clientIds) && body.clientIds.every((id) => Number.isInteger(id));
+}
+
 function uniqueKey(baseKey, existingKeys) {
   if (!existingKeys.has(baseKey)) return baseKey;
   let n = 2;
@@ -114,13 +127,18 @@ router.get('/', (req, res) => {
     }));
     let shapedColumns = columns.map((col) => ({ id: col.id, key: col.key, label: col.label, kind: col.kind }));
 
+    // Captured before filtering -- the true total, for the "(visible/
+    // total)" count next to the Client header (client.js), regardless of
+    // whether this request itself is filtered or ?all=true.
+    const totalClients = clients.length;
+
     if (req.query.all !== 'true') {
       const filtered = applyDefaultFilter(shapedColumns, clients);
       shapedColumns = filtered.columns;
       clients = filtered.clients;
     }
 
-    res.json({ columns: shapedColumns, clients });
+    res.json({ columns: shapedColumns, clients, totalClients });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -151,10 +169,32 @@ router.get('/columns/:columnId/detail', (req, res) => {
       cellsByClient.get(row.client_id)[row.stage_id] = { status: row.status, reason: row.reason, updatedAt: row.updated_at, updatedByName: row.updated_by_name };
     }
 
+    let clients = clientRows.map((c) => ({ id: c.id, name: c.name, cells: cellsByClient.get(c.id) || {} }));
+    const totalClients = clients.length; // captured before filtering, same reasoning as GET / above
+
+    // Same "what's waiting to be done" default filtering as the master
+    // grid (applyDefaultFilter above), just scoped to one column's own
+    // stages instead of every column -- rows only (a detail sheet has no
+    // separate "columns" to hide beyond its own stages, and hiding a
+    // whole STAGE by request wasn't asked for here, only rows). Only
+    // status-type stages count -- text-type ones (WHO, Domain, Comment)
+    // are informational and never "outstanding" in their own right, same
+    // exclusion the rollup itself uses.
+    if (req.query.all !== 'true') {
+      const statusStageIds = stages.filter((s) => s.type === 'status').map((s) => s.id);
+      clients = clients.filter((c) =>
+        statusStageIds.some((stageId) => {
+          const cell = c.cells[stageId];
+          return cell && !RESOLVED_STATUSES.includes(cell.status);
+        })
+      );
+    }
+
     res.json({
       column: { id: column.id, key: column.key, label: column.label },
       stages: stages.map((s) => ({ id: s.id, key: s.key, label: s.label, type: s.type })),
-      clients: clientRows.map((c) => ({ id: c.id, name: c.name, cells: cellsByClient.get(c.id) || {} })),
+      clients,
+      totalClients,
     });
   } catch (err) {
     console.error(err);
@@ -237,6 +277,70 @@ router.patch('/clients/:clientId/bulk-cells', (req, res) => {
     const newReason = STATUSES_WITH_COMMENT.includes(status) ? reason || null : null;
     const columnIds = bulkSetCells(clientId, status, newReason, actorFrom(req));
     res.json({ status, reason: newReason, columnIds });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set one SIMPLE column's status for a set of clients in one go -- the
+// column-based mirror of PATCH /clients/:clientId/bulk-cells above (which
+// sets a whole row). Optional `clientIds` in the body restricts to just
+// those (client.js sends whichever rows are currently rendered, i.e.
+// "visible" respecting the Show All toggle); omit it for every client.
+// See bulkSetColumnCells() in db.js. Compound columns are rejected
+// outright -- their cell_status is never directly settable, only ever
+// derived from their own stages.
+router.patch('/columns/:columnId/bulk-cells', (req, res) => {
+  try {
+    const columnId = Number(req.params.columnId);
+    const column = db.prepare('SELECT * FROM columns WHERE id = ?').get(columnId);
+    if (!column) return res.status(404).json({ error: 'Column not found.' });
+    if (column.kind !== 'simple') return res.status(400).json({ error: `This column is compound -- edit its stages instead, not the whole column directly.` });
+    const body = req.body || {};
+    const { status, reason } = body;
+    if (!STATUSES.includes(status)) return res.status(400).json({ error: `status must be one of ${STATUSES.join(', ')}.` });
+    if (!isValidOptionalClientIds(body)) return res.status(400).json({ error: 'clientIds must be an array of integers if provided.' });
+    const newReason = STATUSES_WITH_COMMENT.includes(status) ? reason || null : null;
+    const affectedIds = bulkSetColumnCells(columnId, status, newReason, actorFrom(req), body.clientIds || null);
+    res.json({ status, reason: newReason, clientIds: affectedIds });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set one stage's value for a set of clients in one go -- the
+// column-based mirror of PATCH /columns/:columnId/clients/:clientId/bulk-stages
+// above (which sets a whole row within one detail sheet). Same optional
+// `clientIds` restriction as PATCH /columns/:columnId/bulk-cells above.
+// Unlike that route, this one DOES accept text-type stages (setting
+// every client's WHO/Domain/Comment field to the same string), same
+// status/text shaping PATCH /stages/:clientId/:stageId already uses per
+// stage.type. See bulkSetStageColumn() in db.js.
+router.patch('/stages/:stageId/bulk-status', (req, res) => {
+  try {
+    const stageId = Number(req.params.stageId);
+    const stage = db.prepare('SELECT * FROM stages WHERE id = ?').get(stageId);
+    if (!stage) return res.status(404).json({ error: 'Stage not found.' });
+
+    const body = req.body || {};
+    if (!isValidOptionalClientIds(body)) return res.status(400).json({ error: 'clientIds must be an array of integers if provided.' });
+
+    let newStatus;
+    let newReason;
+    if (stage.type === 'text') {
+      newStatus = null;
+      newReason = body.reason || null;
+    } else {
+      const { status, reason } = body;
+      if (!STATUSES.includes(status)) return res.status(400).json({ error: `status must be one of ${STATUSES.join(', ')}.` });
+      newStatus = status;
+      newReason = STATUSES_WITH_COMMENT.includes(status) ? reason || null : null;
+    }
+
+    const affectedIds = bulkSetStageColumn(stageId, newStatus, newReason, actorFrom(req), body.clientIds || null);
+    res.json({ status: newStatus, reason: newReason, clientIds: affectedIds });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
