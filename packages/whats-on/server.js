@@ -9,6 +9,7 @@ const express = require('express');
 // README) rather than removed outright.
 const { getPersonalClient } = require('@dashboard/strety-client');
 const { readLastRunStatus } = require('@dashboard/strety-autotask-sync/status.js');
+const { METRICS: AUTOTASK_SYNC_METRICS } = require('@dashboard/strety-autotask-sync/metrics.js');
 const {
   mondayOf,
   weekDatesFrom,
@@ -116,6 +117,15 @@ function evaluateAutomationStatus() {
 const SHIFTS_TEAM_NAME = 'General';
 
 const HELPDESK_TEAM_NAME = 'Helpdesk Task Tracker';
+// The exact set of metric titles the Autotask -> Strety automation keeps
+// updated (see @dashboard/strety-autotask-sync/metrics.js -- the single
+// source of truth for which metrics are automated, not duplicated here).
+// Used to flag each row with isAutoManaged below, so client.js can show
+// an "AUTO: " label -- matched by team + title, same identification
+// sync.js itself uses to find the real Strety metric to write to.
+const AUTO_MANAGED_METRIC_TITLES = new Set(
+  AUTOTASK_SYNC_METRICS.filter((m) => m.team === HELPDESK_TEAM_NAME).map((m) => m.title)
+);
 // By request: only these three cadences -- Strety's real `checkin_frequency`
 // values also include "annual" (confirmed against real data, 2 of the 74
 // metrics on this account), deliberately left out here. Order here is the
@@ -427,6 +437,11 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics, client) {
           title: m.attributes.title,
           target: targetLabel(m.attributes.target_type, m.attributes.target_value),
           cells,
+          // spaceType === 'team' -- Personal metrics are fetched with
+          // spaceType 'person' instead, and the automation only ever
+          // targets the Helpdesk Task Tracker TEAM, so this also
+          // implicitly matches sync.js's own team+title identification.
+          isAutoManaged: spaceType === 'team' && AUTO_MANAGED_METRIC_TITLES.has(m.attributes.title),
         };
       })
       // No inherent order from the API -- alphabetical by title within a cadence.
