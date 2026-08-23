@@ -417,6 +417,13 @@ h1 {
 .button-link--small {
   padding: 0.25rem 0.6rem;
   font-size: 0.75rem;
+  /* Same lighter tint as Start Here's own buttons (.start-here-buttons
+     .button-link), by request -- only these three (What's On's Today &
+     Tomorrow "Show All" links) use --small at all, so this is scoped
+     tightly enough to just set it directly here rather than a separate
+     selector. */
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
 }
 
 /* Start Here's external-system buttons -- a plain emoji before the label,
@@ -829,6 +836,18 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+/* Flex column, by request -- so .tt-column-body (below) can grow to fill
+   whatever height the grid's own default row-stretch already gives this
+   card (matching the tallest of the three columns), pushing
+   .tt-column-footer down to the same fixed spot at the bottom of every
+   column regardless of how much content is above it. */
+.tt-column {
+  display: flex;
+  flex-direction: column;
+}
+.tt-column-body {
+  flex: 1;
+}
 /* "Show All <X>" link under each column's own list, by request --
    separated from .tt-list by a hairline rather than just whitespace so it
    reads as this column's own footer action, not another list-adjacent row. */
@@ -848,7 +867,7 @@ h1 {
   background: var(--card);
   border: 1px solid #16a34a;
   border-radius: 0.5rem;
-  padding: 0.75rem 1rem 1rem;
+  padding: 0.75rem 1rem 0.5rem; /* bottom halved from 1rem, by request */
   margin: 1.5rem 0;
 }
 .tt-list {
@@ -919,6 +938,19 @@ a.tt-tag {
 table {
   width: 100%;
   border-collapse: collapse;
+}
+
+/* What's On's scorecard tables (Helpdesk/Personal, Daily/Weekly/Monthly),
+   by request -- a little smaller, closer to Service Calls' own calendar
+   entry text (.calendar-entry-line1's 0.78rem) than the plain browser
+   default size every other <td> on this dashboard falls back to. th stays
+   close to its own existing 0.8rem (barely changed) so the header row
+   doesn't end up smaller than the body text under it. */
+.scorecard-table td {
+  font-size: 0.8rem;
+}
+.scorecard-table th {
+  font-size: 0.75rem;
 }
 
 /* M365 Environment's Overview/Domains tables -- short, narrow content (a
