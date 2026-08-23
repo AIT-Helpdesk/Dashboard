@@ -270,7 +270,14 @@ export function mount(container) {
     const footer = footerLink
       ? `<div class="tt-column-footer"><a class="button-link button-link--small" href="${escapeHtml(footerLink.href)}">${escapeHtml(footerLink.label)}</a></div>`
       : '';
-    div.innerHTML = `<div class="section-heading">${escapeHtml(heading)}</div>${body}${footer}`;
+    // body wrapped in its own flex-grow div (.tt-column-body), by request --
+    // the three columns already stretch to match the tallest one (grid's
+    // own default align-items: stretch), but without this the footer just
+    // sat right after each column's own (varying-length) content, landing
+    // at a different height in every column. Growing this wrapper instead
+    // pushes the footer down to the same fixed spot at the bottom of every
+    // column, regardless of how much content is above it.
+    div.innerHTML = `<div class="section-heading">${escapeHtml(heading)}</div><div class="tt-column-body">${body}</div>${footer}`;
     return div;
   }
 
@@ -285,8 +292,12 @@ export function mount(container) {
   // a plain span -- opened as a real popup window, same explicit
   // window.open(..., 'width=1200,height=900') convention every other ticket
   // link on this dashboard uses (see e.g. service-calls/client.js), not just
-  // target="_blank" (which only opens a new tab).
-  function ttDayTag(dateKey, today, tomorrow, href) {
+  // target="_blank" (which only opens a new tab). `tooltip`, when given, is
+  // a plain native title="" tooltip -- by request, Service Calls' own tags
+  // show their linked ticket's number/title on hover this way (the other
+  // two columns don't pass one -- neither subscriptions nor Strety tasks
+  // have a "ticket" for this to mean anything).
+  function ttDayTag(dateKey, today, tomorrow, href, tooltip) {
     let cls;
     let label;
     if (dateKey === today) {
@@ -301,10 +312,11 @@ export function mount(container) {
       // .tt-tag--overdue color already says that on its own.
       label = formatShortDate(dateKey);
     }
+    const titleAttr = tooltip ? ` title="${escapeHtml(tooltip)}"` : '';
     if (href) {
-      return `<a class="tt-tag ${cls}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+      return `<a class="tt-tag ${cls}"${titleAttr} href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
     }
-    return `<span class="tt-tag ${cls}">${label}</span>`;
+    return `<span class="tt-tag ${cls}"${titleAttr}>${label}</span>`;
   }
 
   function formatShortDate(dateKey) {
@@ -316,9 +328,12 @@ export function mount(container) {
     const allocation = row.allocated
       ? escapeHtml(row.resourceNames.join(', '))
       : '<span class="text-highlight-red">Unallocated</span>';
+    // Ticket number/title on hover, by request -- null when there's no
+    // linked ticket at all (same case ticketUrl is also null for).
+    const tooltip = row.ticketNumber ? `${row.ticketNumber}: ${row.ticketTitle || ''}`.trim() : null;
     return `
       <li>
-        ${ttDayTag(row.dayKey, today, tomorrow, row.ticketUrl)}
+        ${ttDayTag(row.dayKey, today, tomorrow, row.ticketUrl, tooltip)}
         <span class="tt-time">${formatTime(row.startDateTime)}</span>
         <strong>${escapeHtml(row.companyName)}</strong>
         <span class="cell-subtext">${allocation}${row.description ? ` -- ${escapeHtml(row.description)}` : ''}</span>
@@ -722,6 +737,7 @@ export function mount(container) {
       // still list them (so they're not silently invisible), just without
       // any period columns to hang values on.
       const table = document.createElement('table');
+      table.className = 'scorecard-table';
       table.innerHTML = `
         <thead>
           <tr class="shaded-row"><th>Metric</th><th>Target</th><th>Check-ins</th></tr>
@@ -740,6 +756,7 @@ export function mount(container) {
     // "last 8" -- so the header can show a real date per column instead of
     // a generic "last 8" label.
     const table = document.createElement('table');
+    table.className = 'scorecard-table';
     table.innerHTML = `
       <thead>
         <tr class="shaded-row">

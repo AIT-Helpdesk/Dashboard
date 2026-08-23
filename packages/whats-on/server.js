@@ -544,16 +544,24 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
     if (!ticketIdByServiceCallId.has(t.serviceCallID)) ticketIdByServiceCallId.set(t.serviceCallID, t.ticketID);
   }
 
+  // Always fetched (not just when requireOpenTicket needs the status) --
+  // by request, every row's day tag shows the linked ticket's number/title
+  // on hover, which needs this same lookup regardless of which group is
+  // being built.
+  const ticketIds = [...new Set([...ticketIdByServiceCallId.values()].filter((id) => id !== null && id !== undefined))];
+  const ticketsById = new Map(
+    ticketIds.length > 0
+      ? (await fetchByFieldIn(client.tickets, 'id', ticketIds)).map((t) => [t.id, t])
+      : []
+  );
+
   let eligibleServiceCalls = serviceCalls;
   if (requireOpenTicket) {
-    const ticketIds = [...new Set([...ticketIdByServiceCallId.values()].filter((id) => id !== null && id !== undefined))];
-    const tickets = ticketIds.length > 0 ? await fetchByFieldIn(client.tickets, 'id', ticketIds) : [];
-    const statusByTicketId = new Map(tickets.map((t) => [t.id, t.status]));
     eligibleServiceCalls = serviceCalls.filter((sc) => {
       const ticketId = ticketIdByServiceCallId.get(sc.id);
       if (ticketId === undefined || ticketId === null) return false;
-      const status = statusByTicketId.get(ticketId);
-      return status !== undefined && !CLOSED_TICKET_STATUSES.includes(status);
+      const ticket = ticketsById.get(ticketId);
+      return ticket !== undefined && !CLOSED_TICKET_STATUSES.includes(ticket.status);
     });
   }
   if (eligibleServiceCalls.length === 0) return [];
@@ -588,6 +596,7 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
     for (const rid of resourceIds) resourceNames.push(await resolveResourceName(client, rid));
     resourceNames.sort((a, b) => a.localeCompare(b));
     const ticketId = ticketIdByServiceCallId.get(sc.id) || null;
+    const ticket = ticketId ? ticketsById.get(ticketId) : null;
     rows.push({
       id: sc.id,
       companyName: await resolveCompanyName(client, sc.companyID),
@@ -600,6 +609,10 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
       // renders the day tag as plain (non-link) text in that case, same
       // "no ticket, no link" convention Service Calls' own client.js uses.
       ticketUrl: ticketId ? await getTicketUrl(ticketId) : null,
+      // By request: shown as a hover tooltip on the day tag -- null/null
+      // when there's no linked ticket, same as ticketUrl above.
+      ticketNumber: ticket ? ticket.ticketNumber : null,
+      ticketTitle: ticket ? ticket.title : null,
     });
   }
   return rows;
