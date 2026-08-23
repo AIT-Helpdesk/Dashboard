@@ -3,31 +3,96 @@ export const label = "Start Here";
 
 // External systems this dashboard doesn't cover -- opened in a new tab, not
 // navigated to in place (leaving the dashboard entirely would be jarring
-// for something meant as a quick jumping-off point). Every URL here is a
-// real, confirmed login/portal URL supplied directly -- `url: null` (none
-// currently) would render as a disabled-look placeholder rather than ever
-// shipping a guessed link that might be wrong for this specific
-// account/tenant.
+// for something meant as a quick jumping-off point). Grouped into named
+// categories, by request (each its own .resource-group card + section
+// heading, same visual convention the left column's own page-list groups
+// already use -- see groupHtml() below). Every URL here is a real,
+// confirmed login/portal URL supplied directly, OR a genuinely tenant-
+// independent public tool's own homepage (One Time Secret/MX Toolbox/
+// What's My DNS/Xero's login gate -- the same URL regardless of which
+// account you sign into). `url: null` renders as a disabled-look
+// placeholder (see externalLinkHtml below) rather than ever shipping a
+// guessed tenant-specific login link that might be wrong for this
+// specific account -- several entries below are still null for exactly
+// that reason and need a real URL supplied.
 //
 // `icon` is a plain emoji, by request -- same lightweight-icon convention
 // already used for the sidebar's own theme toggle ('☀️ Light Mode'/'🌙 Dark
 // Mode' in app.js), not a real per-brand logo. Fetching each service's real
 // favicon was deliberately not done -- would mean a live request out to
-// ~12 different third-party domains just to render this page, for a purely
-// cosmetic label decoration.
-const EXTERNAL_LINKS = [
-  { label: 'Kaseya One', icon: '🖥️', url: 'https://one.kaseya.com/login?companyName=Ambient%20IT' },
-  { label: 'AIT Intranet', icon: '📁', url: 'https://ambientitptyltd.sharepoint.com/' },
-  { label: 'Ingram Micro', icon: '📦', url: 'https://au.ingrammicro.com/cep/app/home' },
-  { label: 'Backup Radar', icon: '💾', url: 'https://eu.backupradar.com/app/dashboard/tiles' },
-  { label: 'AutoElevate', icon: '🔐', url: 'https://msp.autoelevate.com/login' },
-  { label: 'Huntress', icon: '🛡️', url: 'https://ambient-it.huntress.io/account/command_center' },
-  { label: 'EasyDMARC', icon: '✉️', url: 'https://app.easydmarc.com/dashboard' },
-  { label: 'Access4', icon: '☎️', url: 'https://ambientit.sasboss.com.au' },
-  { label: 'Aussie Broadband', icon: '📶', url: 'https://carbon.aussiebroadband.com.au/login' },
-  { label: 'TPP', icon: '🌐', url: 'https://www.tppwholesale.com.au/sign-in/' },
-  { label: 'CloudFlare', icon: '☁️', url: 'https://dash.cloudflare.com/' },
-  { label: 'WP Engine', icon: '🔧', url: 'https://my.wpengine.com/' },
+// dozens of different third-party domains just to render this page, for a
+// purely cosmetic label decoration.
+const EXTERNAL_LINK_GROUPS = [
+  {
+    label: 'Systems',
+    links: [
+      { label: 'Kaseya One', icon: '🖥️', url: 'https://one.kaseya.com/login?companyName=Ambient%20IT' },
+      { label: 'AIT Intranet', icon: '🏢', url: 'https://ambientitptyltd.sharepoint.com/' },
+      { label: 'Strety', icon: '📊', url: 'https://2.strety.com/714f93d7-437d-4d8d-a4f4-94f5da9c09ef/home' },
+      { label: 'Rewst', icon: '🤖', url: 'https://app.rewst.asia/organizations/019f187a-5165-72c5-a370-e094207f9890/dashboard' },
+    ],
+  },
+  {
+    label: 'Monitoring',
+    links: [
+      // Antenna, not a floppy disk -- leans into the product's own "Radar" pun.
+      { label: 'Backup Radar', icon: '📡', url: 'https://eu.backupradar.com/app/dashboard/tiles' },
+      { label: 'Unifi Portal', icon: '📶', url: 'https://unifi.ui.com/' },
+      { label: 'UNMS Portal', icon: '🔌', url: 'https://unms.ambientit.com.au/' },
+    ],
+  },
+  {
+    label: 'Services',
+    links: [
+      { label: 'Ingram Micro', icon: '🛒', url: 'https://au.ingrammicro.com/cep/app/home' },
+      { label: 'Huntress', icon: '🛡️', url: 'https://ambient-it.huntress.io/account/command_center' },
+      { label: 'AutoElevate', icon: '🔐', url: 'https://msp.autoelevate.com/login' },
+      { label: 'EasyDMARC', icon: '✉️', url: 'https://app.easydmarc.com/dashboard' },
+    ],
+  },
+  {
+    label: 'Online Services',
+    links: [
+      { label: 'TPP Wholesale', icon: '🌐', url: 'https://www.tppwholesale.com.au/sign-in/' },
+      { label: 'CloudFlare', icon: '☁️', url: 'https://dash.cloudflare.com/' },
+      { label: 'WPEngine', icon: '🔧', url: 'https://my.wpengine.com/' },
+    ],
+  },
+  {
+    label: 'Internet & Telco',
+    links: [
+      { label: 'Access4-SasBoss', icon: '☎️', url: 'https://ambientit.sasboss.com.au' },
+      { label: 'AussieBroadband', icon: '🐨', url: 'https://carbon.aussiebroadband.com.au/login' },
+      // Loop pun.
+      { label: 'Superloop', icon: '🔁', url: 'https://krypton.superloop.com/login' },
+      // Wire/link pun.
+      { label: 'Over the Wire', icon: '🔗', url: 'https://portal.overthewire.com.au/login' },
+      // "Telco in a box" pun.
+      { label: 'Telcoinabox (Octane)', icon: '📦', url: 'https://octane.telcoinabox.com/tiab/Login' },
+    ],
+  },
+  {
+    label: 'TOOLS',
+    links: [
+      { label: 'One Time Secret', icon: '🔒', url: 'https://onetimesecret.com/' },
+      { label: 'Keeper Vault', icon: '🔑', url: 'https://keepersecurity.com/vault/' },
+      { label: 'MX Toolbox', icon: '🧰', url: 'https://mxtoolbox.com/' },
+      { label: "What's My DNS", icon: '🌍', url: 'https://www.whatsmydns.net/' },
+      // Windows pun.
+      { label: 'Microsoft Portals', icon: '🪟', url: 'https://msportals.io/?search=' },
+    ],
+  },
+  {
+    label: 'Finance/Admin',
+    links: [
+      // Fastway's login -- Fastway rebranded as Aramex in AU/NZ.
+      { label: 'Aramex Shipping', icon: '🚚', url: 'https://identity.fastway.org/account/login' },
+      { label: 'Xero Accounting', icon: '🧮', url: 'https://login.xero.com/' },
+      { label: 'ZenContract', icon: '✍️', url: 'https://my.zencontract.com/edge?show2FAReminder=False' },
+      // Hive pun.
+      { label: 'GlassHive', icon: '🐝', url: 'https://app.glasshive.com/Marketing' },
+    ],
+  },
 ];
 
 // One-line descriptions for the internal page list -- kept
@@ -119,14 +184,26 @@ export function mount(container) {
         <div id="page-groups"><p class="status">Loading page list...</p></div>
       </div>
       <div class="start-here-links">
-        <div class="start-here-buttons">
-          ${EXTERNAL_LINKS.map(externalLinkHtml).join('')}
-        </div>
+        ${EXTERNAL_LINK_GROUPS.map(externalLinkGroupHtml).join('')}
       </div>
     </div>
   `;
 
   loadPageList(container.querySelector('#page-groups'));
+}
+
+// Same .resource-group + .section-heading--nav card look the left
+// column's own page-list groups use (see groupHtml() below) -- one card
+// per named category, by request.
+function externalLinkGroupHtml(group) {
+  return `
+    <div class="resource-group">
+      <div class="section-heading section-heading--nav">${escapeHtml(group.label)}</div>
+      <div class="start-here-buttons">
+        ${group.links.map(externalLinkHtml).join('')}
+      </div>
+    </div>
+  `;
 }
 
 function externalLinkHtml(link) {
