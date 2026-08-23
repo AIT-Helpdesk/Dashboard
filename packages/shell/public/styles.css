@@ -995,11 +995,14 @@ td.ticket-number {
    Scorecards heading, by request -- deliberately smaller than
    .inline-subtext above (a secondary, easy-to-ignore detail, not the main
    "as at" timestamp), and on its own line under the heading rather than
-   run on inline with it. */
+   run on inline with it. font-weight: normal overrides the bold inherited
+   from .section-heading--nav (the parent heading is bold; this shouldn't
+   be). */
 .inline-subtext-tiny {
   display: block;
   color: var(--muted);
-  font-size: 0.65em;
+  font-size: 0.55em;
+  font-weight: normal;
 }
 
 /* Start Here -- a wider left column listing this dashboard's own pages
