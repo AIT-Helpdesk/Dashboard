@@ -1056,9 +1056,28 @@ td.ticket-number {
   gap: 1.5rem;
   align-items: start;
 }
+/* The live page-groups list (Daily Dashboards downward) -- two flowing
+   newspaper-style columns rather than one long single-column stack, by
+   request, within the same middle area between the sidebar and the
+   right-hand quick-links panel. CSS multi-column (not grid) so groups
+   just flow top-to-bottom filling the left column before starting the
+   right one, without needing to manually split the list in half in
+   client.js. break-inside: avoid on each .resource-group keeps a single
+   category card from being split awkwardly across the column gap. */
+#page-groups {
+  columns: 2;
+  column-gap: 1.5rem;
+}
+#page-groups .resource-group {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+}
 @media (max-width: 720px) {
   .start-here-layout {
     grid-template-columns: 1fr;
+  }
+  #page-groups {
+    columns: 1;
   }
 }
 
@@ -1103,6 +1122,16 @@ td.ticket-number {
 ul.start-here-checklist-other {
   margin: 0;
   padding-left: 1.25rem;
+}
+/* .cell-subtext's base rule (shared across many pages) is display:block,
+   dropping it to its own line below -- by request, these three sit
+   beside their heading link instead, so scoped to just this list rather
+   than touching the shared base rule. Font-size/color still inherited
+   from .cell-subtext itself (0.8rem/muted), unchanged -- only display
+   and the block-only top margin are overridden here. */
+.start-here-checklist-other .cell-subtext {
+  display: inline;
+  margin-top: 0;
 }
 
 /* Datto RMM's card grid -- donut-ring cards (ported look from

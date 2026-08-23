@@ -231,7 +231,16 @@ async function loadPageList(el) {
     const pagesById = new Map(pages.map((p) => [p.id, p]));
     const tree = Array.isArray(nav.tree) ? nav.tree : [];
 
-    const seen = new Set([id]); // never list this page about itself
+    // Never list this page about itself, and never re-list What's On --
+    // it's already featured prominently in its own green "Daily
+    // Checklist" callout above (DAILY_CHECKLIST_HTML), so listing it
+    // again down here would just be redundant. Adding 'whats-on' to
+    // `seen` up front (rather than a special-case check per branch below)
+    // means this holds regardless of whether it's a top-level page or
+    // gets dragged into a category later -- both the `node.type ===
+    // 'page'` branch and the leftovers fallback already skip anything in
+    // `seen`.
+    const seen = new Set([id, 'whats-on']);
     const groups = [];
     for (const node of tree) {
       if (node.type === 'page') {
