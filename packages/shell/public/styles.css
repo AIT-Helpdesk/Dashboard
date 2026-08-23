@@ -231,6 +231,7 @@ a.nav-link.active[href="#start-here"] {
   border-radius: 6px;
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
 }
 
 .nav-category-header:hover {
@@ -1586,6 +1587,290 @@ tr.row-units-changed {
   background: var(--border);
   border-radius: 4px;
   overflow: hidden;
+}
+
+/* TC Elite Rollout -- the status grid (master table + compound-column
+   detail sheets share the exact same .tcr-table/.tcr-cell markup and
+   editing behaviour, see client.js's wireCellInteractions()). */
+.tcr-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+}
+.tcr-table th,
+.tcr-table td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.5rem;
+  text-align: center;
+}
+/* Data cells -- sized to match What's On's own scorecard tables
+   (.scorecard-table td), by request. Symbols (see STATUS_SYMBOLS in
+   client.js) are short enough that nowrap costs nothing here. */
+.tcr-table td {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+/* Headers -- small and allowed to wrap onto ~2 lines (max-width forces
+   the wrap rather than just permitting it), by request -- a grid with a
+   dozen-plus columns reads easier with short, stacked header text than
+   one long single-line label stretching each column wide. */
+.tcr-table th {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: normal;
+  max-width: 5.5rem;
+  line-height: 1.2;
+}
+/* Client column -- no wrap in either the header or the data cells, in
+   every sheet (master grid and every compound column's own detail sheet
+   share this same .tcr-table class), by request. */
+.tcr-table th:first-child,
+.tcr-table td:first-child {
+  text-align: left;
+  white-space: nowrap;
+  max-width: none;
+}
+/* "Set this whole row to the same value" button, by request -- sits
+   before the client name, unobtrusive until hovered. Clicking it opens
+   .tcr-bulk-row-editor (below) right after it in the same cell. */
+.tcr-bulk-row-btn {
+  border: none;
+  background: none;
+  padding: 0 0.2rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+  vertical-align: middle;
+}
+.tcr-bulk-row-btn:hover {
+  color: var(--accent);
+}
+.tcr-bulk-row-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: 0.5rem;
+  padding: 0.2rem 0.4rem;
+  background: var(--row-alt-bg);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.tcr-cell {
+  font-weight: 600;
+}
+.tcr-cell--editable {
+  cursor: pointer;
+}
+.tcr-cell--editable:hover {
+  filter: brightness(0.93);
+}
+/* Same red/amber/green convention as .tt-tag--overdue/--tomorrow/--today
+   elsewhere on this dashboard -- not a new one-off palette. Grey (na) and
+   plain (text) are the two additions this page needed on top of that. */
+.tcr-cell--not_done {
+  background: color-mix(in srgb, #dc2626 18%, transparent);
+  color: #dc2626;
+}
+.tcr-cell--started {
+  background: color-mix(in srgb, #f39c12 18%, transparent);
+  color: #f39c12;
+}
+.tcr-cell--done {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: #16a34a;
+}
+/* Same green as .tcr-cell--done, by request, but lighter (13% vs Done's
+   18% tint -- roughly halfway between Done's 18% and na/cancelled's
+   original 8%) -- na also means "nothing outstanding here", just a
+   softer signal than a genuine completion. */
+.tcr-cell--na {
+  background: color-mix(in srgb, #16a34a 13%, transparent);
+  color: #16a34a;
+  font-weight: 400;
+}
+/* Same light green as .tcr-cell--na, by request -- cancelled counts as
+   "nothing outstanding" for filtering purposes too (see
+   RESOLVED_STATUSES in server.js), so it reads visually the same way. */
+.tcr-cell--cancelled {
+  background: color-mix(in srgb, #16a34a 13%, transparent);
+  color: #16a34a;
+  font-weight: 400;
+}
+/* Issue -- deliberately in the same visual tier as not_done/started/done
+   (18% tint, not na/cancelled's lighter 13%), since it's a needs-
+   attention state, not a resolved one -- see RESOLVED_STATUSES in
+   server.js and computeRollupStatus() in db.js. Light purple, by
+   request, to read as visually distinct from the red/amber/green trio. */
+.tcr-cell--issue {
+  background: color-mix(in srgb, #8b5cf6 18%, transparent);
+  color: #8b5cf6;
+}
+.tcr-cell--text {
+  font-weight: 400;
+  color: var(--fg);
+  text-align: left;
+}
+
+/* Every cell's "last changed by <name> on <date>" hover tooltip -- a real
+   floating element (not a native title="" attribute), since its content
+   isn't known until the on-hover history fetch resolves (see
+   showCellTooltip() in client.js). pointer-events is NOT none here (unlike
+   a typical CSS-only tooltip) -- it contains a real "View full history"
+   button the cursor needs to be able to reach and click. */
+.tcr-tooltip {
+  position: absolute;
+  z-index: 1000;
+  background: #1b1e24;
+  color: white;
+  padding: 0.45rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  max-width: 20rem;
+}
+.tcr-tooltip-when {
+  color: #b7bdc7;
+  margin-top: 0.2rem;
+}
+.tcr-tooltip-history-link {
+  display: inline-block;
+  margin-top: 0.35rem;
+  background: none;
+  border: none;
+  padding: 0;
+  color: #8ab4ff;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+/* The "View full history" window -- a simple overlay + centered panel,
+   opened from the tooltip's link (any cell) or directly by clicking a
+   non-editable compound-column rollup cell (see openHistoryModal() and
+   wireCellInteractions() in client.js). No existing modal convention
+   elsewhere on this dashboard to reuse, so this is scoped to its own
+   .tcr-history-* classes rather than a shared one. */
+.tcr-history-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+.tcr-history-panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: 90%;
+  max-width: 30rem;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.tcr-history-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--section-header-bg);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+.tcr-history-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.1rem 0.3rem;
+}
+.tcr-history-close:hover {
+  color: var(--fg);
+}
+.tcr-history-body {
+  padding: 0.75rem 1rem 1rem;
+}
+.tcr-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.tcr-history-entry {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.6rem;
+  font-size: 0.85rem;
+}
+.tcr-history-entry:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.tcr-history-when {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+
+.tcr-detail-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.tcr-detail-toggle--active {
+  background: var(--accent);
+  color: white;
+}
+
+.tcr-add-stage {
+  margin-bottom: 0.75rem;
+}
+
+.tcr-form-body {
+  padding: 0.75rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 28rem;
+}
+.tcr-form-body input[type='text'] {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.tcr-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+.tcr-inline-input,
+.tcr-status-select {
+  font: inherit;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.tcr-reason-input {
+  display: block;
+  margin-top: 0.3rem;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .bar-fill {

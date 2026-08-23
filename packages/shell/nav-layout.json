@@ -22,15 +22,26 @@
       },
       {
         "type": "page",
-        "id": "technician-forms"
-      },
+        "id": "my-strety-tasks"
+      }
+    ]
+  },
+  {
+    "type": "category",
+    "id": "process-progress",
+    "label": "Process & Progress",
+    "children": [
       {
         "type": "page",
-        "id": "my-strety-tasks"
+        "id": "tc-elite-rollout"
       },
       {
         "type": "page",
         "id": "teams-shifts"
+      },
+      {
+        "type": "page",
+        "id": "technician-forms"
       }
     ]
   },
@@ -140,5 +151,9 @@
         "id": "saasalerts-customers"
       }
     ]
+  },
+  {
+    "type": "page",
+    "id": "datto-rmm"
   }
 ]
