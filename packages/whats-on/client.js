@@ -709,9 +709,13 @@ export function mount(container) {
     });
   }
 
+  // Only ever used for the three scorecard-group messages above ("wasn't
+  // found in Strety" / "No Strety account found" / "No scorecards for
+  // ...") -- indented under whichever group heading it's replacing the
+  // table for, by request.
   function notice(text) {
     const p = document.createElement('p');
-    p.className = 'status';
+    p.className = 'status scorecard-notice';
     p.textContent = text;
     return p;
   }

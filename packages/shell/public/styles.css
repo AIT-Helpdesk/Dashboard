@@ -466,6 +466,14 @@ h1 {
   color: #dc2626;
 }
 
+/* What's On's scorecard-group messages ("No scorecards for Personal --
+   ...", etc.) -- indented under the group heading above it, by request,
+   matching .section-heading's own 1rem left padding so the text lines up
+   under the heading's own. */
+.scorecard-notice {
+  padding-left: 2rem;
+}
+
 .summary {
   margin-bottom: 1.5rem;
   font-size: 1.1rem;
