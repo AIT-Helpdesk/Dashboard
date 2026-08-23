@@ -57,9 +57,16 @@ body {
   color: var(--fg);
 }
 
+/* height (not min-height) pins .layout to exactly one viewport tall --
+   by request, so the sidebar stays put while a long page's content
+   scrolls, instead of the whole document (sidebar included) scrolling
+   together. This is what actually makes .page-content's own
+   overflow-y: auto below take effect at all -- a flex child's stretched
+   height only gets bounded (letting its own overflow kick in) when the
+   flex container's height is fixed, not just a minimum. */
 .layout {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
 }
 
 .sidebar {
@@ -68,6 +75,7 @@ body {
   background: var(--card);
   border-right: 1px solid var(--border);
   padding: 1.5rem 1rem;
+  overflow-y: auto;
   transition: width 0.15s ease, padding 0.15s ease;
 }
 
@@ -331,6 +339,8 @@ a.nav-link.active[href="#start-here"] {
   flex: 1;
   min-width: 0;
   padding: 2rem;
+  /* Its own independent scroll region -- see .layout's height: 100vh
+     above for why this actually takes effect now. */
   overflow-y: auto;
 }
 
