@@ -627,7 +627,16 @@ export function mount(container) {
     // render()), so overwriting the outer element's innerHTML on every
     // render would silently detach its click listener (a fresh <button>
     // node each time, not the one addEventListener() was ever called on).
-    summaryTextEl.innerHTML = `Helpdesk Scorecards<span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>`;
+    // Very small "last synced" line under the heading, by request -- only
+    // when automationStatus actually has a ranAt to show (null on
+    // localhost, since the automation is production-only; also absent if
+    // it's genuinely never run at all). Shown regardless of whether the
+    // automation is currently healthy -- the banner below already covers
+    // the unhealthy case in more detail, this is just a quick timestamp.
+    const syncedLine = data.automationStatus?.ranAt
+      ? `<span class="inline-subtext-tiny">Autotask -&gt; Strety sync last ran: ${formatDateTime(data.automationStatus.ranAt)}</span>`
+      : '';
+    summaryTextEl.innerHTML = `Helpdesk Scorecards<span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>${syncedLine}`;
 
     resultsEl.innerHTML = '';
 

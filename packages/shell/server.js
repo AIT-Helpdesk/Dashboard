@@ -275,6 +275,21 @@ app.get('/auth/strety-automation/connect', (req, res) => {
   url.searchParams.set('client_id', process.env.STRETY_AUTOMATION_CLIENT_ID);
   url.searchParams.set('redirect_uri', stretyAutomationRedirectUriFor(req));
   url.searchParams.set('scope', 'read write');
+  // By request -- same "hint, not a hard requirement" caveat as the shared
+  // connection's own login_hint above: this route is reachable by ANY
+  // signed-in dashboard user (requireAuth only, no admin check), and
+  // Strety's login page reuses whatever Strety session is already active
+  // in that browser regardless of this hint. Confirmed real risk if
+  // someone other than helpdesk@ reconnects it -- sync.js needs write
+  // access to the Helpdesk Task Tracker team's scorecards specifically,
+  // so a mismatched account either starts failing every scheduled run, or
+  // (worse, if it happens to have adequate access anyway) silently
+  // attributes every future automated check-in to that person's own
+  // identity instead of a recognizable automation account. Doesn't
+  // override an existing active session by itself; logging out of Strety
+  // (or using a private window) first is still the reliable way to
+  // guarantee a fresh prompt.
+  url.searchParams.set('login_hint', 'helpdesk@ambientit.com.au');
   res.redirect(url.toString());
 });
 
