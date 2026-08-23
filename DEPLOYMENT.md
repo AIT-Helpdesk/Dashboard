@@ -264,3 +264,40 @@ Restart-Service AmbientDashboard
 - `package-lock.json` can end up with a local diff purely from running `npm install` on the server -- a different OS/npm version than wherever the committed lockfile was last generated can normalize/reorder it slightly, with no real dependency change involved. Confirmed against a real deploy: this alone was enough to abort a `git pull`.
 
 Running `git checkout -- <path>` on both first always resolves this ahead of time (a no-op if there are no local changes, a clean discard if there are), so `git pull` never has anything to fail on. Deliberate for `nav-layout.json`, by request -- git is the source of truth for that file, any layout change made only on the server and never committed is expected to be lost on the next deploy. Just a practical necessity for `package-lock.json` -- its local drift is never a real deliberate edit worth keeping.
+
+## Deploying TC Elite Rollout (first-time)
+
+A separate one-time step, additional to the "Updating later" routine above, needed the first time `packages/tc-elite-rollout` lands on production. Two things about this page don't fall out of the ordinary update flow:
+
+### 1. Confirm production's Node version first -- a hard blocker if it fails
+
+This page's datastore is node's own built-in **`node:sqlite`** (`DatabaseSync`), which needs **Node >=22.5**. The original install step earlier in this doc only asked for "v20.x or later" -- if the server is still on an older Node 20 LTS install, the dashboard will throw the moment this code loads, not just this one page.
+
+```powershell
+node -v   # must be >= 22.5
+```
+
+If it's older, upgrade the same way as the original install (`winget install OpenJS.NodeJS.LTS`, or the MSI from https://nodejs.org/en/download), then confirm again with a fresh PowerShell window.
+
+### 2. `npm install` is required this time, not optional
+
+`@dashboard/tc-elite-rollout` is a brand-new workspace package (same situation as `strety-autotask-sync` when that was first added) -- it has to be linked in, so don't skip `npm install` even if you'd normally judge it unnecessary for a given update.
+
+### 3. The real imported data has to be copied over as a file -- git pull alone won't bring it
+
+`packages/tc-elite-rollout/data.db` is deliberately gitignored (runtime data, not source). After `git pull` + restart, the page will appear, but `db.js` just creates a fresh, **empty** SQLite database on the server -- none of the real client rollout data imported from the original spreadsheet. That data only exists as a file on whichever machine ran the import, and has to be copied over separately from git, the same RDP-clipboard-carries-files way the original deploy zip was copied in step 1.
+
+**On the source machine, before copying**, stop that machine's own dashboard server first and checkpoint the WAL, so the single `data.db` file is complete and self-contained (WAL mode means the file alone can be missing recently-committed data until checkpointed/closed -- confirmed the hard way earlier in this page's own build, see its README):
+
+```powershell
+cd C:\apps\autotask-dashboard-git\packages\tc-elite-rollout   # or wherever the source copy lives
+node -e "const {db}=require('./db.js'); db.exec('PRAGMA wal_checkpoint(TRUNCATE)');"
+```
+
+**Then copy just that one file** -- `data.db` (not any `-shm`/`-wal` sidecars; they should be gone/empty after the checkpoint above and aren't needed) -- to `C:\apps\autotask-dashboard-git\packages\tc-elite-rollout\data.db` on the production server. Do this **before** `Restart-Service AmbientDashboard` where possible -- if the service already started against an empty `data.db`, dropping a new file into place won't be picked up until it's restarted again anyway.
+
+### 4. Verify
+
+Visit the TC Elite Rollout page on the real domain and confirm the real client list shows up (not an empty grid) -- spot-check a client you recognize against what you know is actually true for them.
+
+The sidebar's new "Process & Progress" category needs no separate step -- `nav-layout.json` is part of the normal git-tracked deploy, so it arrives with the regular `git pull`.
