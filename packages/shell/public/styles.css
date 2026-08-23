@@ -221,6 +221,12 @@ a.nav-link.active[href="#start-here"] {
 
 .nav-item--nested .nav-link {
   font-size: 0.9rem;
+  /* Narrower than the default .nav-link padding (0.55rem top/bottom) --
+     by request, tighter vertical spacing between items within a
+     category specifically, not top-level pages/category headers, which
+     keep their own more spacious padding. */
+  padding-top: 0.3rem;
+  padding-bottom: 0.3rem;
 }
 
 .nav-category {
@@ -264,7 +270,7 @@ a.nav-link.active[href="#start-here"] {
   padding: 0 0 0 0.6rem;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.05rem;
   /* A category with no pages in it yet still needs to read as a real drop
      target, not just disappear -- this keeps a sliver of height so the
      (empty) header + child list combo isn't a zero-height sliver you'd have
