@@ -747,7 +747,7 @@ export function mount(container) {
           <tr class="shaded-row"><th>Metric</th><th>Target</th><th>Check-ins</th></tr>
         </thead>
         <tbody>
-          ${rows.map((m) => `<tr><td>${titleHtml(m.title, Boolean(m.cells[0]))}</td><td class="ticket-number">${escapeHtml(m.target)}</td><td>No check-ins yet</td></tr>`).join('')}
+          ${rows.map((m) => `<tr><td>${titleHtml(m.title, Boolean(m.cells[0]), m.isAutoManaged)}</td><td class="ticket-number">${escapeHtml(m.target)}</td><td>No check-ins yet</td></tr>`).join('')}
         </tbody>
       `;
       groupEl.appendChild(table);
@@ -785,7 +785,7 @@ export function mount(container) {
     }
     return `
       <tr>
-        <td>${titleHtml(m.title, Boolean(m.cells[0]))}</td>
+        <td>${titleHtml(m.title, Boolean(m.cells[0]), m.isAutoManaged)}</td>
         <td class="ticket-number">${escapeHtml(m.target)}</td>
         ${cells.join('')}
       </tr>`;
@@ -798,13 +798,20 @@ export function mount(container) {
   // red if that most recent column is empty -- a quick "is this metric
   // current" signal at a glance, not just decoration. A title with no
   // colon at all still renders unstyled either way, as before.
-  function titleHtml(title, hasRecentData) {
+  //
+  // isAutoManaged (set server-side, from @dashboard/strety-autotask-sync's
+  // own METRICS list -- see server.js) prepends a bold blue "AUTO: " label
+  // ahead of all that, by request -- these specific metrics are filled in
+  // automatically by the Autotask -> Strety sync, not a human, so it's
+  // worth flagging at a glance which ones those are.
+  function titleHtml(title, hasRecentData, isAutoManaged) {
+    const autoPrefix = isAutoManaged ? '<span class="text-highlight-blue">AUTO: </span>' : '';
     const colonIndex = title.indexOf(':');
-    if (colonIndex === -1) return escapeHtml(title);
+    if (colonIndex === -1) return autoPrefix + escapeHtml(title);
     const prefix = title.slice(0, colonIndex + 1);
     const rest = title.slice(colonIndex + 1);
     const cls = hasRecentData ? 'text-highlight-green' : 'text-highlight-red';
-    return `<span class="${cls}">${escapeHtml(prefix)}</span>${escapeHtml(rest)}`;
+    return `${autoPrefix}<span class="${cls}">${escapeHtml(prefix)}</span>${escapeHtml(rest)}`;
   }
 
   function checkinCellHtml(c) {

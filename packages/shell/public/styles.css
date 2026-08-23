@@ -806,6 +806,15 @@ h1 {
   font-weight: 700;
   color: #dc2626;
 }
+/* "AUTO: " label on What's On's Helpdesk scorecards -- flags metrics the
+   Autotask -> Strety sync fills in automatically (see titleHtml() in
+   whats-on/client.js). var(--accent), not a hardcoded hex, so it stays
+   the dashboard's own blue in both light and dark mode. Not bold, by
+   request -- unlike .text-highlight-green/-red above, which stay bold. */
+.text-highlight-blue {
+  font-weight: 400;
+  color: var(--accent);
+}
 
 /* A plain full-width rule between two otherwise-unrelated page sections
    (e.g. What's On's Scorecards vs. its Team Shifts excerpt below) -- an
