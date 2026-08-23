@@ -23,6 +23,7 @@ const {
   isoDateAest,
   matchesWildcard,
   getTicketUrl,
+  toAest,
 } = require('@dashboard/autotask-client');
 const { getTeams, getShiftsByDay } = require('@dashboard/teams-shifts/lib.js');
 // Aliased -- @dashboard/ingram-client's own fetchAllPages/getToken would
@@ -61,6 +62,23 @@ function isLocalhostRequest(req) {
   return req.hostname === 'localhost' || req.hostname === '127.0.0.1';
 }
 
+// The staleness banner ("hasn't run in X hours") is only meaningful while
+// the automation is actually expected to be running -- it's scheduled
+// hourly, 8am-6pm only (see DEPLOYMENT.md's Windows Task Scheduler
+// setup), so outside that window the last run is ALWAYS going to look
+// stale by the 3-hour threshold below (e.g. every single morning before
+// the first 8am run fires) even though nothing is actually wrong. By
+// request, that specific message+button is only shown 8:15am-6:00pm --
+// 8:15, not 8:00, as a small grace period for the first scheduled run to
+// actually fire and complete. Doesn't apply to the "never run yet" or
+// "last run failed" messages below -- those are real problems worth
+// surfacing any time of day, not an artifact of the schedule itself.
+function isWithinAutomationBannerWindow() {
+  const aestNow = toAest(new Date());
+  const minutesSinceMidnight = aestNow.getUTCHours() * 60 + aestNow.getUTCMinutes();
+  return minutesSinceMidnight >= 8 * 60 + 15 && minutesSinceMidnight < 18 * 60;
+}
+
 function evaluateAutomationStatus() {
   const lastRun = readLastRunStatus();
   if (!lastRun) {
@@ -77,6 +95,9 @@ function evaluateAutomationStatus() {
     return { ok: false, message: `The automated Autotask sync last ran ${formatAge(ageMs)} ago and failed: ${detail}`, ranAt: lastRun.ranAt };
   }
   if (ageMs > AUTOMATION_STALE_THRESHOLD_MS) {
+    if (!isWithinAutomationBannerWindow()) {
+      return { ok: true, ranAt: lastRun.ranAt };
+    }
     return {
       ok: false,
       message: `The automated Autotask sync hasn't run in ${formatAge(ageMs)} (expected hourly) -- these EOD numbers may be stale.`,
