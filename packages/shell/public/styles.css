@@ -1658,6 +1658,37 @@ tr.row-units-changed {
   border-radius: 6px;
   white-space: nowrap;
 }
+/* "Set this whole column to the same value" button -- the column-based
+   mirror of .tcr-bulk-row-btn above, sitting in a <th> instead of a <td>.
+   Same look/behaviour, just reusing the row editor's own popup
+   (.tcr-bulk-row-editor) rather than a separate class. */
+.tcr-bulk-col-btn {
+  border: none;
+  background: none;
+  padding: 0 0.2rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+  vertical-align: middle;
+}
+.tcr-bulk-col-btn:hover {
+  color: var(--accent);
+}
+/* .tcr-table th normally forces small/uppercase/letter-spaced/width-
+   capped text (see above) for the column label itself -- none of that
+   should bleed into the Set Column editor's own dropdown/input/buttons
+   once it's open, or "Set Column" would render as tiny uppercase text
+   wrapped awkwardly in a ~5.5rem-wide header cell. */
+.tcr-table th:has(.tcr-bulk-row-editor) {
+  max-width: none;
+}
+.tcr-table th .tcr-bulk-row-editor {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 0.8rem;
+  font-weight: normal;
+  color: var(--fg);
+}
 .tcr-cell {
   font-weight: 600;
 }
@@ -1835,6 +1866,22 @@ tr.row-units-changed {
 
 .tcr-add-stage {
   margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+/* Matches the master grid's own Show All exactly -- that one is a plain
+   <label> inside .date-form, picking up font-size/color from ".date-form
+   label" (0.85rem, var(--muted)) rather than its own rule; this one lives
+   outside .date-form (it's scoped to one detail sheet, not the page
+   header), so those same two values are set explicitly here instead. */
+.tcr-detail-show-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: normal;
+  font-size: 0.85rem;
+  color: var(--muted);
 }
 
 .tcr-form-body {

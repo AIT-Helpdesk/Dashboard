@@ -479,6 +479,74 @@ function bulkSetStages(clientId, columnId, status, reason, actor) {
   return stages.map((s) => s.id);
 }
 
+// Sets one SIMPLE column's cell_status for a set of clients to the same
+// status/reason in one go -- the column-based mirror of bulkSetCells()
+// above (which sets a whole ROW). Only ever called for a kind='simple'
+// column -- server.js validates that before calling this, since a
+// compound column's cell_status is never directly settable, only ever
+// derived from its own stages (see bulkSetStageColumn() below for the
+// detail-sheet equivalent). `clientIds` -- an explicit array to restrict
+// to (e.g. "only the rows currently visible on screen", see PATCH
+// /columns/:columnId/bulk-cells in server.js), or null/omitted for every
+// existing client. Returns the list of affected client ids.
+function bulkSetColumnCells(columnId, status, reason, actor, clientIds = null) {
+  const clients = clientIds ? clientIds.map((id) => ({ id })) : db.prepare('SELECT id FROM clients').all();
+  db.exec('BEGIN');
+  try {
+    for (const client of clients) {
+      const existing = db.prepare('SELECT status, reason FROM cell_status WHERE client_id = ? AND column_id = ?').get(client.id, columnId);
+      if (!existing) continue; // shouldn't happen, but skip rather than fail the whole batch
+      db.prepare(
+        `UPDATE cell_status SET status = $status, reason = $reason, updated_at = $updatedAt, updated_by_email = $email, updated_by_name = $name
+         WHERE client_id = $clientId AND column_id = $columnId`
+      ).run({ $status: status, $reason: reason, $updatedAt: nowIso(), $email: actor.email, $name: actor.name, $clientId: client.id, $columnId: columnId });
+      recordAudit({ entityType: 'cell', clientId: client.id, columnId, oldStatus: existing.status, newStatus: status, oldReason: existing.reason, newReason: reason, actor });
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return clients.map((c) => c.id);
+}
+
+// Sets one stage's stage_status for a set of clients to the same value in
+// one go -- the column-based mirror of bulkSetStages() above (which sets
+// a whole ROW within one detail sheet). Unlike bulkSetStages, this one
+// DOES support text-type stages (setting every client's WHO/Domain/
+// Comment field to the same string is a legitimate, if rarer, use) --
+// server.js shapes status/reason correctly per stage.type first, same
+// convention PATCH /stages/:clientId/:stageId already uses, so this
+// function just writes whatever it's given. `clientIds` -- same meaning
+// as bulkSetColumnCells above (an explicit restriction, or null/omitted
+// for every existing client). Recomputes the rollup for every affected
+// client afterward, only if it's a status-type stage (text-type stages
+// never feed the rollup).
+function bulkSetStageColumn(stageId, status, reason, actor, clientIds = null) {
+  const stage = db.prepare('SELECT * FROM stages WHERE id = ?').get(stageId);
+  const clients = clientIds ? clientIds.map((id) => ({ id })) : db.prepare('SELECT id FROM clients').all();
+  db.exec('BEGIN');
+  try {
+    for (const client of clients) {
+      const existing = db.prepare('SELECT status, reason FROM stage_status WHERE client_id = ? AND stage_id = ?').get(client.id, stageId);
+      if (!existing) continue;
+      db.prepare(
+        `UPDATE stage_status SET status = $status, reason = $reason, updated_at = $updatedAt, updated_by_email = $email, updated_by_name = $name
+         WHERE client_id = $clientId AND stage_id = $stageId`
+      ).run({ $status: status, $reason: reason, $updatedAt: nowIso(), $email: actor.email, $name: actor.name, $clientId: client.id, $stageId: stageId });
+      recordAudit({ entityType: 'stage_cell', clientId: client.id, stageId, oldStatus: existing.status, newStatus: status, oldReason: existing.reason, newReason: reason, actor });
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  if (stage.type === 'status') {
+    for (const client of clients) recomputeRollup(client.id, stage.column_id, actor);
+  }
+  return clients.map((c) => c.id);
+}
+
 // Hard delete -- by request (removing a test client added while trying
 // this page out), not a soft-delete-with-history-preserved model. Purges
 // the client's own audit_log rows too, not just cell/stage_status --
@@ -534,6 +602,8 @@ module.exports = {
   seedNewStage,
   bulkSetCells,
   bulkSetStages,
+  bulkSetColumnCells,
+  bulkSetStageColumn,
   deleteClient,
   deleteStage,
 };

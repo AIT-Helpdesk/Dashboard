@@ -9,6 +9,9 @@ let lastGridData = null;
 let showAll = false;
 let openDetailColumnId = null;
 let lastDetailData = null;
+// A detail sheet's own Show All, separate from the master grid's -- see
+// buildAddStageSection().
+let showAllDetail = false;
 // Fetched fresh on every mount() from /api/me -- who's currently signed
 // in, used only to give an immediate "see Amber" message on click rather
 // than a wasted form-open + round trip. Not the real enforcement point --
@@ -308,9 +311,12 @@ export function mount(container) {
   }
 
   function renderGrid(data) {
-    const { columns, clients } = data;
+    const { columns, clients, totalClients } = data;
     if (columns.length === 0 && clients.length === 0) {
-      gridContainer.innerHTML = `<p class="status">${showAll ? 'Nothing tracked yet -- add a client and a column to get started.' : 'Nothing outstanding -- everything tracked is Done or N/A. Try Show All to see everything.'}</p>`;
+      const message = showAll
+        ? 'Nothing tracked yet -- add a client and a column to get started.'
+        : `Nothing outstanding (0/${totalClients}) -- everything tracked is Done or N/A. Try Show All to see everything.`;
+      gridContainer.innerHTML = `<p class="status">${message}</p>`;
       return;
     }
     const table = document.createElement('table');
@@ -318,8 +324,8 @@ export function mount(container) {
     table.innerHTML = `
       <thead>
         <tr class="shaded-row">
-          <th>Client</th>
-          ${columns.map((col) => `<th>${escapeHtml(col.label)}</th>`).join('')}
+          <th>Client (${clients.length}/${totalClients})</th>
+          ${columns.map((col) => `<th>${col.kind === 'simple' ? `<button type="button" class="tcr-bulk-col-btn" data-column-id="${col.id}" title="Set every currently visible client in this column to the same value">⚙</button> ` : ''}${escapeHtml(col.label)}</th>`).join('')}
         </tr>
       </thead>
       <tbody>
@@ -338,6 +344,7 @@ export function mount(container) {
     gridContainer.appendChild(table);
     wireCellInteractions(table);
     wireBulkRowButtons(table, 'master');
+    wireBulkColumnButtons(table, 'master');
   }
 
   function masterCellHtml(client, col) {
@@ -372,6 +379,10 @@ export function mount(container) {
           detailContainer.innerHTML = '';
         } else {
           openDetailColumnId = columnId;
+          // Fresh sheet, fresh default -- start hidden-by-default same as
+          // the master grid does on page load, not whatever this or a
+          // previously-viewed sheet's toggle happened to be left at.
+          showAllDetail = false;
           await loadDetail(columnId);
         }
         renderDetailButtons(lastGridData.columns);
@@ -382,7 +393,7 @@ export function mount(container) {
   async function loadDetail(columnId) {
     detailContainer.innerHTML = '<p class="status">Loading...</p>';
     try {
-      const res = await fetch(`/api/tc-elite-rollout/columns/${columnId}/detail`);
+      const res = await fetch(`/api/tc-elite-rollout/columns/${columnId}/detail${showAllDetail ? '?all=true' : ''}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastDetailData = data;
@@ -393,7 +404,7 @@ export function mount(container) {
   }
 
   function renderDetail(data) {
-    const { column, stages, clients } = data;
+    const { column, stages, clients, totalClients } = data;
     const heading = document.createElement('div');
     heading.className = 'section-heading section-heading--scorecard';
     heading.textContent = `${column.label} -- Detail`;
@@ -402,7 +413,10 @@ export function mount(container) {
     detailContainer.appendChild(buildAddStageSection(column));
 
     if (clients.length === 0) {
-      detailContainer.appendChild(Object.assign(document.createElement('p'), { className: 'status', textContent: 'No clients yet.' }));
+      const message = showAllDetail
+        ? 'No clients yet.'
+        : `Nothing outstanding on this sheet (0/${totalClients}) -- everything tracked is Done, N/A, or Cancelled. Try Show All to see everything.`;
+      detailContainer.appendChild(Object.assign(document.createElement('p'), { className: 'status', textContent: message }));
       return;
     }
 
@@ -411,8 +425,8 @@ export function mount(container) {
     table.innerHTML = `
       <thead>
         <tr class="shaded-row">
-          <th>Client</th>
-          ${stages.map((s) => `<th>${escapeHtml(s.label)}</th>`).join('')}
+          <th>Client (${clients.length}/${totalClients})</th>
+          ${stages.map((s) => `<th><button type="button" class="tcr-bulk-col-btn" data-stage-id="${s.id}" data-stage-type="${s.type}" title="Set every currently visible client in this column to the same value">⚙</button> ${escapeHtml(s.label)}</th>`).join('')}
         </tr>
       </thead>
       <tbody>
@@ -430,6 +444,7 @@ export function mount(container) {
     detailContainer.appendChild(table);
     wireCellInteractions(table);
     wireBulkRowButtons(table, 'detail', column.id);
+    wireBulkColumnButtons(table, 'detail');
   }
 
   // Add Stage -- restricted to Amber, same as Add Column (see
@@ -450,6 +465,23 @@ export function mount(container) {
     button.textContent = 'Add Stage';
     wrapper.appendChild(button);
 
+    // This detail sheet's own "what's waiting to be done" toggle -- by
+    // request, separate from the master grid's own Show All (showAll
+    // module-level var), since a detail sheet can be showing/hiding
+    // completed rows independently of whatever the master grid is
+    // currently doing. Persists across re-renders of this same open
+    // sheet (a save reloads via loadDetail(), which reads this each
+    // time), resets to hidden-by-default the same as the master grid
+    // does on a fresh page load.
+    const showAllLabel = document.createElement('label');
+    showAllLabel.className = 'tcr-detail-show-all';
+    showAllLabel.innerHTML = `<input type="checkbox" class="tcr-detail-show-all-toggle"${showAllDetail ? ' checked' : ''} /> Show All`;
+    wrapper.appendChild(showAllLabel);
+    showAllLabel.querySelector('.tcr-detail-show-all-toggle').addEventListener('change', (e) => {
+      showAllDetail = e.target.checked;
+      loadDetail(column.id);
+    });
+
     const form = document.createElement('div');
     form.className = 'resource-group';
     form.hidden = true;
@@ -457,7 +489,7 @@ export function mount(container) {
       <div class="section-heading">Add Stage to ${escapeHtml(column.label)}</div>
       <div class="tcr-form-body">
         <input type="text" class="tcr-new-stage-label" placeholder="Stage label" />
-        <label><input type="radio" name="tcr-new-stage-type" value="status" checked /> Status (one of the 5 states)</label>
+        <label><input type="radio" name="tcr-new-stage-type" value="status" checked /> Status (one of the 6 states)</label>
         <label><input type="radio" name="tcr-new-stage-type" value="text" /> Text (free-text field, not part of the rollup)</label>
         <p class="status error tcr-add-stage-error" hidden></p>
         <div class="tcr-form-actions">
@@ -659,6 +691,110 @@ export function mount(container) {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, reason }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  }
+
+  // "Set this whole column to the same value" -- the column-based mirror
+  // of wireBulkRowButtons above (which sets a whole row). `kind` is
+  // 'master' (PATCH /columns/:columnId/bulk-cells, one simple column --
+  // the only kind of gear button that ever appears on the master grid) or
+  // 'detail' (PATCH /stages/:stageId/bulk-status, one stage of the
+  // currently-open compound column -- status or text type).
+  //
+  // Scoped to whichever rows are CURRENTLY RENDERED, by request -- not
+  // literally every client. lastGridData/lastDetailData already hold
+  // exactly the filtered set the table was just built from (the server
+  // did that filtering for GET /, see applyDefaultFilter in server.js),
+  // so reading client ids off there IS "the visible rows", whatever the
+  // Show All toggle is currently set to. Applying to everyone is still
+  // possible -- just turn Show All on first, which makes every row (and
+  // so every client id) visible, then Set Column as usual.
+  function wireBulkColumnButtons(table, kind) {
+    table.querySelectorAll('.tcr-bulk-col-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const existing = btn.parentElement.querySelector('.tcr-bulk-row-editor');
+        if (existing) {
+          existing.remove();
+          return;
+        }
+        const visibleClientIds = (kind === 'master' ? lastGridData.clients : lastDetailData.clients).map((c) => c.id);
+        const isText = btn.dataset.stageType === 'text';
+        const editor = document.createElement('div');
+        editor.className = 'tcr-bulk-row-editor';
+        const saveLabel = `Set Column (${visibleClientIds.length} visible)`;
+        editor.innerHTML = isText
+          ? `
+          <input type="text" class="tcr-inline-input tcr-bulk-col-text" placeholder="Value for every visible client" />
+          <div class="tcr-form-actions">
+            <button type="button" class="button-link button-link--small tcr-save">${saveLabel}</button>
+            <button type="button" class="tcr-cancel">Cancel</button>
+          </div>
+        `
+          : `
+          <select class="tcr-status-select">
+            ${STATUS_ORDER.map((s) => `<option value="${s}">${STATUS_LABELS[s]}</option>`).join('')}
+          </select>
+          <input type="text" class="tcr-inline-input tcr-reason-input" placeholder="Reason (optional)" style="display:none" />
+          <div class="tcr-form-actions">
+            <button type="button" class="button-link button-link--small tcr-save">${saveLabel}</button>
+            <button type="button" class="tcr-cancel">Cancel</button>
+          </div>
+        `;
+        btn.insertAdjacentElement('afterend', editor);
+
+        if (!isText) {
+          const select = editor.querySelector('select');
+          const reasonInput = editor.querySelector('.tcr-reason-input');
+          select.addEventListener('change', () => {
+            reasonInput.style.display = STATUSES_WITH_COMMENT.includes(select.value) ? '' : 'none';
+          });
+        }
+        editor.querySelector('.tcr-cancel').addEventListener('click', () => editor.remove());
+        editor.querySelector('.tcr-save').addEventListener('click', async () => {
+          try {
+            if (isText) {
+              const text = editor.querySelector('.tcr-bulk-col-text').value.trim();
+              await fetchBulkStageColumn(btn.dataset.stageId, null, text || null, visibleClientIds);
+            } else {
+              const status = editor.querySelector('select').value;
+              const reason = STATUSES_WITH_COMMENT.includes(status) ? editor.querySelector('.tcr-reason-input').value.trim() || null : null;
+              if (kind === 'master') {
+                await fetchBulkColumnCells(btn.dataset.columnId, status, reason, visibleClientIds);
+              } else {
+                await fetchBulkStageColumn(btn.dataset.stageId, status, reason, visibleClientIds);
+              }
+            }
+            editor.remove();
+            if (kind === 'master') {
+              await loadGrid();
+            } else {
+              await loadDetail(openDetailColumnId);
+            }
+          } catch (err) {
+            alert(`Error: ${err.message}`);
+          }
+        });
+      });
+    });
+  }
+
+  async function fetchBulkColumnCells(columnId, status, reason, clientIds) {
+    const res = await fetch(`/api/tc-elite-rollout/columns/${columnId}/bulk-cells`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, reason, clientIds }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  }
+
+  async function fetchBulkStageColumn(stageId, status, reason, clientIds) {
+    const res = await fetch(`/api/tc-elite-rollout/stages/${stageId}/bulk-status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, reason, clientIds }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
