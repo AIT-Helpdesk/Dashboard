@@ -991,6 +991,16 @@ td.ticket-number {
   color: var(--muted);
   font-size: 0.85em;
 }
+/* What's On's "Autotask -> Strety sync last ran" line under the Helpdesk
+   Scorecards heading, by request -- deliberately smaller than
+   .inline-subtext above (a secondary, easy-to-ignore detail, not the main
+   "as at" timestamp), and on its own line under the heading rather than
+   run on inline with it. */
+.inline-subtext-tiny {
+  display: block;
+  color: var(--muted);
+  font-size: 0.65em;
+}
 
 /* Start Here -- a wider left column listing this dashboard's own pages
    beside a narrow right column of external-system buttons. Stacks (page

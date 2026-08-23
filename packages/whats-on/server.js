@@ -67,17 +67,23 @@ function evaluateAutomationStatus() {
     return { ok: false, message: 'The automated Autotask sync has never run yet.' };
   }
   const ageMs = Date.now() - new Date(lastRun.ranAt).getTime();
+  // ranAt included on every branch (not just the healthy one) -- by
+  // request, client.js shows it as a small "last synced" line under the
+  // Helpdesk Scorecards heading regardless of whether the automation is
+  // currently healthy; the banner above already covers the unhealthy case
+  // in more detail.
   if (!lastRun.success) {
     const detail = lastRun.fatalError || lastRun.results.find((r) => !r.ok)?.detail || 'unknown error';
-    return { ok: false, message: `The automated Autotask sync last ran ${formatAge(ageMs)} ago and failed: ${detail}` };
+    return { ok: false, message: `The automated Autotask sync last ran ${formatAge(ageMs)} ago and failed: ${detail}`, ranAt: lastRun.ranAt };
   }
   if (ageMs > AUTOMATION_STALE_THRESHOLD_MS) {
     return {
       ok: false,
       message: `The automated Autotask sync hasn't run in ${formatAge(ageMs)} (expected hourly) -- these EOD numbers may be stale.`,
+      ranAt: lastRun.ranAt,
     };
   }
-  return { ok: true };
+  return { ok: true, ranAt: lastRun.ranAt };
 }
 
 // The "Team Shifts" excerpt below the scorecards -- a completely separate
