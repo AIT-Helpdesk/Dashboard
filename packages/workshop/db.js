@@ -43,12 +43,16 @@ db.exec(`
     -- already-live CHECK constraint.
     action_color TEXT NOT NULL DEFAULT 'general' CHECK (action_color IN ('general','done','notewell','blue')),
     location TEXT,
-    -- Today/Tomorrow/2-4 days/Over 4 days, by request -- a real
-    -- calendar-relative scheme replacing the original 3-tier one
-    -- (today/2days/3days_plus). Still a manually-chosen magnet, not
-    -- computed from a ticket's due date -- plenty of jobs have no
-    -- linked ticket at all, so priority has to stay settable on its own.
-    priority TEXT NOT NULL DEFAULT '2to4days' CHECK (priority IN ('today','tomorrow','2to4days','over4days')),
+    -- Urgent/Complete/Nearly Complete/In Progress/Next Up/Not Started, by
+    -- request -- a status-progression scheme replacing the original
+    -- time-urgency one (Today/Tomorrow/2-4 days/Over 4 days). See
+    -- migrateRetierPriorityToStatusStyle() below for how the live data
+    -- was remapped. Still a manually-chosen magnet, not computed from a
+    -- ticket's due date -- plenty of jobs have no linked ticket at all,
+    -- so priority has to stay settable on its own. Defaults to
+    -- 'not_started' -- also the one tier with no background tint (see
+    -- client.js), a fitting "nothing to highlight yet" default.
+    priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','in_progress','next_up','not_started')),
     -- Workshop's own workflow stage -- named workflow_stage, not
     -- status_stage/status2, to stay clearly distinct from the plain
     -- 'status' column below (open/completed, the archive mechanism --
@@ -281,6 +285,87 @@ function migrateAddBlueColorAndNewStages() {
 }
 migrateAddBlueColorAndNewStages();
 
+// Replaces priority's entire tier scheme -- Today/Tomorrow/2-4 days/Over
+// 4 days (time urgency) becomes Urgent/Complete/Nearly Complete/In
+// Progress/Next Up/Not Started (completion progress), by request. Unlike
+// the previous priority retiering, there's no clean semantic mapping
+// between the two schemes -- they measure genuinely different things --
+// so this is a best-effort default mapping (documented so it's easy to
+// revisit), NOT a guarantee the result matches each job's real current
+// state. Confirmed against real live data before writing this (6 real
+// jobs, only today/tomorrow/2to4days/over4days actually in use):
+//   today -> urgent, tomorrow -> in_progress, 2to4days -> next_up,
+//   over4days -> not_started -- preserves relative ordering (most
+//   urgent old tier -> most urgent-sounding new tier, and so on) as the
+//   least-wrong available default. Staff should re-check/re-set
+//   priority on existing jobs after this migration rather than trust it
+//   blindly.
+// Same recreate-table-and-copy dance as the other CHECK-widening
+// migrations above (SQLite can't change an existing CHECK in place).
+// Default also changes, '2to4days' -> 'not_started' -- see the CREATE
+// TABLE comment above for why.
+function migrateRetierPriorityToStatusStyle() {
+  const table = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'`).get();
+  if (table && table.sql && table.sql.includes("'not_started'")) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE jobs_new (
+        id INTEGER PRIMARY KEY,
+        reqd_by TEXT,
+        ticket_number TEXT,
+        ticket_autotask_id INTEGER,
+        customer TEXT,
+        job_description TEXT,
+        action_text TEXT,
+        action_color TEXT NOT NULL DEFAULT 'general' CHECK (action_color IN ('general','done','notewell','blue')),
+        location TEXT,
+        priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','in_progress','next_up','not_started')),
+        workflow_stage TEXT NOT NULL DEFAULT 'new' CHECK (workflow_stage IN ('new','free_text','in_car','ready_to_ship','ready_for_pickup','sent','delivered','collected')),
+        workflow_stage_text TEXT,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','completed')),
+        completed_at TEXT,
+        completed_by_email TEXT,
+        completed_by_name TEXT,
+        created_at TEXT NOT NULL,
+        created_by_email TEXT NOT NULL,
+        created_by_name TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by_email TEXT NOT NULL,
+        updated_by_name TEXT NOT NULL
+      );
+      INSERT INTO jobs_new (
+        id, reqd_by, ticket_number, ticket_autotask_id, customer, job_description, action_text, action_color, location,
+        priority, workflow_stage, workflow_stage_text,
+        status, completed_at, completed_by_email, completed_by_name, created_at, created_by_email, created_by_name, updated_at, updated_by_email, updated_by_name
+      )
+      SELECT
+        id, reqd_by, ticket_number, ticket_autotask_id, customer, job_description, action_text, action_color, location,
+        CASE priority
+          WHEN 'today' THEN 'urgent'
+          WHEN 'tomorrow' THEN 'in_progress'
+          WHEN '2to4days' THEN 'next_up'
+          WHEN 'over4days' THEN 'not_started'
+          ELSE priority
+        END,
+        workflow_stage, workflow_stage_text,
+        status, completed_at, completed_by_email, completed_by_name, created_at, created_by_email, created_by_name, updated_at, updated_by_email, updated_by_name
+      FROM jobs;
+      DROP TABLE jobs;
+      ALTER TABLE jobs_new RENAME TO jobs;
+    `);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+migrateRetierPriorityToStatusStyle();
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -360,7 +445,7 @@ function createJob(fields, ticketAutotaskId, actor) {
       $actionText: fields.actionText || null,
       $actionColor: fields.actionColor || 'general',
       $location: fields.location || null,
-      $priority: fields.priority || '2to4days',
+      $priority: fields.priority || 'not_started',
       $workflowStage: fields.workflowStage || 'new',
       $workflowStageText: fields.workflowStageText || null,
       $now: now,

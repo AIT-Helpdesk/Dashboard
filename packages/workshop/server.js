@@ -12,7 +12,7 @@ const {
   getJobHistory,
 } = require('./db.js');
 
-const PRIORITIES = ['today', 'tomorrow', '2to4days', 'over4days'];
+const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'not_started'];
 const ACTION_COLORS = ['general', 'done', 'notewell', 'blue'];
 const WORKFLOW_STAGES = ['new', 'free_text', 'in_car', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected'];
 // The two stages with a companion free-text field -- 'free_text' (type
@@ -157,7 +157,7 @@ const TICKET_NOTE_PUBLISH = 4; // "Internal & Co-Managed"
 // access to that browser module's exports, and the note's field list is
 // meant to read the same way the on-screen print card does ("contain all
 // the current data for the fields like the print process", by request).
-const NOTE_PRIORITY_LABELS = { today: 'Today', tomorrow: 'Tomorrow', '2to4days': '2-4 days away', over4days: 'Over 4 days' };
+const NOTE_PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', in_progress: 'In Progress', next_up: 'Next Up', not_started: 'Not Started' };
 const NOTE_WORKFLOW_STAGE_LABELS = {
   new: 'New',
   free_text: 'Free Text',
@@ -360,7 +360,7 @@ async function parseJobBody(body, requireDefaults) {
     fields.actionColor = value;
   }
   if ('priority' in body || requireDefaults) {
-    const value = body.priority || '2to4days';
+    const value = body.priority || 'not_started';
     if (!PRIORITIES.includes(value)) throw { status: 400, message: `priority must be one of ${PRIORITIES.join(', ')}.` };
     fields.priority = value;
   }

@@ -12,12 +12,14 @@ let showCompleted = false;
 // convention as showCompleted above.
 let twoColumns = false;
 
-// Today/Tomorrow/2-4 days/Over 4 days, by request -- replaces the
-// original 3-tier scheme. Still a manually-chosen magnet (see db.js's
-// own comment on the priority column) -- plenty of jobs have no linked
-// ticket at all, so it can't be purely computed from a due date.
-const PRIORITY_LABELS = { today: 'Today', tomorrow: 'Tomorrow', '2to4days': '2-4 days away', over4days: 'Over 4 days' };
-const PRIORITY_ORDER = ['today', 'tomorrow', '2to4days', 'over4days'];
+// Urgent/Complete/Nearly Complete/In Progress/Next Up/Not Started, by
+// request -- a completion-progress scheme replacing the original
+// time-urgency one (Today/Tomorrow/2-4 days/Over 4 days -- see db.js's
+// own comment on the priority column for how existing data was
+// remapped). Still a manually-chosen magnet -- plenty of jobs have no
+// linked ticket at all, so it can't be purely computed from a due date.
+const PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', in_progress: 'In Progress', next_up: 'Next Up', not_started: 'Not Started' };
+const PRIORITY_ORDER = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'not_started'];
 // Plain colour names, by request -- Black (default)/Red/Blue/Green. The
 // stored values keep their original names (general/done/notewell) for
 // the three pre-existing ones plus a new 'blue' -- only the labels here
@@ -94,6 +96,7 @@ export function mount(container) {
     <div id="results"></div>
 
     <div class="wsp-priority-legend">
+      <span class="wsp-priority-legend-prefix">Workshop Status: </span>
       ${PRIORITY_ORDER.map((p) => `<span><span class="wsp-dot wsp-dot--${p}"></span>${escapeHtml(PRIORITY_LABELS[p])}</span>`).join('')}
     </div>
   `;
@@ -514,7 +517,7 @@ export function mount(container) {
           </label>
           <label>Priority (magnet)
             <select class="wsp-field" data-field="priority">
-              ${PRIORITY_ORDER.map((p) => `<option value="${p}"${isSelected(existingJob?.priority, p, '2to4days')}>${escapeHtml(PRIORITY_LABELS[p])}</option>`).join('')}
+              ${PRIORITY_ORDER.map((p) => `<option value="${p}"${isSelected(existingJob?.priority, p, 'not_started')}>${escapeHtml(PRIORITY_LABELS[p])}</option>`).join('')}
             </select>
           </label>
           <label>Job description
@@ -640,7 +643,7 @@ export function mount(container) {
     return job.customer || '—';
   }
 
-  const PRINT_PRIORITY_DOT_COLORS = { today: '#16a34a', tomorrow: '#f97316', '2to4days': '#8b5cf6', over4days: '#6b7280' };
+  const PRINT_PRIORITY_DOT_COLORS = { urgent: '#dc2626', complete: '#16a34a', nearly_complete: '#2563eb', in_progress: '#f97316', next_up: '#8b5cf6', not_started: '#6b7280' };
   const PRINT_ACTION_COLORS = { general: '#111827', notewell: '#dc2626', blue: '#2563eb', done: '#16a34a' };
 
   function buildPrintCardHtml(job) {
