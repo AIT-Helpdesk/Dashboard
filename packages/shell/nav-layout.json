@@ -23,6 +23,10 @@
       {
         "type": "page",
         "id": "my-strety-tasks"
+      },
+      {
+        "type": "page",
+        "id": "workshop"
       }
     ]
   },

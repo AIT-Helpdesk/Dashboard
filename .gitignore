@@ -31,3 +31,9 @@ packages/strety-autotask-sync/last-run.json
 packages/tc-elite-rollout/data.db
 packages/tc-elite-rollout/data.db-shm
 packages/tc-elite-rollout/data.db-wal
+
+# Same reasoning, for Workshop's own SQLite database (real workshop job
+# data, not source).
+packages/workshop/data.db
+packages/workshop/data.db-shm
+packages/workshop/data.db-wal

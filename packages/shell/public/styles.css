@@ -1833,13 +1833,16 @@ tr.row-units-changed {
   font-size: 0.75rem;
 }
 
-/* The "View full history" window -- a simple overlay + centered panel,
-   opened from the tooltip's link (any cell) or directly by clicking a
-   non-editable compound-column rollup cell (see openHistoryModal() and
-   wireCellInteractions() in client.js). No existing modal convention
-   elsewhere on this dashboard to reuse, so this is scoped to its own
-   .tcr-history-* classes rather than a shared one. */
-.tcr-history-overlay {
+/* The "View full history" window -- a simple overlay + centered panel.
+   Shared across any page with a per-record audit trail to show (TC
+   Elite Rollout's per-cell/stage history, opened from the tooltip's
+   link or a non-editable compound-column rollup cell -- see
+   openHistoryModal() there; Workshop's per-job history, opened from a
+   row's History button -- see openHistoryModal() in workshop/client.js).
+   Originally TC Elite Rollout-only (.tcr-history-*); generalised here
+   once a second page needed the exact same pattern rather than
+   copy-pasting it. */
+.history-modal-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
@@ -1848,7 +1851,7 @@ tr.row-units-changed {
   justify-content: center;
   z-index: 1100;
 }
-.tcr-history-panel {
+.history-modal-panel {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1858,7 +1861,7 @@ tr.row-units-changed {
   overflow-y: auto;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
-.tcr-history-panel-header {
+.history-modal-panel-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1869,7 +1872,7 @@ tr.row-units-changed {
   position: sticky;
   top: 0;
 }
-.tcr-history-close {
+.history-modal-close {
   background: none;
   border: none;
   cursor: pointer;
@@ -1878,13 +1881,13 @@ tr.row-units-changed {
   line-height: 1;
   padding: 0.1rem 0.3rem;
 }
-.tcr-history-close:hover {
+.history-modal-close:hover {
   color: var(--fg);
 }
-.tcr-history-body {
+.history-modal-body {
   padding: 0.75rem 1rem 1rem;
 }
-.tcr-history-list {
+.history-modal-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1892,16 +1895,16 @@ tr.row-units-changed {
   flex-direction: column;
   gap: 0.6rem;
 }
-.tcr-history-entry {
+.history-modal-entry {
   border-bottom: 1px solid var(--border);
   padding-bottom: 0.6rem;
   font-size: 0.85rem;
 }
-.tcr-history-entry:last-child {
+.history-modal-entry:last-child {
   border-bottom: none;
   padding-bottom: 0;
 }
-.tcr-history-when {
+.history-modal-when {
   color: var(--muted);
   font-size: 0.8rem;
   margin-top: 0.15rem;
@@ -2113,4 +2116,261 @@ tr.row-units-changed {
 }
 .legend-swatch--medium {
   background: var(--accent);
+}
+
+/* Workshop board -- priority colours below are a deliberate 4-tier
+   scheme by request: green=today, orange=tomorrow, purple=2-4 days away,
+   grey=over 4 days. Red/green reuse this dashboard's existing red/green
+   (same values as .text-highlight-red/-green, .cell-flag-red/-green
+   elsewhere); purple is the same #8b5cf6 TC Elite Rollout's "Issue"
+   status uses, for the same reason -- reusing an established colour
+   rather than a fresh one-off shade wherever this dashboard already has
+   one that fits. Orange and the over4days grey are genuinely new --
+   nothing else needed these before this page. */
+.wsp-table th:last-child,
+.wsp-table td.wsp-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+/* Wraps, but only once it doesn't fit in ~30 characters -- by request,
+   short client names stay on one line, longer ones wrap rather than
+   being forced onto one (potentially very wide) line or truncated. `ch`
+   is an approximation of character count (the width of the font's "0"
+   glyph), not an exact character-count wrap point -- close enough for
+   this, and there's no CSS primitive for a literal character count.
+   min-width keeps the column from collapsing back down below ~25
+   characters even when every visible value is short. */
+.wsp-col-client {
+  white-space: normal;
+  min-width: 25ch;
+  max-width: 30ch;
+}
+/* Status never wraps, by request -- it's a short dot+label (or a short
+   typed free-text note), and wrapping it mid-row looked worse than
+   just letting the column size to its content. */
+.wsp-col-status {
+  white-space: nowrap;
+}
+.wsp-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+}
+/* Wraps the dot in the Status column -- its own click target for
+   re-triaging priority straight from the list (see
+   openPriorityEditor()/statusStageCellHtml() in client.js), independent
+   of the Status/workflow-stage text next to it. */
+.wsp-priority-dot {
+  cursor: pointer;
+  display: inline-block;
+  vertical-align: middle;
+  /* Extra gap beyond the inner dot's own margin-right, by request -- the
+     dot alone sat too close to the Status text next to it. */
+  margin-right: 0.3rem;
+}
+.wsp-priority-select {
+  width: auto;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.85rem;
+  margin-right: 0.3rem;
+}
+.wsp-dot--today {
+  background: #16a34a;
+}
+.wsp-dot--tomorrow {
+  background: #f97316;
+}
+.wsp-dot--2to4days {
+  background: #8b5cf6;
+}
+.wsp-dot--over4days {
+  background: #6b7280;
+}
+.wsp-action-text--general {
+  color: var(--fg);
+}
+.wsp-action-text--done {
+  color: #16a34a;
+}
+.wsp-action-text--notewell {
+  color: #dc2626;
+}
+/* Job Description -- stacked above the actual action text in the same
+   cell (see actionCellHtml() in client.js), bold to read as the
+   "headline" of the two. */
+.wsp-job-description {
+  font-weight: 700;
+}
+
+/* Both together, by request -- the light background tint (kept, still
+   too subtle alone in dark mode on its own) PLUS a thin solid-colour bar
+   using the dot's full colour, now running the whole row: left edge of
+   the first (Status) cell, both sides of Client/Action, and right edge
+   of the last real-data (Location) cell -- see jobRowHtml() in client.js
+   for which cells get which class. over4days deliberately has NO tint
+   (by request) -- grey-on-grey read as barely-there/muddy, so that tier
+   keeps just its solid bars, no background wash. */
+.wsp-row-tint--today {
+  background: color-mix(in srgb, #16a34a 8%, transparent);
+}
+.wsp-row-tint--tomorrow {
+  background: color-mix(in srgb, #f97316 8%, transparent);
+}
+.wsp-row-tint--2to4days {
+  background: color-mix(in srgb, #8b5cf6 8%, transparent);
+}
+.wsp-bar-left--today {
+  border-left: 4px solid #16a34a;
+}
+.wsp-bar-left--tomorrow {
+  border-left: 4px solid #f97316;
+}
+.wsp-bar-left--2to4days {
+  border-left: 4px solid #8b5cf6;
+}
+.wsp-bar-left--over4days {
+  border-left: 4px solid #6b7280;
+}
+.wsp-bar-right--today {
+  border-right: 4px solid #16a34a;
+}
+.wsp-bar-right--tomorrow {
+  border-right: 4px solid #f97316;
+}
+.wsp-bar-right--2to4days {
+  border-right: 4px solid #8b5cf6;
+}
+.wsp-bar-right--over4days {
+  border-right: 4px solid #6b7280;
+}
+
+/* The linked ticket's own Autotask status, under the ticket number --
+   small print, muted, by request. */
+.wsp-ticket-status {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.1rem;
+}
+
+/* Overdue Due Date -- red + bold, by request. Same red as
+   .text-highlight-red/.cell-flag-red elsewhere on this dashboard. */
+.wsp-overdue {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+/* Status (workflow stage) -- click-to-edit inline (see
+   statusStageCellHtml()/openStatusStageEditor() in client.js), same
+   dotted-underline "this is clickable" hint convention used for other
+   inline-editable text on this dashboard. */
+.wsp-status-stage {
+  cursor: pointer;
+  border-bottom: 1px dotted var(--muted);
+}
+.wsp-status-stage:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+/* Green text for the "done and on its way out/gone" stages (Ready for
+   Pickup/Sent/Delivered/Collected), by request -- see
+   GREEN_WORKFLOW_STAGES in client.js. Hover still wins (see above), same
+   as every other stage. */
+.wsp-status-stage--green {
+  color: #16a34a;
+}
+.wsp-status-stage-text-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.wsp-status-stage-text {
+  width: 12rem;
+}
+
+/* "Show in 2 columns" toggle -- splits the job list into two side-by-side
+   tables on wide screens (by request, default off). Stacks back to one
+   column below the breakpoint so it never squeezes the table unreadably
+   thin. */
+.wsp-two-column-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+@media (max-width: 1200px) {
+  .wsp-two-column-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Priority colours/labels, plain -- no heading, no card, no Pen Colours
+   section (removed by request), just a flat row of dot+label pairs
+   directly under the table. */
+.wsp-priority-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.wsp-icon-btn {
+  background: none;
+  border: none;
+  padding: 0.1rem 0.3rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.wsp-icon-btn:hover {
+  color: var(--accent);
+}
+
+.wsp-job-form {
+  margin-bottom: 1rem;
+}
+.wsp-form-body {
+  padding: 0.75rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.wsp-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+@media (max-width: 720px) {
+  .wsp-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.wsp-form-grid label,
+.wsp-form-full {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.wsp-field {
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--fg);
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+textarea.wsp-field {
+  resize: vertical;
+}
+.wsp-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
 }

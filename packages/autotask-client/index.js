@@ -124,16 +124,29 @@ const companyNameCache = new Map();
 async function resolveCompanyName(client, id) {
   if (id === null || id === undefined) return 'Unknown';
   if (companyNameCache.has(id)) return companyNameCache.get(id);
+  if (id === 0) {
+    // Not a real company -- Autotask's own convention for "internal" --
+    // so this is a permanent, deterministic mapping, unlike the error
+    // fallback below, and safe to cache.
+    const fallback = 'Ambient IT (internal)';
+    companyNameCache.set(id, fallback);
+    return fallback;
+  }
   try {
     const res = await client.companies.get(id);
     const name = res.data?.companyName || `Company #${id}`;
     companyNameCache.set(id, name);
     return name;
   } catch (err) {
+    // Deliberately NOT cached -- a transient failure (rate limit,
+    // network blip) must not permanently poison this company's name for
+    // the rest of the server process's life. Confirmed the hard way: a
+    // real rate-limit hit during testing left a stale "Company #2271"
+    // fallback that would otherwise have stuck around forever, showing
+    // the wrong client on every page resolving that company (Workshop's
+    // board included) until the whole process was restarted.
     console.error(`Failed to resolve company ${id}:`, err.message);
-    const fallback = id === 0 ? 'Ambient IT (internal)' : `Company #${id}`;
-    companyNameCache.set(id, fallback);
-    return fallback;
+    return `Company #${id}`;
   }
 }
 
