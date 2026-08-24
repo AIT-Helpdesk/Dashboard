@@ -196,6 +196,12 @@ function noteClientText(job) {
 
 function noteFieldSnapshot(job) {
   return [
+    // Who made this particular change -- by request, same as the
+    // History modal already shows per entry. job.updatedByName always
+    // reflects whoever just triggered THIS save (createJob/updateJob/
+    // completeJob/reopenJob all re-touch it), so this is accurate for
+    // every note that goes through this function.
+    `Changed by: ${job.updatedByName || '(unknown)'}`,
     `Ticket: ${job.ticketNumber || '(none)'}${job.ticketStatus ? ` (${job.ticketStatus})` : ''}`,
     `Due date: ${job.ticketDueDate ? new Date(job.ticketDueDate).toLocaleDateString() : '(none)'}`,
     `Client: ${noteClientText(job)}`,
@@ -275,19 +281,27 @@ function ticketMovedDescription(newTicketNumber) {
     : `Workshop Board removed this job's link to this ticket.`;
 }
 
-async function postTicketMovedNote(oldTicketAutotaskId, newTicketNumber) {
+// A short, single-line note (not the full field snapshot) -- used for
+// the specific literal messages requested for the ticket-transfer note
+// above and Complete/Delete/Reopen below. Same best-effort,
+// never-blocking, not-awaited approach as postWorkshopUpdateNote().
+async function postWorkshopActionNote(ticketAutotaskId, message) {
+  if (!ticketAutotaskId) return; // nothing to notify -- no linked ticket
   try {
-    const description = ticketMovedDescription(newTicketNumber);
     const client = await getClient();
-    await client.ticketNotes.create(oldTicketAutotaskId, {
+    await client.ticketNotes.create(ticketAutotaskId, {
       title: NOTE_TITLE,
-      description,
+      description: message,
       noteType: TICKET_NOTE_TYPE,
       publish: TICKET_NOTE_PUBLISH,
     });
   } catch (err) {
-    console.error(`Workshop: failed to post "moved" ticket note to old ticket ${oldTicketAutotaskId}:`, err);
+    console.error(`Workshop: failed to post action note to ticket ${ticketAutotaskId}:`, err);
   }
+}
+
+async function postTicketMovedNote(oldTicketAutotaskId, newTicketNumber) {
+  await postWorkshopActionNote(oldTicketAutotaskId, ticketMovedDescription(newTicketNumber));
 }
 
 const router = express.Router();
@@ -450,9 +464,10 @@ router.patch('/jobs/:id/complete', (req, res) => {
   try {
     const jobId = Number(req.params.id);
     if (!getJob(jobId)) return res.status(404).json({ error: 'Job not found.' });
-    const updated = completeJob(jobId, actorFrom(req));
+    const actor = actorFrom(req);
+    const updated = completeJob(jobId, actor);
     res.json(shapeJob(updated));
-    if (updated.ticket_autotask_id) postWorkshopUpdateNote(jobId, { headline: 'Job marked complete.' });
+    postWorkshopActionNote(updated.ticket_autotask_id, `Workshop Job marked as complete by ${actor.name}.`);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -465,7 +480,7 @@ router.patch('/jobs/:id/reopen', (req, res) => {
     if (!getJob(jobId)) return res.status(404).json({ error: 'Job not found.' });
     const updated = reopenJob(jobId, actorFrom(req));
     res.json(shapeJob(updated));
-    if (updated.ticket_autotask_id) postWorkshopUpdateNote(jobId, { headline: 'Job reopened.' });
+    postWorkshopActionNote(updated.ticket_autotask_id, 'Completed Workshop Job Reopened.');
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -497,15 +512,26 @@ router.patch('/jobs/:id/soft-delete', (req, res) => {
   }
 });
 
-// Hard delete -- kept for genuine cleanup (e.g. direct API/admin use),
-// but no longer what the UI's trash icon does -- see PATCH
-// .../soft-delete above, and deleteJob()'s own comment in db.js.
+// Hard delete -- the Show Completed archive's own trash icon (see
+// deleteJob()'s own comment in db.js), plus still available for direct
+// API/admin use. Requires a resolved ticket link, by request -- once
+// this row is gone, the ticket note posted below is the ONLY remaining
+// record this job ever existed, so there has to be a real ticket for
+// that note to land on. (The open-jobs view's own trash icon, PATCH
+// .../soft-delete above, has no such requirement -- it never destroys
+// anything, it's fully reversible via Reopen.)
 router.delete('/jobs/:id', (req, res) => {
   try {
     const jobId = Number(req.params.id);
-    if (!getJob(jobId)) return res.status(404).json({ error: 'Job not found.' });
+    const job = getJob(jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found.' });
+    if (!job.ticket_autotask_id) {
+      return res.status(400).json({ error: 'Cannot delete a job with no linked ticket -- link a real Autotask ticket first, so a permanent record of the deletion can be posted there.' });
+    }
+    const actor = actorFrom(req);
     deleteJob(jobId);
     res.status(204).end();
+    postWorkshopActionNote(job.ticket_autotask_id, `Workshop Job deleted by ${actor.name}.`);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
