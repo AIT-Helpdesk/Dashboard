@@ -861,20 +861,22 @@ export function mount(container) {
   }
 
   // "open a window with the change history for that object" -- a simple
-  // overlay + panel (no existing modal convention elsewhere on this
-  // dashboard to reuse), listing every audit_log entry for this one
+  // overlay + panel, listing every audit_log entry for this one
   // cell/stage, most recent first (same data the tooltip's "most recent"
   // line already draws from, just the whole list instead of entry[0]).
+  // Uses the shared .history-modal-* classes (packages/shell/public/
+  // styles.css) -- Workshop's own openHistoryModal() reuses the exact
+  // same markup shape/classes for its own per-job history.
   async function openHistoryModal(ctx) {
     const overlay = document.createElement('div');
-    overlay.className = 'tcr-history-overlay';
+    overlay.className = 'history-modal-overlay';
     overlay.innerHTML = `
-      <div class="tcr-history-panel">
-        <div class="tcr-history-panel-header">
+      <div class="history-modal-panel">
+        <div class="history-modal-panel-header">
           <span>${escapeHtml(ctx.clientName || '')} -- ${escapeHtml(ctx.label || '')}</span>
-          <button type="button" class="tcr-history-close" aria-label="Close">✕</button>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
         </div>
-        <div class="tcr-history-body"><p class="status">Loading...</p></div>
+        <div class="history-modal-body"><p class="status">Loading...</p></div>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -886,7 +888,7 @@ export function mount(container) {
       if (e.key === 'Escape') close();
     }
     document.addEventListener('keydown', onKeydown);
-    overlay.querySelector('.tcr-history-close').addEventListener('click', close);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) close();
     });
@@ -894,16 +896,16 @@ export function mount(container) {
     try {
       const res = await fetch(historyUrlFor(ctx));
       const data = await res.json();
-      const body = overlay.querySelector('.tcr-history-body');
+      const body = overlay.querySelector('.history-modal-body');
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       if (!data.history || data.history.length === 0) {
         body.innerHTML = '<p class="status">No history found.</p>';
         return;
       }
       const isText = ctx.kind === 'stage-text';
-      body.innerHTML = `<ul class="tcr-history-list">${data.history.map((entry) => historyEntryHtml(entry, isText)).join('')}</ul>`;
+      body.innerHTML = `<ul class="history-modal-list">${data.history.map((entry) => historyEntryHtml(entry, isText)).join('')}</ul>`;
     } catch (err) {
-      overlay.querySelector('.tcr-history-body').innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
+      overlay.querySelector('.history-modal-body').innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -920,7 +922,7 @@ export function mount(container) {
       if (entry.newReason) changeText += `: ${escapeHtml(entry.newReason)}`;
     }
     const when = `${escapeHtml(entry.changedByName)} -- ${escapeHtml(formatDateTime(entry.changedAt))}`;
-    return `<li class="tcr-history-entry"><div>${changeText}</div><div class="tcr-history-when">${when}</div></li>`;
+    return `<li class="history-modal-entry"><div>${changeText}</div><div class="history-modal-when">${when}</div></li>`;
   }
 
   function openCellEditor(td) {
