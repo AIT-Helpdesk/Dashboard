@@ -8,6 +8,18 @@ export const label = "SaaS Alerts Customers";
 // restore instantly instead of coming back blank.
 let lastData = null;
 let lastFilter = '';
+// Persists across re-mounts, same reasoning as lastData/lastFilter above.
+// null key means "no explicit sort chosen yet" -- falls back to the
+// server's own default order (name, ascending -- see server.js).
+let sortState = { key: null, direction: 'asc' };
+
+const SORTABLE_COLUMNS = [
+  { key: 'name', label: 'Customer' },
+  { key: 'domain', label: 'Domain' },
+  { key: 'status', label: 'Status' },
+  { key: 'products', label: 'Products' },
+  { key: 'monitoredUsers', label: 'Monitored Users' },
+];
 
 export function mount(container) {
   container.innerHTML = `
@@ -73,7 +85,12 @@ export function mount(container) {
 
   function renderResults(customers) {
     const term = lastFilter.trim().toLowerCase();
-    const filtered = term ? customers.filter((c) => c.name.toLowerCase().includes(term)) : customers;
+    let filtered = term ? customers.filter((c) => c.name.toLowerCase().includes(term)) : customers;
+    // No explicit sort chosen -- leave the server's own default order
+    // (name, ascending) alone rather than re-sorting to the same thing.
+    if (sortState.key) {
+      filtered = [...filtered].sort((a, b) => compareForSort(a, b, sortState.key, sortState.direction));
+    }
 
     resultsEl.innerHTML = '';
     if (filtered.length === 0) {
@@ -84,9 +101,9 @@ export function mount(container) {
     const group = document.createElement('div');
     group.className = 'resource-group';
     group.innerHTML = `
-      <table>
+      <table class="sac-table">
         <thead>
-          <tr class="shaded-row"><th>Customer</th><th>Domain</th><th>Status</th><th>Products</th><th>Monitored Users</th></tr>
+          <tr class="shaded-row">${SORTABLE_COLUMNS.map((col) => sortableHeaderHtml(col)).join('')}</tr>
         </thead>
         <tbody>
           ${filtered
@@ -105,6 +122,54 @@ export function mount(container) {
       </table>
     `;
     resultsEl.appendChild(group);
+
+    group.querySelectorAll('.sac-sort-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.sortKey;
+        if (sortState.key === key) {
+          sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortState = { key, direction: 'asc' };
+        }
+        // Re-render from the full (unfiltered) customer list, same as the
+        // filter input's own re-render -- filtering/sorting are both
+        // re-derived from lastData.customers, not accumulated on top of
+        // whatever's currently on screen.
+        renderResults(lastData.customers);
+      });
+    });
+  }
+
+  // Click-to-sort, click-again-to-reverse column headers -- the whole
+  // list is already in memory client-side (see the filter-input comment
+  // above), so re-sorting on click is instant, no round trip needed.
+  function sortableHeaderHtml(col) {
+    const isActive = sortState.key === col.key;
+    const arrow = isActive ? (sortState.direction === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th><button type="button" class="sac-sort-btn${isActive ? ' sac-sort-btn--active' : ''}" data-sort-key="${col.key}">${escapeHtml(col.label)}${arrow}</button></th>`;
+  }
+
+  // 'products' isn't a plain field on the customer object -- it's an
+  // array, sorted the same way it's displayed (joined, alphabetically).
+  function sortValueFor(c, key) {
+    return key === 'products' ? c.products.join(', ') : c[key];
+  }
+
+  // Nulls (domain/monitoredUsers can both be genuinely absent) always
+  // sort to the end, regardless of direction -- so reversing the sort
+  // doesn't make "missing data" jump to the top, which would read as
+  // more surprising than useful.
+  function compareForSort(a, b, key, direction) {
+    const av = sortValueFor(a, key);
+    const bv = sortValueFor(b, key);
+    const aMissing = av === null || av === undefined;
+    const bMissing = bv === null || bv === undefined;
+    if (aMissing || bMissing) return aMissing && bMissing ? 0 : aMissing ? 1 : -1;
+    const cmp =
+      typeof av === 'number' && typeof bv === 'number'
+        ? av - bv
+        : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+    return direction === 'asc' ? cmp : -cmp;
   }
 
   if (lastData) render(lastData);
