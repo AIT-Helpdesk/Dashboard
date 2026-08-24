@@ -1027,6 +1027,30 @@ th {
   letter-spacing: 0.02em;
 }
 
+/* SaaS Alerts Customers' sortable column headers -- scoped to this one
+   page's table (not a dashboard-wide th convention), by request. A plain
+   <button> reset to inherit the surrounding th's own look (muted/
+   uppercase/small), diverging only on hover/active so it still reads as
+   "click me" without looking like a whole new visual language. */
+.sac-sort-btn {
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.sac-sort-btn:hover {
+  color: var(--accent);
+}
+.sac-sort-btn--active {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 td.ticket-number {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
