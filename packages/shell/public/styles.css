@@ -2142,15 +2142,17 @@ tr.row-units-changed {
   background: var(--accent);
 }
 
-/* Workshop board -- priority colours below are a deliberate 4-tier
-   scheme by request: green=today, orange=tomorrow, purple=2-4 days away,
-   grey=over 4 days. Red/green reuse this dashboard's existing red/green
-   (same values as .text-highlight-red/-green, .cell-flag-red/-green
-   elsewhere); purple is the same #8b5cf6 TC Elite Rollout's "Issue"
-   status uses, for the same reason -- reusing an established colour
-   rather than a fresh one-off shade wherever this dashboard already has
-   one that fits. Orange and the over4days grey are genuinely new --
-   nothing else needed these before this page. */
+/* Workshop board -- priority colours below are a deliberate 6-tier
+   completion-progress scheme by request: red=Urgent, green=Complete,
+   blue=Nearly Complete, orange=In Progress, purple=Next Up,
+   grey=Not Started. Red/green/blue reuse this dashboard's existing
+   red/green/accent-blue (same values as .text-highlight-red/-green,
+   .cell-flag-red/-green, var(--accent) elsewhere); purple is the same
+   #8b5cf6 TC Elite Rollout's "Issue" status uses, for the same reason --
+   reusing an established colour rather than a fresh one-off shade
+   wherever this dashboard already has one that fits. Orange and the
+   not_started grey are genuinely new -- nothing else needed these
+   before this page. */
 .wsp-table th:last-child,
 .wsp-table td.wsp-actions {
   text-align: right;
@@ -2201,16 +2203,22 @@ tr.row-units-changed {
   font-size: 0.85rem;
   margin-right: 0.3rem;
 }
-.wsp-dot--today {
+.wsp-dot--urgent {
+  background: #dc2626;
+}
+.wsp-dot--complete {
   background: #16a34a;
 }
-.wsp-dot--tomorrow {
+.wsp-dot--nearly_complete {
+  background: #2563eb;
+}
+.wsp-dot--in_progress {
   background: #f97316;
 }
-.wsp-dot--2to4days {
+.wsp-dot--next_up {
   background: #8b5cf6;
 }
-.wsp-dot--over4days {
+.wsp-dot--not_started {
   background: #6b7280;
 }
 .wsp-action-text--general {
@@ -2234,40 +2242,58 @@ tr.row-units-changed {
    using the dot's full colour, now running the whole row: left edge of
    the first (Status) cell, both sides of Client/Action, and right edge
    of the last real-data (Location) cell -- see jobRowHtml() in client.js
-   for which cells get which class. over4days deliberately has NO tint
+   for which cells get which class. not_started deliberately has NO tint
    (by request) -- grey-on-grey read as barely-there/muddy, so that tier
    keeps just its solid bars, no background wash. */
-.wsp-row-tint--today {
+.wsp-row-tint--urgent {
+  background: color-mix(in srgb, #dc2626 8%, transparent);
+}
+.wsp-row-tint--complete {
   background: color-mix(in srgb, #16a34a 8%, transparent);
 }
-.wsp-row-tint--tomorrow {
+.wsp-row-tint--nearly_complete {
+  background: color-mix(in srgb, #2563eb 8%, transparent);
+}
+.wsp-row-tint--in_progress {
   background: color-mix(in srgb, #f97316 8%, transparent);
 }
-.wsp-row-tint--2to4days {
+.wsp-row-tint--next_up {
   background: color-mix(in srgb, #8b5cf6 8%, transparent);
 }
-.wsp-bar-left--today {
+.wsp-bar-left--urgent {
+  border-left: 4px solid #dc2626;
+}
+.wsp-bar-left--complete {
   border-left: 4px solid #16a34a;
 }
-.wsp-bar-left--tomorrow {
+.wsp-bar-left--nearly_complete {
+  border-left: 4px solid #2563eb;
+}
+.wsp-bar-left--in_progress {
   border-left: 4px solid #f97316;
 }
-.wsp-bar-left--2to4days {
+.wsp-bar-left--next_up {
   border-left: 4px solid #8b5cf6;
 }
-.wsp-bar-left--over4days {
+.wsp-bar-left--not_started {
   border-left: 4px solid #6b7280;
 }
-.wsp-bar-right--today {
+.wsp-bar-right--urgent {
+  border-right: 4px solid #dc2626;
+}
+.wsp-bar-right--complete {
   border-right: 4px solid #16a34a;
 }
-.wsp-bar-right--tomorrow {
+.wsp-bar-right--nearly_complete {
+  border-right: 4px solid #2563eb;
+}
+.wsp-bar-right--in_progress {
   border-right: 4px solid #f97316;
 }
-.wsp-bar-right--2to4days {
+.wsp-bar-right--next_up {
   border-right: 4px solid #8b5cf6;
 }
-.wsp-bar-right--over4days {
+.wsp-bar-right--not_started {
   border-right: 4px solid #6b7280;
 }
 
@@ -2340,6 +2366,11 @@ tr.row-units-changed {
   margin-top: 0.5rem;
   font-size: 0.85rem;
   color: var(--muted);
+}
+/* "Workshop Status: " lead-in, by request -- bold so it reads as the
+   legend's own label rather than just another dot+colour entry. */
+.wsp-priority-legend-prefix {
+  font-weight: 700;
 }
 
 .wsp-icon-btn {
