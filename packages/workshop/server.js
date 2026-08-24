@@ -139,6 +139,157 @@ function shapeHistoryRow(row) {
   };
 }
 
+// ---- "WORKSHOP BOARD UPDATE" ticket notes -- by request, whenever a job
+// with a resolved ticket changes, and (with the job's full audit history
+// appended) the first time a ticket number resolves on a job. ----
+//
+// noteType/publish are real picklist IDs confirmed against this Autotask
+// tenant's own TicketNotes field metadata (autotask_get_field_info) --
+// never guessed, since the wrong `publish` value could expose an
+// internal note to the client portal. This tenant has no generic
+// "General/Internal Note" noteType option, so "Task Notes" was chosen as
+// the closest fit; "Internal & Co-Managed" was chosen for publish.
+const NOTE_TITLE = 'WORKSHOP BOARD UPDATE';
+const TICKET_NOTE_TYPE = 3; // "Task Notes"
+const TICKET_NOTE_PUBLISH = 4; // "Internal & Co-Managed"
+
+// Server-side mirror of client.js's own label maps -- server.js has no
+// access to that browser module's exports, and the note's field list is
+// meant to read the same way the on-screen print card does ("contain all
+// the current data for the fields like the print process", by request).
+const NOTE_PRIORITY_LABELS = { today: 'Today', tomorrow: 'Tomorrow', '2to4days': '2-4 days away', over4days: 'Over 4 days' };
+const NOTE_WORKFLOW_STAGE_LABELS = {
+  new: 'New',
+  free_text: 'Free Text',
+  in_car: 'In Car',
+  ready_to_ship: 'Ready to Ship',
+  ready_for_pickup: 'Ready for Pickup',
+  sent: 'Sent',
+  delivered: 'Delivered',
+  collected: 'Collected',
+};
+const NOTE_ACTION_COLOR_LABELS = { general: 'Black', notewell: 'Red', blue: 'Blue', done: 'Green' };
+const NOTE_FIELD_LABELS = {
+  ticket_number: 'Ticket',
+  customer: 'Client',
+  job_description: 'Job description',
+  action_text: 'Current / required action',
+  action_color: 'Note colour',
+  location: 'Location',
+  priority: 'Priority',
+  workflow_stage: 'Status',
+  workflow_stage_text: 'Status detail',
+};
+
+function noteWorkflowStageLabel(job) {
+  if (job.workflowStage === 'free_text' && job.workflowStageText) return job.workflowStageText;
+  if (job.workflowStage === 'in_car' && job.workflowStageText) return `In Car -- ${job.workflowStageText}`;
+  return NOTE_WORKFLOW_STAGE_LABELS[job.workflowStage] || job.workflowStage;
+}
+
+// Same "ticket's resolved client name, with anything manually typed
+// afterward in brackets" combination the print card uses.
+function noteClientText(job) {
+  if (job.ticketClientName) return job.customer ? `${job.ticketClientName} (${job.customer})` : job.ticketClientName;
+  return job.customer || '(none)';
+}
+
+function noteFieldSnapshot(job) {
+  return [
+    `Ticket: ${job.ticketNumber || '(none)'}${job.ticketStatus ? ` (${job.ticketStatus})` : ''}`,
+    `Due date: ${job.ticketDueDate ? new Date(job.ticketDueDate).toLocaleDateString() : '(none)'}`,
+    `Client: ${noteClientText(job)}`,
+    `Status: ${noteWorkflowStageLabel(job)}`,
+    `Priority: ${NOTE_PRIORITY_LABELS[job.priority] || job.priority}`,
+    `Location: ${job.location || '(none)'}`,
+    `Job description: ${job.jobDescription || '(none)'}`,
+    `Current / required action (${NOTE_ACTION_COLOR_LABELS[job.actionColor] || job.actionColor}): ${job.actionText || '(none)'}`,
+  ].join('\n');
+}
+
+// One line per audit_log entry, plain-text equivalent of client.js's own
+// historyEntryHtml()/valueChangeHtml() -- most recent first, matching
+// the History modal's own convention.
+function noteHistoryLine(entry) {
+  if (entry.field === 'created' || entry.field === 'completed' || entry.field === 'reopened') {
+    const label = entry.field === 'created' ? 'Created' : entry.field === 'completed' ? 'Completed' : 'Reopened';
+    return `${new Date(entry.changedAt).toLocaleString()} -- ${entry.changedByName}: ${label}`;
+  }
+  const label = NOTE_FIELD_LABELS[entry.field] || entry.field;
+  const labelMap =
+    entry.field === 'priority' ? NOTE_PRIORITY_LABELS : entry.field === 'action_color' ? NOTE_ACTION_COLOR_LABELS : entry.field === 'workflow_stage' ? NOTE_WORKFLOW_STAGE_LABELS : null;
+  const fmt = (v) => (v ? labelMap?.[v] || v : '(blank)');
+  return `${new Date(entry.changedAt).toLocaleString()} -- ${entry.changedByName}: ${label}: ${fmt(entry.oldValue)} -> ${fmt(entry.newValue)}`;
+}
+
+// Posts the actual note. Best-effort and never blocking: any failure
+// here (Autotask unreachable, note rejected, etc.) is logged but never
+// propagates -- posting a note is a courtesy on top of the real save,
+// never something that should be able to fail the job save itself. Not
+// awaited by any caller for the same reason -- fire-and-forget, so it
+// never adds latency to the job save's own response.
+async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = false } = {}) {
+  try {
+    const row = getJob(jobId);
+    if (!row || !row.ticket_autotask_id) return; // nothing to notify -- no linked ticket
+    const [job] = await withTicketDetails([shapeJob(row)]);
+    const lines = [];
+    if (headline) lines.push(headline, '');
+    lines.push(noteFieldSnapshot(job));
+    if (includeFullHistory) {
+      const history = getJobHistory(jobId).map(shapeHistoryRow);
+      if (history.length > 0) lines.push('', '-- Full history --', ...history.map(noteHistoryLine));
+    }
+    const client = await getClient();
+    await client.ticketNotes.create(job.ticketAutotaskId, {
+      title: NOTE_TITLE,
+      description: lines.join('\n'),
+      noteType: TICKET_NOTE_TYPE,
+      publish: TICKET_NOTE_PUBLISH,
+    });
+  } catch (err) {
+    console.error(`Workshop: failed to post ticket note for job ${jobId}:`, err);
+  }
+}
+
+// Tells the OLD ticket, when a job's ticket link changes away from it (to
+// a different ticket, or removed entirely), where the job went -- by
+// request, so a tech watching that ticket isn't left wondering why
+// Workshop Board update notes suddenly stopped arriving. `newTicketNumber`
+// is the raw typed/stored value (not resolved) -- when it's blank, the
+// link was simply removed rather than moved. Same best-effort,
+// never-blocking, not-awaited approach as postWorkshopUpdateNote() above.
+// The note headline for a PATCH that changed the ticket link -- a
+// genuine transfer (had a different real ticket before) names the old
+// ticket by number; a first-time link uses the generic wording;
+// anything else (no ticket-link change at all) is a plain update.
+function noteHeadlineFor(transferredFromTicket, ticketLinkChanged) {
+  if (transferredFromTicket) return `Workshop Job transferred from Ticket ${transferredFromTicket}.`;
+  if (ticketLinkChanged) return 'Ticket linked to this Workshop job.';
+  return 'Workshop job updated.';
+}
+
+function ticketMovedDescription(newTicketNumber) {
+  return newTicketNumber
+    ? `Workshop Board moved this job from this ticket to ${newTicketNumber}.`
+    : `Workshop Board removed this job's link to this ticket.`;
+}
+
+async function postTicketMovedNote(oldTicketAutotaskId, newTicketNumber) {
+  try {
+    const description = ticketMovedDescription(newTicketNumber);
+    const client = await getClient();
+    await client.ticketNotes.create(oldTicketAutotaskId, {
+      title: NOTE_TITLE,
+      description,
+      noteType: TICKET_NOTE_TYPE,
+      publish: TICKET_NOTE_PUBLISH,
+    });
+  } catch (err) {
+    console.error(`Workshop: failed to post "moved" ticket note to old ticket ${oldTicketAutotaskId}:`, err);
+  }
+}
+
 const router = express.Router();
 router.use(express.json());
 
@@ -235,6 +386,10 @@ router.post('/jobs', async (req, res) => {
     const jobId = createJob(fields, ticketAutotaskId, actorFrom(req));
     const [shaped] = await withTicketDetails([shapeJob(getJob(jobId))]);
     res.status(201).json(shaped);
+    // A ticket was already linked at creation time -- treat that the same
+    // as "just added" (full history, which at this point is only the
+    // single "created" entry).
+    if (shaped.ticketAutotaskId) postWorkshopUpdateNote(jobId, { headline: 'Job created.', includeFullHistory: true });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     console.error(err);
@@ -245,11 +400,45 @@ router.post('/jobs', async (req, res) => {
 router.patch('/jobs/:id', async (req, res) => {
   try {
     const jobId = Number(req.params.id);
-    if (!getJob(jobId)) return res.status(404).json({ error: 'Job not found.' });
+    const existing = getJob(jobId);
+    if (!existing) return res.status(404).json({ error: 'Job not found.' });
     const { fields, ticketAutotaskId } = await parseJobBody(req.body || {}, false);
+    // Captured BEFORE the update, so afterward we can tell exactly which
+    // audit_log rows this specific call just wrote -- i.e. whether
+    // anything actually changed (a no-op re-save writes none, see
+    // updateJob()'s own comment in db.js) and whether the ticket link
+    // just changed -- without duplicating updateJob()'s own diff logic.
+    const beforeHistory = getJobHistory(jobId);
+    const beforeMaxId = beforeHistory.length ? beforeHistory[0].id : 0;
     const updated = updateJob(jobId, fields, ticketAutotaskId, actorFrom(req));
     const [shaped] = await withTicketDetails([shapeJob(updated)]);
     res.json(shaped);
+
+    const changedThisCall = getJobHistory(jobId).some((h) => h.id > beforeMaxId);
+    if (changedThisCall) {
+      const ticketLinkChanged = updated.ticket_autotask_id !== existing.ticket_autotask_id;
+      // A genuine transfer (had a DIFFERENT real ticket before) vs. a
+      // first-time link (had none before) get distinct headlines on the
+      // new ticket's note -- existing.ticket_number is the OLD job row's
+      // own stored value, already on hand, no extra lookup needed.
+      const transferredFromTicket = ticketLinkChanged && existing.ticket_autotask_id ? existing.ticket_number : null;
+      // The OLD ticket, if it had one, gets told where the job went (or
+      // that the link was simply removed) -- by request, so a tech
+      // watching that ticket isn't left wondering why Workshop Board
+      // notes suddenly stopped.
+      if (ticketLinkChanged && existing.ticket_autotask_id) {
+        postTicketMovedNote(existing.ticket_autotask_id, updated.ticket_number);
+      }
+      if (shaped.ticketAutotaskId) {
+        // Covers both "was unlinked, now linked" and "linked to a
+        // different ticket than before" -- either way this ticket has
+        // never seen a Workshop Board note, so it gets the full history.
+        postWorkshopUpdateNote(jobId, {
+          headline: noteHeadlineFor(transferredFromTicket, ticketLinkChanged),
+          includeFullHistory: ticketLinkChanged,
+        });
+      }
+    }
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     console.error(err);
@@ -263,6 +452,7 @@ router.patch('/jobs/:id/complete', (req, res) => {
     if (!getJob(jobId)) return res.status(404).json({ error: 'Job not found.' });
     const updated = completeJob(jobId, actorFrom(req));
     res.json(shapeJob(updated));
+    if (updated.ticket_autotask_id) postWorkshopUpdateNote(jobId, { headline: 'Job marked complete.' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -275,6 +465,7 @@ router.patch('/jobs/:id/reopen', (req, res) => {
     if (!getJob(jobId)) return res.status(404).json({ error: 'Job not found.' });
     const updated = reopenJob(jobId, actorFrom(req));
     res.json(shapeJob(updated));
+    if (updated.ticket_autotask_id) postWorkshopUpdateNote(jobId, { headline: 'Job reopened.' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -295,6 +486,11 @@ router.patch('/jobs/:id/soft-delete', (req, res) => {
     updateJob(jobId, { workflowStage: 'free_text', workflowStageText: 'Deleted' }, null, actor);
     const completed = completeJob(jobId, actor);
     res.json(shapeJob(completed));
+    // One consolidated note for this whole action (not one from the
+    // updateJob() above plus another from completeJob()) -- it's really
+    // a single user action, not two separate changes worth notifying
+    // about individually.
+    if (completed.ticket_autotask_id) postWorkshopUpdateNote(jobId, { headline: 'Job deleted from Workshop Board (marked complete).' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

@@ -1,5 +1,5 @@
 export const id = "workshop";
-export const label = "Workshop";
+export const label = "Workshop Board";
 
 // Module-scope, not inside mount() -- the shell tears down and re-mounts
 // a page's DOM on every navigation, but the imported module itself stays
@@ -74,7 +74,7 @@ const FIELD_LABELS = {
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
-      <h1>Workshop board</h1>
+      <h1>Workshop Board</h1>
       <div class="date-form">
         <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
           <input type="checkbox" id="show-completed-toggle" /> Show Completed

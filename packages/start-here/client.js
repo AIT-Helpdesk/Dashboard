@@ -108,6 +108,7 @@ const PAGE_DESCRIPTIONS = {
   'my-strety-tasks': 'Your own open Strety to-dos, sorted by due date.',
   'service-calls': 'Month calendar of every Service Call, showing which technician is assigned.',
   'subscriptions-expiring': 'Ingram Micro subscriptions expiring in a chosen window -- a renewals watch-list.',
+  'workshop': 'Workshop job/device board -- ticket, client, status, priority, and location, replacing the physical whiteboard.  Updates to Jobs will update the ticket. Adding a ticket number will apply the whole history to the ticket note. Changing a ticket number will not the change on the old ticket and update the new ticket',
   'technician-forms': 'The Rewst-hosted ROC Technician Forms portal, embedded directly.',
   'client-details': 'Look up clients by criteria, optionally filtered by name.',
   'client-contacts': 'Look up contacts across active clients -- primary, billing, or all.',
