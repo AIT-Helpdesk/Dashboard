@@ -2353,6 +2353,14 @@ tr.row-units-changed {
 .wsp-icon-btn:hover {
   color: var(--accent);
 }
+/* Hard-delete-without-a-linked-ticket, by request -- greyed out and
+   inert rather than hidden, so it's clear the action exists but isn't
+   available for this row (and why, via its own title tooltip). */
+.wsp-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 .wsp-job-form {
   margin-bottom: 1rem;

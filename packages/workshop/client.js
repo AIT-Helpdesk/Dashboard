@@ -317,16 +317,21 @@ export function mount(container) {
     if (showCompleted) {
       // Already completed/archived -- "send to completed" doesn't apply
       // here, so the trash icon in THIS view stays a genuine hard
-      // delete, for cleaning the archive itself up (a duplicate/mistake
-      // that already got completed).
+      // delete (real rubbish bin icon, by request), for cleaning the
+      // archive itself up (a duplicate/mistake that already got
+      // completed). Requires a resolved ticket, by request -- the server
+      // route rejects it either way, this just avoids the round trip and
+      // tells staff why up front. See the DELETE route's own comment in
+      // server.js.
+      const canDelete = !!job.ticketAutotaskId;
       return `${historyBtn}${printBtn}
         <button type="button" class="wsp-icon-btn wsp-reopen-btn" data-id="${job.id}" title="Reopen">↺</button>
-        <button type="button" class="wsp-icon-btn wsp-hard-delete-btn" data-id="${job.id}" title="Permanently delete">\u{1F5D1}️</button>`;
+        <button type="button" class="wsp-icon-btn wsp-hard-delete-btn" data-id="${job.id}" title="${canDelete ? 'Permanently delete' : 'Cannot delete -- no linked ticket'}"${canDelete ? '' : ' disabled'}>\u{1F5D1}️</button>`;
     }
     return `${historyBtn}${printBtn}
       <button type="button" class="wsp-icon-btn wsp-edit-btn" data-id="${job.id}" title="Edit">✏️</button>
-      <button type="button" class="wsp-icon-btn wsp-complete-btn" data-id="${job.id}" title="Mark complete">✓</button>
-      <button type="button" class="wsp-icon-btn wsp-soft-delete-btn" data-id="${job.id}" title="Delete">\u{1F5D1}️</button>`;
+      <button type="button" class="wsp-icon-btn wsp-complete-btn" data-id="${job.id}" title="Mark complete">✅</button>
+      <button type="button" class="wsp-icon-btn wsp-soft-delete-btn" data-id="${job.id}" title="Delete">❌</button>`;
   }
 
   function wireRowActions(group) {
