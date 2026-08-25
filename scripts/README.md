@@ -1,9 +1,11 @@
 # Database backups
 
 `backup-databases.js` -- nightly backup for this dashboard's own SQLite
-databases (currently TC Elite Rollout and Workshop Board; add a new entry
-to the `DATABASES` array at the top of the script if a future page gets
-its own writable database).
+databases (currently TC Elite Rollout and Workshop Board). Auto-discovers
+every database by looking for `packages/*/data.db` -- if a future page
+gets its own writable database at that same standard path (which every
+page's own `db.js` already uses), it's picked up automatically on the
+next run, no script change needed.
 
 ## Why not just copy the `.db` file?
 

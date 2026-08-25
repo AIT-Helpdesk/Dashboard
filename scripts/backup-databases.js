@@ -28,13 +28,21 @@ const { DatabaseSync, backup } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
 
-// One entry per real SQLite database this dashboard owns. Add a new
-// line here (name + source path) if/when a future page gets its own
-// writable database, same way TC Elite Rollout and Workshop did.
-const DATABASES = [
-  { name: 'tc-elite-rollout', source: path.join(__dirname, '..', 'packages', 'tc-elite-rollout', 'data.db') },
-  { name: 'workshop', source: path.join(__dirname, '..', 'packages', 'workshop', 'data.db') },
-];
+// Auto-discovers every real SQLite database this dashboard owns --
+// every page's own db.js already puts its database at exactly
+// packages/<page-name>/data.db (TC Elite Rollout, Workshop, and
+// whatever page adds one next), so this just looks for that pattern
+// directly rather than keeping a hand-maintained list in sync. No glob
+// library needed for a pattern this simple -- a plain readdir + exists
+// check covers it with zero new dependencies.
+function discoverDatabases() {
+  const packagesDir = path.join(__dirname, '..', 'packages');
+  return fs
+    .readdirSync(packagesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({ name: entry.name, source: path.join(packagesDir, entry.name, 'data.db') }))
+    .filter((db) => fs.existsSync(db.source));
+}
 
 // Deliberately OUTSIDE the git checkout (a sibling folder, not
 // packages/*/backups or similar inside the repo) -- backups are real
@@ -128,8 +136,10 @@ function pruneOld(name) {
 }
 
 async function main() {
+  const databases = discoverDatabases();
+  log(`Discovered ${databases.length} database(s): ${databases.map((db) => db.name).join(', ') || '(none)'}`);
   let failures = 0;
-  for (const dbInfo of DATABASES) {
+  for (const dbInfo of databases) {
     try {
       await backupOne(dbInfo);
       pruneOld(dbInfo.name);
