@@ -2505,6 +2505,22 @@ tr.row-units-changed {
   font-size: 0.85rem;
   color: var(--muted);
 }
+/* The intro/description text, moved into the same box style as the
+   bottom Usage instructions panel and up onto the header row itself
+   (same level as the Show Completed/2 columns checkboxes and buttons),
+   by request, replacing the page's own <h1> entirely. flex: 1 so it
+   takes the remaining row width next to .date-form's own fixed-size
+   controls; no sticky/margin-top:auto here (unlike .wsp-bottom-panels)
+   -- this box lives in normal page flow at the top, not pinned to the
+   bottom. */
+.wsp-intro-box {
+  flex: 1;
+  min-width: 0;
+  box-shadow: none;
+}
+.wsp-intro-box p {
+  margin: 0;
+}
 .wsp-usage-box-title {
   display: flex;
   align-items: center;
