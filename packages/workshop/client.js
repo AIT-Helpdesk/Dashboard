@@ -42,6 +42,12 @@ const TINTED_PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress
 // itself).
 const ACTION_COLOR_LABELS = { general: 'Black', notewell: 'Red', blue: 'Blue', done: 'Green' };
 const ACTION_COLOR_ORDER = ['general', 'notewell', 'blue', 'done'];
+// Matches the .wsp-action-text--* CSS classes, for the Pen Colour live
+// preview on the Add/Edit form (see buildJobForm()) -- the form applies
+// these directly as inline styles rather than swapping classes, since the
+// previewed fields (Client/Location inputs, the action textarea) aren't
+// styled via .wsp-action-text-- themselves.
+const ACTION_COLOR_HEX = { general: 'var(--fg)', notewell: '#dc2626', blue: 'var(--accent)', done: '#16a34a' };
 // Workshop's own workflow stage -- replaces the old free-text Req'd By
 // column, by request. Purely informational/workflow tracking -- reaching
 // "Collected" here does NOT complete/archive the job on its own; that's
@@ -132,10 +138,7 @@ export function mount(container) {
       <p id="status" class="status">Loading...</p>
       <div id="results"></div>
 
-      <div class="wsp-priority-legend">
-        <span class="wsp-priority-legend-prefix">Workshop Status: </span>
-        ${PRIORITY_ORDER.map((p) => `<span><span class="wsp-dot wsp-dot--${p}"></span>${escapeHtml(PRIORITY_LABELS[p])}</span>`).join('')}
-      </div>
+      <div class="wsp-priority-legend" id="priority-legend"></div>
 
       <div id="dispose-results"></div>
 
@@ -164,6 +167,7 @@ export function mount(container) {
   const statusEl = container.querySelector('#status');
   const resultsEl = container.querySelector('#results');
   const disposeResultsEl = container.querySelector('#dispose-results');
+  const legendEl = container.querySelector('#priority-legend');
   const formContainer = container.querySelector('#job-form-container');
   const addJobButton = container.querySelector('#add-job-button');
   const refreshButton = container.querySelector('#refresh-button');
@@ -236,41 +240,75 @@ export function mount(container) {
     }
   }
 
-  // Dispose jobs get their own separate table below the priority legend
-  // (see the static #dispose-results container in mount()'s own
-  // template), by request -- kept apart from the main list rather than
-  // mixed in with everything else still active in the workshop. The
-  // main table's own empty-state message is judged on the NON-dispose
-  // count, so "everything left is Dispose" correctly shows "No open
-  // jobs" up top with the real items still visible in their own table
-  // below, not a misleading blank page.
+  function legendHtml() {
+    return `<span class="wsp-priority-legend-prefix">Workshop Status: </span>${PRIORITY_ORDER.map(
+      (p) => `<span><span class="wsp-dot wsp-dot--${p}"></span>${escapeHtml(PRIORITY_LABELS[p])}</span>`
+    ).join('')}`;
+  }
+
+  // Dispose jobs get their own separate table, kept apart from the main
+  // list rather than mixed in with everything else still active in the
+  // workshop, by request. The main table's own empty-state message is
+  // judged on the NON-dispose count, so "everything left is Dispose"
+  // correctly shows "No open jobs" up top with the real items still
+  // visible in their own table, not a misleading blank page.
+  //
+  // Normally (single-column mode) the legend and the Dispose table both
+  // sit in their own static full-width spots below the main table, in
+  // that order. In 2-column mode specifically, by request, they instead
+  // move INTO the two columns themselves -- the legend at the end of
+  // column 1, the Dispose table at the end of column 2 -- rather than
+  // staying full-width below both columns. legendEl/disposeResultsEl
+  // are reset to their normal standalone position/content first, then
+  // overridden (content moved, standalone spot emptied/hidden) only in
+  // the 2-column branch below.
   function renderResults(jobs) {
     const mainJobs = jobs.filter((j) => j.workflowStage !== 'dispose');
     const disposeJobs = jobs.filter((j) => j.workflowStage === 'dispose');
 
     resultsEl.innerHTML = '';
+    legendEl.innerHTML = legendHtml();
+    legendEl.style.display = '';
+    disposeResultsEl.innerHTML = '';
+
     if (mainJobs.length === 0) {
       resultsEl.innerHTML = `<p class="status">${showCompleted ? 'No completed jobs yet.' : 'No open jobs -- add one to get started.'}</p>`;
-    } else if (twoColumns && mainJobs.length > 1) {
+      if (disposeJobs.length > 0) disposeResultsEl.appendChild(buildTableGroup(disposeJobs));
+      return;
+    }
+
+    if (twoColumns && mainJobs.length > 1) {
       // Two side-by-side tables on a very large screen, by request --
       // splits the already-sorted list in half sequentially (left
       // column gets the first/more-urgent half), not any fancier
       // interleaving. Just a re-layout of the same data, not a second
-      // fetch. Dispose jobs are deliberately excluded from this split --
-      // their own table below is always a single list.
+      // fetch.
       const mid = Math.ceil(mainJobs.length / 2);
       const layout = document.createElement('div');
       layout.className = 'wsp-two-column-layout';
-      layout.appendChild(buildTableGroup(mainJobs.slice(0, mid)));
-      layout.appendChild(buildTableGroup(mainJobs.slice(mid)));
+
+      const leftCol = document.createElement('div');
+      leftCol.appendChild(buildTableGroup(mainJobs.slice(0, mid)));
+      const legendCopy = document.createElement('div');
+      legendCopy.className = 'wsp-priority-legend';
+      legendCopy.innerHTML = legendHtml();
+      leftCol.appendChild(legendCopy);
+      layout.appendChild(leftCol);
+
+      const rightCol = document.createElement('div');
+      rightCol.appendChild(buildTableGroup(mainJobs.slice(mid)));
+      if (disposeJobs.length > 0) rightCol.appendChild(buildTableGroup(disposeJobs));
+      layout.appendChild(rightCol);
+
       resultsEl.appendChild(layout);
+
+      // The legend/Dispose table's content now lives inside the columns
+      // above instead -- hide/leave empty their normal standalone spots
+      // so nothing shows twice.
+      legendEl.style.display = 'none';
     } else {
       resultsEl.appendChild(buildTableGroup(mainJobs));
-    }
-
-    disposeResultsEl.innerHTML = '';
-    if (disposeJobs.length > 0) {
-      disposeResultsEl.appendChild(buildTableGroup(disposeJobs));
+      if (disposeJobs.length > 0) disposeResultsEl.appendChild(buildTableGroup(disposeJobs));
     }
   }
 
@@ -660,40 +698,44 @@ export function mount(container) {
     wrapper.innerHTML = `
       <div class="section-heading section-heading--nav">${isEdit ? 'Edit job' : 'Add job'}</div>
       <div class="wsp-form-body">
-        <div class="wsp-form-grid">
-          <label>Status
-            <select class="wsp-field" data-field="workflowStage" id="form-workflow-stage">
-              ${WORKFLOW_STAGE_ORDER.map((s) => `<option value="${s}"${isSelected(existingJob?.workflowStage, s, 'new')}>${escapeHtml(WORKFLOW_STAGE_LABELS[s])}</option>`).join('')}
-            </select>
-          </label>
-          <label>Priority (magnet)
-            <select class="wsp-field" data-field="priority">
-              ${PRIORITY_ORDER.map((p) => `<option value="${p}"${isSelected(existingJob?.priority, p, 'not_started')}>${escapeHtml(PRIORITY_LABELS[p])}</option>`).join('')}
-            </select>
-          </label>
-          <label>Job description
-            <input type="text" class="wsp-field" data-field="jobDescription" value="${escapeHtml(existingJob?.jobDescription || '')}" />
-          </label>
-          <label>Note colour (pen)
-            <select class="wsp-field" data-field="actionColor">
-              ${ACTION_COLOR_ORDER.map((c) => `<option value="${c}"${isSelected(existingJob?.actionColor, c, 'general')}>${escapeHtml(ACTION_COLOR_LABELS[c])}</option>`).join('')}
-            </select>
-          </label>
-          <label>Ticket
-            <input type="text" class="wsp-field" data-field="ticketNumber" value="${escapeHtml(existingJob?.ticketNumber || '')}" />
-          </label>
-          <label>Client
-            <input type="text" class="wsp-field" data-field="customer" value="${escapeHtml(existingJob?.customer || '')}" />
-          </label>
-          <label>Location
-            <input type="text" class="wsp-field" data-field="location" value="${escapeHtml(existingJob?.location || '')}" />
-          </label>
-          <label id="form-workflow-stage-text-wrap"${TEXT_ENABLED_STAGES.includes(existingJob?.workflowStage) ? '' : ' hidden'}>Status detail
-            <input type="text" class="wsp-field" data-field="workflowStageText" value="${escapeHtml(existingJob?.workflowStageText || '')}" placeholder="${escapeHtml(TEXT_ENABLED_PLACEHOLDERS[existingJob?.workflowStage] || '')}" maxlength="25" />
-          </label>
-          <label>Current / required action
-            <textarea class="wsp-field" data-field="actionText" rows="3">${escapeHtml(existingJob?.actionText || '')}</textarea>
-          </label>
+        <div class="wsp-form-columns">
+          <div class="wsp-form-column">
+            <label>Current Status
+              <select class="wsp-field" data-field="priority">
+                ${PRIORITY_ORDER.map((p) => `<option value="${p}"${isSelected(existingJob?.priority, p, 'not_started')}>${escapeHtml(PRIORITY_LABELS[p])}</option>`).join('')}
+              </select>
+            </label>
+            <label>Status Type
+              <select class="wsp-field" data-field="workflowStage" id="form-workflow-stage">
+                ${WORKFLOW_STAGE_ORDER.map((s) => `<option value="${s}"${isSelected(existingJob?.workflowStage, s, 'new')}>${escapeHtml(WORKFLOW_STAGE_LABELS[s])}</option>`).join('')}
+              </select>
+            </label>
+            <label id="form-workflow-stage-text-wrap"${TEXT_ENABLED_STAGES.includes(existingJob?.workflowStage) ? '' : ' hidden'}>Status Free Text Note
+              <input type="text" class="wsp-field" data-field="workflowStageText" value="${escapeHtml(existingJob?.workflowStageText || '')}" placeholder="${escapeHtml(TEXT_ENABLED_PLACEHOLDERS[existingJob?.workflowStage] || '')}" maxlength="25" />
+            </label>
+            <label>Client
+              <input type="text" class="wsp-field" data-field="customer" value="${escapeHtml(existingJob?.customer || '')}" />
+            </label>
+            <label>Ticket
+              <input type="text" class="wsp-field" data-field="ticketNumber" value="${escapeHtml(existingJob?.ticketNumber || '')}" />
+            </label>
+          </div>
+          <div class="wsp-form-column">
+            <label>Job description
+              <input type="text" class="wsp-field" data-field="jobDescription" value="${escapeHtml(existingJob?.jobDescription || '')}" />
+            </label>
+            <label>Current / required action
+              <textarea class="wsp-field" data-field="actionText" rows="3">${escapeHtml(existingJob?.actionText || '')}</textarea>
+            </label>
+            <label>Location
+              <input type="text" class="wsp-field" data-field="location" value="${escapeHtml(existingJob?.location || '')}" />
+            </label>
+            <label>Pen Colour
+              <select class="wsp-field" data-field="actionColor">
+                ${ACTION_COLOR_ORDER.map((c) => `<option value="${c}"${isSelected(existingJob?.actionColor, c, 'general')}>${escapeHtml(ACTION_COLOR_LABELS[c])}</option>`).join('')}
+              </select>
+            </label>
+          </div>
         </div>
         <p class="status error wsp-form-error" hidden></p>
         <div class="wsp-form-actions">
@@ -721,6 +763,26 @@ export function mount(container) {
       textInput.placeholder = TEXT_ENABLED_PLACEHOLDERS[workflowStageSelect.value] || '';
       if (!isTextEnabled) textInput.value = '';
     });
+
+    // Pen Colour live preview -- applied to Client, Current/Required
+    // Action, and Location, matching what the colour will actually look
+    // like on the board once saved (see ACTION_COLOR_HEX above). Also run
+    // once immediately so an existing job's current Pen Colour shows right
+    // away, not just after the user touches the select.
+    const actionColorSelect = wrapper.querySelector('[data-field="actionColor"]');
+    const previewFields = [
+      wrapper.querySelector('[data-field="customer"]'),
+      wrapper.querySelector('[data-field="actionText"]'),
+      wrapper.querySelector('[data-field="location"]'),
+    ];
+    function applyActionColorPreview() {
+      const hex = ACTION_COLOR_HEX[actionColorSelect.value] || ACTION_COLOR_HEX.general;
+      previewFields.forEach((field) => {
+        field.style.color = hex;
+      });
+    }
+    actionColorSelect.addEventListener('change', applyActionColorPreview);
+    applyActionColorPreview();
 
     wrapper.querySelector('.wsp-cancel-button').addEventListener('click', () => {
       formContainer.innerHTML = '';
