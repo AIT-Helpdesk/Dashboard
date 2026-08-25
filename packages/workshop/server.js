@@ -12,7 +12,7 @@ const {
   getJobHistory,
 } = require('./db.js');
 
-const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'not_started'];
+const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'coming', 'not_started'];
 const ACTION_COLORS = ['general', 'done', 'notewell', 'blue'];
 const WORKFLOW_STAGES = ['new', 'free_text', 'in_car', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected'];
 // The two stages with a companion free-text field -- 'free_text' (type
@@ -157,7 +157,7 @@ const TICKET_NOTE_PUBLISH = 4; // "Internal & Co-Managed"
 // access to that browser module's exports, and the note's field list is
 // meant to read the same way the on-screen print card does ("contain all
 // the current data for the fields like the print process", by request).
-const NOTE_PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', in_progress: 'In Progress', next_up: 'Next Up', not_started: 'Not Started' };
+const NOTE_PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', in_progress: 'In Progress', next_up: 'Next Up', coming: 'Coming', not_started: 'Not Started' };
 const NOTE_WORKFLOW_STAGE_LABELS = {
   new: 'New',
   free_text: 'Free Text',
