@@ -108,14 +108,20 @@ export function mount(container) {
         ${PRIORITY_ORDER.map((p) => `<span><span class="wsp-dot wsp-dot--${p}"></span>${escapeHtml(PRIORITY_LABELS[p])}</span>`).join('')}
       </div>
 
-      <div class="wsp-usage-box">
-        <div class="wsp-usage-box-title">Usage instructions</div>
-        <ul>
-          <li>The Workshop Status is about what's happening in the room -- what's in progress, up next, not started, etc. Anything else can be entered with the Free Text option.</li>
-          <li>When a ticket number is entered, the ticket will be updated with all item updates and information to date.</li>
-          <li>If a ticket number is changed, the old ticket will be noted with the new ticket number, and all historical info will be added to the new ticket.</li>
-          <li>The only ticket information drawn from Autotask using the ticket number is the Ticket Status and the Due Date.</li>
-        </ul>
+      <div class="wsp-bottom-panels">
+        <div class="wsp-usage-box">
+          <div class="wsp-usage-box-title">Usage instructions</div>
+          <ul>
+            <li>The Workshop Status is about what's happening in the room -- what's in progress, up next, not started, etc. Anything else can be entered with the Free Text option.</li>
+            <li>When a ticket number is entered, the ticket will be updated with all item updates and information to date.</li>
+            <li>If a ticket number is changed, the old ticket will be noted with the new ticket number, and all historical info will be added to the new ticket.</li>
+            <li>The only ticket information drawn from Autotask using the ticket number is the Ticket Status and the Due Date.</li>
+          </ul>
+        </div>
+        <div class="wsp-usage-box wsp-deliveries-box">
+          <div class="wsp-usage-box-title">Deliveries</div>
+          <p class="wsp-deliveries-placeholder">Coming soon.</p>
+        </div>
       </div>
     </div>
   `;

@@ -2418,27 +2418,39 @@ tr.row-units-changed {
   min-height: 100%;
 }
 
-/* Usage instructions -- a subtle, ALWAYS-visible reference card pinned
-   to the bottom of the page (both the open and completed views, since
-   mount()'s own static template renders it once, outside the toggled
-   #results region), by request. Two mechanisms working together:
-   margin-top: auto (a flex child of .wsp-page above) pushes it all the
-   way to the bottom of the page when the job list is short and doesn't
-   fill the viewport; position: sticky + bottom: 0 keeps it pinned at
-   the bottom of the visible page as the list scrolls underneath it once
-   it's long enough to overflow, rather than only being reachable by
-   scrolling all the way down past it. A solid background (not
-   transparent) and a z-index above the table are both required for
-   that "stays put while content scrolls behind it" effect to actually
-   look right rather than letting scrolled rows show through. Same
-   bordered-card shape as .resource-group, but deliberately quieter
-   (muted section-header background, smaller/muted text) so it reads as
-   reference material, not another data table. */
-.wsp-usage-box {
+/* Row of subtle, ALWAYS-visible reference cards pinned to the bottom of
+   the page (both the open and completed views, since mount()'s own
+   static template renders it once, outside the toggled #results
+   region), by request -- Usage instructions on the left 3/4, a
+   Deliveries placeholder (for a future feature) on the right 1/4. Two
+   mechanisms working together on the ROW itself: margin-top: auto (a
+   flex child of .wsp-page above) pushes it all the way to the bottom of
+   the page when the job list is short and doesn't fill the viewport;
+   position: sticky + bottom: 0 keeps it pinned at the bottom of the
+   visible page as the list scrolls underneath it once it's long enough
+   to overflow, rather than only being reachable by scrolling all the
+   way down past it. */
+.wsp-bottom-panels {
+  display: grid;
+  grid-template-columns: 3fr 1fr;
+  gap: 1rem;
   margin-top: auto;
   position: sticky;
   bottom: 0;
   z-index: 1;
+}
+@media (max-width: 720px) {
+  .wsp-bottom-panels {
+    grid-template-columns: 1fr;
+  }
+}
+/* Each individual card -- a solid background (not transparent) is
+   required for the "stays put while content scrolls behind it" sticky
+   effect above to actually look right, rather than letting scrolled
+   rows show through. Same bordered-card shape as .resource-group, but
+   deliberately quieter (muted section-header background, smaller/muted
+   text) so it reads as reference material, not another data table. */
+.wsp-usage-box {
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -2458,6 +2470,12 @@ tr.row-units-changed {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
+}
+/* Placeholder only, by request -- the real Deliveries content isn't
+   built yet. */
+.wsp-deliveries-placeholder {
+  margin: 0;
+  font-style: italic;
 }
 
 .wsp-icon-btn {
