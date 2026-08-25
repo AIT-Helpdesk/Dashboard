@@ -2317,6 +2317,25 @@ tr.row-units-changed {
 .wsp-page.wsp-mobile-view .wsp-table td:nth-last-child(-n + 4):nth-last-child(n + 2) {
   display: none;
 }
+/* Mobile View also hides the Client column outright, by request -- its own
+   dedicated class on both the header and every cell (.wsp-col-client)
+   makes this simpler than the nth-last-child arithmetic above. The
+   client's name isn't lost, though -- it reappears as the Current/Required
+   Action cell's own first line instead (yellow/bold, see
+   .wsp-mobile-client-line below and actionCellHtml() in client.js). */
+.wsp-page.wsp-mobile-view .wsp-col-client {
+  display: none;
+}
+.wsp-mobile-client-line {
+  display: none;
+}
+.wsp-page.wsp-mobile-view .wsp-mobile-client-line {
+  display: block;
+  font-weight: 700;
+  /* Same yellow as .wsp-dot--coming elsewhere on this page, reused rather
+     than a fresh one-off shade. */
+  color: #eab308;
+}
 /* Mobile View also completely hides the top intro/description box and
    the whole bottom row (Usage instructions + Deliveries), by request --
    pure screen real estate on a small screen, neither is needed to

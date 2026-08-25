@@ -99,8 +99,10 @@ export function mount(container) {
   }
 
   function resultRowHtml(p) {
+    // Real popup window, not just a new tab -- same convention every other
+    // Autotask/IT Glue link on this dashboard uses.
     const nameCell = p.itglueUrl
-      ? `<a href="${escapeHtml(p.itglueUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(p.passwordName)}</a>`
+      ? `<a href="${escapeHtml(p.itglueUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(p.passwordName)}</a>`
       : escapeHtml(p.passwordName);
     return `
       <tr>

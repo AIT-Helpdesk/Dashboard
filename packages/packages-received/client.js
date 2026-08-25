@@ -121,7 +121,9 @@ export function mount(container) {
   function ticketCellHtml(d) {
     if (!d.ticketNumber) return '—';
     if (d.ticketUrl) {
-      return `<a href="${escapeHtml(d.ticketUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.ticketNumber)}</a>`;
+      // Real popup window, not just a new tab -- same convention every
+      // other ticket link on this dashboard uses.
+      return `<a href="${escapeHtml(d.ticketUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(d.ticketNumber)}</a>`;
     }
     return `<span title="Ticket not found in Autotask">${escapeHtml(d.ticketNumber)}</span>`;
   }

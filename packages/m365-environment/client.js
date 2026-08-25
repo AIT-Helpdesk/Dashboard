@@ -121,7 +121,7 @@ export function mount(container) {
       </div>
       <p class="inline-subtext" style="margin: 0.5rem 0.75rem;">
         Synced into IT Glue ${formatDateTime(data.updatedAt)} --
-        <a href="${escapeHtml(data.itglueResourceUrl)}" target="_blank" rel="noopener noreferrer">View in IT Glue</a>
+        <a href="${escapeHtml(data.itglueResourceUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">View in IT Glue</a>
       </p>
     `;
     resultsEl.appendChild(infoWrap);
@@ -163,7 +163,7 @@ export function mount(container) {
       wrap.innerHTML = `
         <p class="inline-subtext" style="margin: 0.75rem;">
           ${escapeHtml(table.note)} --
-          <a href="${escapeHtml(itglueResourceUrl)}" target="_blank" rel="noopener noreferrer">View attachment in IT Glue</a>
+          <a href="${escapeHtml(itglueResourceUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">View attachment in IT Glue</a>
         </p>
       `;
       section.appendChild(wrap);
@@ -244,7 +244,9 @@ export function mount(container) {
   function companyLink(data) {
     const label = escapeHtml(data.companyName);
     if (!data.companyUrl) return label;
-    return `<a href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    // Real popup window, not just a new tab -- same convention every other
+    // Autotask/IT Glue link on this dashboard uses.
+    return `<a href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
   }
 
   function formatDateTime(iso) {
