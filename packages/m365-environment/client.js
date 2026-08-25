@@ -130,7 +130,60 @@ export function mount(container) {
     resultsEl.appendChild(tableSection('Domains', data.domains, { compact: true }));
     resultsEl.appendChild(tableSection('Privileged Group Membership', data.privilegedGroupMembership));
     resultsEl.appendChild(tableSection('Licences', data.licences));
-    resultsEl.appendChild(tableSection('User Licence Assignment', data.userLicenceAssignment));
+    resultsEl.appendChild(userLicenceAssignmentSection(data.userLicenceAssignment, data.itglueResourceUrl));
+  }
+
+  // User Licence Assignment gets its own renderer, not the generic
+  // tableSection() below -- by request. Rewst truncates this specific
+  // field to the first 10 (alphabetical) users and appends a plain-text
+  // note pointing at a full-list attachment instead (parseTraitTable() in
+  // server.js already extracts that note; see its own comment there for
+  // the real example it was confirmed against). When that note is
+  // present, the table it's attached to is genuinely partial -- showing
+  // it as if it were the complete list would be misleading, so this shows
+  // ONLY the heading plus a link straight to the IT Glue asset (where the
+  // real attachment lives -- IT Glue's API doesn't expose a direct
+  // attachment-file URL, so the asset's own resource-url is the closest
+  // real link available) instead. No note means the table Rewst captured
+  // genuinely is the complete list, so it renders normally, same as every
+  // other section on this page.
+  function userLicenceAssignmentSection(table, itglueResourceUrl) {
+    const title = 'User Licence Assignment';
+    const section = document.createElement('div');
+    if (!table || !table.headers) {
+      section.innerHTML = `<h2 class="client-summary-section-heading">${escapeHtml(title)}</h2><p class="status">No data.</p>`;
+      return section;
+    }
+    section.innerHTML = `<h2 class="client-summary-section-heading">${escapeHtml(title)}</h2>`;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'resource-group';
+
+    if (table.note) {
+      wrap.innerHTML = `
+        <p class="inline-subtext" style="margin: 0.75rem;">
+          ${escapeHtml(table.note)} --
+          <a href="${escapeHtml(itglueResourceUrl)}" target="_blank" rel="noopener noreferrer">View attachment in IT Glue</a>
+        </p>
+      `;
+      section.appendChild(wrap);
+      return section;
+    }
+
+    wrap.innerHTML = `
+      <table>
+        <thead>
+          <tr class="shaded-row">${table.headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${table.rows.length === 0
+            ? `<tr><td colspan="${table.headers.length}">None</td></tr>`
+            : table.rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+    `;
+    section.appendChild(wrap);
+    return section;
   }
 
   function tableSection(title, table, opts) {

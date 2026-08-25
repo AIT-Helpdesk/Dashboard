@@ -25,9 +25,9 @@ Clicking the priority dot or the Status text in the list swaps it for a `<select
 
 **Complete** (the checkmark icon) sets `status = 'completed'` and moves the job into the "Show Completed" archive -- full history preserved, reversible via **Reopen**. This is what "finished" means here, mirroring TC Elite Rollout's audit-trail philosophy rather than the whiteboard's "erase it" behaviour.
 
-**Delete, from the open-jobs view** (the trash icon there) is a **soft** delete, by request -- `PATCH /jobs/:id/soft-delete` atomically sets `workflow_stage = 'free_text'` with `workflow_stage_text = 'Deleted'` and completes the job in one call, so it lands in the archive with an honest reason rather than disappearing. Reversible via Reopen, same as any other completed job.
+**Delete, from the open-jobs view** -- there's no delete button here at all, by request. `PATCH /jobs/:id/soft-delete` (atomically sets `workflow_stage = 'free_text'` with `workflow_stage_text = 'Deleted'` and completes the job in one call) still exists in `server.js`/`db.js` as a dormant capability for direct API/admin use, just not wired to any button in the UI.
 
-**Delete, from the completed/archive view** (its own trash icon) is a genuine **hard** delete -- for cleaning up a real mistake already sitting in the archive (a duplicate/test entry). Purges that job's own `audit_log` rows too. `DELETE /jobs/:id` also still exists as a route for direct API/admin use.
+**Delete, from the completed/archive view** (its own X icon -- was a rubbish bin icon, changed by request) is a genuine **hard** delete -- for cleaning up a real mistake already sitting in the archive (a duplicate/test entry). Purges that job's own `audit_log` rows too. `DELETE /jobs/:id` also still exists as a route for direct API/admin use.
 
 The default board view (`GET /`) shows only `status='open'` jobs, sorted by the linked ticket's **due date**, soonest first -- jobs with no known due date (no ticket, an unresolved/free-text ticket number, or a resolved ticket with none set) sort **first**, by request. This sort never looks at `ticket_number` itself (which can be blank or hold arbitrary free text, not a real ticket) -- only the resolved due date. `?status=completed` shows the archive instead, most recently completed first.
 

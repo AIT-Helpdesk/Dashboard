@@ -130,7 +130,7 @@ export function mount(container) {
             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
               <input type="checkbox" id="show-completed-toggle" /> Show Completed
             </label>
-            <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+            <label class="wsp-two-column-toggle-label" style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
               <input type="checkbox" id="two-column-toggle" /> Show in 2 columns
             </label>
             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
@@ -534,22 +534,26 @@ export function mount(container) {
     const printBtn = `<button type="button" class="wsp-icon-btn wsp-print-btn" data-id="${job.id}" title="Print job card">\u{1F5A8}️</button>`;
     if (showCompleted) {
       // Already completed/archived -- "send to completed" doesn't apply
-      // here, so the trash icon in THIS view stays a genuine hard
-      // delete (real rubbish bin icon, by request), for cleaning the
-      // archive itself up (a duplicate/mistake that already got
-      // completed). Requires a resolved ticket, by request -- the server
-      // route rejects it either way, this just avoids the round trip and
-      // tells staff why up front. See the DELETE route's own comment in
-      // server.js.
+      // here, so the X icon in THIS view stays a genuine hard delete, for
+      // cleaning the archive itself up (a duplicate/mistake that already
+      // got completed). Requires a resolved ticket, by request -- the
+      // server route rejects it either way, this just avoids the round
+      // trip and tells staff why up front. See the DELETE route's own
+      // comment in server.js. Icon changed from the rubbish bin to a
+      // plain X, by request -- same icon the (now-removed) open-jobs
+      // delete button used.
       const canDelete = !!job.ticketAutotaskId;
       return `${historyBtn}${printBtn}
         <button type="button" class="wsp-icon-btn wsp-reopen-btn" data-id="${job.id}" title="Reopen">↺</button>
-        <button type="button" class="wsp-icon-btn wsp-hard-delete-btn" data-id="${job.id}" title="${canDelete ? 'Permanently delete' : 'Cannot delete -- no linked ticket'}"${canDelete ? '' : ' disabled'}>\u{1F5D1}️</button>`;
+        <button type="button" class="wsp-icon-btn wsp-hard-delete-btn" data-id="${job.id}" title="${canDelete ? 'Permanently delete' : 'Cannot delete -- no linked ticket'}"${canDelete ? '' : ' disabled'}>❌</button>`;
     }
+    // No delete button on the open-jobs view itself, by request -- the
+    // soft-delete route (PATCH .../soft-delete) is left in server.js/db.js
+    // as a dormant capability (direct API/admin use), just no longer
+    // wired to any button here.
     return `${historyBtn}${printBtn}
       <button type="button" class="wsp-icon-btn wsp-edit-btn" data-id="${job.id}" title="Edit">✏️</button>
-      <button type="button" class="wsp-icon-btn wsp-complete-btn" data-id="${job.id}" title="Mark complete">✅</button>
-      <button type="button" class="wsp-icon-btn wsp-soft-delete-btn" data-id="${job.id}" title="Delete">❌</button>`;
+      <button type="button" class="wsp-icon-btn wsp-complete-btn" data-id="${job.id}" title="Mark complete">✅</button>`;
   }
 
   function wireRowActions(group) {
@@ -571,17 +575,6 @@ export function mount(container) {
       btn.addEventListener('click', async () => {
         try {
           await fetchJson(`/api/workshop/jobs/${btn.dataset.id}/reopen`, 'PATCH');
-          await loadJobs();
-        } catch (err) {
-          alert(`Error: ${err.message}`);
-        }
-      });
-    });
-    group.querySelectorAll('.wsp-soft-delete-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        if (!confirm('Delete this job? It will move to the Show Completed archive with status "Deleted" -- use Reopen there if this was a mistake.')) return;
-        try {
-          await fetchJson(`/api/workshop/jobs/${btn.dataset.id}/soft-delete`, 'PATCH');
           await loadJobs();
         } catch (err) {
           alert(`Error: ${err.message}`);

@@ -201,13 +201,31 @@ export function mount(container) {
   }
 
   function entryHtml(e) {
-    // Two lines per entry, by request -- the first is the call's time and
-    // company (as before), the second is specifically the allocation state
-    // (the resource name(s), or "Unallocated") so it's visible on the
-    // calendar itself without needing to hover for the tooltip.
+    // Three lines per entry, by request -- time/company, the allocation
+    // state (resource name(s) in green when allocated, matching What's
+    // On's own Service Calls section; "Unallocated" stays the default
+    // muted colour), and the first line of the call's own description, so
+    // all three are visible on the calendar itself without needing to
+    // hover for the tooltip. Line 3 always renders (an em dash when
+    // there's no description) so every entry keeps the same 3-line shape,
+    // rather than shorter entries looking inconsistent next to ones that
+    // have a description.
     const line1 = `${formatTime(e.startDateTime)} ${escapeHtml(e.companyName)}`;
-    const line2 = e.allocated ? e.resourceNames.map(escapeHtml).join(', ') : 'Unallocated';
-    const inner = `<span class="calendar-entry-line1">${line1}</span><span class="calendar-entry-line2">${line2}</span>`;
+    const line2 = e.allocated
+      ? `<span class="text-highlight-green">${e.resourceNames.map(escapeHtml).join(', ')}</span>`
+      : 'Unallocated';
+    // Descriptions are often multi-paragraph free text -- split on real
+    // newlines and take the first non-blank one, rather than just letting
+    // line3's own CSS ellipsis cut off wherever the box runs out of
+    // width regardless of the text's own line breaks.
+    const descriptionFirstLine = e.description
+      ? e.description
+          .split('\n')
+          .map((s) => s.trim())
+          .find(Boolean)
+      : null;
+    const line3 = escapeHtml(descriptionFirstLine || '—');
+    const inner = `<span class="calendar-entry-line1">${line1}</span><span class="calendar-entry-line2">${line2}</span><span class="calendar-entry-line3">${line3}</span>`;
     const ticket = e.tickets[0]; // linked ticket is the first one -- see README for the rare multi-ticket case
     // Ticket line(s) and the call's own description are shown together, not
     // one-or-the-other -- a call can have both (a description explaining
