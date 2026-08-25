@@ -87,15 +87,19 @@ export function mount(container) {
         <div class="wsp-usage-box wsp-intro-box">
           <p>All equipment in the workshop (or in the responsibility of the workshop) must be identified, listed, ticketed and labelled. It's location, whether in the workshop, in the warehouse, or out with a repairer, must be known and noted. <span class="wsp-status-caveat">This board does not replace ticket management. Tickets notes only are updated, not status.</span></p>
         </div>
-        <div class="date-form">
-          <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
-            <input type="checkbox" id="show-completed-toggle" /> Show Completed
-          </label>
-          <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
-            <input type="checkbox" id="two-column-toggle" /> Show in 2 columns
-          </label>
-          <button type="button" id="refresh-button">Refresh</button>
-          <button type="button" id="add-job-button" class="button-link">+ Add job</button>
+        <div class="date-form date-form--stacked wsp-controls">
+          <div class="date-form-row">
+            <button type="button" id="refresh-button">Refresh</button>
+            <button type="button" id="add-job-button" class="button-link">+ Add job</button>
+          </div>
+          <div class="date-form-row">
+            <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+              <input type="checkbox" id="show-completed-toggle" /> Show Completed
+            </label>
+            <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+              <input type="checkbox" id="two-column-toggle" /> Show in 2 columns
+            </label>
+          </div>
         </div>
       </header>
 
