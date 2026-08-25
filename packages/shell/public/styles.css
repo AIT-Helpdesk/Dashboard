@@ -2521,6 +2521,14 @@ tr.row-units-changed {
 .wsp-intro-box p {
   margin: 0;
 }
+/* Right-justifies the Refresh/+Add job row and the Show Completed/2
+   columns row against each other, by request -- scoped to Workshop's
+   own .date-form (via this extra class) rather than changing the
+   shared .date-form-row rule itself, which Ingram Orders' left-aligned
+   filter form also uses. */
+.wsp-controls .date-form-row {
+  justify-content: flex-end;
+}
 .wsp-usage-box-title {
   display: flex;
   align-items: center;
