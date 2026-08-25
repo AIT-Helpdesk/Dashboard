@@ -11,6 +11,16 @@ let showCompleted = false;
 // request, unticked by default. Persists across remounts, same
 // convention as showCompleted above.
 let twoColumns = false;
+// "Mobile View" -- hides the Ticket/Due Date columns together, as one
+// set, across every table on the page (main list, both halves in
+// 2-column mode, and the separate Dispose table) -- by request, unticked
+// by default. Completion (Actions) stays visible even in Mobile View, by
+// request. Pure CSS (see .wsp-mobile-view in styles.css) rather than
+// anything per-table, so this stays in sync automatically no matter how
+// many tables are currently rendered. Persists across remounts, same
+// convention as showCompleted/twoColumns
+// above.
+let mobileView = false;
 
 // Urgent/Complete/Nearly Complete/In Progress/Next Up/Coming/Not
 // Started, by request -- a completion-progress scheme replacing the
@@ -47,8 +57,9 @@ const WORKFLOW_STAGE_LABELS = {
   sent: 'Sent',
   delivered: 'Delivered',
   collected: 'Collected',
+  dispose: 'Dispose',
 };
-const WORKFLOW_STAGE_ORDER = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected'];
+const WORKFLOW_STAGE_ORDER = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected', 'dispose'];
 // Stages with a companion free-text field -- 'free_text' (was
 // 'date_reqd', type anything), 'in_car' (whose car), and 'take_onsite'
 // (who took it onsite), by request -- see
@@ -109,6 +120,9 @@ export function mount(container) {
             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
               <input type="checkbox" id="two-column-toggle" /> Show in 2 columns
             </label>
+            <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+              <input type="checkbox" id="mobile-view-toggle" /> Mobile View
+            </label>
           </div>
         </div>
       </header>
@@ -122,6 +136,8 @@ export function mount(container) {
         <span class="wsp-priority-legend-prefix">Workshop Status: </span>
         ${PRIORITY_ORDER.map((p) => `<span><span class="wsp-dot wsp-dot--${p}"></span>${escapeHtml(PRIORITY_LABELS[p])}</span>`).join('')}
       </div>
+
+      <div id="dispose-results"></div>
 
       <div class="wsp-bottom-panels" id="bottom-panels">
         <div class="wsp-usage-box">
@@ -147,16 +163,21 @@ export function mount(container) {
 
   const statusEl = container.querySelector('#status');
   const resultsEl = container.querySelector('#results');
+  const disposeResultsEl = container.querySelector('#dispose-results');
   const formContainer = container.querySelector('#job-form-container');
   const addJobButton = container.querySelector('#add-job-button');
   const refreshButton = container.querySelector('#refresh-button');
   const showCompletedToggle = container.querySelector('#show-completed-toggle');
   const twoColumnToggle = container.querySelector('#two-column-toggle');
+  const mobileViewToggle = container.querySelector('#mobile-view-toggle');
+  const wspPageEl = container.querySelector('.wsp-page');
   const bottomPanelsEl = container.querySelector('#bottom-panels');
   const bottomPanelsToggle = container.querySelector('#bottom-panels-toggle');
 
   showCompletedToggle.checked = showCompleted;
   twoColumnToggle.checked = twoColumns;
+  mobileViewToggle.checked = mobileView;
+  wspPageEl.classList.toggle('wsp-mobile-view', mobileView);
 
   // Deliberately a plain local variable, not module-scope like
   // showCompleted/twoColumns above -- by request, any refresh of this
@@ -184,6 +205,13 @@ export function mount(container) {
     // dashboard uses for an instant, no-round-trip re-render.
     if (lastJobs) renderResults(lastJobs);
   });
+  mobileViewToggle.addEventListener('change', () => {
+    mobileView = mobileViewToggle.checked;
+    // Just a class toggle -- the CSS (.wsp-mobile-view in styles.css)
+    // handles hiding the columns in every currently-rendered table at
+    // once, no re-render needed.
+    wspPageEl.classList.toggle('wsp-mobile-view', mobileView);
+  });
 
   async function loadJobs() {
     formContainer.innerHTML = '';
@@ -192,6 +220,7 @@ export function mount(container) {
     statusEl.className = 'status';
     statusEl.textContent = 'Loading...';
     resultsEl.innerHTML = '';
+    disposeResultsEl.innerHTML = '';
     try {
       const res = await fetch(`/api/workshop/${showCompleted ? '?status=completed' : ''}`);
       const data = await res.json();
@@ -207,25 +236,41 @@ export function mount(container) {
     }
   }
 
+  // Dispose jobs get their own separate table below the priority legend
+  // (see the static #dispose-results container in mount()'s own
+  // template), by request -- kept apart from the main list rather than
+  // mixed in with everything else still active in the workshop. The
+  // main table's own empty-state message is judged on the NON-dispose
+  // count, so "everything left is Dispose" correctly shows "No open
+  // jobs" up top with the real items still visible in their own table
+  // below, not a misleading blank page.
   function renderResults(jobs) {
+    const mainJobs = jobs.filter((j) => j.workflowStage !== 'dispose');
+    const disposeJobs = jobs.filter((j) => j.workflowStage === 'dispose');
+
     resultsEl.innerHTML = '';
-    if (jobs.length === 0) {
+    if (mainJobs.length === 0) {
       resultsEl.innerHTML = `<p class="status">${showCompleted ? 'No completed jobs yet.' : 'No open jobs -- add one to get started.'}</p>`;
-      return;
-    }
-    // Two side-by-side tables on a very large screen, by request --
-    // splits the already-sorted list in half sequentially (left column
-    // gets the first/more-urgent half), not any fancier interleaving.
-    // Just a re-layout of the same data, not a second fetch.
-    if (twoColumns && jobs.length > 1) {
-      const mid = Math.ceil(jobs.length / 2);
+    } else if (twoColumns && mainJobs.length > 1) {
+      // Two side-by-side tables on a very large screen, by request --
+      // splits the already-sorted list in half sequentially (left
+      // column gets the first/more-urgent half), not any fancier
+      // interleaving. Just a re-layout of the same data, not a second
+      // fetch. Dispose jobs are deliberately excluded from this split --
+      // their own table below is always a single list.
+      const mid = Math.ceil(mainJobs.length / 2);
       const layout = document.createElement('div');
       layout.className = 'wsp-two-column-layout';
-      layout.appendChild(buildTableGroup(jobs.slice(0, mid)));
-      layout.appendChild(buildTableGroup(jobs.slice(mid)));
+      layout.appendChild(buildTableGroup(mainJobs.slice(0, mid)));
+      layout.appendChild(buildTableGroup(mainJobs.slice(mid)));
       resultsEl.appendChild(layout);
     } else {
-      resultsEl.appendChild(buildTableGroup(jobs));
+      resultsEl.appendChild(buildTableGroup(mainJobs));
+    }
+
+    disposeResultsEl.innerHTML = '';
+    if (disposeJobs.length > 0) {
+      disposeResultsEl.appendChild(buildTableGroup(disposeJobs));
     }
   }
 
@@ -237,11 +282,11 @@ export function mount(container) {
         <thead>
           <tr class="shaded-row">
             <th class="wsp-col-status">Status</th>
-            <th>Ticket</th>
-            <th>Due Date</th>
             <th class="wsp-col-client">Client</th>
             <th>Current / Required Action</th>
             <th>Location</th>
+            <th>Ticket</th>
+            <th>Due Date</th>
             <th></th>
           </tr>
         </thead>
@@ -268,22 +313,26 @@ export function mount(container) {
     const actionCell = actionCellHtml(job);
     const location = escapeHtml(job.location) || '—';
     // The solid priority-colour bar runs the full width of the row, by
-    // request -- left edge of the first (Status) cell, both sides of
-    // Client/Action, and right edge of the last real-data cell (Location
-    // -- there's no separate Priority column anymore, the dot in the
-    // Status cell plus the legend under the table are the only priority
-    // display now). Client/Action also get a background tint, but only
-    // for TINTED_PRIORITIES (see above) -- Coming and Not Started stay
-    // unshaded, by request.
+    // request -- left edge of Status, both sides of Client/Action,
+    // right edge of Location, AND right edge of Due Date (the true last
+    // data column, right before the action buttons) -- two separate
+    // right-bars, same as Client/Action already had. Client/Action also
+    // get a background tint, but only for TINTED_PRIORITIES (see
+    // above) -- Coming and Not Started stay unshaded, by request.
     const tintClass = TINTED_PRIORITIES.includes(job.priority) ? `wsp-row-tint--${job.priority} ` : '';
+    // Ticket/Due Date moved to after Location, by request -- these are
+    // exactly the 2 columns Mobile View hides as one set (see
+    // .wsp-mobile-view in styles.css, which targets the 2nd/3rd-to-last
+    // columns -- Completion stays visible, so it deliberately isn't the
+    // last 2/3 columns generically, just these two specifically).
     return `
       <tr>
         <td class="wsp-col-status wsp-bar-left--${job.priority}">${statusStageCellHtml(job)}</td>
-        <td>${ticketCell}</td>
-        <td>${dueDateCell}</td>
         <td class="wsp-col-client ${tintClass}wsp-bar-left--${job.priority}">${client}</td>
         <td class="${tintClass}wsp-bar-right--${job.priority}">${actionCell}</td>
         <td class="wsp-bar-right--${job.priority}">${location}</td>
+        <td>${ticketCell}</td>
+        <td class="wsp-bar-right--${job.priority}">${dueDateCell}</td>
         <td class="wsp-actions">${rowActionButtonsHtml(job)}</td>
       </tr>`;
   }
@@ -546,7 +595,7 @@ export function mount(container) {
         (s) => `<option value="${s}"${s === currentValue ? ' selected' : ''}>${escapeHtml(WORKFLOW_STAGE_LABELS[s])}</option>`
       ).join('')}</select>
       <span class="wsp-status-stage-text-wrap"${TEXT_ENABLED_STAGES.includes(currentValue) ? '' : ' hidden'}>
-        <input type="text" class="wsp-field wsp-status-stage-text" value="${escapeHtml(currentText)}" placeholder="${escapeHtml(TEXT_ENABLED_PLACEHOLDERS[currentValue] || '')}" />
+        <input type="text" class="wsp-field wsp-status-stage-text" value="${escapeHtml(currentText)}" placeholder="${escapeHtml(TEXT_ENABLED_PLACEHOLDERS[currentValue] || '')}" maxlength="25" />
         <button type="button" class="wsp-icon-btn" title="Save">✓</button>
       </span>
     `;
@@ -640,7 +689,7 @@ export function mount(container) {
             <input type="text" class="wsp-field" data-field="location" value="${escapeHtml(existingJob?.location || '')}" />
           </label>
           <label id="form-workflow-stage-text-wrap"${TEXT_ENABLED_STAGES.includes(existingJob?.workflowStage) ? '' : ' hidden'}>Status detail
-            <input type="text" class="wsp-field" data-field="workflowStageText" value="${escapeHtml(existingJob?.workflowStageText || '')}" placeholder="${escapeHtml(TEXT_ENABLED_PLACEHOLDERS[existingJob?.workflowStage] || '')}" />
+            <input type="text" class="wsp-field" data-field="workflowStageText" value="${escapeHtml(existingJob?.workflowStageText || '')}" placeholder="${escapeHtml(TEXT_ENABLED_PLACEHOLDERS[existingJob?.workflowStage] || '')}" maxlength="25" />
           </label>
           <label>Current / required action
             <textarea class="wsp-field" data-field="actionText" rows="3">${escapeHtml(existingJob?.actionText || '')}</textarea>

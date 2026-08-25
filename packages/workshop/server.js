@@ -14,7 +14,7 @@ const {
 
 const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'coming', 'not_started'];
 const ACTION_COLORS = ['general', 'done', 'notewell', 'blue'];
-const WORKFLOW_STAGES = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected'];
+const WORKFLOW_STAGES = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected', 'dispose'];
 // The two stages with a companion free-text field -- 'free_text' (type
 // anything) and 'in_car' (whose car, by request). Kept as its own list
 // (mirrors client.js's own TEXT_ENABLED_STAGES) since more than one
@@ -168,6 +168,7 @@ const NOTE_WORKFLOW_STAGE_LABELS = {
   sent: 'Sent',
   delivered: 'Delivered',
   collected: 'Collected',
+  dispose: 'Dispose',
 };
 const NOTE_ACTION_COLOR_LABELS = { general: 'Black', notewell: 'Red', blue: 'Blue', done: 'Green' };
 const NOTE_FIELD_LABELS = {
@@ -380,7 +381,11 @@ async function parseJobBody(body, requireDefaults) {
     }
   }
   if ('workflowStageText' in body) {
-    fields.workflowStageText = body.workflowStageText ? String(body.workflowStageText).trim() : null;
+    // 25 characters max, by request -- the client's own <input maxlength>
+    // already enforces this in the UI; this is just the same limit
+    // enforced server-side too, in case of a direct API call bypassing
+    // the browser control.
+    fields.workflowStageText = body.workflowStageText ? String(body.workflowStageText).trim().slice(0, 25) : null;
   }
 
   // Always a real null by default, never undefined -- node:sqlite's bind
