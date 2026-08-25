@@ -93,6 +93,39 @@ sidebarToggle.addEventListener('click', () => {
 
 renderSidebarToggle();
 
+// Full screen / focus mode -- hides the sidebar entirely so the current
+// page fills the whole window, by request. Deliberately NOT persisted
+// to localStorage (unlike theme/sidebar-collapsed above) -- this reads
+// as a temporary presentation mode you step in and out of during a
+// session, not a lasting preference, so a real page reload always comes
+// back up in the normal layout. Esc exits from anywhere (not just via
+// the floating focus-exit button), since typing Esc to "get out of
+// something full-screen" is a near-universal expectation.
+const focusToggle = document.getElementById('focus-toggle');
+const focusExitBtn = document.getElementById('focus-exit');
+
+function isFocusMode() {
+  return document.documentElement.getAttribute('data-focus-mode') === 'true';
+}
+
+function setFocusMode(next) {
+  if (next) document.documentElement.setAttribute('data-focus-mode', 'true');
+  else document.documentElement.removeAttribute('data-focus-mode');
+}
+
+focusToggle.addEventListener('click', () => setFocusMode(true));
+focusExitBtn.addEventListener('click', () => setFocusMode(false));
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !isFocusMode()) return;
+  // Defer to a currently-open modal's own Escape-to-close (e.g.
+  // Workshop's/TC Elite Rollout's history modal, .history-modal-overlay)
+  // -- one Escape should close that first, not close it AND exit focus
+  // mode at the same time. A second Escape (nothing left open) exits
+  // focus mode as normal.
+  if (document.querySelector('.history-modal-overlay')) return;
+  setFocusMode(false);
+});
+
 async function renderUserInfo() {
   try {
     const res = await nativeFetch('/api/me');

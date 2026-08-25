@@ -350,6 +350,52 @@ a.nav-link.active[href="#start-here"] {
   overflow-y: auto;
 }
 
+/* Full screen / focus mode -- hides the sidebar entirely so the current
+   page's own content fills the whole window, by request. Driven by a
+   data-focus-mode attribute on <html> (app.js toggles it; Esc also
+   exits, handled in app.js too), same pattern as
+   data-sidebar-collapsed above -- just a plain in-memory toggle, NOT
+   persisted to localStorage, so a real page reload always starts back
+   in the normal (sidebar visible) layout. .sidebar going display:none
+   is all that's needed for .page-content (flex: 1 in a flex .layout)
+   to expand and fill the freed-up width -- no extra sizing rule
+   required. */
+html[data-focus-mode="true"] .sidebar {
+  display: none;
+}
+/* The one way back out while the sidebar (and its own Full Screen
+   button) is hidden, besides Esc -- a small floating pill, fixed over
+   the page content so it survives that page's own scrolling. Hidden
+   by default; shown only in focus mode. */
+.focus-exit-btn {
+  display: none;
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  /* Below .tcr-tooltip (1000) and .history-modal-overlay (1100), by
+     design -- an open modal should visually cover this, not float
+     underneath it, and app.js's own Escape handler already defers to a
+     modal's own Escape-to-close when one is open (see its comment). */
+  z-index: 900;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+}
+.focus-exit-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+html[data-focus-mode="true"] .focus-exit-btn {
+  display: flex;
+}
+
 .page-header {
   display: flex;
   flex-wrap: wrap;

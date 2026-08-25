@@ -34,10 +34,17 @@
       <button id="sidebar-toggle" class="sidebar-toggle" type="button"></button>
       <ul id="nav-list" class="nav-list"></ul>
       <div id="user-info" class="user-info"></div>
+      <button id="focus-toggle" class="theme-toggle" type="button">⛶ Full Screen</button>
       <button id="theme-toggle" class="theme-toggle" type="button"></button>
     </nav>
     <main id="page-content" class="page-content"></main>
   </div>
+
+  <!-- Only visible while data-focus-mode="true" (see styles.css) -- the
+       sidebar itself, which normally holds the Full Screen toggle, is
+       hidden in that mode, so this floating button is the one way back
+       out besides the Esc key. -->
+  <button id="focus-exit" class="focus-exit-btn" type="button" title="Exit full screen (Esc)">✕ Exit Full Screen</button>
 
   <script type="module" src="app.js"></script>
 </body>
