@@ -326,7 +326,7 @@ export function mount(container) {
 
   function serviceCallRowHtml(row, today, tomorrow) {
     const allocation = row.allocated
-      ? escapeHtml(row.resourceNames.join(', '))
+      ? `<span class="text-highlight-green">${escapeHtml(row.resourceNames.join(', '))}</span>`
       : '<span class="text-highlight-red">Unallocated</span>';
     // Ticket number/title on hover, by request -- null when there's no
     // linked ticket at all (same case ticketUrl is also null for).

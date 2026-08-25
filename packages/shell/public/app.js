@@ -79,8 +79,10 @@ function renderSidebarToggle() {
   sidebarToggle.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
 }
 
-sidebarToggle.addEventListener('click', () => {
-  const next = !isSidebarCollapsed();
+// Shared by the toggle button's own click below AND the auto-minimize-on
+// nav-click behaviour (see renderPageItem()) -- pulled out to one place so
+// both go through the exact same persist/attribute/re-render steps.
+function setSidebarCollapsed(next) {
   if (next) document.documentElement.setAttribute('data-sidebar-collapsed', 'true');
   else document.documentElement.removeAttribute('data-sidebar-collapsed');
   try {
@@ -89,9 +91,56 @@ sidebarToggle.addEventListener('click', () => {
     // localStorage unavailable -- the choice still applies for this page load, just won't persist.
   }
   renderSidebarToggle();
-});
+}
+
+sidebarToggle.addEventListener('click', () => setSidebarCollapsed(!isSidebarCollapsed()));
 
 renderSidebarToggle();
+
+// Pin -- by request, clicking a nav item auto-collapses the sidebar (see
+// renderPageItem() below) unless pinned open. Persisted per-browser
+// (localStorage), same "personal viewing preference" reasoning as
+// sidebarCollapsed/theme above -- no flash-avoidance head-script needed
+// for this one, though, since the only thing it affects on load is this
+// one button's own active-look, not a page layout that could visibly
+// jump/flash.
+const SIDEBAR_PINNED_KEY = 'dashboard.sidebarPinned';
+const sidebarPinToggle = document.getElementById('sidebar-pin-toggle');
+
+function isSidebarPinned() {
+  return document.documentElement.getAttribute('data-sidebar-pinned') === 'true';
+}
+
+function renderSidebarPinToggle() {
+  const pinned = isSidebarPinned();
+  sidebarPinToggle.classList.toggle('sidebar-pin-toggle--active', pinned);
+  sidebarPinToggle.setAttribute('aria-label', pinned ? 'Unpin sidebar (auto-minimize on click)' : 'Pin sidebar open (disable auto-minimize on click)');
+  sidebarPinToggle.title = sidebarPinToggle.getAttribute('aria-label');
+}
+
+sidebarPinToggle.addEventListener('click', () => {
+  const next = !isSidebarPinned();
+  if (next) document.documentElement.setAttribute('data-sidebar-pinned', 'true');
+  else document.documentElement.removeAttribute('data-sidebar-pinned');
+  try {
+    localStorage.setItem(SIDEBAR_PINNED_KEY, String(next));
+  } catch {
+    // localStorage unavailable -- the choice still applies for this page load, just won't persist.
+  }
+  renderSidebarPinToggle();
+});
+
+// Restore a saved pin from a previous visit -- read directly here (unlike
+// theme/sidebar-collapsed, this doesn't need the synchronous head-script
+// trick, see the comment above).
+try {
+  if (localStorage.getItem(SIDEBAR_PINNED_KEY) === 'true') {
+    document.documentElement.setAttribute('data-sidebar-pinned', 'true');
+  }
+} catch {
+  // localStorage unavailable -- falls back to unpinned.
+}
+renderSidebarPinToggle();
 
 // Full screen / focus mode -- hides the sidebar entirely so the current
 // page fills the whole window, by request. Deliberately NOT persisted
@@ -350,6 +399,14 @@ function renderPageItem(node, loc, activeId) {
   a.href = `#${page.id}`;
   a.textContent = page.label;
   a.className = 'nav-link' + (page.id === activeId ? ' active' : '');
+  // Auto-minimize the sidebar on click, by request -- unless pinned open.
+  // A plain click listener alongside the href navigation itself (not
+  // something in loadPage()/hashchange), so this only fires for an actual
+  // nav-item click -- not the initial page load, browser back/forward, or
+  // any other programmatic hash change elsewhere on this dashboard.
+  a.addEventListener('click', () => {
+    if (!isSidebarPinned()) setSidebarCollapsed(true);
+  });
   li.appendChild(a);
 
   if (editable) {

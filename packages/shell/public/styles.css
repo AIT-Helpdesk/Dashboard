@@ -95,6 +95,20 @@ html[data-sidebar-collapsed="true"] .user-info,
 html[data-sidebar-collapsed="true"] .theme-toggle {
   display: none;
 }
+/* Pin only matters once the sidebar is actually expanded (it governs
+   whether clicking a nav item auto-collapses it) -- hidden along with
+   everything else while collapsed, same as .nav-list/.user-info/
+   .theme-toggle above, so the collapsed rail stays just the one button
+   ("the only way back out of the collapsed state", per its own comment). */
+html[data-sidebar-collapsed="true"] .sidebar-pin-toggle {
+  display: none;
+}
+
+.sidebar-toggle-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
 
 .sidebar-toggle {
   display: flex;
@@ -102,7 +116,6 @@ html[data-sidebar-collapsed="true"] .theme-toggle {
   justify-content: center;
   width: 2.25rem;
   height: 2.25rem;
-  margin-bottom: 0.75rem;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg);
@@ -111,6 +124,14 @@ html[data-sidebar-collapsed="true"] .theme-toggle {
   cursor: pointer;
 }
 .sidebar-toggle:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+/* Pinned state -- accent-coloured/filled so it reads as "on" at a glance,
+   same convention as .nav-link.active elsewhere in the sidebar, by
+   request ("pin the menu so the auto-minimize deactivates"). */
+.sidebar-pin-toggle--active {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
@@ -1509,11 +1530,14 @@ ul.start-here-checklist-other {
   color: var(--fg);
   text-decoration: none;
 }
-/* Two lines per entry -- the call's time/company, and its allocated
-   resource(s) or "Unallocated" -- each independently truncated with an
-   ellipsis rather than the whole entry wrapping/growing unpredictably. */
+/* Three lines per entry -- the call's time/company, its allocated
+   resource(s) (green, see .text-highlight-green) or "Unallocated", and
+   the first line of its own description -- each independently truncated
+   with an ellipsis rather than the whole entry wrapping/growing
+   unpredictably. */
 .calendar-entry-line1,
-.calendar-entry-line2 {
+.calendar-entry-line2,
+.calendar-entry-line3 {
   display: block;
   white-space: nowrap;
   overflow: hidden;
@@ -1523,6 +1547,10 @@ ul.start-here-checklist-other {
   font-size: 0.78rem;
 }
 .calendar-entry-line2 {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.calendar-entry-line3 {
   font-size: 0.72rem;
   color: var(--muted);
 }
@@ -2288,6 +2316,24 @@ tr.row-units-changed {
 .wsp-page.wsp-mobile-view .wsp-table th:nth-last-child(-n + 4):nth-last-child(n + 2),
 .wsp-page.wsp-mobile-view .wsp-table td:nth-last-child(-n + 4):nth-last-child(n + 2) {
   display: none;
+}
+/* Mobile View also completely hides the top intro/description box and
+   the whole bottom row (Usage instructions + Deliveries), by request --
+   pure screen real estate on a small screen, neither is needed to
+   actually work the board. */
+.wsp-page.wsp-mobile-view .wsp-intro-box,
+.wsp-page.wsp-mobile-view .wsp-bottom-panels {
+  display: none;
+}
+/* ...and the "Show in 2 columns" checkbox itself, by request -- a 2-column
+   layout doesn't make sense on the narrow screen Mobile View is for.
+   !important is needed here specifically to beat the label's own inline
+   `style="display:inline-flex"` (see client.js) -- an inline style always
+   outranks an external stylesheet rule regardless of selector specificity,
+   same reasoning .shaded-row's own !important elsewhere on this dashboard
+   documents. */
+.wsp-page.wsp-mobile-view .wsp-two-column-toggle-label {
+  display: none !important;
 }
 .wsp-dot {
   display: inline-block;
