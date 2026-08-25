@@ -2224,6 +2224,19 @@ tr.row-units-changed {
 .wsp-col-status {
   white-space: nowrap;
 }
+/* "Mobile View" checkbox, by request -- hides Location/Ticket/Due Date
+   together, as one set, across EVERY table on the page at once (main
+   list, both halves in 2-column mode, and the separate Dispose table)
+   via a single class toggle on the shared .wsp-page wrapper, rather
+   than anything per-table. Completion (Actions) stays visible even in
+   Mobile View, by request -- it's the true last column, so
+   Location/Ticket/Due Date are nth-last-child(2) through (4) (Ticket/
+   Due Date were moved to after Location specifically so these three are
+   consecutive -- see buildTableGroup()/jobRowHtml() in client.js). */
+.wsp-page.wsp-mobile-view .wsp-table th:nth-last-child(-n + 4):nth-last-child(n + 2),
+.wsp-page.wsp-mobile-view .wsp-table td:nth-last-child(-n + 4):nth-last-child(n + 2) {
+  display: none;
+}
 .wsp-dot {
   display: inline-block;
   width: 10px;
@@ -2453,6 +2466,11 @@ tr.row-units-changed {
 .wsp-priority-legend-prefix {
   font-weight: 700;
 }
+/* Dispose jobs' own separate table, by request -- sits below the
+   priority legend, no heading of its own (removed by request). */
+#dispose-results {
+  margin-top: 1.5rem;
+}
 
 /* Wraps this whole page's content -- a flex column at least as tall as
    .page-content itself (this page's own independent scroll container,
@@ -2583,7 +2601,9 @@ tr.row-units-changed {
 .wsp-icon-btn {
   background: none;
   border: none;
-  padding: 0.1rem 0.3rem;
+  /* Slightly tighter horizontal padding than before, by request -- less
+     gap between adjacent action buttons in the same row. */
+  padding: 0.1rem 0.2rem;
   cursor: pointer;
   font-size: 0.9rem;
   color: var(--muted);

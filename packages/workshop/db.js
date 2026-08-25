@@ -76,7 +76,12 @@ db.exec(`
     -- 'delivered' is new too -- Sent/Delivered/Collected are three
     -- distinct real-world endings (courier dispatched vs. courier
     -- confirmed arrived vs. customer picked up in person), by request.
-    workflow_stage TEXT NOT NULL DEFAULT 'new' CHECK (workflow_stage IN ('new','free_text','in_car','take_onsite','ready_to_ship','ready_for_pickup','sent','delivered','collected')),
+    -- 'dispose' has no companion free text (unlike in_car/take_onsite)
+    -- -- jobs in this stage get their own separate table below the
+    -- priority legend on the client, by request, see client.js's own
+    -- renderResults(). See migrateAddDisposeStage() below for how it
+    -- was added to an already-live CHECK constraint.
+    workflow_stage TEXT NOT NULL DEFAULT 'new' CHECK (workflow_stage IN ('new','free_text','in_car','take_onsite','ready_to_ship','ready_for_pickup','sent','delivered','collected','dispose')),
     workflow_stage_text TEXT,
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','completed')),
     completed_at TEXT,
@@ -475,6 +480,59 @@ function migrateAddTakeOnsiteStage() {
   }
 }
 migrateAddTakeOnsiteStage();
+
+// Widens workflow_stage's CHECK to also allow 'dispose' -- unlike
+// 'in_car'/'take_onsite', this one has no companion free-text field
+// (jobs in this stage instead get their own separate table on the
+// client, see client.js's renderResults()). Every existing value keeps
+// its original name/meaning -- only 'dispose' is new, so no data
+// remapping is needed, just the same recreate-table-and-copy dance as
+// the other CHECK-widening migrations.
+function migrateAddDisposeStage() {
+  const table = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'`).get();
+  if (table && table.sql && table.sql.includes("'dispose'")) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE jobs_new (
+        id INTEGER PRIMARY KEY,
+        reqd_by TEXT,
+        ticket_number TEXT,
+        ticket_autotask_id INTEGER,
+        customer TEXT,
+        job_description TEXT,
+        action_text TEXT,
+        action_color TEXT NOT NULL DEFAULT 'general' CHECK (action_color IN ('general','done','notewell','blue')),
+        location TEXT,
+        priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','in_progress','next_up','coming','not_started')),
+        workflow_stage TEXT NOT NULL DEFAULT 'new' CHECK (workflow_stage IN ('new','free_text','in_car','take_onsite','ready_to_ship','ready_for_pickup','sent','delivered','collected','dispose')),
+        workflow_stage_text TEXT,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','completed')),
+        completed_at TEXT,
+        completed_by_email TEXT,
+        completed_by_name TEXT,
+        created_at TEXT NOT NULL,
+        created_by_email TEXT NOT NULL,
+        created_by_name TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by_email TEXT NOT NULL,
+        updated_by_name TEXT NOT NULL
+      );
+      INSERT INTO jobs_new SELECT * FROM jobs;
+      DROP TABLE jobs;
+      ALTER TABLE jobs_new RENAME TO jobs;
+    `);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+migrateAddDisposeStage();
 
 function nowIso() {
   return new Date().toISOString();
