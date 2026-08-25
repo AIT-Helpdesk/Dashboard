@@ -2460,6 +2460,10 @@ tr.row-units-changed {
   color: var(--muted);
 }
 .wsp-usage-box-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   font-weight: 600;
   color: var(--fg);
   margin-bottom: 0.4rem;
@@ -2476,6 +2480,30 @@ tr.row-units-changed {
 .wsp-deliveries-placeholder {
   margin: 0;
   font-style: italic;
+}
+
+/* Minimize/maximize both panels down to just their headings, by
+   request -- so the row can be ignored on small screens. Only the
+   Usage instructions title carries the actual button (see client.js);
+   collapsing it toggles a class on the shared row wrapper, which is
+   what actually hides BOTH panels' body content together. Never
+   remembered across a refresh/remount -- see client.js's own comment on
+   why bottomPanelsCollapsed is a plain local variable, not persisted
+   module-scope state. */
+.wsp-bottom-panels-toggle {
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0 0.3rem;
+}
+.wsp-bottom-panels--collapsed .wsp-usage-box {
+  padding-bottom: 0.5rem;
+}
+.wsp-bottom-panels--collapsed .wsp-usage-box-title {
+  margin-bottom: 0;
+}
+.wsp-bottom-panels--collapsed .wsp-usage-box ul,
+.wsp-bottom-panels--collapsed .wsp-deliveries-placeholder {
+  display: none;
 }
 
 .wsp-icon-btn {
