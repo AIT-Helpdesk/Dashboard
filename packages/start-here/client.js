@@ -214,7 +214,9 @@ function externalLinkHtml(link) {
     // clickable at all by default, which is enough here without extra ARIA.
     return `<span class="button-link button-link--pending" title="URL not confirmed yet">${iconHtml}${escapeHtml(link.label)}</span>`;
   }
-  return `<a class="button-link" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${iconHtml}${escapeHtml(link.label)}</a>`;
+  // Real popup window, not just a new tab -- same convention every other
+  // external link on this dashboard uses.
+  return `<a class="button-link" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${iconHtml}${escapeHtml(link.label)}</a>`;
 }
 
 // Pulled live from the same two sources the sidebar itself uses

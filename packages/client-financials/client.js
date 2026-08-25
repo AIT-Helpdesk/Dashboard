@@ -180,7 +180,10 @@ export function mount(container) {
   function companyLink(data) {
     const label = escapeHtml(data.companyName);
     if (!data.companyUrl) return label;
-    return `<a href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    // Real popup window, not just a new tab -- same convention this page's
+    // own invoice link (and every other Autotask/IT Glue link on this
+    // dashboard) uses.
+    return `<a href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
   }
 
   function invoiceLink(inv) {

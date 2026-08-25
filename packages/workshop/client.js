@@ -390,10 +390,22 @@ export function mount(container) {
   // display-only combination, not a separate table column; the two stay
   // separate real fields underneath (job_description/action_text), each
   // with its own audit trail entry.
+  //
+  // Mobile View, by request, also hides the whole Client column (see
+  // .wsp-col-client in styles.css) and shows the client's name as this
+  // cell's own first line instead (yellow/bold, see
+  // .wsp-mobile-client-line) -- since that's the one piece of context lost
+  // by hiding the Client column outright. Always rendered (same "pure CSS
+  // toggle, no re-render needed" architecture the rest of Mobile View
+  // uses -- see mobileViewToggle's own change handler above), just hidden
+  // via CSS outside Mobile View.
   function actionCellHtml(job) {
+    const clientText = job.ticketClientName || job.customer;
+    const mobileClientLine = clientText ? `<div class="wsp-mobile-client-line">${escapeHtml(clientText)}</div>` : '';
     const descriptionLine = job.jobDescription ? `<div class="wsp-job-description">${escapeHtml(job.jobDescription)}</div>` : '';
     const actionLine = job.actionText ? `<div class="wsp-action-text--${job.actionColor}">${escapeHtml(job.actionText)}</div>` : '';
-    return descriptionLine || actionLine ? `${descriptionLine}${actionLine}` : '—';
+    const body = descriptionLine || actionLine ? `${descriptionLine}${actionLine}` : '—';
+    return `${mobileClientLine}${body}`;
   }
 
   // A blank ticket shows the same em-dash as every other empty field. A
@@ -410,7 +422,9 @@ export function mount(container) {
       // unresolved ticket has no real status to show (see
       // withTicketDetails() in server.js).
       const statusLine = job.ticketStatus ? `<div class="wsp-ticket-status">${escapeHtml(job.ticketStatus)}</div>` : '';
-      return `<a href="${escapeHtml(job.ticketUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(job.ticketNumber)}</a>${statusLine}`;
+      // Real popup window, not just a new tab -- same convention every
+      // other ticket link on this dashboard uses.
+      return `<a href="${escapeHtml(job.ticketUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(job.ticketNumber)}</a>${statusLine}`;
     }
     return `<span title="Ticket not found in Autotask">${escapeHtml(job.ticketNumber)}</span>`;
   }

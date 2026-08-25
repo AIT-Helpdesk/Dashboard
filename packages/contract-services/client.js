@@ -164,7 +164,9 @@ export function mount(container) {
   function contractLink(r) {
     const label = escapeHtml(r.contractName);
     if (!r.contractUrl) return label;
-    return `<a href="${escapeHtml(r.contractUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    // Real popup window, not just a new tab -- same convention every other
+    // Autotask/IT Glue link on this dashboard uses.
+    return `<a href="${escapeHtml(r.contractUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
   }
 
   function formatMonth(month) {
