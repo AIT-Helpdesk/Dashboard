@@ -519,6 +519,39 @@ function currentPageId() {
   return ids.includes(hash) ? hash : ids[0];
 }
 
+// Auto-enters Mobile View + Full Screen whenever a page that HAS a Mobile
+// View checkbox is opened on a narrow screen, by request. Viewport width
+// (not user-agent sniffing) -- reacts to actual available space, same
+// breakpoint Workshop Board's own .wsp-bottom-panels responsive stacking
+// already uses, rather than trying to label specific devices as "mobile"
+// or not.
+//
+// Fully generic, not Workshop-specific: ANY page can opt in just by
+// giving its own mobile-view checkbox a `data-auto-mobile-view` attribute
+// -- no shell code changes needed per page. Workshop Board is the only
+// page with one today (`#mobile-view-toggle` in its own client.js).
+// Dispatches a real `change` event (not just flipping `.checked`) so the
+// page's own existing change handler does the actual work exactly as if
+// the checkbox had been clicked -- this function only decides WHEN to
+// trigger it, never re-implements what checking it does.
+//
+// Runs on every navigation TO such a page while the viewport is narrow
+// (not just once per session) -- simplest behavior matching "opening the
+// page on a mobile phone", though that does mean it re-applies even after
+// manually turning Mobile View or Full Screen back off and navigating
+// away and back. Worth revisiting if that turns out to be annoying in
+// practice.
+const MOBILE_VIEWPORT_QUERY = '(max-width: 720px)';
+function applyAutoMobileView() {
+  const checkbox = content.querySelector('[data-auto-mobile-view]');
+  if (!checkbox || !window.matchMedia(MOBILE_VIEWPORT_QUERY).matches) return;
+  if (!checkbox.checked) {
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  setFocusMode(true);
+}
+
 async function loadPage(id) {
   const page = pagesById.get(id) || pagesById.get(flattenPageIds()[0]);
   if (!page) {
@@ -530,6 +563,7 @@ async function loadPage(id) {
   try {
     const mod = await page.module();
     mod.mount(content);
+    applyAutoMobileView();
   } catch (err) {
     content.innerHTML = `<p class="status error">Failed to load page: ${err.message}</p>`;
   }

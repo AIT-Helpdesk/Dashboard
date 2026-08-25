@@ -134,7 +134,7 @@ export function mount(container) {
               <input type="checkbox" id="two-column-toggle" /> Show in 2 columns
             </label>
             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
-              <input type="checkbox" id="mobile-view-toggle" /> Mobile View
+              <input type="checkbox" id="mobile-view-toggle" data-auto-mobile-view /> Mobile View
             </label>
           </div>
         </div>
