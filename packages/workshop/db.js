@@ -83,6 +83,15 @@ db.exec(`
     -- was added to an already-live CHECK constraint.
     workflow_stage TEXT NOT NULL DEFAULT 'new' CHECK (workflow_stage IN ('new','free_text','in_car','take_onsite','ready_to_ship','ready_for_pickup','sent','delivered','collected','dispose')),
     workflow_stage_text TEXT,
+    -- The "stamp" -- a free-text question anyone can leave on a row, by
+    -- request. Rendered as a small (dim when blank, big/bold once set) ?
+    -- icon right-justified in the Status column (see flagIconHtml() in
+    -- client.js) -- hovering it shows the question text; clicking it
+    -- (whether blank or already set) opens the same inline editor used to
+    -- add/change/clear it. NULL/blank means no question left. See
+    -- migrateAddFlagNote() below for how this was added to an
+    -- already-live table.
+    flag_note TEXT,
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','completed')),
     completed_at TEXT,
     completed_by_email TEXT,
@@ -534,6 +543,19 @@ function migrateAddDisposeStage() {
 }
 migrateAddDisposeStage();
 
+// Adds flag_note -- the "stamp" question feature, by request. A plain
+// nullable column with no CHECK constraint, same as job_description
+// above -- SQLite's ALTER TABLE ADD COLUMN handles this directly, no
+// recreate-table-and-copy dance needed. Guarded by checking the table's
+// real current columns (pragma_table_info), same as
+// migrateAddJobDescription()/migrateAddWorkflowStage() above.
+function migrateAddFlagNote() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('jobs')`).all();
+  if (columns.some((c) => c.name === 'flag_note')) return;
+  db.exec('ALTER TABLE jobs ADD COLUMN flag_note TEXT');
+}
+migrateAddFlagNote();
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -590,6 +612,7 @@ const FIELD_TO_COLUMN = {
   priority: 'priority',
   workflowStage: 'workflow_stage',
   workflowStageText: 'workflow_stage_text',
+  flagNote: 'flag_note',
 };
 
 // `fields` is the camelCase request body; `ticketAutotaskId` is already

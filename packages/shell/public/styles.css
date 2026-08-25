@@ -2224,6 +2224,58 @@ tr.row-units-changed {
 .wsp-col-status {
   white-space: nowrap;
 }
+/* Wraps the dot+status content and the ? "stamp" icon (see
+   flagIconHtml()/jobRowHtml() in client.js) so the icon sits pinned to
+   the right edge of the Status column regardless of how short the
+   dot+status content next to it is, by request. */
+.wsp-status-cell-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+/* The dot+status pair has to render as ONE flex item here, not two
+   separate sibling spans -- statusStageCellHtml() returns two adjacent
+   <span>s (the dot, then the status text). Left ungrouped, that makes
+   .wsp-status-cell-row a 3-item flex row (dot, status text, ? icon), and
+   space-between then puts an EQUAL gap between every pair -- shoving the
+   status text away from its own dot and toward the middle of the column
+   instead of hugging the left edge like before. Wrapping them in this
+   span keeps it a clean 2-item row (status content vs. the icon), so
+   space-between only pushes the icon to the far right, exactly as
+   intended. */
+.wsp-status-cell-main {
+  display: inline-flex;
+  align-items: center;
+}
+/* The "stamp" -- dim and small until a question is actually left, then
+   big/bold, by request ("leaving a note causes it to appear" reads here
+   as that visual jump, since the icon has to always be clickable even
+   when empty -- there'd otherwise be no way to add the FIRST question).
+   Colour is left alone -- ❓ is already a solid red/orange glyph in every
+   emoji set, unlike plain text glyphs CSS `color` can't override it. */
+.wsp-flag-icon {
+  cursor: pointer;
+  display: inline-block;
+  line-height: 1;
+  font-size: 0.8rem;
+  opacity: 0.28;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.wsp-flag-icon:hover {
+  opacity: 0.6;
+}
+.wsp-flag-icon--set {
+  opacity: 1;
+  font-size: 1.25rem;
+  transform: scale(1.05);
+}
+.wsp-flag-icon--set:hover {
+  opacity: 1;
+}
+.wsp-flag-note-input {
+  width: 11rem;
+}
 /* "Mobile View" checkbox, by request -- hides Location/Ticket/Due Date
    together, as one set, across EVERY table on the page at once (main
    list, both halves in 2-column mode, and the separate Dispose table)
