@@ -41,26 +41,36 @@ const WORKFLOW_STAGE_LABELS = {
   new: 'New',
   free_text: 'Free Text',
   in_car: 'In Car',
+  take_onsite: 'Take Onsite',
   ready_to_ship: 'Ready to Ship',
   ready_for_pickup: 'Ready for Pickup',
   sent: 'Sent',
   delivered: 'Delivered',
   collected: 'Collected',
 };
-const WORKFLOW_STAGE_ORDER = ['new', 'free_text', 'in_car', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected'];
+const WORKFLOW_STAGE_ORDER = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected'];
 // Stages with a companion free-text field -- 'free_text' (was
-// 'date_reqd', type anything) and 'in_car' (whose car, by request) --
-// see statusStageCellHtml()/openStatusStageEditor()/buildJobForm() below
+// 'date_reqd', type anything), 'in_car' (whose car), and 'take_onsite'
+// (who took it onsite), by request -- see
+// statusStageCellHtml()/openStatusStageEditor()/buildJobForm() below
 // for where this drives showing/hiding the text field.
-const TEXT_ENABLED_STAGES = ['free_text', 'in_car'];
-const TEXT_ENABLED_PLACEHOLDERS = { free_text: 'Type anything...', in_car: "Whose car?" };
+const TEXT_ENABLED_STAGES = ['free_text', 'in_car', 'take_onsite'];
+const TEXT_ENABLED_PLACEHOLDERS = { free_text: 'Type anything...', in_car: "Whose car?", take_onsite: 'Who?' };
 // Stages that read as "done and on its way out/gone", coloured green in
 // the list, by request -- everything else stays the default text
 // colour.
 const GREEN_WORKFLOW_STAGES = ['ready_for_pickup', 'sent', 'delivered', 'collected'];
 // Stages that read as "not yet actioned/still waiting on the workshop",
-// coloured red in the list, by request.
-const RED_WORKFLOW_STAGES = ['new', 'ready_to_ship', 'in_car'];
+// coloured red in the list, by request. 'in_car'/'take_onsite' are
+// special-cased further in statusStageCellHtml() below -- only the
+// stage NAME renders red, the WHO text after it renders in the default
+// colour, by request (see SPLIT_COLOR_STAGES below), rather than the
+// whole label being uniformly red the way it is here for 'new'/
+// 'ready_to_ship'.
+const RED_WORKFLOW_STAGES = ['new', 'ready_to_ship', 'in_car', 'take_onsite'];
+// The subset of RED_WORKFLOW_STAGES that split their colouring once
+// there's real WHO text -- see statusStageCellHtml() below.
+const SPLIT_COLOR_STAGES = ['in_car', 'take_onsite'];
 
 // audit_log's `field` values -> a human label for the history modal.
 // 'created'/'completed'/'reopened' are whole-job events (see db.js's
@@ -121,6 +131,7 @@ export function mount(container) {
           </div>
           <ul>
             <li>The Workshop Status is about what's happening in the room -- what's in progress, up next, not started, etc. Anything else can be entered with the Free Text option.</li>
+            <li>The following Statuses can have free text added: Free Text, In Car, and Take Onsite.</li>
             <li>When a ticket number is entered, the ticket will be updated with all item updates and information to date.</li>
             <li>If a ticket number is changed, the old ticket will be noted with the new ticket number, and all historical info will be added to the new ticket.</li>
             <li>The only ticket information drawn from Autotask using the ticket number is the Ticket Status and the Due Date.</li>
@@ -344,39 +355,61 @@ export function mount(container) {
   // When the stage is 'free_text', the typed text itself is shown
   // instead of the generic "Free Text" label -- that's the whole point
   // of the option (e.g. a specific date, or "Deleted" for a soft-deleted
-  // job -- see the trash icon's own handling below). 'in_car' keeps its
-  // own "In Car" label but appends the typed text (whose car), by
-  // request, rather than replacing it -- unlike free_text, "In Car" on
-  // its own is still meaningful.
+  // job -- see the trash icon's own handling below). 'in_car'/
+  // 'take_onsite' keep their own label but append the typed WHO text,
+  // by request, rather than replacing it -- unlike free_text, "In Car"/
+  // "Take Onsite" on their own are still meaningful.
   //
+  // Plain-text version -- shared with the print card below
+  // (printJobCard()) and with the ticket-note text server-side (see
+  // noteWorkflowStageLabel() in server.js, which mirrors this exactly
+  // since notes are plain text with no HTML/colour concept). The
+  // on-screen list cell has its own separate, colour-aware version
+  // below (statusStageCellHtml()) since it needs real markup, not a
+  // plain string.
+  function workflowStageLabel(job) {
+    if (job.workflowStage === 'free_text' && job.workflowStageText) {
+      return job.workflowStageText;
+    }
+    if (SPLIT_COLOR_STAGES.includes(job.workflowStage) && job.workflowStageText) {
+      return `${WORKFLOW_STAGE_LABELS[job.workflowStage]} -- ${job.workflowStageText}`;
+    }
+    return WORKFLOW_STAGE_LABELS[job.workflowStage] || job.workflowStage;
+  }
+
   // Green text for the stages that read as "done and on its way
   // out/gone" (see GREEN_WORKFLOW_STAGES above); red for the stages that
   // read as "not yet actioned/still waiting on the workshop" (see
   // RED_WORKFLOW_STAGES above); everything else stays the default text
   // colour. Both by request.
-  // Shared with the print card below (printJobCard()) -- one place for
-  // the free_text/in_car label logic instead of duplicating it.
-  function workflowStageLabel(job) {
-    if (job.workflowStage === 'free_text' && job.workflowStageText) {
-      return job.workflowStageText;
-    }
-    if (job.workflowStage === 'in_car' && job.workflowStageText) {
-      return `In Car -- ${job.workflowStageText}`;
-    }
-    return WORKFLOW_STAGE_LABELS[job.workflowStage] || job.workflowStage;
-  }
-
+  //
+  // 'in_car'/'take_onsite' (SPLIT_COLOR_STAGES) get a further split once
+  // there's real WHO text, by request: only the stage NAME ("In Car"/
+  // "Take Onsite") renders red, the person's name after it renders in
+  // the default colour -- an inner span carries the colour instead of
+  // colouring the whole outer .wsp-status-stage the way every other
+  // case here does. With no WHO text yet, there's nothing to
+  // distinguish from, so it falls through to the plain uniform-red case
+  // like 'new'/'ready_to_ship'.
   function statusStageCellHtml(job) {
-    const label = workflowStageLabel(job);
-    const colorClass = GREEN_WORKFLOW_STAGES.includes(job.workflowStage)
-      ? ' wsp-status-stage--green'
-      : RED_WORKFLOW_STAGES.includes(job.workflowStage)
-        ? ' wsp-status-stage--red'
-        : '';
+    const hasSplitText = SPLIT_COLOR_STAGES.includes(job.workflowStage) && job.workflowStageText;
+    let innerHtml;
+    let outerColorClass;
+    if (hasSplitText) {
+      innerHtml = `<span class="wsp-status-stage--red">${escapeHtml(WORKFLOW_STAGE_LABELS[job.workflowStage])} --</span> ${escapeHtml(job.workflowStageText)}`;
+      outerColorClass = '';
+    } else {
+      innerHtml = escapeHtml(workflowStageLabel(job));
+      outerColorClass = GREEN_WORKFLOW_STAGES.includes(job.workflowStage)
+        ? ' wsp-status-stage--green'
+        : RED_WORKFLOW_STAGES.includes(job.workflowStage)
+          ? ' wsp-status-stage--red'
+          : '';
+    }
     // The dot itself is its own click target -- by request, priority can
     // be re-triaged straight from the list (see openPriorityEditor()
     // below), independently of the Status/workflow-stage text next to it.
-    return `<span class="wsp-priority-dot" data-id="${job.id}" data-value="${job.priority}" title="Click to change priority"><span class="wsp-dot wsp-dot--${job.priority}"></span></span><span class="wsp-status-stage${colorClass}" data-id="${job.id}" data-value="${job.workflowStage}" data-text="${escapeHtml(job.workflowStageText || '')}" title="Click to change">${escapeHtml(label)}</span>`;
+    return `<span class="wsp-priority-dot" data-id="${job.id}" data-value="${job.priority}" title="Click to change priority"><span class="wsp-dot wsp-dot--${job.priority}"></span></span><span class="wsp-status-stage${outerColorClass}" data-id="${job.id}" data-value="${job.workflowStage}" data-text="${escapeHtml(job.workflowStageText || '')}" title="Click to change">${innerHtml}</span>`;
   }
 
   function rowActionButtonsHtml(job) {
@@ -496,11 +529,12 @@ export function mount(container) {
   // Swaps the plain Status text for a <select>, focused and open --
   // choosing a new value saves immediately (no separate Save button),
   // same "quick inline update" reasoning as statusStageCellHtml()'s own
-  // comment above. The exception is the TEXT_ENABLED_STAGES ('free_text'
-  // and 'in_car') -- picking either reveals a text input + its own small
-  // save button instead of saving right away, since there's real text to
-  // type first. Clicking elsewhere without changing anything just leaves
-  // the select showing until the next loadJobs() re-render (harmless --
+  // comment above. The exception is the TEXT_ENABLED_STAGES ('free_text',
+  // 'in_car', 'take_onsite') -- picking one reveals a text input + its
+  // own small save button instead of saving right away, since there's
+  // real text to type first. Clicking elsewhere without changing
+  // anything just leaves the select showing until the next loadJobs()
+  // re-render (harmless --
   // it still shows the correct current value).
   function openStatusStageEditor(el) {
     if (el.querySelector('select')) return; // already open
@@ -627,7 +661,8 @@ export function mount(container) {
     // job that WAS on a text-enabled stage with real text, then switched
     // to a different Status in this form, would silently keep submitting
     // the old (now-hidden) text alongside the new stage. The placeholder
-    // also swaps to match which stage is picked (free_text vs in_car).
+    // also swaps to match which stage is picked (see
+    // TEXT_ENABLED_PLACEHOLDERS above).
     const workflowStageSelect = wrapper.querySelector('#form-workflow-stage');
     const workflowStageTextWrap = wrapper.querySelector('#form-workflow-stage-text-wrap');
     workflowStageSelect.addEventListener('change', () => {

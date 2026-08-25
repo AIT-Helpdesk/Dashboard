@@ -14,12 +14,12 @@ const {
 
 const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'coming', 'not_started'];
 const ACTION_COLORS = ['general', 'done', 'notewell', 'blue'];
-const WORKFLOW_STAGES = ['new', 'free_text', 'in_car', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected'];
+const WORKFLOW_STAGES = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected'];
 // The two stages with a companion free-text field -- 'free_text' (type
 // anything) and 'in_car' (whose car, by request). Kept as its own list
 // (mirrors client.js's own TEXT_ENABLED_STAGES) since more than one
 // stage now needs the "keep/clear workflowStageText" logic below.
-const TEXT_ENABLED_STAGES = ['free_text', 'in_car'];
+const TEXT_ENABLED_STAGES = ['free_text', 'in_car', 'take_onsite'];
 
 // { email, name } for whoever's making this request -- requireAuth (see
 // packages/shell/auth.js) already guarantees a signed-in session before
@@ -162,6 +162,7 @@ const NOTE_WORKFLOW_STAGE_LABELS = {
   new: 'New',
   free_text: 'Free Text',
   in_car: 'In Car',
+  take_onsite: 'Take Onsite',
   ready_to_ship: 'Ready to Ship',
   ready_for_pickup: 'Ready for Pickup',
   sent: 'Sent',
@@ -184,6 +185,7 @@ const NOTE_FIELD_LABELS = {
 function noteWorkflowStageLabel(job) {
   if (job.workflowStage === 'free_text' && job.workflowStageText) return job.workflowStageText;
   if (job.workflowStage === 'in_car' && job.workflowStageText) return `In Car -- ${job.workflowStageText}`;
+  if (job.workflowStage === 'take_onsite' && job.workflowStageText) return `Take Onsite -- ${job.workflowStageText}`;
   return NOTE_WORKFLOW_STAGE_LABELS[job.workflowStage] || job.workflowStage;
 }
 
