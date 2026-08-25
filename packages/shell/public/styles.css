@@ -2402,9 +2402,13 @@ tr.row-units-changed {
   color: #16a34a;
 }
 /* Red text for the "not yet actioned/still waiting on the workshop"
-   stages (New/Ready to Ship/In Car), by request -- see
+   stages (New/Ready to Ship/In Car/Take Onsite), by request -- see
    RED_WORKFLOW_STAGES in client.js. Hover still wins (see above), same
-   as every other stage. */
+   as every other stage. Also reused as an INNER span for In Car/Take
+   Onsite once there's real WHO text (SPLIT_COLOR_STAGES in client.js)
+   -- there it colours only the stage name, not the whole
+   .wsp-status-stage; the person's name after it stays the default
+   colour. Works unchanged either way since it's a plain color rule. */
 .wsp-status-stage--red {
   color: #dc2626;
 }
