@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/packages-received",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "packages-received",
+    "label": "Goods Received",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "express": "^4.19.2"
+  }
+}

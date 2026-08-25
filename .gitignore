@@ -37,3 +37,9 @@ packages/tc-elite-rollout/data.db-wal
 packages/workshop/data.db
 packages/workshop/data.db-shm
 packages/workshop/data.db-wal
+
+# Same reasoning, for Goods Received's own SQLite database (real
+# delivery-log data, not source).
+packages/packages-received/data.db
+packages/packages-received/data.db-shm
+packages/packages-received/data.db-wal

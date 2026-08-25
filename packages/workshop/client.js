@@ -21,6 +21,12 @@ let twoColumns = false;
 // convention as showCompleted/twoColumns
 // above.
 let mobileView = false;
+// The bottom-right "Deliveries" panel's own cached data -- same "restore
+// instantly instead of a blank flash on revisit" convention as lastJobs
+// above. A genuine cross-page read (this page's own client.js fetches
+// Goods Received's real GET /api/packages-received/ directly, see
+// loadDeliveriesPreview() below) rather than duplicating any data/logic.
+let lastDeliveriesPreview = null;
 
 // Urgent/Complete/Nearly Complete/In Progress/Next Up/Coming/Not
 // Started, by request -- a completion-progress scheme replacing the
@@ -156,10 +162,9 @@ export function mount(container) {
             <li>The only ticket information drawn from Autotask using the ticket number is the Ticket Status and the Due Date.</li>
           </ul>
         </div>
-        <div class="wsp-usage-box wsp-deliveries-box">
-          <div class="wsp-usage-box-title">Deliveries</div>
-          <p class="wsp-deliveries-placeholder">Coming soon.</p>
-        </div>
+        <a href="#packages-received" class="wsp-usage-box wsp-deliveries-box wsp-deliveries-link" title="Open Goods Received">
+          <div id="deliveries-preview" class="wsp-deliveries-body"><p class="wsp-deliveries-placeholder">Loading...</p></div>
+        </a>
       </div>
     </div>
   `;
@@ -177,6 +182,7 @@ export function mount(container) {
   const wspPageEl = container.querySelector('.wsp-page');
   const bottomPanelsEl = container.querySelector('#bottom-panels');
   const bottomPanelsToggle = container.querySelector('#bottom-panels-toggle');
+  const deliveriesPreviewEl = container.querySelector('#deliveries-preview');
 
   showCompletedToggle.checked = showCompleted;
   twoColumnToggle.checked = twoColumns;
@@ -197,7 +203,10 @@ export function mount(container) {
   });
 
   addJobButton.addEventListener('click', () => openForm(null));
-  refreshButton.addEventListener('click', () => loadJobs());
+  refreshButton.addEventListener('click', () => {
+    loadJobs();
+    loadDeliveriesPreview();
+  });
   showCompletedToggle.addEventListener('change', () => {
     showCompleted = showCompletedToggle.checked;
     loadJobs();
@@ -1011,11 +1020,93 @@ export function mount(container) {
     return data;
   }
 
+  // Bottom-right "Deliveries" panel -- up to 5 most recent Goods Received
+  // entries, by request, showing only Date & Time, Sender + Freight
+  // Company (combined into one cell), and Receiver Name -- deliberately a
+  // narrow preview, not the full Goods Received table (that's what the
+  // "Deliveries" heading link is for). Goods Received's own GET
+  // /api/packages-received/ already sorts newest-first, so this just
+  // slices the first 5 rather than duplicating that sort here.
+  async function loadDeliveriesPreview() {
+    try {
+      const res = await fetch('/api/packages-received/');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      lastDeliveriesPreview = data.deliveries.slice(0, 5);
+      deliveriesPreviewEl.innerHTML = deliveriesPreviewHtml(lastDeliveriesPreview);
+    } catch (err) {
+      // Degrade gracefully -- a failed lookup (e.g. Goods Received's own
+      // router not loaded) just leaves this one panel showing an error,
+      // never breaks the rest of the board.
+      deliveriesPreviewEl.innerHTML = `<p class="status error wsp-deliveries-placeholder">Error: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function deliveriesPreviewHtml(deliveries) {
+    if (!deliveries || deliveries.length === 0) {
+      return '<p class="wsp-deliveries-placeholder">No deliveries logged yet.</p>';
+    }
+    const rows = deliveries
+      .map((d) => {
+        const senderFreight = [d.sender, d.freightCompany].filter(Boolean).join(' / ') || '—';
+        const cartons = d.cartonCount === null || d.cartonCount === undefined ? '—' : d.cartonCount;
+        return `<tr>
+          <td>${deliveryReceivedHtml(d.receivedAt)}</td>
+          <td>${escapeHtml(senderFreight)}</td>
+          <td>${cartons}</td>
+        </tr>`;
+      })
+      .join('');
+    return `<table class="wsp-deliveries-table">
+      <thead><tr><th>Received</th><th>Sender</th><th>#</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  // Minimizes the space this panel needs, by request -- reuses What's On's
+  // own Today/Tomorrow tag colour convention (green=today, amber=the
+  // adjacent day -- see .tt-tag--today/--tomorrow in styles.css and
+  // ttDayTag() in whats-on/client.js), scoped under this page's own
+  // .wsp-delivery-tag-- classes rather than reusing those literally (same
+  // "each page owns its own class names even when visually mirroring
+  // another page" convention as .wsp-table vs .tcr-table). Every row gets
+  // a tag now, by request:
+  //   - Received TODAY: a green tag showing the TIME instead of the word
+  //     "Today" -- the time is the useful bit once "today" is already
+  //     implied by the colour.
+  //   - Received YESTERDAY: an amber tag (same colour as What's On's
+  //     "Tomorrow" tag) showing just day + month, not the word "Yesterday".
+  //   - Anything older: a blue tag, also just day + month.
+  // Compared as CALENDAR days in the browser's own local time, same
+  // convention as dueDateCellHtml()'s own today/tomorrow comparison above.
+  function deliveryReceivedHtml(receivedAtIso) {
+    const received = new Date(receivedAtIso);
+    const receivedDay = new Date(received.getFullYear(), received.getMonth(), received.getDate()).getTime();
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    if (receivedDay === today) {
+      const time = received.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      return `<span class="wsp-delivery-tag wsp-delivery-tag--today">${escapeHtml(time)}</span>`;
+    }
+    const dayMonth = formatDayMonth(receivedAtIso);
+    if (receivedDay === today - oneDayMs) {
+      return `<span class="wsp-delivery-tag wsp-delivery-tag--yesterday">${escapeHtml(dayMonth)}</span>`;
+    }
+    return `<span class="wsp-delivery-tag wsp-delivery-tag--older">${escapeHtml(dayMonth)}</span>`;
+  }
+
   if (lastJobs) {
     statusEl.hidden = true;
     renderResults(lastJobs);
   } else {
     loadJobs();
+  }
+
+  if (lastDeliveriesPreview) {
+    deliveriesPreviewEl.innerHTML = deliveriesPreviewHtml(lastDeliveriesPreview);
+  } else {
+    loadDeliveriesPreview();
   }
 }
 
@@ -1029,6 +1120,14 @@ function formatDateTime(iso) {
 function formatDate(iso) {
   if (!iso) return '';
   return new Date(iso).toLocaleDateString();
+}
+
+// Day + month only (e.g. "24 Aug"), no year -- for the Deliveries preview
+// panel's yesterday/older tags, by request. Same format What's On's own
+// formatShortDate() uses for its overdue tag, for consistency.
+function formatDayMonth(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
 function escapeHtml(str) {
