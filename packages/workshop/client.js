@@ -108,9 +108,12 @@ export function mount(container) {
         ${PRIORITY_ORDER.map((p) => `<span><span class="wsp-dot wsp-dot--${p}"></span>${escapeHtml(PRIORITY_LABELS[p])}</span>`).join('')}
       </div>
 
-      <div class="wsp-bottom-panels">
+      <div class="wsp-bottom-panels" id="bottom-panels">
         <div class="wsp-usage-box">
-          <div class="wsp-usage-box-title">Usage instructions</div>
+          <div class="wsp-usage-box-title">
+            Usage instructions
+            <button type="button" class="wsp-icon-btn wsp-bottom-panels-toggle" id="bottom-panels-toggle" title="Minimize">−</button>
+          </div>
           <ul>
             <li>The Workshop Status is about what's happening in the room -- what's in progress, up next, not started, etc. Anything else can be entered with the Free Text option.</li>
             <li>When a ticket number is entered, the ticket will be updated with all item updates and information to date.</li>
@@ -133,9 +136,24 @@ export function mount(container) {
   const refreshButton = container.querySelector('#refresh-button');
   const showCompletedToggle = container.querySelector('#show-completed-toggle');
   const twoColumnToggle = container.querySelector('#two-column-toggle');
+  const bottomPanelsEl = container.querySelector('#bottom-panels');
+  const bottomPanelsToggle = container.querySelector('#bottom-panels-toggle');
 
   showCompletedToggle.checked = showCompleted;
   twoColumnToggle.checked = twoColumns;
+
+  // Deliberately a plain local variable, not module-scope like
+  // showCompleted/twoColumns above -- by request, any refresh of this
+  // page (including just navigating away and back within the SPA, since
+  // mount() runs fresh each time) should always restore both panels
+  // maximized, never remember a collapsed state.
+  let bottomPanelsCollapsed = false;
+  bottomPanelsToggle.addEventListener('click', () => {
+    bottomPanelsCollapsed = !bottomPanelsCollapsed;
+    bottomPanelsEl.classList.toggle('wsp-bottom-panels--collapsed', bottomPanelsCollapsed);
+    bottomPanelsToggle.textContent = bottomPanelsCollapsed ? '+' : '−';
+    bottomPanelsToggle.title = bottomPanelsCollapsed ? 'Maximize' : 'Minimize';
+  });
 
   addJobButton.addEventListener('click', () => openForm(null));
   refreshButton.addEventListener('click', () => loadJobs());
