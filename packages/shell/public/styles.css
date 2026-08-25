@@ -2293,6 +2293,9 @@ tr.row-units-changed {
 .wsp-action-text--notewell {
   color: #dc2626;
 }
+.wsp-action-text--blue {
+  color: var(--accent);
+}
 /* Job Description -- stacked above the actual action text in the same
    cell (see actionCellHtml() in client.js), bold to read as the
    "headline" of the two. */
@@ -2437,7 +2440,12 @@ tr.row-units-changed {
 /* "Show in 2 columns" toggle -- splits the job list into two side-by-side
    tables on wide screens (by request, default off). Stacks back to one
    column below the breakpoint so it never squeezes the table unreadably
-   thin. */
+   thin. Each grid child is a plain wrapper div (not a bare table group)
+   in this mode -- the priority legend gets appended after column 1's
+   table and the Dispose table after column 2's, by request (see
+   renderResults() in client.js) -- but since neither wrapper sets its
+   own display, they just stack their own children vertically as normal
+   block flow, no extra rules needed here for that. */
 .wsp-two-column-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2634,12 +2642,28 @@ tr.row-units-changed {
   grid-template-columns: 1fr 1fr;
   gap: 0.75rem;
 }
+/* Two explicit columns (each its own fixed field order), replacing the
+   old .wsp-form-grid's implicit 2-per-row flow, by request. */
+.wsp-form-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+.wsp-form-column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
 @media (max-width: 720px) {
   .wsp-form-grid {
     grid-template-columns: 1fr;
   }
+  .wsp-form-columns {
+    grid-template-columns: 1fr;
+  }
 }
 .wsp-form-grid label,
+.wsp-form-columns label,
 .wsp-form-full {
   display: flex;
   flex-direction: column;
