@@ -12,14 +12,18 @@ let showCompleted = false;
 // convention as showCompleted above.
 let twoColumns = false;
 
-// Urgent/Complete/Nearly Complete/In Progress/Next Up/Not Started, by
-// request -- a completion-progress scheme replacing the original
-// time-urgency one (Today/Tomorrow/2-4 days/Over 4 days -- see db.js's
-// own comment on the priority column for how existing data was
+// Urgent/Complete/Nearly Complete/In Progress/Next Up/Coming/Not
+// Started, by request -- a completion-progress scheme replacing the
+// original time-urgency one (Today/Tomorrow/2-4 days/Over 4 days -- see
+// db.js's own comment on the priority column for how existing data was
 // remapped). Still a manually-chosen magnet -- plenty of jobs have no
 // linked ticket at all, so it can't be purely computed from a due date.
-const PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', in_progress: 'In Progress', next_up: 'Next Up', not_started: 'Not Started' };
-const PRIORITY_ORDER = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'not_started'];
+const PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', in_progress: 'In Progress', next_up: 'Next Up', coming: 'Coming', not_started: 'Not Started' };
+const PRIORITY_ORDER = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'not_started', 'coming'];
+// Client/Current-Required-Action background tint applies to these
+// tiers only, by request -- Coming and Not Started stay unshaded (the
+// bars still carry their colour either way).
+const TINTED_PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up'];
 // Plain colour names, by request -- Black (default)/Red/Blue/Green. The
 // stored values keep their original names (general/done/notewell) for
 // the three pre-existing ones plus a new 'blue' -- only the labels here
@@ -54,6 +58,9 @@ const TEXT_ENABLED_PLACEHOLDERS = { free_text: 'Type anything...', in_car: "Whos
 // the list, by request -- everything else stays the default text
 // colour.
 const GREEN_WORKFLOW_STAGES = ['ready_for_pickup', 'sent', 'delivered', 'collected'];
+// Stages that read as "not yet actioned/still waiting on the workshop",
+// coloured red in the list, by request.
+const RED_WORKFLOW_STAGES = ['new', 'ready_to_ship', 'in_car'];
 
 // audit_log's `field` values -> a human label for the history modal.
 // 'created'/'completed'/'reopened' are whole-job events (see db.js's
@@ -75,29 +82,41 @@ const FIELD_LABELS = {
 
 export function mount(container) {
   container.innerHTML = `
-    <header class="page-header">
-      <h1>Workshop Board</h1>
-      <div class="date-form">
-        <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
-          <input type="checkbox" id="show-completed-toggle" /> Show Completed
-        </label>
-        <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
-          <input type="checkbox" id="two-column-toggle" /> Show in 2 columns
-        </label>
-        <button type="button" id="refresh-button">Refresh</button>
-        <button type="button" id="add-job-button" class="button-link">+ Add job</button>
+    <div class="wsp-page">
+      <header class="page-header">
+        <h1>Workshop Board</h1>
+        <div class="date-form">
+          <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+            <input type="checkbox" id="show-completed-toggle" /> Show Completed
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+            <input type="checkbox" id="two-column-toggle" /> Show in 2 columns
+          </label>
+          <button type="button" id="refresh-button">Refresh</button>
+          <button type="button" id="add-job-button" class="button-link">+ Add job</button>
+        </div>
+      </header>
+      <p class="status">All equipment in the workshop (or in the responsibility of the workshop) must be identified, listed, ticketed and labelled. It's location, whether in the workshop, in the warehouse, or out with a repairer, must be known and noted. <span class="wsp-status-caveat">This board does not replace ticket management. Tickets notes only are updated, not status.</span></p>
+
+      <div id="job-form-container"></div>
+
+      <p id="status" class="status">Loading...</p>
+      <div id="results"></div>
+
+      <div class="wsp-priority-legend">
+        <span class="wsp-priority-legend-prefix">Workshop Status: </span>
+        ${PRIORITY_ORDER.map((p) => `<span><span class="wsp-dot wsp-dot--${p}"></span>${escapeHtml(PRIORITY_LABELS[p])}</span>`).join('')}
       </div>
-    </header>
-    <p class="status">All equipment in the workshop (or in the responsibility of the workshop) must be identified, listed, ticketed and labelled. It's location, whether in the workshop, in the warehouse, or out with a repairer, must be known and noted.</p>
 
-    <div id="job-form-container"></div>
-
-    <p id="status" class="status">Loading...</p>
-    <div id="results"></div>
-
-    <div class="wsp-priority-legend">
-      <span class="wsp-priority-legend-prefix">Workshop Status: </span>
-      ${PRIORITY_ORDER.map((p) => `<span><span class="wsp-dot wsp-dot--${p}"></span>${escapeHtml(PRIORITY_LABELS[p])}</span>`).join('')}
+      <div class="wsp-usage-box">
+        <div class="wsp-usage-box-title">Usage instructions</div>
+        <ul>
+          <li>The Workshop Status is about what's happening in the room -- what's in progress, up next, not started, etc. Anything else can be entered with the Free Text option.</li>
+          <li>When a ticket number is entered, the ticket will be updated with all item updates and information to date.</li>
+          <li>If a ticket number is changed, the old ticket will be noted with the new ticket number, and all historical info will be added to the new ticket.</li>
+          <li>The only ticket information drawn from Autotask using the ticket number is the Ticket Status and the Due Date.</li>
+        </ul>
+      </div>
     </div>
   `;
 
@@ -213,14 +232,17 @@ export function mount(container) {
     // Client/Action, and right edge of the last real-data cell (Location
     // -- there's no separate Priority column anymore, the dot in the
     // Status cell plus the legend under the table are the only priority
-    // display now).
+    // display now). Client/Action also get a background tint, but only
+    // for TINTED_PRIORITIES (see above) -- Coming and Not Started stay
+    // unshaded, by request.
+    const tintClass = TINTED_PRIORITIES.includes(job.priority) ? `wsp-row-tint--${job.priority} ` : '';
     return `
       <tr>
         <td class="wsp-col-status wsp-bar-left--${job.priority}">${statusStageCellHtml(job)}</td>
         <td>${ticketCell}</td>
         <td>${dueDateCell}</td>
-        <td class="wsp-col-client wsp-row-tint--${job.priority} wsp-bar-left--${job.priority}">${client}</td>
-        <td class="wsp-row-tint--${job.priority} wsp-bar-right--${job.priority}">${actionCell}</td>
+        <td class="wsp-col-client ${tintClass}wsp-bar-left--${job.priority}">${client}</td>
+        <td class="${tintClass}wsp-bar-right--${job.priority}">${actionCell}</td>
         <td class="wsp-bar-right--${job.priority}">${location}</td>
         <td class="wsp-actions">${rowActionButtonsHtml(job)}</td>
       </tr>`;
@@ -256,14 +278,25 @@ export function mount(container) {
     return `<span title="Ticket not found in Autotask">${escapeHtml(job.ticketNumber)}</span>`;
   }
 
-  // Red + bold when overdue (due date genuinely in the past) -- by
-  // request. A blank due date (no ticket resolved, or the ticket has no
-  // due date set) just shows the usual em-dash, unstyled.
+  // Red when overdue (due date genuinely in the past, not bold -- by
+  // request), green when due today, dark yellow when due tomorrow --
+  // compared as CALENDAR days in the browser's own local time, not a
+  // raw 24-hour window, so a due time late tonight still reads as
+  // "today" and one early tomorrow morning still reads as "tomorrow".
+  // A blank due date (no ticket resolved, or the ticket has no due date
+  // set) just shows the usual em-dash, unstyled.
   function dueDateCellHtml(job) {
     if (!job.ticketAutotaskId || !job.ticketDueDate) return '—';
-    const overdue = new Date(job.ticketDueDate).getTime() < Date.now();
+    const due = new Date(job.ticketDueDate);
+    const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const oneDayMs = 24 * 60 * 60 * 1000;
     const text = escapeHtml(formatDate(job.ticketDueDate));
-    return overdue ? `<span class="wsp-overdue">${text}</span>` : text;
+    if (dueDay < today) return `<span class="wsp-due-overdue">${text}</span>`;
+    if (dueDay === today) return `<span class="wsp-due-today">${text}</span>`;
+    if (dueDay === today + oneDayMs) return `<span class="wsp-due-tomorrow">${text}</span>`;
+    return text;
   }
 
   // Status (workflow stage) -- click-to-edit inline, same "no separate
@@ -287,9 +320,11 @@ export function mount(container) {
   // request, rather than replacing it -- unlike free_text, "In Car" on
   // its own is still meaningful.
   //
-  // Green text, by request, for the stages that read as "done and on
-  // its way out/gone" (see GREEN_WORKFLOW_STAGES above) -- everything
-  // else stays the default text colour.
+  // Green text for the stages that read as "done and on its way
+  // out/gone" (see GREEN_WORKFLOW_STAGES above); red for the stages that
+  // read as "not yet actioned/still waiting on the workshop" (see
+  // RED_WORKFLOW_STAGES above); everything else stays the default text
+  // colour. Both by request.
   // Shared with the print card below (printJobCard()) -- one place for
   // the free_text/in_car label logic instead of duplicating it.
   function workflowStageLabel(job) {
@@ -304,11 +339,15 @@ export function mount(container) {
 
   function statusStageCellHtml(job) {
     const label = workflowStageLabel(job);
-    const greenClass = GREEN_WORKFLOW_STAGES.includes(job.workflowStage) ? ' wsp-status-stage--green' : '';
+    const colorClass = GREEN_WORKFLOW_STAGES.includes(job.workflowStage)
+      ? ' wsp-status-stage--green'
+      : RED_WORKFLOW_STAGES.includes(job.workflowStage)
+        ? ' wsp-status-stage--red'
+        : '';
     // The dot itself is its own click target -- by request, priority can
     // be re-triaged straight from the list (see openPriorityEditor()
     // below), independently of the Status/workflow-stage text next to it.
-    return `<span class="wsp-priority-dot" data-id="${job.id}" data-value="${job.priority}" title="Click to change priority"><span class="wsp-dot wsp-dot--${job.priority}"></span></span><span class="wsp-status-stage${greenClass}" data-id="${job.id}" data-value="${job.workflowStage}" data-text="${escapeHtml(job.workflowStageText || '')}" title="Click to change">${escapeHtml(label)}</span>`;
+    return `<span class="wsp-priority-dot" data-id="${job.id}" data-value="${job.priority}" title="Click to change priority"><span class="wsp-dot wsp-dot--${job.priority}"></span></span><span class="wsp-status-stage${colorClass}" data-id="${job.id}" data-value="${job.workflowStage}" data-text="${escapeHtml(job.workflowStageText || '')}" title="Click to change">${escapeHtml(label)}</span>`;
   }
 
   function rowActionButtonsHtml(job) {
@@ -643,7 +682,7 @@ export function mount(container) {
     return job.customer || '—';
   }
 
-  const PRINT_PRIORITY_DOT_COLORS = { urgent: '#dc2626', complete: '#16a34a', nearly_complete: '#2563eb', in_progress: '#f97316', next_up: '#8b5cf6', not_started: '#6b7280' };
+  const PRINT_PRIORITY_DOT_COLORS = { urgent: '#dc2626', complete: '#16a34a', nearly_complete: '#2563eb', in_progress: '#f97316', next_up: '#8b5cf6', coming: '#eab308', not_started: '#6b7280' };
   const PRINT_ACTION_COLORS = { general: '#111827', notewell: '#dc2626', blue: '#2563eb', done: '#16a34a' };
 
   function buildPrintCardHtml(job) {

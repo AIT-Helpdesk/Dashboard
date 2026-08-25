@@ -2142,17 +2142,18 @@ tr.row-units-changed {
   background: var(--accent);
 }
 
-/* Workshop board -- priority colours below are a deliberate 6-tier
+/* Workshop board -- priority colours below are a deliberate 7-tier
    completion-progress scheme by request: red=Urgent, green=Complete,
    blue=Nearly Complete, orange=In Progress, purple=Next Up,
-   grey=Not Started. Red/green/blue reuse this dashboard's existing
-   red/green/accent-blue (same values as .text-highlight-red/-green,
-   .cell-flag-red/-green, var(--accent) elsewhere); purple is the same
-   #8b5cf6 TC Elite Rollout's "Issue" status uses, for the same reason --
-   reusing an established colour rather than a fresh one-off shade
-   wherever this dashboard already has one that fits. Orange and the
-   not_started grey are genuinely new -- nothing else needed these
-   before this page. */
+   yellow=Coming, grey=Not Started. Red/green/blue reuse this
+   dashboard's existing red/green/accent-blue (same values as
+   .text-highlight-red/-green, .cell-flag-red/-green, var(--accent)
+   elsewhere); purple is the same #8b5cf6 TC Elite Rollout's "Issue"
+   status uses, and yellow is the same #eab308 already used for a
+   warning/pending state elsewhere on this dashboard -- reusing an
+   established colour rather than a fresh one-off shade wherever this
+   dashboard already has one that fits. Orange and the not_started grey
+   are genuinely new -- nothing else needed these before this page. */
 .wsp-table th:last-child,
 .wsp-table td.wsp-actions {
   text-align: right;
@@ -2218,6 +2219,9 @@ tr.row-units-changed {
 .wsp-dot--next_up {
   background: #8b5cf6;
 }
+.wsp-dot--coming {
+  background: #eab308;
+}
 .wsp-dot--not_started {
   background: #6b7280;
 }
@@ -2236,15 +2240,21 @@ tr.row-units-changed {
 .wsp-job-description {
   font-weight: 700;
 }
+/* "This board does not replace ticket management..." caveat, inline at
+   the end of the intro paragraph, by request -- green but NOT bold
+   (unlike .text-highlight-green elsewhere, which stays bold). */
+.wsp-status-caveat {
+  color: #16a34a;
+}
 
-/* Both together, by request -- the light background tint (kept, still
-   too subtle alone in dark mode on its own) PLUS a thin solid-colour bar
-   using the dot's full colour, now running the whole row: left edge of
-   the first (Status) cell, both sides of Client/Action, and right edge
-   of the last real-data (Location) cell -- see jobRowHtml() in client.js
-   for which cells get which class. not_started deliberately has NO tint
-   (by request) -- grey-on-grey read as barely-there/muddy, so that tier
-   keeps just its solid bars, no background wash. */
+/* A thin solid-colour bar using the dot's full colour, running the
+   whole row: left edge of the first (Status) cell, both sides of
+   Client/Action, and right edge of the last real-data (Location) cell
+   -- see jobRowHtml() in client.js for which cells get which class.
+   Client/Action also get a light background tint, but only for
+   TINTED_PRIORITIES (see client.js) -- Coming and Not Started
+   deliberately have NO tint, by request (their bars still carry the
+   colour on their own). */
 .wsp-row-tint--urgent {
   background: color-mix(in srgb, #dc2626 8%, transparent);
 }
@@ -2275,6 +2285,9 @@ tr.row-units-changed {
 .wsp-bar-left--next_up {
   border-left: 4px solid #8b5cf6;
 }
+.wsp-bar-left--coming {
+  border-left: 4px solid #eab308;
+}
 .wsp-bar-left--not_started {
   border-left: 4px solid #6b7280;
 }
@@ -2293,6 +2306,9 @@ tr.row-units-changed {
 .wsp-bar-right--next_up {
   border-right: 4px solid #8b5cf6;
 }
+.wsp-bar-right--coming {
+  border-right: 4px solid #eab308;
+}
 .wsp-bar-right--not_started {
   border-right: 4px solid #6b7280;
 }
@@ -2305,11 +2321,19 @@ tr.row-units-changed {
   margin-top: 0.1rem;
 }
 
-/* Overdue Due Date -- red + bold, by request. Same red as
-   .text-highlight-red/.cell-flag-red elsewhere on this dashboard. */
-.wsp-overdue {
+/* Due Date colouring, by request -- red (not bold) if overdue, same red
+   as .text-highlight-red/.cell-flag-red elsewhere on this dashboard;
+   green if due today; dark yellow if due tomorrow (a darker/more
+   legible shade than the Coming priority's own #eab308, which reads too
+   light for text at normal weight). */
+.wsp-due-overdue {
   color: #dc2626;
-  font-weight: 700;
+}
+.wsp-due-today {
+  color: #16a34a;
+}
+.wsp-due-tomorrow {
+  color: #b45309;
 }
 
 /* Status (workflow stage) -- click-to-edit inline (see
@@ -2330,6 +2354,13 @@ tr.row-units-changed {
    as every other stage. */
 .wsp-status-stage--green {
   color: #16a34a;
+}
+/* Red text for the "not yet actioned/still waiting on the workshop"
+   stages (New/Ready to Ship/In Car), by request -- see
+   RED_WORKFLOW_STAGES in client.js. Hover still wins (see above), same
+   as every other stage. */
+.wsp-status-stage--red {
+  color: #dc2626;
 }
 .wsp-status-stage-text-wrap {
   display: inline-flex;
@@ -2371,6 +2402,62 @@ tr.row-units-changed {
    legend's own label rather than just another dot+colour entry. */
 .wsp-priority-legend-prefix {
   font-weight: 700;
+}
+
+/* Wraps this whole page's content -- a flex column at least as tall as
+   .page-content itself (this page's own independent scroll container,
+   see its own CSS comment above), so .wsp-usage-box's own margin-top:
+   auto below can push it all the way to the bottom of the visible page
+   on a SHORT job list, not just sit directly under wherever the table
+   happens to end. min-height: 100% resolves against .page-content
+   because that flex child already has a definite (not just minimum)
+   height -- see .page-content's own comment for why. */
+.wsp-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* Usage instructions -- a subtle, ALWAYS-visible reference card pinned
+   to the bottom of the page (both the open and completed views, since
+   mount()'s own static template renders it once, outside the toggled
+   #results region), by request. Two mechanisms working together:
+   margin-top: auto (a flex child of .wsp-page above) pushes it all the
+   way to the bottom of the page when the job list is short and doesn't
+   fill the viewport; position: sticky + bottom: 0 keeps it pinned at
+   the bottom of the visible page as the list scrolls underneath it once
+   it's long enough to overflow, rather than only being reachable by
+   scrolling all the way down past it. A solid background (not
+   transparent) and a z-index above the table are both required for
+   that "stays put while content scrolls behind it" effect to actually
+   look right rather than letting scrolled rows show through. Same
+   bordered-card shape as .resource-group, but deliberately quieter
+   (muted section-header background, smaller/muted text) so it reads as
+   reference material, not another data table. */
+.wsp-usage-box {
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--section-header-bg);
+  box-shadow: 0 -2px 6px rgb(0 0 0 / 0.08);
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.wsp-usage-box-title {
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 0.4rem;
+}
+.wsp-usage-box ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
 }
 
 .wsp-icon-btn {

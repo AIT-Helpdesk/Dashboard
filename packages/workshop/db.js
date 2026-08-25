@@ -43,16 +43,16 @@ db.exec(`
     -- already-live CHECK constraint.
     action_color TEXT NOT NULL DEFAULT 'general' CHECK (action_color IN ('general','done','notewell','blue')),
     location TEXT,
-    -- Urgent/Complete/Nearly Complete/In Progress/Next Up/Not Started, by
-    -- request -- a status-progression scheme replacing the original
-    -- time-urgency one (Today/Tomorrow/2-4 days/Over 4 days). See
-    -- migrateRetierPriorityToStatusStyle() below for how the live data
-    -- was remapped. Still a manually-chosen magnet, not computed from a
-    -- ticket's due date -- plenty of jobs have no linked ticket at all,
-    -- so priority has to stay settable on its own. Defaults to
-    -- 'not_started' -- also the one tier with no background tint (see
-    -- client.js), a fitting "nothing to highlight yet" default.
-    priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','in_progress','next_up','not_started')),
+    -- Urgent/Complete/Nearly Complete/In Progress/Next Up/Coming/Not
+    -- Started, by request -- a status-progression scheme replacing the
+    -- original time-urgency one (Today/Tomorrow/2-4 days/Over 4 days).
+    -- See migrateRetierPriorityToStatusStyle()/migrateAddComingPriority()
+    -- below for how the live data was remapped/widened. Still a
+    -- manually-chosen magnet, not computed from a ticket's due date --
+    -- plenty of jobs have no linked ticket at all, so priority has to
+    -- stay settable on its own. Defaults to 'not_started' -- a fitting
+    -- "nothing to highlight yet" default.
+    priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','in_progress','next_up','coming','not_started')),
     -- Workshop's own workflow stage -- named workflow_stage, not
     -- status_stage/status2, to stay clearly distinct from the plain
     -- 'status' column below (open/completed, the archive mechanism --
@@ -365,6 +365,60 @@ function migrateRetierPriorityToStatusStyle() {
   }
 }
 migrateRetierPriorityToStatusStyle();
+
+// Widens priority's CHECK to also allow 'coming' (yellow -- "coming up
+// but not next in line yet", between Next Up and Not Started), by
+// request. Every existing value keeps its original name/meaning -- only
+// 'coming' is new, so no data remapping is needed, just the same
+// recreate-table-and-copy dance as the other CHECK-widening migrations
+// (SQLite can't widen an existing CHECK in place). Idempotency is
+// checked against the live table's own CREATE TABLE SQL, same as
+// migrateAddBlueColorAndNewStages() above.
+function migrateAddComingPriority() {
+  const table = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'`).get();
+  if (table && table.sql && table.sql.includes("'coming'")) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE jobs_new (
+        id INTEGER PRIMARY KEY,
+        reqd_by TEXT,
+        ticket_number TEXT,
+        ticket_autotask_id INTEGER,
+        customer TEXT,
+        job_description TEXT,
+        action_text TEXT,
+        action_color TEXT NOT NULL DEFAULT 'general' CHECK (action_color IN ('general','done','notewell','blue')),
+        location TEXT,
+        priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','in_progress','next_up','coming','not_started')),
+        workflow_stage TEXT NOT NULL DEFAULT 'new' CHECK (workflow_stage IN ('new','free_text','in_car','ready_to_ship','ready_for_pickup','sent','delivered','collected')),
+        workflow_stage_text TEXT,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','completed')),
+        completed_at TEXT,
+        completed_by_email TEXT,
+        completed_by_name TEXT,
+        created_at TEXT NOT NULL,
+        created_by_email TEXT NOT NULL,
+        created_by_name TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by_email TEXT NOT NULL,
+        updated_by_name TEXT NOT NULL
+      );
+      INSERT INTO jobs_new SELECT * FROM jobs;
+      DROP TABLE jobs;
+      ALTER TABLE jobs_new RENAME TO jobs;
+    `);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+migrateAddComingPriority();
 
 function nowIso() {
   return new Date().toISOString();
