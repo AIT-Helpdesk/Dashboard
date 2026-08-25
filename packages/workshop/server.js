@@ -60,6 +60,7 @@ function shapeJob(row) {
     priority: row.priority,
     workflowStage: row.workflow_stage,
     workflowStageText: row.workflow_stage_text,
+    flagNote: row.flag_note,
     status: row.status,
     completedAt: row.completed_at,
     completedByName: row.completed_by_name,
@@ -181,6 +182,7 @@ const NOTE_FIELD_LABELS = {
   priority: 'Priority',
   workflow_stage: 'Status',
   workflow_stage_text: 'Status detail',
+  flag_note: 'Question',
 };
 
 function noteWorkflowStageLabel(job) {
@@ -213,6 +215,7 @@ function noteFieldSnapshot(job) {
     `Location: ${job.location || '(none)'}`,
     `Job description: ${job.jobDescription || '(none)'}`,
     `Current / required action (${NOTE_ACTION_COLOR_LABELS[job.actionColor] || job.actionColor}): ${job.actionText || '(none)'}`,
+    `Question: ${job.flagNote || '(none)'}`,
   ].join('\n');
 }
 
@@ -386,6 +389,13 @@ async function parseJobBody(body, requireDefaults) {
     // enforced server-side too, in case of a direct API call bypassing
     // the browser control.
     fields.workflowStageText = body.workflowStageText ? String(body.workflowStageText).trim().slice(0, 25) : null;
+  }
+  if ('flagNote' in body) {
+    // The "stamp" question -- 300 characters max (the client's own <input
+    // maxlength> enforces the same limit in the UI), a real question can
+    // run longer than workflowStageText's own 25-char cap. Blank clears
+    // it (the icon stops showing, see flagIconHtml() in client.js).
+    fields.flagNote = body.flagNote ? String(body.flagNote).trim().slice(0, 300) : null;
   }
 
   // Always a real null by default, never undefined -- node:sqlite's bind

@@ -111,6 +111,7 @@ const FIELD_LABELS = {
   priority: 'Priority',
   workflow_stage: 'Status',
   workflow_stage_text: 'Status detail',
+  flag_note: 'Question',
 };
 
 export function mount(container) {
@@ -374,7 +375,7 @@ export function mount(container) {
     // last 2/3 columns generically, just these two specifically).
     return `
       <tr>
-        <td class="wsp-col-status wsp-bar-left--${job.priority}">${statusStageCellHtml(job)}</td>
+        <td class="wsp-col-status wsp-bar-left--${job.priority}"><div class="wsp-status-cell-row"><span class="wsp-status-cell-main">${statusStageCellHtml(job)}</span>${flagIconHtml(job)}</div></td>
         <td class="wsp-col-client ${tintClass}wsp-bar-left--${job.priority}">${client}</td>
         <td class="${tintClass}wsp-bar-right--${job.priority}">${actionCell}</td>
         <td class="wsp-bar-right--${job.priority}">${location}</td>
@@ -508,6 +509,23 @@ export function mount(container) {
     return `<span class="wsp-priority-dot" data-id="${job.id}" data-value="${job.priority}" title="Click to change priority"><span class="wsp-dot wsp-dot--${job.priority}"></span></span><span class="wsp-status-stage${outerColorClass}" data-id="${job.id}" data-value="${job.workflowStage}" data-text="${escapeHtml(job.workflowStageText || '')}" title="Click to change">${innerHtml}</span>`;
   }
 
+  // The "stamp" -- a ? icon right-justified in the Status column (see
+  // jobRowHtml's .wsp-status-cell-row wrapper), by request. Dim/small
+  // when there's no question yet, big/bold once one's been left -- rather
+  // than only appearing once set (which would leave no way to click it to
+  // add the FIRST question), it's always present and clickable; "leaving a
+  // note causes it to appear" reads here as the visual jump from a faint
+  // ghost icon to a real stamp. Hovering shows the actual question text via
+  // a plain native tooltip, same convention as the "Ticket not found in
+  // Autotask" tooltip elsewhere on this page. Clicking it (either state)
+  // opens the same inline editor -- see openFlagNoteEditor() below.
+  function flagIconHtml(job) {
+    const hasNote = !!job.flagNote;
+    const cls = hasNote ? 'wsp-flag-icon wsp-flag-icon--set' : 'wsp-flag-icon wsp-flag-icon--empty';
+    const title = hasNote ? job.flagNote : 'Click to leave a question';
+    return `<span class="${cls}" data-id="${job.id}" data-note="${escapeHtml(job.flagNote || '')}" title="${escapeHtml(title)}">❓</span>`;
+  }
+
   function rowActionButtonsHtml(job) {
     const historyBtn = `<button type="button" class="wsp-icon-btn wsp-history-btn" data-id="${job.id}" title="View history">\u{1F553}</button>`;
     // Available in both views, by request -- reprinting a completed
@@ -593,6 +611,9 @@ export function mount(container) {
     group.querySelectorAll('.wsp-priority-dot').forEach((el) => {
       el.addEventListener('click', () => openPriorityEditor(el));
     });
+    group.querySelectorAll('.wsp-flag-icon').forEach((el) => {
+      el.addEventListener('click', () => openFlagNoteEditor(el));
+    });
   }
 
   // Swaps the plain priority dot for a <select> of the same 4 priority
@@ -620,6 +641,44 @@ export function mount(container) {
       }
     });
     select.focus();
+  }
+
+  // Swaps the ? icon for a small text input + save button, focused and
+  // open -- lets anyone leave/change/clear a question straight from the
+  // list, same "quick inline update, no form trip" reasoning as
+  // openPriorityEditor()/openStatusStageEditor(). Unlike Priority (saves
+  // immediately on change), this needs an explicit save since there's real
+  // text to type -- same shape as the free-text companion input
+  // openStatusStageEditor() reveals for Free Text/In Car/Take Onsite.
+  // Saving with the field left empty clears the question (the icon fades
+  // back to its dim, unset state).
+  function openFlagNoteEditor(el) {
+    if (el.querySelector('input')) return; // already open
+    const currentNote = el.dataset.note;
+    const jobId = el.dataset.id;
+    el.innerHTML = `
+      <input type="text" class="wsp-field wsp-flag-note-input" value="${escapeHtml(currentNote)}" placeholder="Leave a question..." maxlength="300" />
+      <button type="button" class="wsp-icon-btn" title="Save">✓</button>
+    `;
+    const input = el.querySelector('input');
+    const saveButton = el.querySelector('button');
+    // Same "don't re-trigger the click-to-open handler by bubbling" guard
+    // openStatusStageEditor() uses.
+    el.querySelectorAll('input, button').forEach((child) => child.addEventListener('click', (e) => e.stopPropagation()));
+
+    async function save() {
+      try {
+        await fetchJson(`/api/workshop/jobs/${jobId}`, 'PATCH', { flagNote: input.value.trim() });
+        await loadJobs();
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      }
+    }
+    saveButton.addEventListener('click', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save();
+    });
+    input.focus();
   }
 
   // Swaps the plain Status text for a <select>, focused and open --
@@ -931,6 +990,7 @@ export function mount(container) {
     ${row('Location', escapeHtml(job.location) || '—')}
     ${row('Job description', escapeHtml(job.jobDescription) || '—')}
     ${row('Current / required action', actionValue)}
+    ${job.flagNote ? row('Question', escapeHtml(job.flagNote)) : ''}
     <p class="wspp-footer">Printed ${printedAt}</p>
   </div>
 </body>
