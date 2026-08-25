@@ -2535,6 +2535,116 @@ tr.row-units-changed {
   font-size: 0.85rem;
   color: var(--muted);
 }
+
+/* Goods Received -- a goods-received register (a straightforward
+   running log, deliberately simpler than Workshop Board: no priority/status
+   colour-coding, no complete/archive view). Reuses this dashboard's shared
+   table/.resource-group/.section-heading--nav/.history-modal-* conventions
+   wherever they already fit; the pgr- prefix below covers only what's
+   genuinely specific to this page's own column set and form layout. */
+
+/* Wide table (11 data columns + actions) -- scrolls horizontally within its
+   own card on a narrow screen instead of forcing the whole page to scroll
+   sideways. */
+.pgr-table-wrap {
+  overflow-x: auto;
+}
+.pgr-table {
+  width: 100%;
+}
+.pgr-nowrap {
+  white-space: nowrap;
+}
+.pgr-col-center {
+  text-align: center;
+}
+/* Client, same "wraps past ~25-30 characters instead of forcing one very
+   wide column" reasoning as Workshop Board's own .wsp-col-client. */
+.pgr-col-client {
+  white-space: normal;
+  min-width: 20ch;
+  max-width: 28ch;
+}
+.pgr-table th:last-child,
+.pgr-table td.pgr-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.pgr-icon-btn {
+  background: none;
+  border: none;
+  padding: 0.1rem 0.2rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.pgr-icon-btn:hover {
+  color: var(--accent);
+}
+
+.pgr-delivery-form {
+  margin-bottom: 1rem;
+}
+.pgr-form-body {
+  padding: 0.75rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+/* Two explicit columns, same convention Workshop Board's own
+   .wsp-form-columns/.wsp-form-column established -- left: when/who/where a
+   delivery came from and who it's for; right: what it is, the two
+   processing checkboxes, and notes. */
+.pgr-form-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+.pgr-form-column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+@media (max-width: 720px) {
+  .pgr-form-columns {
+    grid-template-columns: 1fr;
+  }
+}
+.pgr-form-column label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+/* Checkbox fields read horizontally (box then its own label text), unlike
+   every other field in this form which stacks its label above a full-width
+   control. */
+.pgr-checkbox-field {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.4rem !important;
+}
+.pgr-field {
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--fg);
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+textarea.pgr-field {
+  resize: vertical;
+}
+/* Same as Workshop Board's own .wsp-form-actions -- Cancel is a plain
+   unstyled <button> (browser default look), by convention, not a custom
+   class. */
+.pgr-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
 /* The intro/description text, moved into the same box style as the
    bottom Usage instructions panel and up onto the header row itself
    (same level as the Show Completed/2 columns checkboxes and buttons),
@@ -2575,11 +2685,78 @@ tr.row-units-changed {
   flex-direction: column;
   gap: 0.3rem;
 }
-/* Placeholder only, by request -- the real Deliveries content isn't
-   built yet. */
+/* Empty/error/loading message states inside the Deliveries panel (the real
+   data renders as .wsp-deliveries-table instead, see below). */
 .wsp-deliveries-placeholder {
   margin: 0;
   font-style: italic;
+}
+/* The WHOLE Deliveries box is a real link to the Goods Received page
+   (#packages-received), by request -- no separate heading text at all
+   (.wsp-deliveries-box is itself the <a>, see client.js). Grid items are
+   blockified per spec, so this lays out identically to the plain <div>
+   .wsp-usage-box it replaces, just anywhere-clickable. Inherits the box's
+   own colour instead of looking like a normal blue link; a subtle
+   background shift on hover (not text-decoration -- underlining the whole
+   table's text would look wrong) is the click affordance instead. */
+.wsp-deliveries-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.wsp-deliveries-link:hover {
+  background: var(--border);
+}
+/* Up to 5 most recent Goods Received deliveries (see
+   loadDeliveriesPreview() in client.js) -- deliberately compact (smaller
+   font/tighter padding than the dashboard's own default th/td) since this
+   panel only has 1/4-width to work with. */
+.wsp-deliveries-table {
+  width: 100%;
+}
+.wsp-deliveries-table th,
+.wsp-deliveries-table td {
+  padding: 0.2rem 0.3rem;
+  font-size: 0.75rem;
+  white-space: normal;
+}
+/* "#" (carton count), the table's last column. */
+.wsp-deliveries-table th:last-child,
+.wsp-deliveries-table td:last-child {
+  text-align: center;
+}
+.wsp-deliveries-table th {
+  font-size: 0.68rem;
+}
+/* Received-today/-yesterday/-older tags -- every row gets one now, by
+   request. Today/yesterday reuse the same pill shape and colours as
+   What's On's own .tt-tag/--today/--tomorrow (see ttDayTag() in
+   whats-on/client.js), scoped under this page's own classes rather than
+   reused literally (same "each page owns its own class names even when
+   visually mirroring another page" convention as .wsp-table vs .tcr-table
+   elsewhere on this dashboard). Older reuses this dashboard's established
+   blue (var(--accent), same value used e.g. for the "Nearly Complete"
+   priority dot elsewhere on this page) rather than a new one-off shade. */
+.wsp-delivery-tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
+.wsp-delivery-tag--today {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: #16a34a;
+}
+.wsp-delivery-tag--yesterday {
+  background: color-mix(in srgb, #f39c12 18%, transparent);
+  color: #f39c12;
+}
+.wsp-delivery-tag--older {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
 }
 
 /* Minimize/maximize both panels down to just their headings, by
@@ -2602,7 +2779,7 @@ tr.row-units-changed {
   margin-bottom: 0;
 }
 .wsp-bottom-panels--collapsed .wsp-usage-box ul,
-.wsp-bottom-panels--collapsed .wsp-deliveries-placeholder {
+.wsp-bottom-panels--collapsed .wsp-deliveries-body {
   display: none;
 }
 
