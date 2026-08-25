@@ -107,10 +107,10 @@ export function mount(container) {
         <td>${escapeHtml(p.clientName || '')}</td>
         <td>${nameCell}</td>
         <td>${escapeHtml(p.username || '')}</td>
-        <td>${p.shareable ? 'Yes' : 'No'}</td>
+        <td${p.shareable ? ' class="cell-flag-green"' : ''}>${p.shareable ? 'Yes' : 'No'}</td>
         <td>${escapeHtml(p.type || '')}</td>
         <td>${escapeHtml(p.category || '')}</td>
-        <td>${p.otpConfigured ? 'Yes' : 'No'}</td>
+        <td${p.otpConfigured ? ' class="cell-flag-green"' : ''}>${p.otpConfigured ? 'Yes' : 'No'}</td>
         <td class="ticket-number">${formatDateTime(p.dateLastChanged)}</td>
       </tr>`;
   }
