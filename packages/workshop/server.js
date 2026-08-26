@@ -10,6 +10,9 @@ const {
   reopenJob,
   deleteJob,
   getJobHistory,
+  listEquipmentForJob,
+  replaceEquipmentForJob,
+  recordAudit,
 } = require('./db.js');
 
 const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'coming', 'not_started'];
@@ -69,6 +72,45 @@ function shapeJob(row) {
     updatedAt: row.updated_at,
     updatedByName: row.updated_by_name,
   };
+}
+
+function shapeEquipmentRow(row) {
+  return {
+    id: row.id,
+    count: row.count,
+    description: row.description,
+    inWorkshop: !!row.in_workshop,
+    locationNote: row.location_note,
+    configured: !!row.configured,
+    delivered: !!row.delivered,
+  };
+}
+
+// Attaches each job's own equipment list -- a small, per-job sub-table
+// (a handful of rows at most), so a plain per-job fetch is fine here
+// rather than needing fetchByFieldIn's batching (that's for the separate
+// Autotask API round-trips in withTicketDetails() below, a genuinely
+// different cost).
+function attachEquipment(shapedJobs) {
+  return shapedJobs.map((job) => ({ ...job, equipment: listEquipmentForJob(job.id).map(shapeEquipmentRow) }));
+}
+
+// One line per equipment item, e.g. "2x Laptop (In Workshop, Configured)"
+// -- used both for the audit_log summary when the list changes (see
+// saveEquipment() below) and the "WORKSHOP BOARD UPDATE" ticket note
+// snapshot (noteFieldSnapshot() below), same "reads the same way the
+// on-screen view does" reasoning every other field on this page follows.
+function equipmentSummaryText(items) {
+  if (!items || items.length === 0) return '(none)';
+  return items
+    .map((item) => {
+      const countPart = item.count ? `${item.count}x ` : '';
+      const flags = [item.inWorkshop && 'In Workshop', item.configured && 'Configured', item.delivered && 'Delivered'].filter(Boolean);
+      const flagsPart = flags.length ? ` (${flags.join(', ')})` : '';
+      const notePart = item.locationNote ? ` -- ${item.locationNote}` : '';
+      return `${countPart}${item.description || '(unnamed item)'}${flagsPart}${notePart}`;
+    })
+    .join('; ');
 }
 
 // Attaches the resolved Autotask ticket's URL, current due date, real
@@ -216,6 +258,7 @@ function noteFieldSnapshot(job) {
     `Job description: ${job.jobDescription || '(none)'}`,
     `Current / required action (${NOTE_ACTION_COLOR_LABELS[job.actionColor] || job.actionColor}): ${job.actionText || '(none)'}`,
     `Question: ${job.flagNote || '(none)'}`,
+    `Equipment: ${equipmentSummaryText(job.equipment)}`,
   ].join('\n');
 }
 
@@ -244,7 +287,7 @@ async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = fa
   try {
     const row = getJob(jobId);
     if (!row || !row.ticket_autotask_id) return; // nothing to notify -- no linked ticket
-    const [job] = await withTicketDetails([shapeJob(row)]);
+    const [job] = attachEquipment(await withTicketDetails([shapeJob(row)]));
     const lines = [];
     if (headline) lines.push(headline, '');
     lines.push(noteFieldSnapshot(job));
@@ -321,7 +364,7 @@ router.get('/', async (req, res) => {
   try {
     const isCompletedView = req.query.status === 'completed';
     const rows = isCompletedView ? listCompletedJobs() : listOpenJobs();
-    let jobs = await withTicketDetails(rows.map(shapeJob));
+    let jobs = attachEquipment(await withTicketDetails(rows.map(shapeJob)));
     if (!isCompletedView) {
       // Due dates aren't known until withTicketDetails() resolves them
       // live from Autotask, so this sort has to happen here in JS, after
@@ -411,11 +454,60 @@ async function parseJobBody(body, requireDefaults) {
   return { fields, ticketAutotaskId };
 }
 
+// Validates the optional `equipment` array (present on POST/PATCH /jobs
+// when the Add/Edit form's own equipment table is being saved alongside
+// everything else, and always present on the dedicated PUT
+// /jobs/:id/equipment route the standalone equipment-icon modal uses).
+// Same "a clean 400 beats a raw SQLite constraint failure" reasoning as
+// parseJobBody()'s own actionColor/priority checks.
+function parseEquipmentItems(rawItems) {
+  if (!Array.isArray(rawItems)) throw { status: 400, message: 'equipment must be an array.' };
+  return rawItems.map((raw, index) => {
+    let count = null;
+    if (raw.count !== undefined && raw.count !== null && raw.count !== '') {
+      count = Number(raw.count);
+      if (!Number.isInteger(count) || count < 0) throw { status: 400, message: `equipment[${index}].count must be a whole number of 0 or more.` };
+    }
+    return {
+      count,
+      description: raw.description ? String(raw.description).trim() : null,
+      inWorkshop: !!raw.inWorkshop,
+      // "Small note field", by request -- 60 characters max, well short of
+      // workflowStageText's own 25-char cap being too tight but nowhere
+      // near a full free-text field like actionText.
+      locationNote: raw.locationNote ? String(raw.locationNote).trim().slice(0, 60) : null,
+      configured: !!raw.configured,
+      delivered: !!raw.delivered,
+    };
+  });
+}
+
+// Shared by POST/PATCH /jobs and PUT /jobs/:id/equipment -- replaces the
+// job's whole equipment list (see replaceEquipmentForJob()'s own comment
+// in db.js for why a wholesale replace, not a per-row diff) and writes
+// ONE audit_log summary entry for the whole list, only when it actually
+// changed (comparing readable summaries is simpler and just as accurate
+// as a structural diff here, since the summary already captures every
+// field). Returns whether anything changed, so callers can decide whether
+// a "WORKSHOP BOARD UPDATE" ticket note is warranted.
+function saveEquipmentIfProvided(jobId, body, actor) {
+  if (!('equipment' in body)) return false;
+  const items = parseEquipmentItems(body.equipment);
+  const beforeSummary = equipmentSummaryText(listEquipmentForJob(jobId).map(shapeEquipmentRow));
+  replaceEquipmentForJob(jobId, items);
+  const afterSummary = equipmentSummaryText(items);
+  if (beforeSummary === afterSummary) return false;
+  recordAudit({ jobId, field: 'equipment', oldValue: beforeSummary, newValue: afterSummary, actor });
+  return true;
+}
+
 router.post('/jobs', async (req, res) => {
   try {
     const { fields, ticketAutotaskId } = await parseJobBody(req.body || {}, true);
-    const jobId = createJob(fields, ticketAutotaskId, actorFrom(req));
-    const [shaped] = await withTicketDetails([shapeJob(getJob(jobId))]);
+    const actor = actorFrom(req);
+    const jobId = createJob(fields, ticketAutotaskId, actor);
+    saveEquipmentIfProvided(jobId, req.body || {}, actor);
+    const [shaped] = attachEquipment(await withTicketDetails([shapeJob(getJob(jobId))]));
     res.status(201).json(shaped);
     // A ticket was already linked at creation time -- treat that the same
     // as "just added" (full history, which at this point is only the
@@ -434,15 +526,19 @@ router.patch('/jobs/:id', async (req, res) => {
     const existing = getJob(jobId);
     if (!existing) return res.status(404).json({ error: 'Job not found.' });
     const { fields, ticketAutotaskId } = await parseJobBody(req.body || {}, false);
+    const actor = actorFrom(req);
     // Captured BEFORE the update, so afterward we can tell exactly which
     // audit_log rows this specific call just wrote -- i.e. whether
     // anything actually changed (a no-op re-save writes none, see
     // updateJob()'s own comment in db.js) and whether the ticket link
     // just changed -- without duplicating updateJob()'s own diff logic.
+    // Equipment changes (below) write to this same audit_log table, so
+    // this one check naturally covers both without any special-casing.
     const beforeHistory = getJobHistory(jobId);
     const beforeMaxId = beforeHistory.length ? beforeHistory[0].id : 0;
-    const updated = updateJob(jobId, fields, ticketAutotaskId, actorFrom(req));
-    const [shaped] = await withTicketDetails([shapeJob(updated)]);
+    const updated = updateJob(jobId, fields, ticketAutotaskId, actor);
+    saveEquipmentIfProvided(jobId, req.body || {}, actor);
+    const [shaped] = attachEquipment(await withTicketDetails([shapeJob(updated)]));
     res.json(shaped);
 
     const changedThisCall = getJobHistory(jobId).some((h) => h.id > beforeMaxId);
@@ -469,6 +565,30 @@ router.patch('/jobs/:id', async (req, res) => {
           includeFullHistory: ticketLinkChanged,
         });
       }
+    }
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Standalone save for the equipment-icon's own modal, by request -- lets
+// staff update just the equipment list without opening the full Edit
+// form (which also has this same table embedded at its bottom and saves
+// it as part of the regular PATCH above; both paths go through the same
+// saveEquipmentIfProvided()).
+router.put('/jobs/:id/equipment', (req, res) => {
+  try {
+    const jobId = Number(req.params.id);
+    const existing = getJob(jobId);
+    if (!existing) return res.status(404).json({ error: 'Job not found.' });
+    const actor = actorFrom(req);
+    const changed = saveEquipmentIfProvided(jobId, req.body || {}, actor);
+    const equipment = listEquipmentForJob(jobId).map(shapeEquipmentRow);
+    res.json({ equipment });
+    if (changed && existing.ticket_autotask_id) {
+      postWorkshopUpdateNote(jobId, { headline: 'Equipment list updated.' });
     }
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });

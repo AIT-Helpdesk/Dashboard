@@ -121,6 +121,31 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_audit_job ON audit_log(job_id, changed_at);
+
+  -- Per-job equipment list, by request -- a job can have several pieces of
+  -- equipment (a laptop, a monitor, ...), each tracked separately: how
+  -- many, what it is, whether it's physically in the workshop, a short
+  -- note on exactly where, and two separate completion flags (configured /
+  -- delivered -- genuinely different milestones, same reasoning
+  -- workflow_stage's own sent/delivered/collected split above documents).
+  -- A brand-new table, not a column on jobs -- CREATE TABLE IF NOT EXISTS
+  -- handles this directly for an already-live data.db, no migration
+  -- needed (unlike widening an existing column's CHECK constraint).
+  CREATE TABLE IF NOT EXISTS equipment (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER NOT NULL REFERENCES jobs(id),
+    count INTEGER,
+    description TEXT,
+    in_workshop INTEGER NOT NULL DEFAULT 0 CHECK (in_workshop IN (0, 1)),
+    location_note TEXT,
+    configured INTEGER NOT NULL DEFAULT 0 CHECK (configured IN (0, 1)),
+    delivered INTEGER NOT NULL DEFAULT 0 CHECK (delivered IN (0, 1)),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_equipment_job ON equipment(job_id, sort_order);
 `);
 
 // One real migration, run every startup but a no-op after the first
@@ -717,6 +742,7 @@ function deleteJob(jobId) {
   db.exec('BEGIN');
   try {
     db.prepare('DELETE FROM audit_log WHERE job_id = ?').run(jobId);
+    db.prepare('DELETE FROM equipment WHERE job_id = ?').run(jobId);
     db.prepare('DELETE FROM jobs WHERE id = ?').run(jobId);
     db.exec('COMMIT');
   } catch (err) {
@@ -727,6 +753,50 @@ function deleteJob(jobId) {
 
 function getJobHistory(jobId) {
   return db.prepare('SELECT * FROM audit_log WHERE job_id = ? ORDER BY changed_at DESC').all(jobId);
+}
+
+function listEquipmentForJob(jobId) {
+  return db.prepare('SELECT * FROM equipment WHERE job_id = ? ORDER BY sort_order ASC, id ASC').all(jobId);
+}
+
+// Whole-list replace, by request -- simpler and more robust than diffing
+// individual rows against whatever the client last had: a repeatable
+// sub-table like this has no stable identity worth tracking across edits
+// (rows can be added/removed/reordered all in the same save), so this
+// just deletes the job's existing set and inserts the new one fresh,
+// wrapped in a transaction so a partial failure never leaves half the old
+// set gone and half the new set missing. Doesn't write its own audit_log
+// entries per row -- the CALLER (server.js) records one summary entry for
+// the whole list, same "readable changelog, not noise" reasoning
+// everything else here follows.
+function replaceEquipmentForJob(jobId, items) {
+  const now = nowIso();
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM equipment WHERE job_id = ?').run(jobId);
+    const insert = db.prepare(
+      `INSERT INTO equipment (job_id, count, description, in_workshop, location_note, configured, delivered, sort_order, created_at, updated_at)
+       VALUES ($jobId, $count, $description, $inWorkshop, $locationNote, $configured, $delivered, $sortOrder, $now, $now)`
+    );
+    items.forEach((item, index) => {
+      insert.run({
+        $jobId: jobId,
+        $count: item.count === undefined || item.count === null ? null : item.count,
+        $description: item.description || null,
+        $inWorkshop: item.inWorkshop ? 1 : 0,
+        $locationNote: item.locationNote || null,
+        $configured: item.configured ? 1 : 0,
+        $delivered: item.delivered ? 1 : 0,
+        $sortOrder: index,
+        $now: now,
+      });
+    });
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return listEquipmentForJob(jobId);
 }
 
 module.exports = {
@@ -742,4 +812,6 @@ module.exports = {
   reopenJob,
   deleteJob,
   getJobHistory,
+  listEquipmentForJob,
+  replaceEquipmentForJob,
 };

@@ -2304,6 +2304,33 @@ tr.row-units-changed {
 .wsp-flag-note-input {
   width: 11rem;
 }
+/* The equipment "symbol", shown inline BEFORE the Location text (see
+   jobRowHtml() in client.js), by request -- same dim-when-empty/
+   bold-once-set pattern as .wsp-flag-icon just above (see
+   equipmentIconHtml() in client.js for why it's always rendered rather
+   than only appearing once set). Margin-right gives it a little breathing
+   room beyond the plain space character already between it and the
+   location text. */
+.wsp-equipment-icon {
+  cursor: pointer;
+  display: inline-block;
+  line-height: 1;
+  font-size: 0.8rem;
+  opacity: 0.28;
+  margin-right: 0.2rem;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.wsp-equipment-icon:hover {
+  opacity: 0.6;
+}
+.wsp-equipment-icon--set {
+  opacity: 1;
+  font-size: 1.1rem;
+  transform: scale(1.05);
+}
+.wsp-equipment-icon--set:hover {
+  opacity: 1;
+}
 /* "Mobile View" checkbox, by request -- hides Location/Ticket/Due Date
    together, as one set, across EVERY table on the page at once (main
    list, both halves in 2-column mode, and the separate Dispose table)
@@ -2981,4 +3008,45 @@ textarea.wsp-field {
   display: flex;
   gap: 0.5rem;
   margin-top: 0.25rem;
+}
+
+/* Equipment editor -- the table embedded at the bottom of the Add/Edit
+   job form, AND (identical markup, see buildEquipmentEditor() in
+   client.js) inside the standalone modal the row's own equipment icon
+   opens. */
+.wsp-equipment-section {
+  margin-top: 0.5rem;
+}
+.wsp-equipment-editor {
+  margin-top: 0.5rem;
+}
+.wsp-equipment-table-wrap {
+  overflow-x: auto;
+}
+.wsp-equipment-table {
+  width: 100%;
+}
+.wsp-equipment-table th,
+.wsp-equipment-table td {
+  padding: 0.35rem 0.5rem;
+}
+.wsp-equipment-checkbox-cell {
+  text-align: center;
+}
+.wsp-equipment-table input[type="text"],
+.wsp-equipment-table input[type="number"] {
+  width: 100%;
+  min-width: 6rem;
+}
+.wsp-equipment-table input[type="number"] {
+  min-width: 4rem;
+}
+.wsp-equipment-add-row {
+  margin-top: 0.5rem;
+}
+/* Wider than the default .history-modal-panel (30rem) -- this modal holds
+   a 7-column table, by request the same editor the Add/Edit form itself
+   uses at the bottom. */
+.wsp-equipment-modal-panel {
+  max-width: 45rem;
 }
