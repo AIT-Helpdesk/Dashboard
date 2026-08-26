@@ -112,6 +112,7 @@ const FIELD_LABELS = {
   workflow_stage: 'Status',
   workflow_stage_text: 'Status detail',
   flag_note: 'Question',
+  equipment: 'Equipment',
 };
 
 export function mount(container) {
@@ -359,7 +360,9 @@ export function mount(container) {
       ? `<span title="From ${escapeHtml(job.ticketNumber || 'linked ticket')}">${escapeHtml(job.ticketClientName)}</span>`
       : escapeHtml(job.customer) || '—';
     const actionCell = actionCellHtml(job);
-    const location = escapeHtml(job.location) || '—';
+    // Equipment icon moved here (inline with the text), by request -- was
+    // originally at the end of the Current/Required Action cell.
+    const location = `${equipmentIconHtml(job)} ${escapeHtml(job.location) || '—'}`;
     // The solid priority-colour bar runs the full width of the row, by
     // request -- left edge of Status, both sides of Client/Action,
     // right edge of Location, AND right edge of Due Date (the true last
@@ -406,6 +409,39 @@ export function mount(container) {
     const actionLine = job.actionText ? `<div class="wsp-action-text--${job.actionColor}">${escapeHtml(job.actionText)}</div>` : '';
     const body = descriptionLine || actionLine ? `${descriptionLine}${actionLine}` : '—';
     return `${mobileClientLine}${body}`;
+  }
+
+  // The equipment "symbol", shown inline with the Location text (see
+  // jobRowHtml() above), by request -- same "always clickable, dim when
+  // empty, bold once set" pattern as the ❓ question stamp (flagIconHtml()
+  // above): there'd otherwise be no way to add the FIRST equipment item.
+  // Hovering shows the full list via a plain native tooltip; clicking
+  // (either state) opens the standalone equipment modal -- see
+  // openEquipmentModal() and wireRowActions() below.
+  function equipmentIconHtml(job) {
+    const items = job.equipment || [];
+    const hasItems = items.length > 0;
+    const cls = hasItems ? 'wsp-equipment-icon wsp-equipment-icon--set' : 'wsp-equipment-icon wsp-equipment-icon--empty';
+    const title = hasItems ? equipmentSummaryLines(items) : 'Click to add equipment';
+    return `<span class="${cls}" data-id="${job.id}" title="${escapeHtml(title)}">\u{1F4E6}</span>`;
+  }
+
+  // One line per item, e.g. "2x Laptop (In Workshop, Configured) -- shelf
+  // 3" -- used for both the row icon's hover tooltip and the standalone
+  // equipment modal's own title context. Mirrors equipmentSummaryText() in
+  // server.js (used there for the audit_log summary/ticket note instead),
+  // just newline- rather than semicolon-joined for a real multi-line
+  // tooltip.
+  function equipmentSummaryLines(items) {
+    return items
+      .map((item) => {
+        const countPart = item.count ? `${item.count}x ` : '';
+        const flags = [item.inWorkshop && 'In Workshop', item.configured && 'Configured', item.delivered && 'Delivered'].filter(Boolean);
+        const flagsPart = flags.length ? ` (${flags.join(', ')})` : '';
+        const notePart = item.locationNote ? ` -- ${item.locationNote}` : '';
+        return `${countPart}${item.description || '(unnamed item)'}${flagsPart}${notePart}`;
+      })
+      .join('\n');
   }
 
   // A blank ticket shows the same em-dash as every other empty field. A
@@ -621,6 +657,9 @@ export function mount(container) {
     group.querySelectorAll('.wsp-flag-icon').forEach((el) => {
       el.addEventListener('click', () => openFlagNoteEditor(el));
     });
+    group.querySelectorAll('.wsp-equipment-icon').forEach((el) => {
+      el.addEventListener('click', () => openEquipmentModal(el.dataset.id, findJob(el.dataset.id)));
+    });
   }
 
   // Swaps the plain priority dot for a <select> of the same 4 priority
@@ -757,6 +796,140 @@ export function mount(container) {
     return (lastJobs || []).find((j) => String(j.id) === String(jobId));
   }
 
+  // ---- Equipment editor -- one shared table-editing widget used in TWO
+  // places, by request: embedded at the bottom of the Add/Edit job form
+  // (buildJobForm() below, saved together with everything else on that
+  // form's own Save button), and inside the standalone modal the row's
+  // own equipment icon opens (openEquipmentModal() below, with its own
+  // independent Save so equipment can be updated without opening the full
+  // Edit form). Row order has no stable identity worth tracking across
+  // edits (see replaceEquipmentForJob()'s own comment in db.js) -- adding/
+  // removing rows is just DOM insertion/removal, and saving just reads
+  // whatever rows are currently in the table, in order, no id bookkeeping
+  // needed. ----
+  function equipmentRowEditHtml(item) {
+    return `
+      <tr>
+        <td><input type="number" min="0" step="1" class="wsp-field wsp-equipment-count" value="${item.count ?? ''}" /></td>
+        <td><input type="text" class="wsp-field wsp-equipment-description" value="${escapeHtml(item.description || '')}" /></td>
+        <td class="wsp-equipment-checkbox-cell"><input type="checkbox" class="wsp-equipment-in-workshop"${item.inWorkshop ? ' checked' : ''} /></td>
+        <td><input type="text" class="wsp-field wsp-equipment-location-note" maxlength="60" placeholder="Where exactly..." value="${escapeHtml(item.locationNote || '')}" /></td>
+        <td class="wsp-equipment-checkbox-cell"><input type="checkbox" class="wsp-equipment-configured"${item.configured ? ' checked' : ''} /></td>
+        <td class="wsp-equipment-checkbox-cell"><input type="checkbox" class="wsp-equipment-delivered"${item.delivered ? ' checked' : ''} /></td>
+        <td><button type="button" class="wsp-icon-btn wsp-equipment-remove-row" title="Remove">❌</button></td>
+      </tr>`;
+  }
+
+  function buildEquipmentEditor(items) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'wsp-equipment-editor';
+    wrapper.innerHTML = `
+      <div class="resource-group wsp-equipment-table-wrap">
+        <table class="wsp-equipment-table">
+          <thead>
+            <tr class="shaded-row">
+              <th>Count</th>
+              <th>Description</th>
+              <th>In Workshop</th>
+              <th>Location Note</th>
+              <th>Configured</th>
+              <th>Delivered</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${items.map(equipmentRowEditHtml).join('')}</tbody>
+        </table>
+      </div>
+      <button type="button" class="button-link wsp-equipment-add-row">+ Add equipment</button>
+    `;
+    const tbody = wrapper.querySelector('tbody');
+    function wireRemoveButtons() {
+      tbody.querySelectorAll('.wsp-equipment-remove-row').forEach((btn) => {
+        btn.onclick = () => btn.closest('tr').remove();
+      });
+    }
+    wrapper.querySelector('.wsp-equipment-add-row').addEventListener('click', () => {
+      tbody.insertAdjacentHTML('beforeend', equipmentRowEditHtml({}));
+      wireRemoveButtons();
+    });
+    wireRemoveButtons();
+    return wrapper;
+  }
+
+  function collectEquipmentFromEditor(editorContainer) {
+    const rows = editorContainer.querySelectorAll('.wsp-equipment-table tbody tr');
+    return Array.from(rows).map((tr) => {
+      const countValue = tr.querySelector('.wsp-equipment-count').value.trim();
+      return {
+        count: countValue === '' ? null : Number(countValue),
+        description: tr.querySelector('.wsp-equipment-description').value.trim(),
+        inWorkshop: tr.querySelector('.wsp-equipment-in-workshop').checked,
+        locationNote: tr.querySelector('.wsp-equipment-location-note').value.trim(),
+        configured: tr.querySelector('.wsp-equipment-configured').checked,
+        delivered: tr.querySelector('.wsp-equipment-delivered').checked,
+      };
+    });
+  }
+
+  // Standalone equipment modal -- opened by clicking the row's own
+  // equipment icon (see equipmentIconHtml()/wireRowActions() above), with
+  // its own independent Save (PUT /jobs/:id/equipment) so the list can be
+  // updated without opening the full Edit form. Same overlay+panel shape
+  // as the History modal (.history-modal-*), reused rather than a
+  // separate one-off dialog.
+  function openEquipmentModal(jobId, job) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    const title = job ? job.ticketClientName || job.customer || `Job #${jobId}` : `Job #${jobId}`;
+    overlay.innerHTML = `
+      <div class="history-modal-panel wsp-equipment-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>${escapeHtml(title)} -- Equipment</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <div class="wsp-equipment-editor-container"></div>
+          <p class="status error wsp-equipment-modal-error" hidden></p>
+          <div class="wsp-form-actions">
+            <button type="button" class="button-link wsp-equipment-save-button">Save</button>
+            <button type="button" class="wsp-equipment-cancel-button">Cancel</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.querySelector('.wsp-equipment-cancel-button').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const editorContainer = overlay.querySelector('.wsp-equipment-editor-container');
+    editorContainer.appendChild(buildEquipmentEditor((job && job.equipment) || []));
+
+    overlay.querySelector('.wsp-equipment-save-button').addEventListener('click', async () => {
+      const errorEl = overlay.querySelector('.wsp-equipment-modal-error');
+      errorEl.hidden = true;
+      const items = collectEquipmentFromEditor(editorContainer);
+      try {
+        await fetchJson(`/api/workshop/jobs/${jobId}/equipment`, 'PUT', { equipment: items });
+        close();
+        await loadJobs();
+      } catch (err) {
+        errorEl.hidden = false;
+        errorEl.textContent = `Error: ${err.message}`;
+      }
+    });
+  }
+
   // ---- Add/Edit job form -- one shared form for both, matching the
   // mockup's "Edit job" layout exactly (Add job is the same form, just
   // starting blank with the defaults new jobs seed to). ----
@@ -812,6 +985,10 @@ export function mount(container) {
             </label>
           </div>
         </div>
+        <div class="wsp-equipment-section">
+          <div class="section-heading">Equipment</div>
+          <div class="wsp-equipment-editor-container"></div>
+        </div>
         <p class="status error wsp-form-error" hidden></p>
         <div class="wsp-form-actions">
           <button type="button" class="button-link wsp-save-button">Save</button>
@@ -819,6 +996,14 @@ export function mount(container) {
         </div>
       </div>
     `;
+
+    // Equipment table, by request -- shown at the bottom of the Add/Edit
+    // form, same shared editor (buildEquipmentEditor()) the standalone
+    // equipment-icon modal uses (see openEquipmentModal() below), saved
+    // together with everything else in this form on the one Save button
+    // below rather than needing its own separate save action here.
+    const equipmentEditorContainer = wrapper.querySelector('.wsp-equipment-editor-container');
+    equipmentEditorContainer.appendChild(buildEquipmentEditor(existingJob?.equipment || []));
 
     // Show/hide the free-text companion field alongside the Status
     // select -- and CLEAR its value when hiding it, not just visually
@@ -869,6 +1054,7 @@ export function mount(container) {
       wrapper.querySelectorAll('[data-field]').forEach((el) => {
         fields[el.dataset.field] = el.value.trim();
       });
+      fields.equipment = collectEquipmentFromEditor(equipmentEditorContainer);
       try {
         if (isEdit) {
           await fetchJson(`/api/workshop/jobs/${existingJob.id}`, 'PATCH', fields);
@@ -998,6 +1184,7 @@ export function mount(container) {
     ${row('Job description', escapeHtml(job.jobDescription) || '—')}
     ${row('Current / required action', actionValue)}
     ${job.flagNote ? row('Question', escapeHtml(job.flagNote)) : ''}
+    ${job.equipment && job.equipment.length > 0 ? row('Equipment', equipmentSummaryLines(job.equipment).split('\n').map(escapeHtml).join('<br>')) : ''}
     <p class="wspp-footer">Printed ${printedAt}</p>
   </div>
 </body>
