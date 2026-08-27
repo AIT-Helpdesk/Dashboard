@@ -79,6 +79,12 @@ Confirmed against the real API: Strety enforces a genuine rate limit -- a 429 `{
 - `fetchAllPages()` walks every page at that ceiling until the running total covers the response's own `meta.total_count`.
 - The `sort` query param is **not reliable** when combined with `filter[...]` params -- confirmed against real data: a `GET /todos?filter[completed]=false&filter[assignee_id]=...&sort=due_date` request came back in no discernible order at all (verified: not ascending, not descending, not creation order). `fetchAllPages()` deliberately doesn't expose a `sort` passthrough at all -- callers collect the full result set and sort it themselves in JS (see My Strety Tasks).
 
+## Opening a to-do in Strety's web app -- `getTodoUrl(todoId)`
+
+Deep link to a specific to-do in Strety's own browser UI, by request (My Strety Tasks and What's On's Strety Tasks column both link out to this). **Not derivable from the API** -- a real todo's raw JSON:API response (`{id, type, attributes, relationships}`) carries no `links`/`permalink`/`web_url` field at all, confirmed via a live round-trip against real data. The actual pattern (`https://2.strety.com/<accountId>/todos/<todoId>`) was confirmed the only way available: a signed-in user pasted a real URL from their own browser after opening a to-do directly in Strety. Independently re-confirmed afterward -- that exact same to-do id turned up in this dashboard's own live data, with `getTodoUrl()` generating the identical URL.
+
+`WEB_ACCOUNT_ID` (the leading path segment, Ambient iT's own fixed Strety workspace id) is a plain hardcoded constant in `index.js` -- there's no known API to resolve it dynamically the way `@dashboard/autotask-client`'s `getWebUrl()` resolves Autotask's own web URL from `zoneInformation`. If this dashboard is ever pointed at a different Strety workspace, this constant would need updating by hand.
+
 ## Confirmed filters (exact-match only, same limitation as IT Glue)
 
 - `filter[email]` on `/people` -- exact match.

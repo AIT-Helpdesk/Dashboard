@@ -1,5 +1,5 @@
 const express = require('express');
-const { getPersonalClient } = require('@dashboard/strety-client');
+const { getPersonalClient, getTodoUrl } = require('@dashboard/strety-client');
 
 // Strety's own person directory -- matched against the dashboard's signed-in
 // email (`req.session.user.email`, the same Microsoft 365 identity every
@@ -92,6 +92,10 @@ async function fetchOpenTasksFor(personId, client) {
     createdAt: t.attributes.created_at,
     updatedAt: t.attributes.updated_at,
     space: resolveSpace(t.relationships?.space?.data),
+    // Deep link to open this to-do directly in Strety's own web app, by
+    // request -- see getTodoUrl()'s own comment in @dashboard/strety-client
+    // for why this can't be built from the API response alone.
+    todoUrl: getTodoUrl(t.id),
   }));
   rows.sort((a, b) => {
     if (a.dueDate === null && b.dueDate === null) return 0;

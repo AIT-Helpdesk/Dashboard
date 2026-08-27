@@ -104,18 +104,40 @@ export function mount(container) {
     }
 
     const todayKey = todayAestKey();
+    const tomorrowKey = tomorrowAestKey();
+
+    // Re-bucketed into Today -> Tomorrow -> Overdue -> Future -> no due
+    // date, by request -- overrides the server's own plain date-ascending
+    // order (fetchOpenTasksFor() in server.js), which put overdue tasks
+    // BEFORE today's own (an overdue date is chronologically earliest, so
+    // a pure ascending sort puts it first -- not what's wanted here). A
+    // STABLE sort (guaranteed since ES2019, both in browsers and Node)
+    // preserves each bucket's existing date-ascending relative order, so
+    // this only changes which BUCKET comes first, not the order within
+    // one -- Overdue still reads oldest-overdue-first, Future still reads
+    // soonest-first.
+    function taskCategory(t) {
+      if (!t.dueDate) return 4;
+      if (t.dueDate === todayKey) return 0;
+      if (t.dueDate === tomorrowKey) return 1;
+      if (t.dueDate < todayKey) return 2; // overdue
+      return 3; // future
+    }
+    const orderedTasks = [...data.tasks].sort((a, b) => taskCategory(a) - taskCategory(b));
 
     // Grouped by Team (a task's `space` -- Personal, a real team, or a
-    // project, see server.js), each group internally still sorted by due
-    // date -- for free, since data.tasks arrives from the server already
-    // sorted that way and a filter() preserves relative order. Groups
-    // themselves are NOT alphabetical -- they're emitted in the order their
-    // first (soonest-due) task appears in that already-sorted list, so the
-    // team with the most urgent task leads, matching this page's overall
-    // "soonest first" premise instead of fighting it.
+    // project, see server.js), each group internally in the same Today ->
+    // Tomorrow -> Overdue -> Future order as orderedTasks above (for free,
+    // via filter() preserving relative order). Groups themselves are NOT
+    // alphabetical -- they're emitted in the order their first task
+    // appears in orderedTasks, by request -- since Today/Tomorrow tasks
+    // are now first in that list regardless of which team they belong to,
+    // this naturally puts every team with a Today or Tomorrow task ahead
+    // of every team that only has overdue/future/no-date ones, without
+    // needing any separate team-level sort of its own.
     const groupNames = [];
     const seen = new Set();
-    for (const t of data.tasks) {
+    for (const t of orderedTasks) {
       const name = t.space ? t.space.name : 'Unknown';
       if (!seen.has(name)) {
         seen.add(name);
@@ -124,12 +146,12 @@ export function mount(container) {
     }
 
     for (const name of groupNames) {
-      const rows = data.tasks.filter((t) => (t.space ? t.space.name : 'Unknown') === name);
-      resultsEl.appendChild(group(name, rows, todayKey));
+      const rows = orderedTasks.filter((t) => (t.space ? t.space.name : 'Unknown') === name);
+      resultsEl.appendChild(group(name, rows, todayKey, tomorrowKey));
     }
   }
 
-  function group(name, rows, todayKey) {
+  function group(name, rows, todayKey, tomorrowKey) {
     const groupEl = document.createElement('div');
     groupEl.className = 'resource-group';
 
@@ -144,25 +166,59 @@ export function mount(container) {
         <tr class="shaded-row"><th>Due Date</th><th>Title</th><th>Priority</th><th>Description</th></tr>
       </thead>
       <tbody>
-        ${rows.map((t) => taskRowHtml(t, todayKey)).join('')}
+        ${rows.map((t) => taskRowHtml(t, todayKey, tomorrowKey)).join('')}
       </tbody>
     `;
     groupEl.appendChild(table);
     return groupEl;
   }
 
-  function taskRowHtml(t, todayKey) {
-    // Overdue (due before today, still open) flagged red -- same "needs
-    // attention" convention used elsewhere on this dashboard. A task due
-    // today is NOT flagged -- there's still time left in the day.
-    const overdue = t.dueDate && t.dueDate < todayKey;
+  function taskRowHtml(t, todayKey, tomorrowKey) {
     return `
       <tr>
-        <td class="ticket-number${overdue ? ' cell-flag-red' : ''}">${t.dueDate ? formatDate(t.dueDate) : ''}</td>
+        <td>${dueDateTagHtml(t, todayKey, tomorrowKey)}</td>
         <td>${escapeHtml(t.title)}</td>
         <td>${escapeHtml(capitalize(t.priority))}</td>
         <td>${escapeHtml(t.description || '')}</td>
       </tr>`;
+  }
+
+  // Same coloured Today/Tomorrow/date-pill look as What's On's own My
+  // Strety Tasks column (ttDayTag() in whats-on/client.js), by request --
+  // reused here rather than the plain locale-formatted date this column
+  // used to show. Today = green, Tomorrow = amber, genuinely overdue (due
+  // before today) = red with just the short date (no "Overdue" text label
+  // -- the colour already says that). Unlike What's On's own version,
+  // this page shows EVERY open task regardless of due date, not just
+  // today/tomorrow/overdue -- a due date further out than tomorrow gets
+  // the same pill shape with no colour modifier at all (plain text colour),
+  // since it isn't today, tomorrow, OR overdue. No due date at all renders
+  // nothing.
+  //
+  // The tag ITSELF is the link to Strety (when t.todoUrl resolved), not
+  // the title text -- tried linking the title first, by request reverted
+  // (looked bad) in favour of matching What's On's own href-on-the-tag
+  // convention exactly.
+  function dueDateTagHtml(t, todayKey, tomorrowKey) {
+    if (!t.dueDate) return '';
+    let colorClass;
+    let label;
+    if (t.dueDate === todayKey) {
+      colorClass = 'tt-tag--today';
+      label = 'Today';
+    } else if (t.dueDate === tomorrowKey) {
+      colorClass = 'tt-tag--tomorrow';
+      label = 'Tomorrow';
+    } else if (t.dueDate < todayKey) {
+      colorClass = 'tt-tag--overdue';
+      label = formatShortDate(t.dueDate);
+    } else {
+      colorClass = '';
+      label = formatShortDate(t.dueDate);
+    }
+    const cls = `tt-tag${colorClass ? ` ${colorClass}` : ''}`;
+    if (!t.todoUrl) return `<span class="${cls}">${escapeHtml(label)}</span>`;
+    return `<a class="${cls}" href="${escapeHtml(t.todoUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
   }
 
   if (lastData) render(lastData);
@@ -174,14 +230,26 @@ export function mount(container) {
     return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 10);
   }
 
+  function tomorrowAestKey() {
+    return new Date(Date.now() + 10 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
+
   function capitalize(str) {
     if (!str) return '';
     return str.charAt(0).toUpperCase() + str.slice(1);
   }
 
-  function formatDate(isoDateOnly) {
-    if (!isoDateOnly) return '';
-    return new Date(`${isoDateOnly}T00:00:00.000Z`).toLocaleDateString(undefined, { timeZone: 'Australia/Brisbane' });
+  // Day + month only, no year -- same as What's On's own formatShortDate()
+  // (ttDayTag()'s overdue-date label), for consistency now that this
+  // column uses the identical tag component. Built from a fixed 3-letter
+  // table, not toLocaleDateString's own month: 'short' -- by request, that
+  // option's actual output length isn't guaranteed 3 characters across
+  // every locale/browser, so this pins it exactly.
+  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function formatShortDate(dateKey) {
+    if (!dateKey) return '';
+    const d = new Date(`${dateKey}T00:00:00`);
+    return `${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
   }
 
   function formatDateTime(iso) {

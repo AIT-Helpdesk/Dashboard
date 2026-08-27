@@ -7,7 +7,7 @@ const express = require('express');
 // for why). The shared connection/its own /auth/strety/connect route still
 // exist (used by nothing in this file anymore, but kept -- see that
 // README) rather than removed outright.
-const { getPersonalClient } = require('@dashboard/strety-client');
+const { getPersonalClient, getTodoUrl } = require('@dashboard/strety-client');
 const { readLastRunStatus } = require('@dashboard/strety-autotask-sync/status.js');
 const { METRICS: AUTOTASK_SYNC_METRICS } = require('@dashboard/strety-autotask-sync/metrics.js');
 const {
@@ -827,6 +827,9 @@ async function fetchStretyTasksDueTodayTomorrow(client, personId, today, tomorro
       dueDate: t.attributes.due_date,
       priority: t.attributes.priority || null,
       overdue: isOverdue(t.attributes.due_date, today),
+      // Deep link to open this to-do directly in Strety's own web app, by
+      // request -- same helper My Strety Tasks' own server.js uses.
+      todoUrl: getTodoUrl(t.id),
     }));
   rows.sort((a, b) => {
     if (a.overdue !== b.overdue) return a.overdue ? 1 : -1; // today/tomorrow group first, overdue group after

@@ -399,4 +399,21 @@ function getPersonalClient(email) {
   return personalClientsByEmail.get(key);
 }
 
-module.exports = { ...defaultClient, createClient, getPersonalClient, BASE_URL };
+// Deep link to a to-do in Strety's own web app -- takes the todo's real
+// (UUID) id. NOT derivable from the API: a real todo's raw JSON:API shape
+// (type/id/attributes/relationships) carries no `links`/`permalink`/
+// `web_url` field at all, confirmed via a live round-trip. WEB_ACCOUNT_ID
+// is Ambient iT's own fixed Strety workspace id -- the leading path
+// segment in every strety.com web-app URL, confirmed against a real URL a
+// signed-in user pasted from their own browser
+// (https://2.strety.com/<WEB_ACCOUNT_ID>/todos/<todoId>) -- not something
+// this package can look up itself, so it's a plain constant here, same
+// "2.strety.com" host BASE_URL's own API already points at (just the
+// browser-facing app instead of /api/v1).
+const WEB_ACCOUNT_ID = '714f93d7-437d-4d8d-a4f4-94f5da9c09ef';
+function getTodoUrl(todoId) {
+  if (!todoId) return null;
+  return `https://2.strety.com/${WEB_ACCOUNT_ID}/todos/${todoId}`;
+}
+
+module.exports = { ...defaultClient, createClient, getPersonalClient, BASE_URL, getTodoUrl };
