@@ -2490,7 +2490,16 @@ tr.row-units-changed {
      dot alone sat too close to the Status text next to it. */
   margin-right: 0.3rem;
 }
-.wsp-priority-select {
+/* .wsp-field.wsp-priority-select, not just .wsp-priority-select -- both
+   classes sit on the same <select> (client.js: class="wsp-field
+   wsp-priority-select"), and .wsp-field (below, LATER in this file) is an
+   equally-specific single-class selector, so on a plain source-order tie
+   its own font-size: 0.95rem was silently winning over this rule's 0.72rem
+   -- confirmed the hard way: the first version of this rule (just
+   .wsp-priority-select) never actually took visible effect. Chaining both
+   classes here raises this selector's specificity above .wsp-field alone,
+   so it wins regardless of where either rule sits in the file. */
+.wsp-field.wsp-priority-select {
   width: auto;
   padding: 0.1rem 0.3rem;
   /* Matches .entry-popup-menu-item's own font-size (Service Calls' Open
@@ -2503,8 +2512,9 @@ tr.row-units-changed {
    client.js) had no dedicated rule at all before this -- it was inheriting
    .wsp-field's normal 0.95rem, noticeably bigger than the Priority select
    right next to it. Same size as .wsp-priority-select above (both = the
-   Service Calls popup's own 0.72rem), by request. */
-.wsp-status-stage-select {
+   Service Calls popup's own 0.72rem), by request. Same .wsp-field-chained
+   specificity fix as .wsp-priority-select above, for the same reason. */
+.wsp-field.wsp-status-stage-select {
   width: auto;
   padding: 0.1rem 0.3rem;
   font-size: 0.72rem;
@@ -2680,7 +2690,13 @@ tr.row-units-changed {
   align-items: center;
   gap: 0.3rem;
 }
-.wsp-status-stage-text {
+/* .wsp-field.wsp-status-stage-text, same specificity-tie fix as
+   .wsp-field.wsp-priority-select/.wsp-field.wsp-status-stage-select above
+   and for the identical reason -- this input also carries both classes
+   (client.js: class="wsp-field wsp-status-stage-text"), and plain
+   .wsp-status-stage-text (equal specificity to .wsp-field, declared
+   earlier in the file) was silently losing the source-order tie. */
+.wsp-field.wsp-status-stage-text {
   width: 12rem;
   /* Same 0.72rem as .wsp-status-stage-select right next to it, by request
      -- was inheriting .wsp-field's larger 0.95rem, which read noticeably
