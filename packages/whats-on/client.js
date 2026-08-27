@@ -23,6 +23,25 @@ let lastShiftsData = null;
 // shifts excerpt.
 let lastTodayTomorrowData = null;
 
+// Service Calls column's own All/Just Mine/Unallocated filter, by request
+// -- a pure client-side view filter over the already-fetched rows (no
+// re-fetch needed, same "purely a re-layout of data already in memory"
+// reasoning Workshop Board's own 2-column toggle uses), so it lives here
+// as its own module-scope variable rather than round-tripping through the
+// server. Module scope (not declared inside mount()) so it survives a
+// remount the same way lastTodayTomorrowData above does. Resets to 'all'
+// every time loadTodayTomorrow() runs (see mount() below) -- covers both
+// the section's own Refresh button and the very first load of a session,
+// by request ("Refresh should always return to ALL"); navigating away and
+// back WITHOUT refreshing (the lastTodayTomorrowData cache-restore path)
+// deliberately leaves whatever filter was last selected alone.
+let serviceCallFilter = 'all';
+const SERVICE_CALL_FILTERS = [
+  { value: 'all', label: 'All' },
+  { value: 'mine', label: 'Just Mine' },
+  { value: 'unallocated', label: 'Unallocated' },
+];
+
 const FREQUENCIES = ['daily', 'weekly', 'monthly'];
 const FREQUENCY_LABELS = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
 
@@ -180,6 +199,18 @@ export function mount(container) {
   // (event delegation), same convention as elsewhere on this dashboard
   // where content re-renders more often than its container does.
   ttColumnsEl.addEventListener('click', (e) => {
+    // The Service Calls filter buttons (All/Just Mine/Unallocated), by
+    // request -- checked first, before the [data-sc-id] row-click handling
+    // below, since a filter button also lives inside the same delegated
+    // container. Purely a re-render from already-fetched data (no
+    // re-fetch) -- see serviceCallFilter's own comment at the top of this
+    // file.
+    const filterBtn = e.target.closest('[data-sc-filter]');
+    if (filterBtn) {
+      serviceCallFilter = filterBtn.dataset.scFilter;
+      if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
+      return;
+    }
     const row = e.target.closest('[data-sc-id]');
     if (!row) return;
     e.preventDefault();
@@ -193,6 +224,9 @@ export function mount(container) {
   else loadTodayTomorrow(justConnectedStrety);
 
   async function loadTodayTomorrow(force) {
+    // "Refresh should always return to ALL", by request -- see
+    // serviceCallFilter's own comment at the top of this file.
+    serviceCallFilter = 'all';
     ttRefreshButton.disabled = true;
     ttStatusEl.hidden = false;
     ttStatusEl.className = 'status';
@@ -225,14 +259,36 @@ export function mount(container) {
 
     ttStatusEl.hidden = true;
     ttColumnsEl.innerHTML = '';
+
+    // All/Just Mine/Unallocated, by request -- a pure client-side filter
+    // over the already-fetched rows (see serviceCallFilter's own comment
+    // at the top of this file). scColumn keeps its original `rows` (the
+    // unfiltered full list, needed below for the "(showing/all)" count and
+    // to tell "genuinely nothing today/tomorrow" apart from "filter hid
+    // everything"); scVisibleRows is what actually renders.
+    const scColumn = data.serviceCalls;
+    const scVisibleRows =
+      scColumn.ok && serviceCallFilter !== 'all'
+        ? scColumn.rows.filter((r) => (serviceCallFilter === 'mine' ? r.isMine : !r.allocated))
+        : scColumn.rows;
+    // Distinguishes "no calls today/tomorrow at all" (ttColumn()'s own
+    // default empty message already covers that) from "there ARE calls,
+    // the current filter just hides all of them" -- the generic message
+    // would otherwise misleadingly imply nothing's scheduled at all.
+    const scEmptyMessage =
+      scColumn.ok && scColumn.rows.length > 0 && scVisibleRows.length === 0
+        ? `No service calls match "${SERVICE_CALL_FILTERS.find((f) => f.value === serviceCallFilter)?.label}".`
+        : null;
+
     ttColumnsEl.appendChild(
       ttColumn(
         'Service Calls',
-        data.serviceCalls,
+        scColumn.ok ? { ...scColumn, rows: scVisibleRows } : scColumn,
         (row) => serviceCallRowHtml(row, data.today, data.tomorrow),
+        scEmptyMessage,
         null,
-        null,
-        { href: '#service-calls', label: 'Show All Service Calls' }
+        { href: '#service-calls', label: 'Show All Service Calls' },
+        { totalCount: scColumn.ok ? scColumn.rows.length : undefined, headingExtraHtml: scColumn.ok ? serviceCallFilterButtonsHtml() : '' }
       )
     );
     ttColumnsEl.appendChild(
@@ -282,8 +338,14 @@ export function mount(container) {
   // when given, adds a "Show All <X>" link to that column's own full page
   // below the list -- shown regardless of the column's state (error/empty/
   // populated), since jumping to the full page is useful in every case,
-  // not just when there's today/tomorrow data to show.
-  function ttColumn(title, column, rowHtmlFn, overrideEmptyMessage, overrideEmptyHtml, footerLink) {
+  // not just when there's today/tomorrow data to show. `extra` ({
+  // totalCount, headingExtraHtml }), when given (Service Calls only, by
+  // request), adds real (unescaped -- a trusted, hardcoded button row, same
+  // caveat as overrideEmptyHtml above) markup next to the heading, and
+  // switches the count to "(showing/total)" whenever totalCount differs
+  // from this column's own (possibly filtered) row count.
+  function ttColumn(title, column, rowHtmlFn, overrideEmptyMessage, overrideEmptyHtml, footerLink, extra = {}) {
+    const { totalCount, headingExtraHtml } = extra;
     const div = document.createElement('div');
     div.className = 'resource-group tt-column';
     let body;
@@ -300,7 +362,13 @@ export function mount(container) {
     }
     // Count in brackets next to the heading -- only when the column loaded
     // successfully (an error state has no real row count to show).
-    const heading = column.ok ? `${title} (${column.rows.length})` : title;
+    // "(showing/total)" instead of a plain count whenever a filter
+    // (Service Calls' own All/Just Mine/Unallocated) is actually hiding
+    // some rows -- totalCount === column.rows.length (the "All" case, or
+    // any column that never passes totalCount at all) falls through to
+    // the plain count exactly as before.
+    const countText = column.ok ? (totalCount !== undefined && totalCount !== column.rows.length ? `(${column.rows.length}/${totalCount})` : `(${column.rows.length})`) : '';
+    const heading = column.ok ? `${title} ${countText}` : title;
     const footer = footerLink
       ? `<div class="tt-column-footer"><a class="button-link button-link--small" href="${escapeHtml(footerLink.href)}">${escapeHtml(footerLink.label)}</a></div>`
       : '';
@@ -311,8 +379,21 @@ export function mount(container) {
     // at a different height in every column. Growing this wrapper instead
     // pushes the footer down to the same fixed spot at the bottom of every
     // column, regardless of how much content is above it.
-    div.innerHTML = `<div class="section-heading">${escapeHtml(heading)}</div><div class="tt-column-body">${body}</div>${footer}`;
+    div.innerHTML = `<div class="section-heading tt-column-heading"><span>${escapeHtml(heading)}</span>${headingExtraHtml || ''}</div><div class="tt-column-body">${body}</div>${footer}`;
     return div;
+  }
+
+  // The Service Calls column's own All/Just Mine/Unallocated buttons, by
+  // request -- the currently-showing one highlighted green
+  // (.tt-filter-btn--active). Delegated click handling lives on
+  // #tt-columns itself (see mount()'s own listener above), not wired here
+  // per-render -- these buttons get torn down and rebuilt on every
+  // renderTodayTomorrow() call same as everything else in this column.
+  function serviceCallFilterButtonsHtml() {
+    return `<span class="tt-filter-buttons">${SERVICE_CALL_FILTERS.map(
+      (f) =>
+        `<button type="button" class="button-link button-link--small tt-filter-btn${f.value === serviceCallFilter ? ' tt-filter-btn--active' : ''}" data-sc-filter="${f.value}">${escapeHtml(f.label)}</button>`
+    ).join('')}</span>`;
   }
 
   // "Today"/"Tomorrow"/"Overdue" tag shared by all three row renderers --
