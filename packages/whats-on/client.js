@@ -806,17 +806,12 @@ export function mount(container) {
       resultsEl.appendChild(banner);
     }
 
-    data.groups.forEach((group, i) => {
+    data.groups.forEach((group) => {
       // The Personal group is always second (see server.js -- Helpdesk is
-      // pushed first, unconditionally) -- a fresh heading here marks the
-      // shift from Helpdesk's scorecards to the signed-in user's own,
-      // since summaryEl above only introduces the Helpdesk half.
-      if (i === 1) {
-        const personalHeading = document.createElement('div'); // was <p class="summary"> -- section-heading is styled as a block div elsewhere on this dashboard (Start Here's, Ticket Times', Team Shifts' own heading above)
-        personalHeading.className = 'section-heading section-heading--nav';
-        personalHeading.innerHTML = `Your Personal Scorecards<span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>`;
-        resultsEl.appendChild(personalHeading);
-      }
+      // pushed first, unconditionally). No separating heading here, by
+      // request -- Personal Scorecards sits directly below Helpdesk's own,
+      // rather than getting its own "Your Personal Scorecards -- as at..."
+      // heading first.
       if (group.notFound) {
         resultsEl.appendChild(notice(`"${group.label}" wasn't found in Strety -- it may have been renamed or removed.`));
         return;
