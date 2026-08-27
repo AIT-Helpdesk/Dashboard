@@ -342,9 +342,15 @@ export function mount(container) {
     return `<span class="tt-tag ${cls}"${titleAttr}>${label}</span>`;
   }
 
+  // Built from a fixed 3-letter table, not toLocaleDateString's own
+  // month: 'short' -- by request, that option's actual output length isn't
+  // guaranteed 3 characters across every locale/browser (some render 4+,
+  // e.g. with a trailing period), so this pins it exactly.
+  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   function formatShortDate(dateKey) {
     if (!dateKey) return '';
-    return new Date(`${dateKey}T00:00:00`).toLocaleDateString([], { day: 'numeric', month: 'short' });
+    const d = new Date(`${dateKey}T00:00:00`);
+    return `${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
   }
 
   function serviceCallRowHtml(row, today, tomorrow) {
@@ -488,10 +494,18 @@ export function mount(container) {
       </li>`;
   }
 
+  // Opens the to-do directly in Strety's own web app, by request -- on the
+  // day tag itself (Today/Tomorrow/date), NOT the title text (tried that
+  // first, looked bad by request -- reverted). Same href-on-ttDayTag
+  // convention Service Calls' own rows already use for their ticket link.
+  // row.todoUrl is null when getTodoUrl() (server.js/
+  // @dashboard/strety-client) has nothing to build from -- ttDayTag()
+  // renders a plain non-link tag in that case, same as any other row with
+  // no href.
   function stretyTaskRowHtml(row, today, tomorrow) {
     return `
       <li>
-        ${ttDayTag(row.dueDate, today, tomorrow)}
+        ${ttDayTag(row.dueDate, today, tomorrow, row.todoUrl)}
         <span class="tt-strety-title">${escapeHtml(row.title)}</span>
       </li>`;
   }
