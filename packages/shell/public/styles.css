@@ -2493,7 +2493,21 @@ tr.row-units-changed {
 .wsp-priority-select {
   width: auto;
   padding: 0.1rem 0.3rem;
-  font-size: 0.85rem;
+  /* Matches .entry-popup-menu-item's own font-size (Service Calls' Open
+     Ticket/Mark Complete/status popup) -- was 0.85rem, by request smaller
+     still, same size as that popup's own text. */
+  font-size: 0.72rem;
+  margin-right: 0.3rem;
+}
+/* The Status column's own inline editor (openStatusStageEditor() in
+   client.js) had no dedicated rule at all before this -- it was inheriting
+   .wsp-field's normal 0.95rem, noticeably bigger than the Priority select
+   right next to it. Same size as .wsp-priority-select above (both = the
+   Service Calls popup's own 0.72rem), by request. */
+.wsp-status-stage-select {
+  width: auto;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.72rem;
   margin-right: 0.3rem;
 }
 .wsp-dot--urgent {
@@ -2668,6 +2682,11 @@ tr.row-units-changed {
 }
 .wsp-status-stage-text {
   width: 12rem;
+  /* Same 0.72rem as .wsp-status-stage-select right next to it, by request
+     -- was inheriting .wsp-field's larger 0.95rem, which read noticeably
+     bigger than the select it sits beside. */
+  font-size: 0.72rem;
+  padding: 0.1rem 0.3rem;
 }
 
 /* "Show in 2 columns" toggle -- splits the job list into two side-by-side
