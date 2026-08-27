@@ -52,6 +52,71 @@ function excludeMonitoringAlerts(tickets) {
   return tickets.filter((t) => t.issueType !== 14);
 }
 
+// A raw error from ANY of this dashboard's external API integrations
+// (Autotask, IT Glue, Ingram, SaaS Alerts, Strety -- all axios-based)
+// carries the full outgoing request, including the real auth
+// headers/secrets, on `error.config`/`error.request` (and, for Autotask
+// specifically, re-attached as `originalError` on the SDK's own wrapped
+// error). Confirmed the hard way: a plain `console.error(err)` -- the
+// convention every route on this dashboard uses -- printed a real
+// ApiIntegrationCode/UserName/Secret in plaintext to a log file once an
+// Autotask call failed. Sanitized HERE, once, rather than at every one of
+// the ~28 pages' own catch blocks, so no route needs to remember this.
+// Idempotent (checks a marker before attaching) since this same function
+// gets called on the shared bare axios singleton, which multiple modules
+// could in principle patch.
+// Selective redaction (deleting just the auth-related keys off the
+// headers object, tried first) turned out NOT to be reliably safe:
+// confirmed the hard way, with a real round-trip test, that even after
+// successfully deleting 'Secret'/'ApiIntegrationCode'/'UserName' off
+// error.config.headers (an AxiosHeaders instance) AND blanking
+// error.request._header (the pre-rendered wire-format header string),
+// the real secret value STILL showed up in a full console.error()-style
+// dump -- traced to Node's raw http.ClientRequest, which caches the
+// outgoing headers AGAIN internally under its own non-public symbol
+// (`Symbol(kOutHeaders)`, visible in the very first leaked dump this bug
+// produced), entirely separate from `_header`. Enumerating and
+// stripping every internal copy Node's HTTP implementation happens to
+// keep isn't a stable target to chase. Wholesale REPLACEMENT is instead:
+// swap out the entire config/request/response.config objects for a
+// small, definitely-safe summary (just method + URL, still useful for
+// debugging) rather than trying to selectively clean a structure that
+// keeps redundant internal copies of the sensitive data.
+function safeConfigSummary(config) {
+  if (!config) return config;
+  return { method: config.method, url: config.url, baseURL: config.baseURL };
+}
+function installErrorSanitizer(axiosInstance) {
+  if (!axiosInstance || axiosInstance.__errorSanitizerInstalled) return;
+  axiosInstance.__errorSanitizerInstalled = true;
+  axiosInstance.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      try {
+        if (error?.config) error.config = safeConfigSummary(error.config);
+        if (error?.response?.config) error.response.config = safeConfigSummary(error.response.config);
+        // The raw Node http.ClientRequest -- never genuinely needed by
+        // any caller here, and (per the comment above) carries the
+        // sensitive headers redundantly across several internal fields
+        // that aren't practical to enumerate and strip individually.
+        if (error?.request) error.request = '[redacted -- raw ClientRequest removed, carried auth headers internally]';
+        if (error?.response?.request) error.response.request = '[redacted -- raw ClientRequest removed, carried auth headers internally]';
+      } catch {
+        // Best-effort only -- sanitizing must never itself throw and mask the real underlying error.
+      }
+      return Promise.reject(error);
+    }
+  );
+}
+// Patches the bare axios module itself (the default export every OTHER
+// external client on this dashboard -- ingram-client/itglue-client/
+// saasalerts-client/strety-client -- calls directly via axios.get/post(),
+// none of them create their own dedicated axios.create() instance). Done
+// here, at module load, rather than in each of those four packages
+// individually, since @dashboard/autotask-client is a dependency of
+// effectively every page already -- one file to patch instead of five.
+installErrorSanitizer(axios);
+
 let clientPromise = null;
 function getClient() {
   if (!clientPromise) {
@@ -64,7 +129,16 @@ function getClient() {
       // Autotask's API does not handle gzip-encoded POST bodies well; the SDK's
       // compression option gzips request bodies, which breaks POST /query calls.
       { enableCompression: false }
-    );
+    ).then((client) => {
+      // autotask-node's own AutotaskClient.create() builds a SEPARATE,
+      // dedicated axios.create() instance internally (not the bare
+      // module patched above) -- confirmed by reading its own source.
+      // Instances created via axios.create() do NOT inherit interceptors
+      // from the default axios export, so this needs its own explicit
+      // patch call.
+      installErrorSanitizer(client.axios);
+      return client;
+    });
   }
   return clientPromise;
 }

@@ -237,18 +237,37 @@ router.get('/', async (req, res) => {
 // The first real WRITE this page makes against Autotask -- everything
 // else here has been read-only up to now. ServiceCalls.isComplete is a
 // genuine, directly-writable field (confirmed via field info: isReadOnly
-// false, not a picklist/computed value), so this is a plain partial
-// PATCH, not a workflow action with side effects to worry about. Called
-// from both this page's own calendar entries/day popup AND What's On's
-// Service Calls section (a cross-page call to this same route -- no need
-// to duplicate the write in whats-on/server.js).
+// false, not a picklist/computed value), so this is a plain single-field
+// update, not a workflow action with side effects to worry about. This
+// ROUTE stays a real HTTP PATCH (that's just this page's own API, and a
+// partial update is exactly what PATCH means) -- see below for why the
+// Autotask-facing call itself is shaped differently. Called from both
+// this page's own calendar entries/day popup AND What's On's Service
+// Calls section (a cross-page call to this same route -- no need to
+// duplicate the write in whats-on/server.js).
 router.patch('/:id/complete', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid service call id.' });
   const isComplete = !!req.body?.isComplete;
   try {
     const client = await getClient();
-    await client.serviceCalls.patch(id, { id, isComplete });
+    // Confirmed against the real API: both the SDK's own .patch(id, ...)
+    // (PATCH /ServiceCalls/{id}) and .update(id, ...) (PUT
+    // /ServiceCalls/{id}) get a genuine HTTP 405 from Autotask for this
+    // entity -- despite the SDK exposing both methods generically, this
+    // entity apparently doesn't support either verb at the per-resource
+    // URL. Autotask's actual convention here (confirmed working via a
+    // real round-trip test) is PATCH to the bare COLLECTION endpoint
+    // (/ServiceCalls, no id in the URL) with `id` carried in the body
+    // instead -- bypassing the SDK's own id-in-URL .patch()/.update()
+    // wrappers and hitting the same underlying axios instance
+    // (BaseEntity's own public `.axios`) directly. isComplete itself also
+    // has to be a real INTEGER (0/1), not a JSON boolean or a string --
+    // confirmed via field info (`dataType: "short"`, not boolean) and by
+    // Autotask's own parse errors when the wrong shape was sent ("Could
+    // not convert string to integer" for a string, a JSON parse error for
+    // a raw boolean).
+    await client.serviceCalls.axios.patch('/ServiceCalls', { id, isComplete: isComplete ? 1 : 0 });
     // Simplest correct invalidation -- this call's own day could be cached
     // under any signed-in user's own "monthKey|email" key (isMine/allocated
     // differ per user, but isComplete doesn't), and a flip like this is
@@ -256,6 +275,45 @@ router.patch('/:id/complete', async (req, res) => {
     // refetch fresh beats selectively patching every matching cache entry.
     reportCacheByKey.clear();
     res.json({ ok: true, isComplete });
+  } catch (err) {
+    // Plain console.error(err), same convention every other route on this
+    // dashboard uses -- safe again now that @dashboard/autotask-client
+    // sanitizes auth headers off of every Autotask error at the source
+    // (see installErrorSanitizer() there), not just this one route.
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Mark as Onsite TBA"/"Mark as Onsite Arranged", by request -- sets
+// ServiceCalls.status directly to one of Autotask's own two real values
+// for those (103/104). NOT the same 4-value list `autotask_get_field_info`
+// itself returns for this field (1 New, 2 Complete, 101 Canceled, 102
+// Canceled by Client) -- that's the exact same stale/cached picklist
+// problem this page's own README already documents hitting once before
+// for this identical field (confirmed correct instead against the live
+// `ServiceCalls/entityInformation/fields` response directly). Restricted
+// to just these two values -- this isn't a general status editor, only
+// the two specific actions asked for.
+const ONSITE_STATUS_VALUES = { onsiteTba: 104, onsiteArranged: 103 };
+router.patch('/:id/status', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid service call id.' });
+  const status = Number(req.body?.status);
+  if (!Object.values(ONSITE_STATUS_VALUES).includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${Object.values(ONSITE_STATUS_VALUES).join(', ')}.` });
+  }
+  try {
+    const client = await getClient();
+    // Same PATCH-to-collection-endpoint shape as /complete above, and for
+    // the exact same reason (both .patch(id, ...) and .update(id, ...)
+    // 405 for this entity at the per-resource URL). status IS already a
+    // real integer field (confirmed via field info, dataType "integer"),
+    // unlike isComplete's own "short"-not-boolean quirk, so no extra
+    // coercion needed here beyond Number(req.body.status) above.
+    await client.serviceCalls.axios.patch('/ServiceCalls', { id, status });
+    reportCacheByKey.clear();
+    res.json({ ok: true, status });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

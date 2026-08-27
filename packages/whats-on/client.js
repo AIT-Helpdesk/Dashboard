@@ -392,6 +392,8 @@ export function mount(container) {
     menu.innerHTML = `
       ${entry.ticketUrl ? `<button type="button" class="entry-popup-menu-item" data-action="open-ticket">Open ticket</button>` : ''}
       <button type="button" class="entry-popup-menu-item" data-action="toggle-complete">${entry.isComplete ? 'Mark Incomplete' : 'Mark Complete'}</button>
+      <button type="button" class="entry-popup-menu-item" data-action="onsite-tba">Mark as Onsite TBA</button>
+      <button type="button" class="entry-popup-menu-item" data-action="onsite-arranged">Mark as Onsite Arranged</button>
     `;
     document.body.appendChild(menu);
     const rect = anchorEl.getBoundingClientRect();
@@ -409,6 +411,12 @@ export function mount(container) {
       });
     }
     menu.querySelector('[data-action="toggle-complete"]').addEventListener('click', () => toggleServiceCallComplete(entry.id, !entry.isComplete));
+    // 104/103 -- Autotask's own real ServiceCalls.status values for these
+    // two, confirmed against the live picklist -- see Service Calls' own
+    // README/server.js comment for why NOT to trust
+    // autotask_get_field_info's own (stale/cached) picklist for this field.
+    menu.querySelector('[data-action="onsite-tba"]').addEventListener('click', () => setServiceCallStatus(entry.id, 104));
+    menu.querySelector('[data-action="onsite-arranged"]').addEventListener('click', () => setServiceCallStatus(entry.id, 103));
     // Deferred, not added synchronously -- otherwise the very click that
     // opened this menu would immediately bubble up to document and close
     // it again in the same tick.
@@ -426,6 +434,18 @@ export function mount(container) {
     closeServiceCallMenu();
     try {
       await fetchJson(`/api/service-calls/${id}/complete`, 'PATCH', { isComplete: nextIsComplete });
+      await loadTodayTomorrow(true);
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  }
+
+  // Same shape as toggleServiceCallComplete() above, calling Service
+  // Calls' own PATCH .../:id/status route instead.
+  async function setServiceCallStatus(id, status) {
+    closeServiceCallMenu();
+    try {
+      await fetchJson(`/api/service-calls/${id}/status`, 'PATCH', { status });
       await loadTodayTomorrow(true);
     } catch (err) {
       alert(`Error: ${err.message}`);
