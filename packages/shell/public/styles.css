@@ -997,6 +997,15 @@ h1 {
 .tt-list .cell-subtext {
   flex-basis: 100%;
 }
+/* The whole row is the click target for the Open ticket/Mark Complete
+   popup, by request -- see serviceCallRowHtml()/the delegated click
+   listener on #tt-columns in whats-on/client.js. */
+.tt-service-call-row {
+  cursor: pointer;
+}
+.tt-service-call-row:hover {
+  background: var(--section-header-bg);
+}
 .tt-time {
   color: var(--muted);
   font-size: 0.85rem;
@@ -1593,8 +1602,12 @@ ul.start-here-checklist-other {
 .calendar-entry:hover {
   text-decoration: underline;
 }
+/* No linked ticket doesn't mean nothing to click, by request -- Mark
+   Complete is still available (via the same Open ticket/Mark Complete
+   popup, just without the "Open ticket" option), so this stays a normal
+   pointer cursor, not "default". */
 .calendar-entry--no-ticket {
-  cursor: default;
+  cursor: pointer;
 }
 @media (max-width: 720px) {
   .calendar-cell {
@@ -1603,6 +1616,45 @@ ul.start-here-checklist-other {
   .calendar-table th {
     font-size: 0.65rem;
   }
+}
+
+/* Open ticket / Mark Complete popup -- shared by Service Calls' own
+   calendar entries and What's On's Service Calls section (see
+   openServiceCallMenu() in each page's own client.js; a small, deliberate
+   duplication of the JS itself, same convention every other cross-page
+   helper like escapeHtml()/formatDateTime() already follows on this
+   dashboard, but ONE shared CSS component since the visual result is
+   identical either way). Positioned via inline style (fixed, anchored
+   under whichever entry was clicked), not a fixed spot in the page flow. */
+.entry-popup-menu {
+  position: fixed;
+  z-index: 1050; /* below .history-modal-overlay (1100), above ordinary page content */
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  min-width: 9rem;
+  overflow: hidden;
+}
+.entry-popup-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.9rem;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--fg);
+  cursor: pointer;
+}
+.entry-popup-menu-item:hover {
+  background: var(--section-header-bg);
+}
+.entry-popup-menu-item + .entry-popup-menu-item {
+  border-top: 1px solid var(--border);
 }
 
 /* What's On's "Team Shifts" excerpt -- a fixed key of button-sized colored

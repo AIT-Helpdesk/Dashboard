@@ -155,6 +155,21 @@ export function mount(container) {
   }
 
   ttRefreshButton.addEventListener('click', () => loadTodayTomorrow(true));
+  // Delegated once on the stable #tt-columns container, not re-wired per
+  // render -- renderTodayTomorrow() below replaces its innerHTML on every
+  // load, but a listener on the ancestor itself keeps working regardless
+  // (event delegation), same convention as elsewhere on this dashboard
+  // where content re-renders more often than its container does.
+  ttColumnsEl.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-sc-id]');
+    if (!row) return;
+    e.preventDefault();
+    openServiceCallMenu(row, {
+      id: row.dataset.scId,
+      isComplete: row.dataset.scComplete === 'true',
+      ticketUrl: row.dataset.scTicketUrl || null,
+    });
+  });
   if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
   else loadTodayTomorrow(justConnectedStrety);
 
@@ -314,7 +329,15 @@ export function mount(container) {
     }
     const titleAttr = tooltip ? ` title="${escapeHtml(tooltip)}"` : '';
     if (href) {
-      return `<a class="tt-tag ${cls}"${titleAttr} href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+      // href/target/rel stay real (not just decorative) -- by request, a
+      // plain left-click anywhere on the Service Calls ROW (not just this
+      // tag -- see the <li data-sc-id> wrapper in serviceCallRowHtml()
+      // below) is intercepted client-side to open the Open ticket/Mark
+      // Complete popup instead (wireServiceCallMenu(), delegated on
+      // #tt-columns). A middle-click or right-click -> "open in new tab"
+      // on the tag itself never fires that JS at all, so those still go
+      // straight to the ticket natively.
+      return `<a class="tt-tag ${cls}"${titleAttr} href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
     }
     return `<span class="tt-tag ${cls}"${titleAttr}>${label}</span>`;
   }
@@ -331,13 +354,94 @@ export function mount(container) {
     // Ticket number/title on hover, by request -- null when there's no
     // linked ticket at all (same case ticketUrl is also null for).
     const tooltip = row.ticketNumber ? `${row.ticketNumber}: ${row.ticketTitle || ''}`.trim() : null;
+    // The WHOLE row is the click target for the Open ticket/Mark Complete
+    // popup, by request -- not just the day tag, since a call with no
+    // linked ticket at all still needs to be clickable for Mark Complete
+    // (see the delegated click listener on ttColumnsEl above).
     return `
-      <li>
+      <li class="tt-service-call-row" data-sc-id="${row.id}" data-sc-complete="${row.isComplete ? 'true' : 'false'}" data-sc-ticket-url="${escapeHtml(row.ticketUrl || '')}">
         ${ttDayTag(row.dayKey, today, tomorrow, row.ticketUrl, tooltip)}
         <span class="tt-time">${formatTime(row.startDateTime)}</span>
         <strong>${escapeHtml(row.companyName)}</strong>
         <span class="cell-subtext">${allocation}${row.description ? ` -- ${escapeHtml(row.description)}` : ''}</span>
       </li>`;
+  }
+
+  // ---- Open ticket / Mark Complete popup -- by request, replaces the old
+  // "click a Service Calls row -> straight to the ticket" behaviour. Same
+  // shared .entry-popup-menu-* classes Service Calls' own client.js uses
+  // for the identical component. Only one open at a time. ----
+  let openEntryMenuEl = null;
+  function closeServiceCallMenu() {
+    if (!openEntryMenuEl) return;
+    openEntryMenuEl.remove();
+    openEntryMenuEl = null;
+    document.removeEventListener('click', onServiceCallMenuOutsideClick, true);
+    document.removeEventListener('keydown', onServiceCallMenuKeydown);
+  }
+  function onServiceCallMenuOutsideClick(e) {
+    if (openEntryMenuEl && !openEntryMenuEl.contains(e.target)) closeServiceCallMenu();
+  }
+  function onServiceCallMenuKeydown(e) {
+    if (e.key === 'Escape') closeServiceCallMenu();
+  }
+  function openServiceCallMenu(anchorEl, entry) {
+    closeServiceCallMenu();
+    const menu = document.createElement('div');
+    menu.className = 'entry-popup-menu';
+    menu.innerHTML = `
+      ${entry.ticketUrl ? `<button type="button" class="entry-popup-menu-item" data-action="open-ticket">Open ticket</button>` : ''}
+      <button type="button" class="entry-popup-menu-item" data-action="toggle-complete">${entry.isComplete ? 'Mark Incomplete' : 'Mark Complete'}</button>
+    `;
+    document.body.appendChild(menu);
+    const rect = anchorEl.getBoundingClientRect();
+    menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
+    menu.style.left = `${rect.left + window.scrollX}px`;
+    const menuRect = menu.getBoundingClientRect();
+    if (menuRect.right > window.innerWidth) {
+      menu.style.left = `${Math.max(4, window.innerWidth - menuRect.width - 4)}px`;
+    }
+    openEntryMenuEl = menu;
+    if (entry.ticketUrl) {
+      menu.querySelector('[data-action="open-ticket"]').addEventListener('click', () => {
+        window.open(entry.ticketUrl, '_blank', 'noopener,noreferrer,width=1200,height=900');
+        closeServiceCallMenu();
+      });
+    }
+    menu.querySelector('[data-action="toggle-complete"]').addEventListener('click', () => toggleServiceCallComplete(entry.id, !entry.isComplete));
+    // Deferred, not added synchronously -- otherwise the very click that
+    // opened this menu would immediately bubble up to document and close
+    // it again in the same tick.
+    setTimeout(() => document.addEventListener('click', onServiceCallMenuOutsideClick, true), 0);
+    document.addEventListener('keydown', onServiceCallMenuKeydown);
+  }
+
+  // Calls the SAME /api/service-calls/:id/complete route Service Calls'
+  // own page uses -- a cross-page call, not a duplicated write, since
+  // that's the one place ServiceCalls.isComplete actually gets patched in
+  // Autotask. Forces a fresh fetch afterward (bypassing the 10-min
+  // Today & Tomorrow cache) so the change is visible immediately, same
+  // reasoning the Refresh button's own force=true already uses.
+  async function toggleServiceCallComplete(id, nextIsComplete) {
+    closeServiceCallMenu();
+    try {
+      await fetchJson(`/api/service-calls/${id}/complete`, 'PATCH', { isComplete: nextIsComplete });
+      await loadTodayTomorrow(true);
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  }
+
+  async function fetchJson(url, method, body) {
+    const res = await fetch(url, {
+      method,
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    let data = null;
+    if (res.status !== 204) data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+    return data;
   }
 
   function subscriptionRowHtml(row, today, tomorrow) {

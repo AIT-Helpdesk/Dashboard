@@ -218,6 +218,7 @@ async function getReport(monthKey, currentUserEmail, force) {
 }
 
 const router = express.Router();
+router.use(express.json());
 
 router.get('/', async (req, res) => {
   const month = req.query.month;
@@ -227,6 +228,34 @@ router.get('/', async (req, res) => {
   try {
     const data = await getReport(month, req.session?.user?.email, req.query.force === 'true');
     res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The first real WRITE this page makes against Autotask -- everything
+// else here has been read-only up to now. ServiceCalls.isComplete is a
+// genuine, directly-writable field (confirmed via field info: isReadOnly
+// false, not a picklist/computed value), so this is a plain partial
+// PATCH, not a workflow action with side effects to worry about. Called
+// from both this page's own calendar entries/day popup AND What's On's
+// Service Calls section (a cross-page call to this same route -- no need
+// to duplicate the write in whats-on/server.js).
+router.patch('/:id/complete', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid service call id.' });
+  const isComplete = !!req.body?.isComplete;
+  try {
+    const client = await getClient();
+    await client.serviceCalls.patch(id, { id, isComplete });
+    // Simplest correct invalidation -- this call's own day could be cached
+    // under any signed-in user's own "monthKey|email" key (isMine/allocated
+    // differ per user, but isComplete doesn't), and a flip like this is
+    // cheap enough that clearing everything and letting the next load
+    // refetch fresh beats selectively patching every matching cache entry.
+    reportCacheByKey.clear();
+    res.json({ ok: true, isComplete });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
