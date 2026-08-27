@@ -2677,6 +2677,24 @@ tr.row-units-changed {
   border-right: 4px solid #6b7280;
 }
 
+/* Ticket links on the main board, by request -- stay plain text-coloured
+   (var(--fg), the dashboard's normal "black" body text, not literally
+   #000 so this still reads correctly in dark mode) regardless of visited
+   state, rather than the browser's own default blue-unvisited/purple-
+   visited link colours. This <a> carries no class elsewhere on this
+   dashboard (Service Calls/What's On's own ticket links use
+   td.ticket-number's own scoped `a` rule, an accent colour, further up
+   this file) -- Workshop's own ticket cell has no such wrapper class, so
+   it needs its own rule. Explicit :visited/:hover/:active all repeat the
+   same colour, since the point is "never changes colour", not just
+   "starts out right". */
+.wsp-ticket-link,
+.wsp-ticket-link:visited,
+.wsp-ticket-link:hover,
+.wsp-ticket-link:active {
+  color: var(--fg);
+}
+
 /* The linked ticket's own Autotask status, under the ticket number --
    small print, muted, by request. */
 .wsp-ticket-status {
