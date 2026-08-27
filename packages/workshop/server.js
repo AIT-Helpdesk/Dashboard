@@ -1,5 +1,6 @@
+const path = require('path');
 const express = require('express');
-const { getClient, listAll, fetchByFieldIn, getTicketUrl, resolveCompanyName, getPicklistLabels } = require('@dashboard/autotask-client');
+const { getClient, listAll, fetchByFieldIn, getTicketUrl, resolveCompanyName, getPicklistLabels, todayAestKey, isoDateAest } = require('@dashboard/autotask-client');
 const {
   listOpenJobs,
   listCompletedJobs,
@@ -13,6 +14,8 @@ const {
   listEquipmentForJob,
   replaceEquipmentForJob,
   recordAudit,
+  getEquipmentById,
+  setEquipmentChecked,
 } = require('./db.js');
 
 const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'coming', 'not_started'];
@@ -64,6 +67,7 @@ function shapeJob(row) {
     workflowStage: row.workflow_stage,
     workflowStageText: row.workflow_stage_text,
     flagNote: row.flag_note,
+    skipTicketUpdates: !!row.skip_ticket_updates,
     status: row.status,
     completedAt: row.completed_at,
     completedByName: row.completed_by_name,
@@ -83,6 +87,8 @@ function shapeEquipmentRow(row) {
     locationNote: row.location_note,
     configured: !!row.configured,
     delivered: !!row.delivered,
+    checkedAt: row.checked_at,
+    checkedByName: row.checked_by_name,
   };
 }
 
@@ -225,7 +231,9 @@ const NOTE_FIELD_LABELS = {
   workflow_stage: 'Status',
   workflow_stage_text: 'Status detail',
   flag_note: 'Question',
+  skip_ticket_updates: 'Skip ticket update',
 };
+const NOTE_YES_NO_LABELS = { '0': 'No', '1': 'Yes' };
 
 function noteWorkflowStageLabel(job) {
   if (job.workflowStage === 'free_text' && job.workflowStageText) return job.workflowStageText;
@@ -272,7 +280,15 @@ function noteHistoryLine(entry) {
   }
   const label = NOTE_FIELD_LABELS[entry.field] || entry.field;
   const labelMap =
-    entry.field === 'priority' ? NOTE_PRIORITY_LABELS : entry.field === 'action_color' ? NOTE_ACTION_COLOR_LABELS : entry.field === 'workflow_stage' ? NOTE_WORKFLOW_STAGE_LABELS : null;
+    entry.field === 'priority'
+      ? NOTE_PRIORITY_LABELS
+      : entry.field === 'action_color'
+        ? NOTE_ACTION_COLOR_LABELS
+        : entry.field === 'workflow_stage'
+          ? NOTE_WORKFLOW_STAGE_LABELS
+          : entry.field === 'skip_ticket_updates'
+            ? NOTE_YES_NO_LABELS
+            : null;
   const fmt = (v) => (v ? labelMap?.[v] || v : '(blank)');
   return `${new Date(entry.changedAt).toLocaleString()} -- ${entry.changedByName}: ${label}: ${fmt(entry.oldValue)} -> ${fmt(entry.newValue)}`;
 }
@@ -287,6 +303,13 @@ async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = fa
   try {
     const row = getJob(jobId);
     if (!row || !row.ticket_autotask_id) return; // nothing to notify -- no linked ticket
+    // "Skip ticket update" checkbox, by request -- checked entirely inside
+    // this one shared function, since every regular (non-hard-delete) call
+    // site funnels through here with just a jobId, already re-fetching the
+    // row fresh. The hard-delete route posts via postWorkshopActionNote()
+    // directly instead (see its own comment there for why that one is NOT
+    // gated on this flag).
+    if (row.skip_ticket_updates) return;
     const [job] = attachEquipment(await withTicketDetails([shapeJob(row)]));
     const lines = [];
     if (headline) lines.push(headline, '');
@@ -334,8 +357,13 @@ function ticketMovedDescription(newTicketNumber) {
 // the specific literal messages requested for the ticket-transfer note
 // above and Complete/Delete/Reopen below. Same best-effort,
 // never-blocking, not-awaited approach as postWorkshopUpdateNote().
-async function postWorkshopActionNote(ticketAutotaskId, message) {
-  if (!ticketAutotaskId) return; // nothing to notify -- no linked ticket
+// `skip` is the caller's own job row's skip_ticket_updates flag -- this
+// function has no jobId of its own to look it up (it only ever gets a raw
+// ticketAutotaskId), so each call site passes whichever job's flag applies
+// (see below). Defaults to false so the hard-delete route -- which must
+// NEVER be silenced, see its own comment -- can simply not pass it at all.
+async function postWorkshopActionNote(ticketAutotaskId, message, skip = false) {
+  if (skip || !ticketAutotaskId) return; // nothing to notify -- no linked ticket, or this job opted out
   try {
     const client = await getClient();
     await client.ticketNotes.create(ticketAutotaskId, {
@@ -349,8 +377,8 @@ async function postWorkshopActionNote(ticketAutotaskId, message) {
   }
 }
 
-async function postTicketMovedNote(oldTicketAutotaskId, newTicketNumber) {
-  await postWorkshopActionNote(oldTicketAutotaskId, ticketMovedDescription(newTicketNumber));
+async function postTicketMovedNote(oldTicketAutotaskId, newTicketNumber, skip = false) {
+  await postWorkshopActionNote(oldTicketAutotaskId, ticketMovedDescription(newTicketNumber), skip);
 }
 
 const router = express.Router();
@@ -439,6 +467,14 @@ async function parseJobBody(body, requireDefaults) {
     // run longer than workflowStageText's own 25-char cap. Blank clears
     // it (the icon stops showing, see flagIconHtml() in client.js).
     fields.flagNote = body.flagNote ? String(body.flagNote).trim().slice(0, 300) : null;
+  }
+  if ('skipTicketUpdates' in body) {
+    // Plain boolean coercion, not the trimmed-string pattern every other
+    // field above uses -- this is a checkbox, not text, and db.js's own
+    // updateJob() specifically expects a real true/false here (see its own
+    // comment for why this field is handled outside the generic
+    // FIELD_TO_COLUMN diff loop).
+    fields.skipTicketUpdates = !!body.skipTicketUpdates;
   }
 
   // Always a real null by default, never undefined -- node:sqlite's bind
@@ -554,7 +590,7 @@ router.patch('/jobs/:id', async (req, res) => {
       // watching that ticket isn't left wondering why Workshop Board
       // notes suddenly stopped.
       if (ticketLinkChanged && existing.ticket_autotask_id) {
-        postTicketMovedNote(existing.ticket_autotask_id, updated.ticket_number);
+        postTicketMovedNote(existing.ticket_autotask_id, updated.ticket_number, !!updated.skip_ticket_updates);
       }
       if (shaped.ticketAutotaskId) {
         // Covers both "was unlinked, now linked" and "linked to a
@@ -604,7 +640,7 @@ router.patch('/jobs/:id/complete', (req, res) => {
     const actor = actorFrom(req);
     const updated = completeJob(jobId, actor);
     res.json(shapeJob(updated));
-    postWorkshopActionNote(updated.ticket_autotask_id, `Workshop Job marked as complete by ${actor.name}.`);
+    postWorkshopActionNote(updated.ticket_autotask_id, `Workshop Job marked as complete by ${actor.name}.`, !!updated.skip_ticket_updates);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -617,7 +653,7 @@ router.patch('/jobs/:id/reopen', (req, res) => {
     if (!getJob(jobId)) return res.status(404).json({ error: 'Job not found.' });
     const updated = reopenJob(jobId, actorFrom(req));
     res.json(shapeJob(updated));
-    postWorkshopActionNote(updated.ticket_autotask_id, 'Completed Workshop Job Reopened.');
+    postWorkshopActionNote(updated.ticket_autotask_id, 'Completed Workshop Job Reopened.', !!updated.skip_ticket_updates);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -657,6 +693,11 @@ router.patch('/jobs/:id/soft-delete', (req, res) => {
 // that note to land on. (The open-jobs view's own trash icon, PATCH
 // .../soft-delete above, has no such requirement -- it never destroys
 // anything, it's fully reversible via Reopen.)
+// Deliberately NOT gated on skip_ticket_updates, unlike every other note in
+// this file -- "skip ticket update" opts a job's ROUTINE changes out of
+// noise on its ticket, it does not mean "let this job's own permanent
+// record of being destroyed go unwritten anywhere." postWorkshopActionNote()
+// is called below with its `skip` param left at the default (false).
 router.delete('/jobs/:id', (req, res) => {
   try {
     const jobId = Number(req.params.id);
@@ -684,6 +725,120 @@ router.get('/jobs/:id/history', (req, res) => {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---- Equipment Checklist -- a standalone popup (equipment-checklist.html)
+// meant to be left open on its own device in the workshop, listing every
+// still-outstanding piece of equipment across every OPEN job so it can be
+// physically ticked off. Three routes: the standalone page itself, the data
+// it polls, and the tick-box write. ----
+
+// Not-yet-delivered equipment across every open job, grouped by the
+// EQUIPMENT ITEM's own location (never the job's own Location field -- by
+// request, those are two genuinely different things: a job's Location is
+// where the JOB/ticket sits, an item's own location note is where that
+// specific piece of gear physically is, and only the latter is meaningful
+// for "walk around and find/tick this thing"). Originally grouped by
+// client with items ordered by location within each group; inverted by
+// request -- now grouped by location, with each item's own client shown
+// alongside it (a location group can span several different jobs/clients).
+// Reuses listOpenJobs()/attachEquipment()/withTicketDetails() rather than a
+// new SQL join -- same already-tested "resolve the ticket's real client
+// name live, prefer it over the free-text customer field" resolution the
+// main board view uses (see withTicketDetails()'s own comment).
+router.get('/equipment-checklist', async (req, res) => {
+  try {
+    const jobs = attachEquipment(await withTicketDetails(listOpenJobs().map(shapeJob)));
+    const todayKey = todayAestKey();
+
+    const NO_LOCATION = '(No location)';
+    const byLocation = new Map(); // equipment's own locationNote -> items[]
+    for (const job of jobs) {
+      const clientName = job.ticketClientName || job.customer || '(No client)';
+      for (const item of job.equipment) {
+        if (item.delivered) continue; // "Do not show the item if it's marked as delivered", by request
+        const location = item.locationNote || NO_LOCATION;
+        if (!byLocation.has(location)) byLocation.set(location, []);
+        byLocation.get(location).push({
+          equipmentId: item.id,
+          jobId: job.id,
+          clientName,
+          description: item.description || '(unnamed item)',
+          count: item.count,
+          // "Show the tick if the current date-time stamp is today, blank
+          // if it's blank or earlier" -- computed fresh on every request
+          // from the real stamp (see setEquipmentChecked() in db.js),
+          // rather than a plain boolean that would need a daily reset job
+          // to blank it back out at midnight.
+          checkedToday: !!item.checkedAt && isoDateAest(item.checkedAt) === todayKey,
+        });
+      }
+    }
+
+    // "(No location)" sorts last, by request-equivalent reasoning to the
+    // old blank-sorts-last item order this replaces -- a real location
+    // reads more usefully first than an unlocated catch-all group. Items
+    // within a location group are sorted by client, then item name, so two
+    // items for the same client on the same shelf still read as a
+    // readable, stable block rather than in arbitrary job-fetch order.
+    const groups = [...byLocation.entries()]
+      .map(([location, items]) => ({
+        location,
+        items: items.sort((a, b) => a.clientName.localeCompare(b.clientName) || a.description.localeCompare(b.description)),
+      }))
+      .sort((a, b) => {
+        if (a.location === NO_LOCATION) return 1;
+        if (b.location === NO_LOCATION) return -1;
+        return a.location.localeCompare(b.location);
+      });
+
+    res.json({ generatedAt: new Date().toISOString(), groups });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The tick box write. Ticking (checked: true) stamps checked_at/by (see
+// setEquipmentChecked() in db.js) AND posts a note to the item's job's
+// linked Autotask ticket -- by request, that note is deliberately narrow:
+// ONLY who ticketed it, the date-time stamp, the equipment item, and its
+// location, nothing else (not the job/client, not the count) -- unlike
+// every other "WORKSHOP BOARD UPDATE" note on this page, which includes
+// the full field snapshot. Unticking just clears the local stamp -- no
+// note, since there's nothing meaningful to tell the ticket about a
+// checklist tick being taken back.
+router.put('/equipment-checklist/:equipmentId/checked', (req, res) => {
+  try {
+    const equipmentId = Number(req.params.equipmentId);
+    const existing = getEquipmentById(equipmentId);
+    if (!existing) return res.status(404).json({ error: 'Equipment item not found.' });
+    const checked = !!req.body?.checked;
+    const actor = actorFrom(req);
+    const updated = setEquipmentChecked(equipmentId, checked, actor);
+    res.json({ equipment: shapeEquipmentRow(updated) });
+
+    if (checked) {
+      const job = getJob(existing.job_id);
+      const stamp = new Date().toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', dateStyle: 'medium', timeStyle: 'short' });
+      const message = `Equipment checked by ${actor.name} on ${stamp}: ${existing.description || '(unnamed item)'} -- ${existing.location_note || '(no location set)'}.`;
+      postWorkshopActionNote(job?.ticket_autotask_id, message, !!job?.skip_ticket_updates);
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The standalone page itself -- a plain static file (not part of the SPA
+// shell: no sidebar/nav, meant to be opened as its own window and left
+// running on a dedicated device), same res.sendFile() pattern
+// packages/shell/server.js's own /pages/:id/client.js route uses. Still
+// behind this whole router's requireAuth gate (mounted in
+// packages/shell/server.js before any /api/<page> router), so it's not
+// reachable signed out.
+router.get('/equipment-checklist/view', (req, res) => {
+  res.sendFile(path.join(__dirname, 'equipment-checklist.html'));
 });
 
 module.exports = router;

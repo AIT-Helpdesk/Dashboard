@@ -1797,6 +1797,18 @@ tr.row-units-changed {
   overflow: hidden;
 }
 
+/* Plain (non-clickable) variant of .bar-row -- Ticket Dashboards (Test)'s
+   status/queue/priority breakdowns have no per-bar drilldown to show, unlike
+   classification-summary's own .bar-row usage, so the button-y hover/cursor
+   affordance is turned back off here rather than implying a click that does
+   nothing. */
+.bar-row--static {
+  cursor: default;
+}
+.bar-row--static:hover {
+  background: none;
+}
+
 /* TC Elite Rollout -- the status grid (master table + compound-column
    detail sheets share the exact same .tcr-table/.tcr-cell markup and
    editing behaviour, see client.js's wireCellInteractions()). */
@@ -2238,6 +2250,21 @@ tr.row-units-changed {
 .vbar-fill--medium {
   background: var(--accent);
 }
+/* Ticket Dashboards (Test)'s created-vs-closed trend -- same two-tone stacked
+   shape as critical/medium above, just relabeled: accent blue for new work
+   coming in, the same green .tcr-cell--done/.legend-swatch--closed already
+   uses elsewhere for "resolved". */
+.vbar-fill--created,
+.vbar-fill--closed {
+  display: block;
+  width: 100%;
+}
+.vbar-fill--created {
+  background: var(--accent);
+}
+.vbar-fill--closed {
+  background: #16a34a;
+}
 
 .vbar-label {
   font-size: 0.8rem;
@@ -2270,6 +2297,12 @@ tr.row-units-changed {
 }
 .legend-swatch--medium {
   background: var(--accent);
+}
+.legend-swatch--created {
+  background: var(--accent);
+}
+.legend-swatch--closed {
+  background: #16a34a;
 }
 
 /* Workshop board -- priority colours below are a deliberate 7-tier
@@ -3048,6 +3081,19 @@ textarea.pgr-field {
   font-size: 0.85rem;
   color: var(--muted);
 }
+/* "Skip ticket update" -- a checkbox, not a text/select field, so it needs
+   the checkbox BESIDE its label text, not stacked above/below it like every
+   other .wsp-form-columns label above. Overrides just the direction/
+   alignment; still inherits the same font-size/color as its siblings. */
+.wsp-checkbox-field {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.4rem !important;
+}
+.wsp-checkbox-field .wsp-field {
+  width: auto;
+  padding: 0;
+}
 .wsp-field {
   font: inherit;
   font-size: 0.95rem;
@@ -3088,6 +3134,14 @@ textarea.wsp-field {
 }
 .wsp-equipment-checkbox-cell {
   text-align: center;
+}
+/* Read-only -- the only way to actually set checked_at is the Equipment
+   Checklist popup's own tick box, not this editor, so it's styled muted
+   like other display-only info rather than looking like an editable cell. */
+.wsp-equipment-last-checked {
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
 }
 .wsp-equipment-table input[type="text"],
 .wsp-equipment-table input[type="number"] {

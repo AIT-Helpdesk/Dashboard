@@ -92,6 +92,19 @@ db.exec(`
     -- migrateAddFlagNote() below for how this was added to an
     -- already-live table.
     flag_note TEXT,
+    -- "Skip ticket update", by request -- when set, NONE of this job's
+    -- changes post a "WORKSHOP BOARD UPDATE" note to its linked ticket
+    -- (create/edit/complete/reopen/soft-delete/equipment changes/equipment
+    -- checklist ticks -- see postWorkshopUpdateNote()/
+    -- postWorkshopActionNote() in server.js, both of which check this flag
+    -- before posting). Deliberately does NOT suppress the hard-delete
+    -- route's own note -- that one is the sole permanent record a deleted
+    -- job ever existed, so it always posts regardless (see that route's
+    -- own comment in server.js). Defaults to 0 (post as normal) -- this is
+    -- an opt-out, not the default behaviour. See
+    -- migrateAddSkipTicketUpdates() below for how it was added to an
+    -- already-live jobs table.
+    skip_ticket_updates INTEGER NOT NULL DEFAULT 0 CHECK (skip_ticket_updates IN (0, 1)),
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','completed')),
     completed_at TEXT,
     completed_by_email TEXT,
@@ -140,6 +153,18 @@ db.exec(`
     location_note TEXT,
     configured INTEGER NOT NULL DEFAULT 0 CHECK (configured IN (0, 1)),
     delivered INTEGER NOT NULL DEFAULT 0 CHECK (delivered IN (0, 1)),
+    -- The Equipment Checklist popup's own "ticked today" flag -- by
+    -- request, a real timestamp (not a plain boolean) so "was this
+    -- checked TODAY" can be computed fresh on every render (see
+    -- setEquipmentChecked() below and server.js's equipment-checklist
+    -- route) rather than needing a daily reset job to blank a boolean
+    -- back to false every midnight. checked_by_email/name identify who,
+    -- same actor shape as everywhere else on this page. All three are
+    -- cleared together (back to NULL) when unticked -- see
+    -- setEquipmentChecked().
+    checked_at TEXT,
+    checked_by_email TEXT,
+    checked_by_name TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -581,6 +606,33 @@ function migrateAddFlagNote() {
 }
 migrateAddFlagNote();
 
+// Adds checked_at/checked_by_email/checked_by_name to an already-live
+// equipment table -- the Equipment Checklist popup's tick box. Three
+// plain nullable columns, no CHECK constraint, same
+// ALTER-TABLE-ADD-COLUMN-directly approach as migrateAddJobDescription()/
+// migrateAddFlagNote() above (equipment has no existing CHECK-constrained
+// column this touches, so no recreate-table dance needed here either).
+function migrateAddEquipmentChecked() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('equipment')`).all();
+  if (columns.some((c) => c.name === 'checked_at')) return;
+  db.exec('ALTER TABLE equipment ADD COLUMN checked_at TEXT');
+  db.exec('ALTER TABLE equipment ADD COLUMN checked_by_email TEXT');
+  db.exec('ALTER TABLE equipment ADD COLUMN checked_by_name TEXT');
+}
+migrateAddEquipmentChecked();
+
+// Adds skip_ticket_updates to an already-live jobs table. NOT NULL DEFAULT +
+// CHECK on a brand-new column is well within SQLite's real ADD COLUMN
+// support (nothing existing to violate it) -- same direct-add approach
+// migrateAddWorkflowStage() above already established, no recreate-table
+// dance needed.
+function migrateAddSkipTicketUpdates() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('jobs')`).all();
+  if (columns.some((c) => c.name === 'skip_ticket_updates')) return;
+  db.exec(`ALTER TABLE jobs ADD COLUMN skip_ticket_updates INTEGER NOT NULL DEFAULT 0 CHECK (skip_ticket_updates IN (0, 1))`);
+}
+migrateAddSkipTicketUpdates();
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -650,8 +702,8 @@ function createJob(fields, ticketAutotaskId, actor) {
   const now = nowIso();
   const info = db
     .prepare(
-      `INSERT INTO jobs (ticket_number, ticket_autotask_id, customer, job_description, action_text, action_color, location, priority, workflow_stage, workflow_stage_text, status, created_at, created_by_email, created_by_name, updated_at, updated_by_email, updated_by_name)
-       VALUES ($ticketNumber, $ticketAutotaskId, $customer, $jobDescription, $actionText, $actionColor, $location, $priority, $workflowStage, $workflowStageText, 'open', $now, $email, $name, $now, $email, $name)`
+      `INSERT INTO jobs (ticket_number, ticket_autotask_id, customer, job_description, action_text, action_color, location, priority, workflow_stage, workflow_stage_text, skip_ticket_updates, status, created_at, created_by_email, created_by_name, updated_at, updated_by_email, updated_by_name)
+       VALUES ($ticketNumber, $ticketAutotaskId, $customer, $jobDescription, $actionText, $actionColor, $location, $priority, $workflowStage, $workflowStageText, $skipTicketUpdates, 'open', $now, $email, $name, $now, $email, $name)`
     )
     .run({
       $ticketNumber: fields.ticketNumber || null,
@@ -664,6 +716,14 @@ function createJob(fields, ticketAutotaskId, actor) {
       $priority: fields.priority || 'not_started',
       $workflowStage: fields.workflowStage || 'new',
       $workflowStageText: fields.workflowStageText || null,
+      // Boolean, not text -- `fields.skipTicketUpdates || null` (the
+      // generic pattern every OTHER field here uses) would be wrong for a
+      // boolean: `false || null` collapses the real "off" value to null,
+      // which a NOT NULL column would then reject outright. This ternary
+      // handles both a real false AND an entirely-absent field (undefined,
+      // on a request that never mentioned it) the same way -- 0 -- since
+      // node:sqlite's bind params reject undefined but accept 0 fine.
+      $skipTicketUpdates: fields.skipTicketUpdates ? 1 : 0,
       $now: now,
       $email: actor.email,
       $name: actor.name,
@@ -699,6 +759,21 @@ function updateJob(jobId, fields, ticketAutotaskId, actor) {
   if ('ticketNumber' in fields) {
     sets.push('ticket_autotask_id = $ticketAutotaskId');
     params.$ticketAutotaskId = ticketAutotaskId;
+  }
+  // Handled OUTSIDE the generic FIELD_TO_COLUMN loop above, deliberately --
+  // that loop's `fields[field] || null` pattern is right for every OTHER
+  // (text/enum) field here, but wrong for a boolean: unticking this
+  // checkbox sends `false`, and `false || null` would collapse that real
+  // "off" value to null, which the column's NOT NULL constraint would then
+  // reject outright.
+  if ('skipTicketUpdates' in fields) {
+    const newValue = fields.skipTicketUpdates ? 1 : 0;
+    const oldValue = existing.skip_ticket_updates;
+    if (newValue !== oldValue) {
+      sets.push('skip_ticket_updates = $skipTicketUpdates');
+      params.$skipTicketUpdates = newValue;
+      recordAudit({ jobId, field: 'skip_ticket_updates', oldValue, newValue, actor });
+    }
   }
 
   db.prepare(`UPDATE jobs SET ${sets.join(', ')} WHERE id = $id`).run(params);
@@ -759,6 +834,33 @@ function listEquipmentForJob(jobId) {
   return db.prepare('SELECT * FROM equipment WHERE job_id = ? ORDER BY sort_order ASC, id ASC').all(jobId);
 }
 
+function getEquipmentById(equipmentId) {
+  return db.prepare('SELECT * FROM equipment WHERE id = ?').get(equipmentId);
+}
+
+// The Equipment Checklist popup's tick box. Ticking always overwrites
+// checked_at to right now regardless of any previous value (there's no
+// "already checked today, do nothing" special case -- re-ticking just
+// re-stamps it, which is harmless and keeps this simple); unticking
+// clears all three columns back to NULL, a real bidirectional toggle.
+// Deliberately NOT an audit_log entry -- this is a high-frequency,
+// low-stakes physical-checklist action (by request, its own durable
+// record is the Autotask ticket note server.js posts on ticking, not a
+// second copy here), unlike every other field on this page.
+function setEquipmentChecked(equipmentId, checked, actor) {
+  const now = nowIso();
+  if (checked) {
+    db.prepare(
+      `UPDATE equipment SET checked_at = $now, checked_by_email = $email, checked_by_name = $name, updated_at = $now WHERE id = $id`
+    ).run({ $id: equipmentId, $now: now, $email: actor.email, $name: actor.name });
+  } else {
+    db.prepare(
+      `UPDATE equipment SET checked_at = NULL, checked_by_email = NULL, checked_by_name = NULL, updated_at = $now WHERE id = $id`
+    ).run({ $id: equipmentId, $now: now });
+  }
+  return getEquipmentById(equipmentId);
+}
+
 // Whole-list replace, by request -- simpler and more robust than diffing
 // individual rows against whatever the client last had: a repeatable
 // sub-table like this has no stable identity worth tracking across edits
@@ -814,4 +916,6 @@ module.exports = {
   getJobHistory,
   listEquipmentForJob,
   replaceEquipmentForJob,
+  getEquipmentById,
+  setEquipmentChecked,
 };

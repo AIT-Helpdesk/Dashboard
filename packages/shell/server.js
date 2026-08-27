@@ -44,6 +44,26 @@ function discoverPages() {
 
 const pages = discoverPages();
 
+// Per-page visibility gate, on top of the dashboard-wide Microsoft 365 sign-in
+// every page already requires (requireAuth below) -- a page's package.json
+// can set `dashboardPage.restrictedTo: [<lowercase email>, ...]` to hide it
+// from everyone except those exact accounts (e.g. Ticket Dashboards (Test),
+// while it's still being tried out). Checked in THREE places, not just the
+// nav: /pages-registry.js (below) so an unauthorized browser's copy of
+// registeredPages never even lists the page's id -- which also means
+// app.js's own reconcileTree() can never auto-append it into that browser's
+// sidebar, no separate nav-layout.json change needed; /pages/:id/client.js
+// (below) so the page's own JS module can't be fetched directly by URL
+// either; and the /api/<id> router mount (bottom of this file) so the
+// underlying data can't be reached by a direct API call even by someone who
+// somehow got the page id. All three answer 404, not 403 -- the point is
+// that the page doesn't appear to exist at all for anyone not on the list,
+// not merely that it's visibly locked.
+function pageVisibleTo(page, email) {
+  if (!page.restrictedTo) return true;
+  return !!email && page.restrictedTo.includes(email.toLowerCase());
+}
+
 // Shared sidebar layout (categories + page order/grouping) -- one JSON file
 // on disk, not per-browser localStorage, since the whole point is that
 // everyone hitting the real dashboard URL sees the SAME arrangement. Not
@@ -310,6 +330,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/pages-registry.js', (req, res) => {
   const entries = pages
+    .filter((p) => pageVisibleTo(p, req.session.user?.email))
     .map(
       (p) =>
         `  { id: ${JSON.stringify(p.id)}, label: ${JSON.stringify(p.label)}, module: () => import('/pages/${p.id}/client.js') },`
@@ -320,7 +341,7 @@ app.get('/pages-registry.js', (req, res) => {
 
 app.get('/pages/:id/client.js', (req, res) => {
   const page = pages.find((p) => p.id === req.params.id);
-  if (!page || !page.client) return res.status(404).end();
+  if (!page || !page.client || !pageVisibleTo(page, req.session.user?.email)) return res.status(404).end();
   res.type('application/javascript').sendFile(path.join(page.root, page.client));
 });
 
@@ -355,7 +376,13 @@ app.get('/api/health', async (req, res) => {
 for (const page of pages) {
   if (!page.server) continue;
   const router = require(path.join(page.root, page.server));
-  app.use(`/api/${page.id}`, router);
+  // Same restrictedTo check as the page-serving routes above -- otherwise a
+  // page hidden from the sidebar/client.js would still leak its real data to
+  // anyone who guessed its /api/<id> path.
+  app.use(`/api/${page.id}`, (req, res, next) => {
+    if (!pageVisibleTo(page, req.session.user?.email)) return res.status(404).json({ error: 'Not found.' });
+    next();
+  }, router);
 }
 
 // Bound to localhost-only, not every network interface -- the intended path

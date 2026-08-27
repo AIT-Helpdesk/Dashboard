@@ -1,0 +1,17 @@
+{
+  "name": "@dashboard/ticket-dashboards-test",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "ticket-dashboards-test",
+    "label": "Ticket Dashboards (Test)",
+    "client": "client.js",
+    "server": "server.js",
+    "restrictedTo": ["amber@ambientit.com.au"]
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "express": "^4.19.2"
+  }
+}
