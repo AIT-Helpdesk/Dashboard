@@ -2472,6 +2472,48 @@ tr.row-units-changed {
 .wsp-qa-modal-label .wsp-field {
   flex: 1;
 }
+/* Upload Photos modal (openPhotoUploadModal() in client.js) -- same
+   overlay/panel shell as the Q&A/Equipment/History modals, its own body
+   content. Labels stack (file input / description) rather than sitting
+   side-by-side like .wsp-qa-modal-label's own short Q/A icon + input rows
+   -- a native file picker button reads awkwardly squeezed next to a label
+   the way a plain text input doesn't. */
+.wsp-photo-modal-panel {
+  width: 26rem;
+  max-width: 90vw;
+}
+.wsp-photo-modal-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.wsp-photo-modal-label .wsp-field {
+  width: 100%;
+}
+/* Accumulated selection across multiple uses of the file picker (see
+   openPhotoUploadModal()'s own comment in client.js for why this can't
+   just read the native <input>'s own .files each time), each with its own
+   remove (✕) button. */
+.wsp-photo-file-list {
+  list-style: none;
+  margin: -0.4rem 0 0.75rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.wsp-photo-file-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  word-break: break-word;
+}
 /* The equipment "symbol", shown inline BEFORE the Location text (see
    jobRowHtml() in client.js), by request -- same dim-when-empty/
    bold-once-set pattern as .wsp-qa-icon just above (see

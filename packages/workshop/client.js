@@ -638,6 +638,13 @@ export function mount(container) {
     // job's card is a real thing too (e.g. it comes back for warranty
     // work), not just open ones.
     const printBtn = `<button type="button" class="wsp-icon-btn wsp-print-btn" data-id="${job.id}" title="Print job card">\u{1F5A8}️</button>`;
+    // Also available in both views, same reasoning as printBtn above --
+    // photos of a completed/archived job (e.g. proof of finished work) are
+    // just as real as photos of one still in progress. Requires a
+    // resolved ticket, by request -- there's nowhere else for the
+    // attachment to live (see server.js's own POST /jobs/:id/photos).
+    const canUploadPhotos = !!job.ticketAutotaskId;
+    const photoBtn = `<button type="button" class="wsp-icon-btn wsp-photo-btn" data-id="${job.id}" title="${canUploadPhotos ? 'Upload photos' : 'Cannot upload -- no linked ticket'}"${canUploadPhotos ? '' : ' disabled'}>📷</button>`;
     if (showCompleted) {
       // Already completed/archived -- "send to completed" doesn't apply
       // here, so the X icon in THIS view stays a genuine hard delete, for
@@ -649,7 +656,7 @@ export function mount(container) {
       // plain X, by request -- same icon the (now-removed) open-jobs
       // delete button used.
       const canDelete = !!job.ticketAutotaskId;
-      return `${historyBtn}${printBtn}
+      return `${historyBtn}${printBtn}${photoBtn}
         <button type="button" class="wsp-icon-btn wsp-reopen-btn" data-id="${job.id}" title="Reopen">↺</button>
         <button type="button" class="wsp-icon-btn wsp-hard-delete-btn" data-id="${job.id}" title="${canDelete ? 'Permanently delete' : 'Cannot delete -- no linked ticket'}"${canDelete ? '' : ' disabled'}>❌</button>`;
     }
@@ -657,7 +664,7 @@ export function mount(container) {
     // soft-delete route (PATCH .../soft-delete) is left in server.js/db.js
     // as a dormant capability (direct API/admin use), just no longer
     // wired to any button here.
-    return `${historyBtn}${printBtn}
+    return `${historyBtn}${printBtn}${photoBtn}
       <button type="button" class="wsp-icon-btn wsp-edit-btn" data-id="${job.id}" title="Edit">✏️</button>
       <button type="button" class="wsp-icon-btn wsp-complete-btn" data-id="${job.id}" title="Mark complete">✅</button>`;
   }
@@ -717,6 +724,9 @@ export function mount(container) {
     });
     group.querySelectorAll('.wsp-equipment-icon').forEach((el) => {
       el.addEventListener('click', () => openEquipmentModal(el.dataset.id, findJob(el.dataset.id)));
+    });
+    group.querySelectorAll('.wsp-photo-btn').forEach((btn) => {
+      btn.addEventListener('click', () => openPhotoUploadModal(btn.dataset.id, findJob(btn.dataset.id)));
     });
   }
 
@@ -821,6 +831,166 @@ export function mount(container) {
     }
     overlay.querySelector('.wsp-qa-save-button').addEventListener('click', save);
     questionInput.focus();
+  }
+
+  // Reads a browser File as base64 -- the part after the
+  // "data:...;base64," prefix FileReader.readAsDataURL() produces.
+  // Autotask's own TicketAttachments API wants base64 in the request body
+  // either way (see server.js's own POST /jobs/:id/photos), so this is
+  // sent through as-is -- no multipart upload/new dependency needed for
+  // what has to become base64 on the wire regardless.
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result || '';
+        const commaIndex = result.indexOf(',');
+        resolve(commaIndex === -1 ? result : result.slice(commaIndex + 1));
+      };
+      reader.onerror = () => reject(reader.error || new Error('Failed to read file.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Uploads one or more photos straight to the job's linked Autotask
+  // ticket, with an optional shared text description, by request -- see
+  // server.js's own POST /jobs/:id/photos for the real Autotask API shape
+  // this was confirmed against (a live round-trip, not guessed). Same
+  // overlay+panel shell as the other modals on this page. Doesn't
+  // reload/re-render the job list on success -- unlike Q&A/Equipment,
+  // nothing about a job's own row display changes because of an
+  // attachment upload.
+  function openPhotoUploadModal(jobId, job) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    const title = job ? job.ticketClientName || job.customer || `Job #${jobId}` : `Job #${jobId}`;
+    overlay.innerHTML = `
+      <div class="history-modal-panel wsp-photo-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>${escapeHtml(title)} -- Upload Photos</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <label class="wsp-photo-modal-label">
+            <span>Photos</span>
+            <input type="file" class="wsp-photo-file-input" accept="image/*" multiple />
+          </label>
+          <ul class="wsp-photo-file-list"></ul>
+          <label class="wsp-photo-modal-label">
+            <span>Description (optional)</span>
+            <input type="text" class="wsp-field wsp-photo-description-input" placeholder="What's in these photos..." maxlength="300" />
+          </label>
+          <p class="status wsp-photo-modal-status" hidden></p>
+          <div class="wsp-form-actions">
+            <button type="button" class="button-link wsp-photo-upload-button" disabled>Upload</button>
+            <button type="button" class="wsp-photo-cancel-button">Cancel</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.querySelector('.wsp-photo-cancel-button').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const fileInput = overlay.querySelector('.wsp-photo-file-input');
+    const fileListEl = overlay.querySelector('.wsp-photo-file-list');
+    const descriptionInput = overlay.querySelector('.wsp-photo-description-input');
+    const statusEl = overlay.querySelector('.wsp-photo-modal-status');
+    const uploadButton = overlay.querySelector('.wsp-photo-upload-button');
+
+    // Accumulated separately from fileInput.files, and NOT just read fresh
+    // at upload time -- confirmed the hard way (a real user report: "I
+    // added 2 photos but only one made it") that a native <input
+    // type="file" multiple> does NOT accumulate across separate uses of
+    // the picker the way it might look like it should -- selecting one
+    // photo, then opening the picker AGAIN to add a second, REPLACES the
+    // whole FileList with just the second photo, silently discarding the
+    // first. Confirmed server-side round-trips with 1 and 2 files sent
+    // TOGETHER both worked perfectly -- the bug was entirely this client-
+    // side selection-replacement gap, not the upload path itself. Fixed by
+    // keeping our own running list and merging each picker use into it,
+    // clearing the underlying input's own value afterward so the same
+    // picker can be reopened for more without it thinking those files are
+    // already "selected" (which would silently no-op the next choose).
+    let selectedFiles = [];
+
+    function renderFileList() {
+      fileListEl.innerHTML = selectedFiles
+        .map(
+          (f, i) => `
+        <li class="wsp-photo-file-list-item">
+          <span>${escapeHtml(f.name)}</span>
+          <button type="button" class="wsp-icon-btn wsp-photo-remove-file" data-index="${i}" title="Remove">✕</button>
+        </li>`
+        )
+        .join('');
+      fileListEl.querySelectorAll('.wsp-photo-remove-file').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          selectedFiles.splice(Number(btn.dataset.index), 1);
+          renderFileList();
+        });
+      });
+      uploadButton.disabled = selectedFiles.length === 0;
+    }
+
+    fileInput.addEventListener('change', () => {
+      // De-duplicated by name+size+lastModified -- picking the exact same
+      // file twice (easy to do by accident when reopening the picker
+      // repeatedly) adds it once, not twice.
+      for (const f of fileInput.files) {
+        const isDuplicate = selectedFiles.some((existing) => existing.name === f.name && existing.size === f.size && existing.lastModified === f.lastModified);
+        if (!isDuplicate) selectedFiles.push(f);
+      }
+      fileInput.value = ''; // see selectedFiles' own comment above
+      renderFileList();
+    });
+
+    uploadButton.addEventListener('click', async () => {
+      if (selectedFiles.length === 0) return;
+      uploadButton.disabled = true;
+      statusEl.hidden = false;
+      statusEl.className = 'status';
+      statusEl.textContent = `Uploading ${selectedFiles.length} photo${selectedFiles.length === 1 ? '' : 's'}...`;
+      try {
+        const payloadFiles = await Promise.all(
+          selectedFiles.map(async (f) => ({ filename: f.name, contentType: f.type || 'application/octet-stream', dataBase64: await readFileAsBase64(f) }))
+        );
+        const result = await fetchJson(`/api/workshop/jobs/${jobId}/photos`, 'POST', {
+          description: descriptionInput.value.trim(),
+          files: payloadFiles,
+        });
+        // Best-effort per file server-side -- a partial failure leaves the
+        // modal open and only the FAILED files still selected (the
+        // succeeded ones are removed from the list, so re-clicking Upload
+        // doesn't re-send duplicates of what already landed) rather than
+        // silently discarding which ones failed and why.
+        if (result.failed.length === 0) {
+          close();
+        } else {
+          const failedNames = new Set(result.failed.map((f) => f.filename));
+          selectedFiles = selectedFiles.filter((f) => failedNames.has(f.name));
+          renderFileList();
+          statusEl.className = 'status error';
+          statusEl.textContent = `Uploaded ${result.uploaded} of ${result.uploaded + result.failed.length}. Failed: ${result.failed.map((f) => `${f.filename} (${f.error})`).join('; ')}`;
+          uploadButton.disabled = selectedFiles.length === 0;
+        }
+      } catch (err) {
+        statusEl.className = 'status error';
+        statusEl.textContent = `Error: ${err.message}`;
+        uploadButton.disabled = false;
+      }
+    });
   }
 
   // Swaps the plain Status text for a <select>, focused and open --

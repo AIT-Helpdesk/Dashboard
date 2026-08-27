@@ -385,7 +385,15 @@ async function postTicketMovedNote(oldTicketAutotaskId, newTicketNumber, skip = 
 }
 
 const router = express.Router();
-router.use(express.json());
+// Raised from express.json()'s own default (~100kb) -- by request, jobs can
+// have real photos attached (POST /jobs/:id/photos below), sent as base64
+// JSON (Autotask's own TicketAttachments API expects base64 in the request
+// body either way, so this avoids adding multer/a multipart parser as a new
+// dependency for what Autotask needs re-encoded as base64 regardless).
+// 40mb comfortably covers several real phone photos at once (base64
+// inflates raw size by ~1/3) -- not a real DoS concern for an internal
+// tool behind Microsoft 365 sign-in.
+router.use(express.json({ limit: '40mb' }));
 
 // The board -- open jobs by default, sorted by linked ticket due date
 // (soonest first, by request), ?status=completed for the archive view
@@ -720,6 +728,92 @@ router.delete('/jobs/:id', (req, res) => {
     deleteJob(jobId);
     res.status(204).end();
     postWorkshopActionNote(job.ticket_autotask_id, `Workshop Job deleted by ${actor.name}.`);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Photo upload -- attaches one or more photos directly to the job's
+// linked Autotask ticket, with an optional shared text description, by
+// request. Requires a resolved ticket link (400 otherwise) -- there's
+// nowhere else for a photo attachment to live; this isn't stored in
+// Workshop's own database at all, it goes straight to Autotask.
+//
+// The real Autotask API shape here was NOT guessable from the SDK's own
+// TicketAttachments.create() -- that method posts to the flat
+// /TicketAttachments collection, which returns a genuine "Resource not
+// found" (confirmed via a live test). Autotask's real create endpoint is
+// NESTED under the parent ticket instead -- POST /Tickets/{id}/Attachments
+// -- the exact same shape TicketNotes' own create(ticketId, ...) already
+// uses elsewhere in the SDK (that entity DOES have the nested-path
+// handling; TicketAttachments just never got it). Confirmed via a real
+// round-trip against a genuine internal ticket: created a tiny test
+// attachment, fetched it back (confirmed the field shape below), then
+// deleted it -- which ALSO isn't the flat /TicketAttachments/{id} DELETE
+// the SDK exposes (a real 405) -- the real delete endpoint is nested too
+// (DELETE /Tickets/{id}/Attachments/{id}), not used by this route but
+// worth documenting here since it was confirmed the same session.
+//
+// Required fields, confirmed against the entity's own live
+// entityInformation/fields plus real trial and error (Autotask's own
+// error messages named each one as it was added): title, fullPath
+// (filename), contentType, data (base64), publish (same picklist/value
+// TicketNotes.publish already uses on this tenant -- see
+// TICKET_NOTE_PUBLISH above), and attachmentType (FILE_ATTACHMENT, vs.
+// FILE_LINK/FOLDER_LINK/URL -- this is always a real uploaded file, never
+// one of those other three).
+//
+// Always uploads regardless of skip_ticket_updates -- that flag opts a
+// job's routine NARRATIVE notes out of its ticket, it doesn't mean
+// "photos silently go nowhere"; the attachment itself is the entire point
+// of this action, the same way the Equipment Checklist's own checked_at
+// stamp always writes regardless of that flag (see its own route's
+// comment). No separate "WORKSHOP BOARD UPDATE" note is posted alongside
+// it -- the shared description is already visible as each attachment's
+// own title directly on the ticket's Attachments tab, a second note
+// narrating the same thing would just be noise.
+//
+// Best-effort per file, not all-or-nothing -- one bad file (Autotask
+// rejects it, a network blip) shouldn't silently lose the others in the
+// same batch. Response reports exactly which succeeded/failed so the
+// client can tell the user precisely what happened.
+router.post('/jobs/:id/photos', async (req, res) => {
+  try {
+    const jobId = Number(req.params.id);
+    const job = getJob(jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found.' });
+    if (!job.ticket_autotask_id) {
+      return res.status(400).json({ error: 'Cannot upload photos -- this job has no linked ticket.' });
+    }
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (files.length === 0) return res.status(400).json({ error: 'No files provided.' });
+    if (files.length > 10) return res.status(400).json({ error: 'Upload at most 10 photos at once.' });
+
+    const description = req.body?.description ? String(req.body.description).trim().slice(0, 300) : '';
+    const client = await getClient();
+
+    const results = { uploaded: 0, failed: [] };
+    for (const file of files) {
+      const filename = file?.filename ? String(file.filename).slice(0, 255) : 'photo';
+      try {
+        if (!file?.dataBase64) throw new Error('No file data received.');
+        await client.ticketAttachments.axios.post(`/Tickets/${job.ticket_autotask_id}/Attachments`, {
+          title: (description || filename).slice(0, 255),
+          fullPath: filename,
+          contentType: file.contentType || 'application/octet-stream',
+          data: file.dataBase64,
+          publish: TICKET_NOTE_PUBLISH,
+          attachmentType: 'FILE_ATTACHMENT',
+        });
+        results.uploaded += 1;
+      } catch (err) {
+        console.error(`Workshop: failed to upload photo "${filename}" to ticket ${job.ticket_autotask_id}:`, err);
+        const detail = err.response ? `HTTP ${err.response.status}${err.response.data?.errors ? `: ${err.response.data.errors.join(', ')}` : ''}` : err.message;
+        results.failed.push({ filename, error: detail });
+      }
+    }
+    res.json(results);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
