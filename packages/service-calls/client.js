@@ -159,6 +159,10 @@ export function mount(container) {
     const allEntries = Object.values(data.byDay).flat();
     const visible = visibleEntries(allEntries);
     const visibleUnallocatedCount = visible.filter((e) => !e.allocated).length;
+    // Looked up by the click handler wired below -- entryHtml() itself
+    // only embeds the id (data-sc-id), not the whole entry object, since
+    // it's just building an HTML string.
+    const entryById = new Map(allEntries.map((e) => [String(e.id), e]));
 
     summaryEl.hidden = false;
     summaryEl.innerHTML = showUnallocatedOnly
@@ -198,6 +202,25 @@ export function mount(container) {
     }
     table.appendChild(tbody);
     calendarEl.appendChild(table);
+    wireServiceCallEntries(calendarEl, entryById);
+  }
+
+  // A plain left-click on any entry (ticket-linked or not) now opens the
+  // Open ticket/Mark Complete popup instead of navigating straight there,
+  // by request -- see openServiceCallMenu() below. preventDefault() on the
+  // click is what stops the ticket-linked <a>'s own default navigation;
+  // it deliberately does NOT touch the anchor's real href/target, so a
+  // middle-click or right-click -> "open in new tab" still goes straight
+  // to the ticket as normal (those don't fire a 'click' event at all,
+  // just this page's own left-click interception).
+  function wireServiceCallEntries(container, entryById) {
+    container.querySelectorAll('[data-sc-id]').forEach((el) => {
+      el.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const entry = entryById.get(el.dataset.scId);
+        if (entry) openServiceCallMenu(el, entry);
+      });
+    });
   }
 
   function entryHtml(e) {
@@ -257,14 +280,101 @@ export function mount(container) {
     // whatever other state the entry is already showing.
     const mineClass = e.isMine ? ' calendar-entry--mine' : '';
     if (ticket) {
-      // A real popup window, not just a new tab -- specifying window
-      // features (width/height/etc.) is what signals that to the browser.
-      // Reads `this.href` rather than re-embedding the URL in the onclick
-      // string, so there's only one place the URL needs escaping. Same
-      // pattern as Client Financials'/Client Details' invoice links.
-      return `<a class="calendar-entry${colorClass}${accentClass}${mineClass}" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${inner}</a>`;
+      // href/target/rel stay real (not just decorative) -- by request, a
+      // plain left-click is intercepted client-side to open the Open
+      // ticket/Mark Complete popup instead (see wireServiceCallEntries()
+      // above), but a middle-click or right-click -> "open in new tab"
+      // never fires that JS at all, so those still go straight to the
+      // ticket natively, same as any other real link.
+      return `<a class="calendar-entry${colorClass}${accentClass}${mineClass}" data-sc-id="${e.id}" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}">${inner}</a>`;
     }
-    return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}${accentClass}${mineClass}" title="${title}">${inner}</div>`;
+    // No ticket doesn't mean nothing to click, by request -- Mark Complete
+    // is still available even with no linked ticket, just via the same
+    // popup with only that one option (see openServiceCallMenu() below).
+    return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}${accentClass}${mineClass}" data-sc-id="${e.id}" title="${title}">${inner}</div>`;
+  }
+
+  // ---- Open ticket / Mark Complete popup -- by request, replaces the old
+  // "click an entry -> straight to the ticket" behaviour. A small floating
+  // menu (shared .entry-popup-menu-* classes -- What's On's own Service
+  // Calls section uses the exact same ones) anchored under whichever
+  // entry was clicked. Only one open at a time. ----
+  let openEntryMenuEl = null;
+  function closeServiceCallMenu() {
+    if (!openEntryMenuEl) return;
+    openEntryMenuEl.remove();
+    openEntryMenuEl = null;
+    document.removeEventListener('click', onServiceCallMenuOutsideClick, true);
+    document.removeEventListener('keydown', onServiceCallMenuKeydown);
+  }
+  function onServiceCallMenuOutsideClick(e) {
+    if (openEntryMenuEl && !openEntryMenuEl.contains(e.target)) closeServiceCallMenu();
+  }
+  function onServiceCallMenuKeydown(e) {
+    if (e.key === 'Escape') closeServiceCallMenu();
+  }
+  function openServiceCallMenu(anchorEl, entry) {
+    closeServiceCallMenu();
+    const ticket = entry.tickets[0];
+    const menu = document.createElement('div');
+    menu.className = 'entry-popup-menu';
+    menu.innerHTML = `
+      ${ticket ? `<button type="button" class="entry-popup-menu-item" data-action="open-ticket">Open ticket</button>` : ''}
+      <button type="button" class="entry-popup-menu-item" data-action="toggle-complete">${entry.isComplete ? 'Mark Incomplete' : 'Mark Complete'}</button>
+    `;
+    document.body.appendChild(menu);
+    const rect = anchorEl.getBoundingClientRect();
+    menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
+    menu.style.left = `${rect.left + window.scrollX}px`;
+    // Keep it on-screen -- shift left if it would overflow the right edge.
+    const menuRect = menu.getBoundingClientRect();
+    if (menuRect.right > window.innerWidth) {
+      menu.style.left = `${Math.max(4, window.innerWidth - menuRect.width - 4)}px`;
+    }
+    openEntryMenuEl = menu;
+    if (ticket) {
+      menu.querySelector('[data-action="open-ticket"]').addEventListener('click', () => {
+        window.open(ticket.ticketUrl, '_blank', 'noopener,noreferrer,width=1200,height=900');
+        closeServiceCallMenu();
+      });
+    }
+    menu.querySelector('[data-action="toggle-complete"]').addEventListener('click', () => toggleServiceCallComplete(entry.id, !entry.isComplete));
+    // Deferred, not added synchronously -- otherwise the very click that
+    // opened this menu would immediately bubble up to document and close
+    // it again in the same tick.
+    setTimeout(() => document.addEventListener('click', onServiceCallMenuOutsideClick, true), 0);
+    document.addEventListener('keydown', onServiceCallMenuKeydown);
+  }
+
+  // Shared by the popup menu above AND the day popup's own button (see
+  // dayPopupEntryHtml()/openDayPopup() below, reached via window.opener
+  // since that's a genuinely separate document/window). Forces a fresh
+  // fetch afterward (bypassing the 10-min report cache) so the change is
+  // visible immediately rather than waiting out the cache -- same
+  // reasoning the Refresh button's own force=true already uses.
+  async function toggleServiceCallComplete(id, nextIsComplete) {
+    closeServiceCallMenu();
+    try {
+      await fetchJson(`/api/service-calls/${id}/complete`, 'PATCH', { isComplete: nextIsComplete });
+      await load(lastMonth || defaultMonthKey(), true);
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  }
+  // Exposed for the day popup's own separate window to call back into via
+  // window.opener -- see dayPopupEntryHtml() below.
+  window.toggleServiceCallComplete = toggleServiceCallComplete;
+
+  async function fetchJson(url, method, body) {
+    const res = await fetch(url, {
+      method,
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    let data = null;
+    if (res.status !== 204) data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+    return data;
   }
 
   // Opens a real popup window (same "not just a new tab" convention as the
@@ -326,6 +436,8 @@ export function mount(container) {
   .card dd { margin: 0; }
   a { color: ${colors.accent}; }
   .empty { color: ${colors.muted}; }
+  .mark-complete-btn { font: inherit; font-size: 0.85rem; padding: 0.15rem 0.5rem; margin-left: 0.5rem; border: 1px solid ${colors.border}; border-radius: 4px; background: ${colors.bg}; color: ${colors.fg}; cursor: pointer; }
+  .mark-complete-btn:hover { border-color: ${colors.accent}; color: ${colors.accent}; }
 </style>
 </head>
 <body>
@@ -336,6 +448,16 @@ ${cardsHtml || '<p class="empty">No entries.</p>'}
     popup.document.close();
   }
 
+  // The Mark Complete/Incomplete button below reaches back into the
+  // OPENER window via `window.opener.toggleServiceCallComplete(...)`
+  // (exposed on `window` above) rather than duplicating the fetch/cache-
+  // bypass/reload logic inside this separate document.write()'d window --
+  // this window's own `location` is about:blank, so a plain relative
+  // fetch() from here has no reliable base URL to resolve against. Closes
+  // the day popup right after, by request-adjacent simplicity: this list
+  // is a static snapshot (not live-updating in place), so closing and
+  // letting the calendar behind it refresh is simpler than trying to
+  // rebuild just the one card in here.
   function dayPopupEntryHtml(e, colors) {
     const time = `${formatTime(e.startDateTime)}${e.endDateTime ? ` - ${formatTime(e.endDateTime)}` : ''}`;
     const allocation = e.allocated ? escapeHtml(e.resourceNames.join(', ')) : 'Unallocated';
@@ -356,7 +478,9 @@ ${cardsHtml || '<p class="empty">No entries.</p>'}
         <h2>${escapeHtml(time)} -- ${escapeHtml(e.companyName)}</h2>
         <dl>
           <dt>Allocated to</dt><dd style="${e.isMine ? `color: ${colors.accent}; font-weight: 600;` : ''}">${allocation}${e.isMine ? ' (you)' : ''}</dd>
-          <dt>Completed</dt><dd>${e.isComplete ? 'Yes' : 'No'}</dd>
+          <dt>Completed</dt><dd>${e.isComplete ? 'Yes' : 'No'}
+            <button type="button" class="mark-complete-btn" onclick="if (window.opener) { window.opener.toggleServiceCallComplete(${e.id}, ${!e.isComplete}); window.close(); }">${e.isComplete ? 'Mark Incomplete' : 'Mark Complete'}</button>
+          </dd>
           <dt>Service call status</dt><dd>${escapeHtml(e.serviceCallStatus)}</dd>
           ${e.description ? `<dt>Description</dt><dd>${escapeHtml(e.description)}</dd>` : ''}
           ${ticketsHtml}

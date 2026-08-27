@@ -641,6 +641,13 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
       dayKey: isoDateAest(sc.startDateTime),
       allocated: resourceNames.length > 0,
       resourceNames,
+      // Always false in practice now -- both queries above filter
+      // isComplete=false server-side, by request (this section never
+      // shows completed calls at all). Kept on the row anyway (rather
+      // than assumed client-side) so client.js's Open ticket/Mark
+      // Complete popup stays correct even if that ever changes, and so it
+      // never has to guess.
+      isComplete: !!sc.isComplete,
       // null when this call has no linked ticket at all -- client.js
       // renders the day tag as plain (non-link) text in that case, same
       // "no ticket, no link" convention Service Calls' own client.js uses.
@@ -657,7 +664,11 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
 // Service Calls due today or tomorrow (AEST), plus -- by request -- still-
 // incomplete calls scheduled in the past 2 weeks whose linked ticket is
 // still open (the "fell through the cracks" case: an appointment that was
-// never marked complete and the work item behind it is still live).
+// never marked complete and the work item behind it is still live). Both
+// groups exclude completed calls entirely (isComplete=false in both
+// queries below), by request -- an already-finished call isn't useful in
+// this compact summary the way it still is on Service Calls' own full
+// calendar page.
 // Confirmed against real data before picking the 2-week window: an
 // unbounded "isComplete = false, any date" query returned 1574 rows going
 // back to 2007 (old calls simply never marked complete on tickets that
@@ -681,9 +692,17 @@ async function fetchServiceCallsTodayTomorrow() {
   const pastStartISO = aestToUtcIso(ty, tm, td - 14);
 
   const [todayTomorrowCalls, pastIncompleteCalls] = await Promise.all([
+    // isComplete=false, by request -- an already-finished call isn't
+    // useful in a compact "what's happening today/tomorrow" summary the
+    // way it still is on Service Calls' own full calendar (which shows
+    // completed calls too, green-filled, behind its own opt-in "Show
+    // Completed" toggle). Once a call is marked complete (via this
+    // section's own Open ticket/Mark Complete popup, or in Autotask
+    // directly), it simply drops off this list on the next refresh.
     listAll(client.serviceCalls, [
       { op: 'gte', field: 'startDateTime', value: startISO },
       { op: 'lt', field: 'startDateTime', value: endISO },
+      { op: 'eq', field: 'isComplete', value: false },
     ]),
     listAll(client.serviceCalls, [
       { op: 'gte', field: 'startDateTime', value: pastStartISO },
