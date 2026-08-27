@@ -26,6 +26,25 @@ let lastTodayTomorrowData = null;
 const FREQUENCIES = ['daily', 'weekly', 'monthly'];
 const FREQUENCY_LABELS = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
 
+// Used by formatShortDate() (below, inside mount()) -- a fixed 3-letter
+// table, not toLocaleDateString's own month: 'short' (that option's actual
+// output length isn't guaranteed 3 characters across every locale/browser).
+// Deliberately at true MODULE scope, not declared inside mount() itself --
+// confirmed the hard way: a `const` declared inside mount() sat AFTER the
+// synchronous "restore from cache on revisit" call
+// (`if (lastTodayTomorrowData) renderTodayTomorrow(...)` below), which
+// itself calls into formatShortDate() -- a real `ReferenceError: Cannot
+// access 'MONTH_SHORT' before initialization` on every SECOND-OR-LATER
+// visit to this page within the same browser session (not the first visit,
+// since lastTodayTomorrowData is still null then and that early-return
+// line does nothing) -- a `const`'s temporal dead zone applies to its
+// whole enclosing scope, not just "before this line textually", and
+// mount() re-runs top-to-bottom on every navigation back to this page,
+// hitting that early call before ever reaching the `const` line again each
+// time. Module scope sidesteps this entirely -- it's fully initialized
+// once, before mount() is ever called the first time.
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 // Fixed legend, by request -- matched against each entry's own `displayName`
 // (case-insensitive), which for a regular shift is the shift's own label and
 // for a time-off entry is its RESOLVED timeOffReason name (see
@@ -342,11 +361,9 @@ export function mount(container) {
     return `<span class="tt-tag ${cls}"${titleAttr}>${label}</span>`;
   }
 
-  // Built from a fixed 3-letter table, not toLocaleDateString's own
-  // month: 'short' -- by request, that option's actual output length isn't
-  // guaranteed 3 characters across every locale/browser (some render 4+,
-  // e.g. with a trailing period), so this pins it exactly.
-  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  // MONTH_SHORT itself lives at module scope (top of file) -- see its own
+  // comment there for why (a real TDZ crash on page revisit, confirmed the
+  // hard way, when it was declared here instead).
   function formatShortDate(dateKey) {
     if (!dateKey) return '';
     const d = new Date(`${dateKey}T00:00:00`);

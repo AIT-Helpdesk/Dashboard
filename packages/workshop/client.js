@@ -498,7 +498,7 @@ export function mount(container) {
       const statusLine = job.ticketStatus ? `<div class="wsp-ticket-status">${escapeHtml(job.ticketStatus)}</div>` : '';
       // Real popup window, not just a new tab -- same convention every
       // other ticket link on this dashboard uses.
-      return `<a href="${escapeHtml(job.ticketUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(job.ticketNumber)}</a>${statusLine}`;
+      return `<a class="wsp-ticket-link" href="${escapeHtml(job.ticketUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(job.ticketNumber)}</a>${statusLine}`;
     }
     return `<span title="Ticket not found in Autotask">${escapeHtml(job.ticketNumber)}</span>`;
   }
