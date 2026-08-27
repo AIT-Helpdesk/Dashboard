@@ -24,6 +24,7 @@ const {
   isoDateAest,
   matchesWildcard,
   getTicketUrl,
+  getPicklistLabels,
   toAest,
 } = require('@dashboard/autotask-client');
 const { getTeams, getShiftsByDay } = require('@dashboard/teams-shifts/lib.js');
@@ -585,11 +586,19 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
   // on hover, which needs this same lookup regardless of which group is
   // being built.
   const ticketIds = [...new Set([...ticketIdByServiceCallId.values()].filter((id) => id !== null && id !== undefined))];
-  const ticketsById = new Map(
-    ticketIds.length > 0
-      ? (await fetchByFieldIn(client.tickets, 'id', ticketIds)).map((t) => [t.id, t])
-      : []
-  );
+  const [ticketRows, ticketStatusLabels, serviceCallStatusLabels] = await Promise.all([
+    ticketIds.length > 0 ? fetchByFieldIn(client.tickets, 'id', ticketIds) : [],
+    // Ticket Status/Service call status on the hover tooltip, by request --
+    // same two picklists Service Calls' own server.js already resolves
+    // (client.tickets.status / client.serviceCalls.status), resolved live
+    // rather than hardcoded since both are genuine Autotask picklists (see
+    // getPicklistLabels()'s own comment). Cached per entity+field after the
+    // first call, so calling this again for the past-incomplete group
+    // below (this function runs twice per request) costs nothing extra.
+    getPicklistLabels(client.tickets, 'status'),
+    getPicklistLabels(client.serviceCalls, 'status'),
+  ]);
+  const ticketsById = new Map(ticketRows.map((t) => [t.id, t]));
 
   let eligibleServiceCalls = serviceCalls;
   if (requireOpenTicket) {
@@ -656,6 +665,14 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
       // when there's no linked ticket, same as ticketUrl above.
       ticketNumber: ticket ? ticket.ticketNumber : null,
       ticketTitle: ticket ? ticket.title : null,
+      // Ticket Status / Service call status on the hover tooltip, by
+      // request. ticketStatus is null/null right alongside ticketNumber/
+      // ticketTitle above when there's no linked ticket at all; serviceCallStatus
+      // is always present (every ServiceCall row has a real status), same
+      // "always resolved, never conditional on a ticket" shape Service
+      // Calls' own server.js already uses for this exact field.
+      ticketStatus: ticket ? ticketStatusLabels.get(ticket.status) || `#${ticket.status}` : null,
+      serviceCallStatus: serviceCallStatusLabels.get(sc.status) || `#${sc.status}`,
     });
   }
   return rows;

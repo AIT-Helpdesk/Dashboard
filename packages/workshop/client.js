@@ -47,6 +47,10 @@ const TINTED_PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress
 // existed (see migrateAddBlueColorAndNewStages() in db.js for 'blue'
 // itself).
 const ACTION_COLOR_LABELS = { general: 'Black', notewell: 'Red', blue: 'Blue', done: 'Green' };
+// For the History modal's skip_ticket_updates entries -- audit_log stores
+// the raw 0/1 (as strings, see recordAudit()'s own String() coercion in
+// db.js), this just renders that as Yes/No instead of a bare digit.
+const YES_NO_LABELS = { '0': 'No', '1': 'Yes' };
 const ACTION_COLOR_ORDER = ['general', 'notewell', 'blue', 'done'];
 // Matches the .wsp-action-text--* CSS classes, for the Pen Colour live
 // preview on the Add/Edit form (see buildJobForm()) -- the form applies
@@ -113,6 +117,7 @@ const FIELD_LABELS = {
   workflow_stage_text: 'Status detail',
   flag_note: 'Question',
   equipment: 'Equipment',
+  skip_ticket_updates: 'Skip ticket update',
 };
 
 export function mount(container) {
@@ -126,6 +131,7 @@ export function mount(container) {
           <div class="date-form-row">
             <button type="button" id="refresh-button">Refresh</button>
             <button type="button" id="add-job-button" class="button-link">+ Add job</button>
+            <button type="button" id="equipment-checklist-button" class="button-link">Equipment Checklist</button>
           </div>
           <div class="date-form-row">
             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
@@ -177,6 +183,7 @@ export function mount(container) {
   const legendEl = container.querySelector('#priority-legend');
   const formContainer = container.querySelector('#job-form-container');
   const addJobButton = container.querySelector('#add-job-button');
+  const equipmentChecklistButton = container.querySelector('#equipment-checklist-button');
   const refreshButton = container.querySelector('#refresh-button');
   const showCompletedToggle = container.querySelector('#show-completed-toggle');
   const twoColumnToggle = container.querySelector('#two-column-toggle');
@@ -205,6 +212,14 @@ export function mount(container) {
   });
 
   addJobButton.addEventListener('click', () => openForm(null));
+  // A real separate window, not an in-page modal -- by request, this is
+  // meant to be left open on its own device in the workshop (a mounted
+  // tablet), polling on its own, independent of whether this SPA tab stays
+  // open. A dedicated named window (not '_blank') so clicking this button
+  // again re-focuses the same window instead of stacking up duplicates.
+  equipmentChecklistButton.addEventListener('click', () => {
+    window.open('/api/workshop/equipment-checklist/view', 'workshop-equipment-checklist', 'width=480,height=900,scrollbars=yes');
+  });
   refreshButton.addEventListener('click', () => {
     loadJobs();
     loadDeliveriesPreview();
@@ -362,7 +377,7 @@ export function mount(container) {
     const actionCell = actionCellHtml(job);
     // Equipment icon moved here (inline with the text), by request -- was
     // originally at the end of the Current/Required Action cell.
-    const location = `${equipmentIconHtml(job)} ${escapeHtml(job.location) || '—'}`;
+    const location = `${equipmentIconHtml(job)} ${escapeHtml(job.location) || '—'}${equipmentLocationsText(job)}`;
     // The solid priority-colour bar runs the full width of the row, by
     // request -- left edge of Status, both sides of Client/Action,
     // right edge of Location, AND right edge of Due Date (the true last
@@ -426,6 +441,22 @@ export function mount(container) {
     return `<span class="${cls}" data-id="${job.id}" title="${escapeHtml(title)}">\u{1F4E6}</span>`;
   }
 
+  // Every distinct equipment location note, in brackets after the job's own
+  // Location field, by request -- e.g. job.location "Bay 3" with two items
+  // noted "Shelf A"/"Shelf B" reads "Bay 3 (Shelf A, Shelf B)". ALL of the
+  // job's equipment, regardless of Delivered -- unlike the Equipment
+  // Checklist popup (which deliberately excludes delivered items, see its
+  // own comment in server.js), this is just "where is everything", not a
+  // still-outstanding worklist. Items with no location note set are left
+  // out rather than showing a blank entry; duplicate notes (two items on
+  // the same shelf) are only listed once, in first-seen order. Blank
+  // brackets never show -- no equipment, or equipment with no location
+  // notes at all, both just fall back to the plain job.location text alone.
+  function equipmentLocationsText(job) {
+    const notes = [...new Set((job.equipment || []).map((item) => item.locationNote).filter(Boolean))];
+    return notes.length > 0 ? ` (${notes.map(escapeHtml).join(', ')})` : '';
+  }
+
   // One line per item, e.g. "2x Laptop (In Workshop, Configured) -- shelf
   // 3" -- used for both the row icon's hover tooltip and the standalone
   // equipment modal's own title context. Mirrors equipmentSummaryText() in
@@ -439,7 +470,13 @@ export function mount(container) {
         const flags = [item.inWorkshop && 'In Workshop', item.configured && 'Configured', item.delivered && 'Delivered'].filter(Boolean);
         const flagsPart = flags.length ? ` (${flags.join(', ')})` : '';
         const notePart = item.locationNote ? ` -- ${item.locationNote}` : '';
-        return `${countPart}${item.description || '(unnamed item)'}${flagsPart}${notePart}`;
+        // Same "Last checked" info the equipment editor table's own
+        // read-only column shows, by request -- so hovering the row's
+        // 📦 icon (without opening the editor at all) gives the same
+        // answer. Date AND time (formatDateTime), same reasoning as that
+        // column's own comment.
+        const checkedPart = ` [Checked: ${item.checkedAt ? formatDateTime(item.checkedAt) : 'Never'}]`;
+        return `${countPart}${item.description || '(unnamed item)'}${flagsPart}${notePart}${checkedPart}`;
       })
       .join('\n');
   }
@@ -808,6 +845,16 @@ export function mount(container) {
   // whatever rows are currently in the table, in order, no id bookkeeping
   // needed. ----
   function equipmentRowEditHtml(item) {
+    // Read-only -- there's no input here, by request the ONLY way to set
+    // checked_at is the Equipment Checklist popup's own tick box (see its
+    // section in server.js/README.md). A brand-new row (the "+ Add
+    // equipment" button below calls this with `{}`) has never been
+    // checked, so it just reads "Never", same as any existing item that
+    // hasn't been ticked yet. Date AND time (formatDateTime, not the
+    // date-only formatDate() every other date column here uses) -- by
+    // request, "last checked today at 2:15pm" vs "3:40pm" is a real,
+    // meaningful distinction when multiple checks can happen in one day.
+    const lastChecked = item.checkedAt ? formatDateTime(item.checkedAt) : 'Never';
     return `
       <tr>
         <td><input type="number" min="0" step="1" class="wsp-field wsp-equipment-count" value="${item.count ?? ''}" /></td>
@@ -816,6 +863,7 @@ export function mount(container) {
         <td><input type="text" class="wsp-field wsp-equipment-location-note" maxlength="60" placeholder="Where exactly..." value="${escapeHtml(item.locationNote || '')}" /></td>
         <td class="wsp-equipment-checkbox-cell"><input type="checkbox" class="wsp-equipment-configured"${item.configured ? ' checked' : ''} /></td>
         <td class="wsp-equipment-checkbox-cell"><input type="checkbox" class="wsp-equipment-delivered"${item.delivered ? ' checked' : ''} /></td>
+        <td class="wsp-equipment-last-checked">${escapeHtml(lastChecked)}</td>
         <td><button type="button" class="wsp-icon-btn wsp-equipment-remove-row" title="Remove">❌</button></td>
       </tr>`;
   }
@@ -834,6 +882,7 @@ export function mount(container) {
               <th>Location Note</th>
               <th>Configured</th>
               <th>Delivered</th>
+              <th>Last checked</th>
               <th></th>
             </tr>
           </thead>
@@ -967,6 +1016,9 @@ export function mount(container) {
             <label>Ticket
               <input type="text" class="wsp-field" data-field="ticketNumber" value="${escapeHtml(existingJob?.ticketNumber || '')}" />
             </label>
+            <label class="wsp-checkbox-field" title="When checked, none of this job's changes (including equipment checklist ticks) post a note to its linked ticket.">
+              <input type="checkbox" class="wsp-field" data-field="skipTicketUpdates" ${existingJob?.skipTicketUpdates ? 'checked' : ''} /> Skip ticket update
+            </label>
           </div>
           <div class="wsp-form-column">
             <label>Job description
@@ -1052,7 +1104,12 @@ export function mount(container) {
       errorEl.hidden = true;
       const fields = {};
       wrapper.querySelectorAll('[data-field]').forEach((el) => {
-        fields[el.dataset.field] = el.value.trim();
+        // Checkboxes (currently just skipTicketUpdates) read .checked, not
+        // .value -- a native checkbox's .value is a fixed "on" regardless
+        // of whether it's actually ticked, so the generic .value.trim()
+        // every other (text/select) field here uses would always send
+        // true.
+        fields[el.dataset.field] = el.type === 'checkbox' ? el.checked : el.value.trim();
       });
       fields.equipment = collectEquipmentFromEditor(equipmentEditorContainer);
       try {
@@ -1248,6 +1305,8 @@ export function mount(container) {
       changeText = `${escapeHtml(label)}: ${valueChangeHtml(entry, ACTION_COLOR_LABELS)}`;
     } else if (entry.field === 'workflow_stage') {
       changeText = `${escapeHtml(label)}: ${valueChangeHtml(entry, WORKFLOW_STAGE_LABELS)}`;
+    } else if (entry.field === 'skip_ticket_updates') {
+      changeText = `${escapeHtml(label)}: ${valueChangeHtml(entry, YES_NO_LABELS)}`;
     } else {
       changeText = `${escapeHtml(label)}: ${valueChangeHtml(entry, null)}`;
     }

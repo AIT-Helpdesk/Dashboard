@@ -255,7 +255,7 @@ export function mount(container) {
     // the work, plus a real linked ticket for it), and hiding the
     // description just because a ticket happened to be linked was losing
     // real information.
-    const titleLines = e.tickets.flatMap((t) => [`${t.ticketNumber}: ${t.title}`, `  Status: ${t.status}`]);
+    const titleLines = e.tickets.flatMap((t) => [`${t.ticketNumber}: ${t.title}`, `  Ticket Status: ${t.status}`]);
     if (e.description) titleLines.push(e.description);
     titleLines.push(e.allocated ? `Allocated: ${e.resourceNames.join(', ')}` : 'Unallocated');
     if (e.isComplete) titleLines.push('Complete');

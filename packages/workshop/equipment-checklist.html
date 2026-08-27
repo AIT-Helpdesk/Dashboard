@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Workshop Equipment Checklist</title>
+<style>
+  /* Standalone popup, deliberately NOT sharing the SPA shell's styles.css --
+     this page is meant to be opened as its own window and left running on a
+     dedicated device (a tablet mounted in the workshop), independent of
+     whether the main dashboard tab is even open. Same light/dark-via-
+     media-query approach the Service Calls day popup uses, just as plain
+     CSS custom properties instead of a JS-computed color object, since this
+     is a static file with no server-side templating. */
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --card: #f9fafb;
+    --accent: #2563eb;
+    --done: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --fg: #eef0f3;
+      --muted: #9aa3af;
+      --border: #2a2e35;
+      --card: #1b1e24;
+      --accent: #5b8def;
+      --done: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0.75rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+  }
+  h1 {
+    font-size: 1.15rem;
+    margin: 0;
+  }
+  #meta {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  button {
+    font: inherit;
+    padding: 0.5rem 0.9rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--fg);
+    cursor: pointer;
+  }
+  button:active { transform: translateY(1px); }
+  #status {
+    color: var(--muted);
+    padding: 1rem 0;
+  }
+  #status.error { color: #dc2626; }
+  .location-group {
+    margin-bottom: 1.25rem;
+  }
+  .location-name {
+    font-size: 1rem;
+    font-weight: 700;
+    padding: 0.4rem 0.5rem;
+    background: var(--card);
+    border-radius: 6px;
+    margin-bottom: 0.4rem;
+    position: sticky;
+    top: 0;
+  }
+  .item-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .item-row:last-child { border-bottom: none; }
+  /* Large tap target -- by request, this page is meant to be used on a
+     touchscreen device, not clicked with a mouse pointer. */
+  .item-row input[type="checkbox"] {
+    width: 1.6rem;
+    height: 1.6rem;
+    flex: none;
+    accent-color: var(--done);
+  }
+  .item-desc { flex: 1; min-width: 0; }
+  .item-title { font-weight: 600; }
+  .item-title.checked-today { color: var(--done); }
+  .item-client {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .empty {
+    color: var(--muted);
+    padding: 1rem 0.5rem;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Equipment Checklist</h1>
+    <div style="display:flex; align-items:center; gap:0.6rem;">
+      <span id="meta"></span>
+      <button type="button" id="refresh-button">Refresh</button>
+    </div>
+  </header>
+  <p id="status">Loading...</p>
+  <div id="groups"></div>
+
+  <script>
+    // Absolute paths, not relative to this page's own URL
+    // (/api/workshop/equipment-checklist/view) -- unambiguous regardless of
+    // exactly where this file is served from.
+    const DATA_URL = '/api/workshop/equipment-checklist';
+    const CHECK_URL = (id) => `/api/workshop/equipment-checklist/${id}/checked`;
+    // Left open on a device all day, by request -- other staff keep adding/
+    // completing/delivering jobs and equipment elsewhere on the dashboard,
+    // so this re-polls on its own rather than only ever showing whatever
+    // was true the moment it was opened.
+    const REFRESH_MS = 45000;
+
+    const statusEl = document.getElementById('status');
+    const metaEl = document.getElementById('meta');
+    const groupsEl = document.getElementById('groups');
+    const refreshButton = document.getElementById('refresh-button');
+
+    refreshButton.addEventListener('click', load);
+
+    async function load() {
+      try {
+        const res = await fetch(DATA_URL);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        render(data);
+      } catch (err) {
+        statusEl.hidden = false;
+        statusEl.className = 'error';
+        statusEl.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    function render(data) {
+      statusEl.hidden = true;
+      metaEl.textContent = `Updated ${new Date(data.generatedAt).toLocaleTimeString()}`;
+
+      const totalItems = data.groups.reduce((sum, g) => sum + g.items.length, 0);
+      if (totalItems === 0) {
+        groupsEl.innerHTML = '<p class="empty">No outstanding equipment.</p>';
+        return;
+      }
+
+      groupsEl.innerHTML = data.groups
+        .map(
+          (g) => `
+        <div class="location-group">
+          <div class="location-name">${escapeHtml(g.location)}</div>
+          ${g.items.map(itemRowHtml).join('')}
+        </div>`
+        )
+        .join('');
+
+      groupsEl.querySelectorAll('input[type="checkbox"][data-id]').forEach((box) => {
+        box.addEventListener('change', () => onToggle(box));
+      });
+    }
+
+    // Count + item name is the row's own title; the item's CLIENT (not its
+    // location -- that's now the group header above it) is the subtext, by
+    // request: "list all items by location with count, item name, client".
+    function itemRowHtml(item) {
+      const countPart = item.count ? `${item.count}x ` : '';
+      return `
+        <div class="item-row">
+          <input type="checkbox" data-id="${item.equipmentId}" ${item.checkedToday ? 'checked' : ''} />
+          <div class="item-desc">
+            <div class="item-title${item.checkedToday ? ' checked-today' : ''}">${countPart}${escapeHtml(item.description)}</div>
+            <div class="item-client">${escapeHtml(item.clientName)}</div>
+          </div>
+        </div>`;
+    }
+
+    async function onToggle(box) {
+      const id = box.dataset.id;
+      const checked = box.checked;
+      box.disabled = true;
+      try {
+        const res = await fetch(CHECK_URL(id), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ checked }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        // Re-fetch rather than trust the optimistic local state -- cheap
+        // (this list is never large) and guarantees the "is it REALLY
+        // today" flag/highlight always matches the server's own clock, not
+        // this device's.
+        await load();
+      } catch (err) {
+        box.checked = !checked; // revert the tick -- the write didn't actually happen
+        alert(`Error: ${err.message}`);
+        box.disabled = false;
+      }
+    }
+
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    load();
+    setInterval(load, REFRESH_MS);
+  </script>
+</body>
+</html>

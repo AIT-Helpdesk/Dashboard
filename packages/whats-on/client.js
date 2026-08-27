@@ -351,9 +351,21 @@ export function mount(container) {
     const allocation = row.allocated
       ? `<span class="text-highlight-green">${escapeHtml(row.resourceNames.join(', '))}</span>`
       : '<span class="text-highlight-red">Unallocated</span>';
-    // Ticket number/title on hover, by request -- null when there's no
-    // linked ticket at all (same case ticketUrl is also null for).
-    const tooltip = row.ticketNumber ? `${row.ticketNumber}: ${row.ticketTitle || ''}`.trim() : null;
+    // Ticket number/title/status on hover, by request -- the Ticket Status
+    // line is only included alongside the ticket number/title (null when
+    // there's no linked ticket at all, same case ticketUrl is also null
+    // for); Service call status is always shown underneath, regardless of
+    // whether a ticket is linked, since every service call has its own
+    // status either way. Same multi-line native title="" tooltip
+    // convention Service Calls' own client.js uses for this identical info
+    // (see entryHtml() there).
+    const tooltipLines = [];
+    if (row.ticketNumber) {
+      tooltipLines.push(`${row.ticketNumber}: ${row.ticketTitle || ''}`.trim());
+      tooltipLines.push(`Ticket Status: ${row.ticketStatus}`);
+    }
+    tooltipLines.push(`Service call status: ${row.serviceCallStatus}`);
+    const tooltip = tooltipLines.join('\n');
     // The WHOLE row is the click target for the Open ticket/Mark Complete
     // popup, by request -- not just the day tag, since a call with no
     // linked ticket at all still needs to be clickable for Mark Complete
