@@ -83,15 +83,19 @@ db.exec(`
     -- was added to an already-live CHECK constraint.
     workflow_stage TEXT NOT NULL DEFAULT 'new' CHECK (workflow_stage IN ('new','free_text','in_car','take_onsite','ready_to_ship','ready_for_pickup','sent','delivered','collected','dispose')),
     workflow_stage_text TEXT,
-    -- The "stamp" -- a free-text question anyone can leave on a row, by
-    -- request. Rendered as a small (dim when blank, big/bold once set) ?
-    -- icon right-justified in the Status column (see flagIconHtml() in
-    -- client.js) -- hovering it shows the question text; clicking it
-    -- (whether blank or already set) opens the same inline editor used to
-    -- add/change/clear it. NULL/blank means no question left. See
-    -- migrateAddFlagNote() below for how this was added to an
-    -- already-live table.
+    -- The "stamp" -- a free-text Q&A anyone can leave on a row, by request.
+    -- Two separate columns (originally just flag_note/"Question" alone;
+    -- flag_answer added later, by request, once a companion Answer was
+    -- wanted alongside it) filled in together via one small popup form
+    -- (see openQaModal() in client.js), NOT two separate editors. Rendered
+    -- as small (dim when both blank, bold/coloured once set) Q/A icons
+    -- right-justified in the Status column (see qaIconsHtml() in
+    -- client.js) -- hovering shows the actual text; clicking either icon
+    -- opens the same combined form. NULL/blank means nothing left for that
+    -- field. See migrateAddFlagNote()/migrateAddFlagAnswer() below for how
+    -- each was added to an already-live table.
     flag_note TEXT,
+    flag_answer TEXT,
     -- "Skip ticket update", by request -- when set, NONE of this job's
     -- changes post a "WORKSHOP BOARD UPDATE" note to its linked ticket
     -- (create/edit/complete/reopen/soft-delete/equipment changes/equipment
@@ -606,6 +610,16 @@ function migrateAddFlagNote() {
 }
 migrateAddFlagNote();
 
+// Adds flag_answer -- the "stamp"'s companion Answer field, by request.
+// Same plain-nullable-column, direct ALTER TABLE ADD COLUMN approach as
+// migrateAddFlagNote() just above.
+function migrateAddFlagAnswer() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('jobs')`).all();
+  if (columns.some((c) => c.name === 'flag_answer')) return;
+  db.exec('ALTER TABLE jobs ADD COLUMN flag_answer TEXT');
+}
+migrateAddFlagAnswer();
+
 // Adds checked_at/checked_by_email/checked_by_name to an already-live
 // equipment table -- the Equipment Checklist popup's tick box. Three
 // plain nullable columns, no CHECK constraint, same
@@ -690,6 +704,7 @@ const FIELD_TO_COLUMN = {
   workflowStage: 'workflow_stage',
   workflowStageText: 'workflow_stage_text',
   flagNote: 'flag_note',
+  flagAnswer: 'flag_answer',
 };
 
 // `fields` is the camelCase request body; `ticketAutotaskId` is already

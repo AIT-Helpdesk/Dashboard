@@ -67,6 +67,7 @@ function shapeJob(row) {
     workflowStage: row.workflow_stage,
     workflowStageText: row.workflow_stage_text,
     flagNote: row.flag_note,
+    flagAnswer: row.flag_answer,
     skipTicketUpdates: !!row.skip_ticket_updates,
     status: row.status,
     completedAt: row.completed_at,
@@ -231,6 +232,7 @@ const NOTE_FIELD_LABELS = {
   workflow_stage: 'Status',
   workflow_stage_text: 'Status detail',
   flag_note: 'Question',
+  flag_answer: 'Answer',
   skip_ticket_updates: 'Skip ticket update',
 };
 const NOTE_YES_NO_LABELS = { '0': 'No', '1': 'Yes' };
@@ -266,6 +268,7 @@ function noteFieldSnapshot(job) {
     `Job description: ${job.jobDescription || '(none)'}`,
     `Current / required action (${NOTE_ACTION_COLOR_LABELS[job.actionColor] || job.actionColor}): ${job.actionText || '(none)'}`,
     `Question: ${job.flagNote || '(none)'}`,
+    `Answer: ${job.flagAnswer || '(none)'}`,
     `Equipment: ${equipmentSummaryText(job.equipment)}`,
   ].join('\n');
 }
@@ -462,11 +465,18 @@ async function parseJobBody(body, requireDefaults) {
     fields.workflowStageText = body.workflowStageText ? String(body.workflowStageText).trim().slice(0, 25) : null;
   }
   if ('flagNote' in body) {
-    // The "stamp" question -- 300 characters max (the client's own <input
+    // The "stamp" Question -- 300 characters max (the client's own <input
     // maxlength> enforces the same limit in the UI), a real question can
-    // run longer than workflowStageText's own 25-char cap. Blank clears
-    // it (the icon stops showing, see flagIconHtml() in client.js).
+    // run longer than workflowStageText's own 25-char cap. Blank clears it
+    // (see qaIconsHtml() in client.js for the display logic once it's
+    // combined with flagAnswer below).
     fields.flagNote = body.flagNote ? String(body.flagNote).trim().slice(0, 300) : null;
+  }
+  if ('flagAnswer' in body) {
+    // The stamp's companion Answer -- same 300-char cap/blank-clears
+    // convention as flagNote above, filled in via the same popup form
+    // (openQaModal() in client.js), not a separate editor.
+    fields.flagAnswer = body.flagAnswer ? String(body.flagAnswer).trim().slice(0, 300) : null;
   }
   if ('skipTicketUpdates' in body) {
     // Plain boolean coercion, not the trimmed-string pattern every other

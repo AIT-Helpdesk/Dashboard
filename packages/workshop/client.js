@@ -116,6 +116,7 @@ const FIELD_LABELS = {
   workflow_stage: 'Status',
   workflow_stage_text: 'Status detail',
   flag_note: 'Question',
+  flag_answer: 'Answer',
   equipment: 'Equipment',
   skip_ticket_updates: 'Skip ticket update',
 };
@@ -393,7 +394,7 @@ export function mount(container) {
     // last 2/3 columns generically, just these two specifically).
     return `
       <tr>
-        <td class="wsp-col-status wsp-bar-left--${job.priority}"><div class="wsp-status-cell-row"><span class="wsp-status-cell-main">${statusStageCellHtml(job)}</span>${flagIconHtml(job)}</div></td>
+        <td class="wsp-col-status wsp-bar-left--${job.priority}"><div class="wsp-status-cell-row"><span class="wsp-status-cell-main">${statusStageCellHtml(job)}</span>${qaIconsHtml(job)}</div></td>
         <td class="wsp-col-client ${tintClass}wsp-bar-left--${job.priority}">${client}</td>
         <td class="${tintClass}wsp-bar-right--${job.priority}">${actionCell}</td>
         <td class="wsp-bar-right--${job.priority}">${location}</td>
@@ -428,8 +429,8 @@ export function mount(container) {
 
   // The equipment "symbol", shown inline with the Location text (see
   // jobRowHtml() above), by request -- same "always clickable, dim when
-  // empty, bold once set" pattern as the ❓ question stamp (flagIconHtml()
-  // above): there'd otherwise be no way to add the FIRST equipment item.
+  // empty, bold once set" pattern as the Q/A stamp (qaIconsHtml() above):
+  // there'd otherwise be no way to add the FIRST equipment item.
   // Hovering shows the full list via a plain native tooltip; clicking
   // (either state) opens the standalone equipment modal -- see
   // openEquipmentModal() and wireRowActions() below.
@@ -596,21 +597,39 @@ export function mount(container) {
     return `<span class="wsp-priority-dot" data-id="${job.id}" data-value="${job.priority}" title="Click to change priority"><span class="wsp-dot wsp-dot--${job.priority}"></span></span><span class="wsp-status-stage${outerColorClass}" data-id="${job.id}" data-value="${job.workflowStage}" data-text="${escapeHtml(job.workflowStageText || '')}" title="Click to change">${innerHtml}</span>`;
   }
 
-  // The "stamp" -- a ? icon right-justified in the Status column (see
-  // jobRowHtml's .wsp-status-cell-row wrapper), by request. Dim/small
-  // when there's no question yet, big/bold once one's been left -- rather
-  // than only appearing once set (which would leave no way to click it to
-  // add the FIRST question), it's always present and clickable; "leaving a
-  // note causes it to appear" reads here as the visual jump from a faint
-  // ghost icon to a real stamp. Hovering shows the actual question text via
-  // a plain native tooltip, same convention as the "Ticket not found in
-  // Autotask" tooltip elsewhere on this page. Clicking it (either state)
-  // opens the same inline editor -- see openFlagNoteEditor() below.
-  function flagIconHtml(job) {
-    const hasNote = !!job.flagNote;
-    const cls = hasNote ? 'wsp-flag-icon wsp-flag-icon--set' : 'wsp-flag-icon wsp-flag-icon--empty';
-    const title = hasNote ? job.flagNote : 'Click to leave a question';
-    return `<span class="${cls}" data-id="${job.id}" data-note="${escapeHtml(job.flagNote || '')}" title="${escapeHtml(title)}">❓</span>`;
+  // The "stamp" -- Q/A icons right-justified in the Status column (see
+  // jobRowHtml's .wsp-status-cell-row wrapper), by request. Both fields are
+  // filled in together via one combined popup form (openQaModal() below),
+  // not two separate editors, but which icon(s) actually render depends on
+  // which of the two has real content:
+  //   - neither set  -> just "?", dim/small (the entry point -- there'd
+  //                     otherwise be no way to click to add the first one)
+  //   - Q only       -> just "?", bold orange
+  //   - Q and A      -> "?" (bold orange) followed by "A" (bold blue)
+  //   - A only       -> just "A", bold blue -- the "?" is deliberately
+  //                     NOT shown in this case, by request
+  // Plain "?"/"A" text characters, not emoji -- a plain text glyph is what
+  // actually lets CSS `color` control it at all; an emoji-presentation
+  // character renders as a fixed-color glyph from the font/OS's own emoji
+  // set, which CSS can't override (confirmed the hard way with the ❓ emoji
+  // this replaced). Hovering each icon shows that field's own text via a
+  // plain native tooltip, same convention as the "Ticket not found in
+  // Autotask" tooltip elsewhere on this page.
+  function qaIconsHtml(job) {
+    const hasQuestion = !!job.flagNote;
+    const hasAnswer = !!job.flagAnswer;
+    const dataAttrs = `data-id="${job.id}" data-question="${escapeHtml(job.flagNote || '')}" data-answer="${escapeHtml(job.flagAnswer || '')}"`;
+
+    if (!hasQuestion && !hasAnswer) {
+      return `<span class="wsp-qa-icon wsp-qa-icon--q wsp-qa-icon--empty" ${dataAttrs} title="Click to leave a question/answer">?</span>`;
+    }
+    if (!hasQuestion && hasAnswer) {
+      return `<span class="wsp-qa-icon wsp-qa-icon--a wsp-qa-icon--set" ${dataAttrs} title="${escapeHtml(job.flagAnswer)}">A</span>`;
+    }
+    const qIcon = `<span class="wsp-qa-icon wsp-qa-icon--q wsp-qa-icon--set" ${dataAttrs} title="${escapeHtml(job.flagNote)}">?</span>`;
+    if (!hasAnswer) return qIcon;
+    const aIcon = `<span class="wsp-qa-icon wsp-qa-icon--a wsp-qa-icon--set" ${dataAttrs} title="${escapeHtml(job.flagAnswer)}">A</span>`;
+    return `${qIcon}${aIcon}`;
   }
 
   function rowActionButtonsHtml(job) {
@@ -691,8 +710,10 @@ export function mount(container) {
     group.querySelectorAll('.wsp-priority-dot').forEach((el) => {
       el.addEventListener('click', () => openPriorityEditor(el));
     });
-    group.querySelectorAll('.wsp-flag-icon').forEach((el) => {
-      el.addEventListener('click', () => openFlagNoteEditor(el));
+    // Either icon (Q or A -- whichever is currently showing) opens the
+    // SAME combined popup form, by request.
+    group.querySelectorAll('.wsp-qa-icon').forEach((el) => {
+      el.addEventListener('click', () => openQaModal(el.dataset.id, findJob(el.dataset.id)));
     });
     group.querySelectorAll('.wsp-equipment-icon').forEach((el) => {
       el.addEventListener('click', () => openEquipmentModal(el.dataset.id, findJob(el.dataset.id)));
@@ -726,42 +747,80 @@ export function mount(container) {
     select.focus();
   }
 
-  // Swaps the ? icon for a small text input + save button, focused and
-  // open -- lets anyone leave/change/clear a question straight from the
-  // list, same "quick inline update, no form trip" reasoning as
-  // openPriorityEditor()/openStatusStageEditor(). Unlike Priority (saves
-  // immediately on change), this needs an explicit save since there's real
-  // text to type -- same shape as the free-text companion input
-  // openStatusStageEditor() reveals for Free Text/In Car/Take Onsite.
-  // Saving with the field left empty clears the question (the icon fades
-  // back to its dim, unset state).
-  function openFlagNoteEditor(el) {
-    if (el.querySelector('input')) return; // already open
-    const currentNote = el.dataset.note;
-    const jobId = el.dataset.id;
-    el.innerHTML = `
-      <input type="text" class="wsp-field wsp-flag-note-input" value="${escapeHtml(currentNote)}" placeholder="Leave a question..." maxlength="300" />
-      <button type="button" class="wsp-icon-btn" title="Save">✓</button>
+  // The Q/A stamp's combined popup form -- opened by clicking either the Q
+  // or the A icon (see qaIconsHtml()/wireRowActions() above), by request:
+  // both fields are filled in together here, not as two separate inline
+  // editors the way this used to work (openFlagNoteEditor(), a single
+  // question-only text input swapped into the cell). Same overlay+panel
+  // shape as the History/Equipment modals (.history-modal-*), reused
+  // rather than a separate one-off dialog. Labeled just "Q"/"A" (matching
+  // the icons themselves), not the full words "Question"/"Answer", by
+  // request. Saving with a field left empty clears that field specifically
+  // -- the OTHER field, if it still has content, is untouched (this is one
+  // PATCH carrying both flagNote and flagAnswer, so both are always
+  // written together based on whatever's currently in each input).
+  function openQaModal(jobId, job) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    const title = job ? job.ticketClientName || job.customer || `Job #${jobId}` : `Job #${jobId}`;
+    overlay.innerHTML = `
+      <div class="history-modal-panel wsp-qa-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>${escapeHtml(title)} -- Q &amp; A</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <label class="wsp-qa-modal-label">
+            <span class="wsp-qa-icon wsp-qa-icon--q wsp-qa-icon--set">?</span>
+            <input type="text" class="wsp-field wsp-qa-question-input" value="${escapeHtml((job && job.flagNote) || '')}" placeholder="Leave a question..." maxlength="300" />
+          </label>
+          <label class="wsp-qa-modal-label">
+            <span class="wsp-qa-icon wsp-qa-icon--a wsp-qa-icon--set">A</span>
+            <input type="text" class="wsp-field wsp-qa-answer-input" value="${escapeHtml((job && job.flagAnswer) || '')}" placeholder="Leave an answer..." maxlength="300" />
+          </label>
+          <p class="status error wsp-qa-modal-error" hidden></p>
+          <div class="wsp-form-actions">
+            <button type="button" class="button-link wsp-qa-save-button">Save</button>
+            <button type="button" class="wsp-qa-cancel-button">Cancel</button>
+          </div>
+        </div>
+      </div>
     `;
-    const input = el.querySelector('input');
-    const saveButton = el.querySelector('button');
-    // Same "don't re-trigger the click-to-open handler by bubbling" guard
-    // openStatusStageEditor() uses.
-    el.querySelectorAll('input, button').forEach((child) => child.addEventListener('click', (e) => e.stopPropagation()));
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.querySelector('.wsp-qa-cancel-button').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const questionInput = overlay.querySelector('.wsp-qa-question-input');
+    const answerInput = overlay.querySelector('.wsp-qa-answer-input');
 
     async function save() {
+      const errorEl = overlay.querySelector('.wsp-qa-modal-error');
+      errorEl.hidden = true;
       try {
-        await fetchJson(`/api/workshop/jobs/${jobId}`, 'PATCH', { flagNote: input.value.trim() });
+        await fetchJson(`/api/workshop/jobs/${jobId}`, 'PATCH', {
+          flagNote: questionInput.value.trim(),
+          flagAnswer: answerInput.value.trim(),
+        });
+        close();
         await loadJobs();
       } catch (err) {
-        alert(`Error: ${err.message}`);
+        errorEl.hidden = false;
+        errorEl.textContent = `Error: ${err.message}`;
       }
     }
-    saveButton.addEventListener('click', save);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') save();
-    });
-    input.focus();
+    overlay.querySelector('.wsp-qa-save-button').addEventListener('click', save);
+    questionInput.focus();
   }
 
   // Swaps the plain Status text for a <select>, focused and open --
@@ -1241,6 +1300,7 @@ export function mount(container) {
     ${row('Job description', escapeHtml(job.jobDescription) || '—')}
     ${row('Current / required action', actionValue)}
     ${job.flagNote ? row('Question', escapeHtml(job.flagNote)) : ''}
+    ${job.flagAnswer ? row('Answer', escapeHtml(job.flagAnswer)) : ''}
     ${job.equipment && job.equipment.length > 0 ? row('Equipment', equipmentSummaryLines(job.equipment).split('\n').map(escapeHtml).join('<br>')) : ''}
     <p class="wspp-footer">Printed ${printedAt}</p>
   </div>
