@@ -142,6 +142,19 @@ try {
 }
 renderSidebarPinToggle();
 
+// Refresh the whole dashboard, by request -- next to the pin button. A
+// real full browser reload (not an SPA-internal re-fetch of just the
+// current page), by design: this app has no single "refresh everything"
+// entry point of its own -- every page manages its own cached state
+// (lastData/lastJobs/etc module-scope variables, each page's own
+// server-side report caches) independently, so reaching into every one of
+// them individually would be significantly more code for the same
+// end result a plain reload already gives for free -- nav layout,
+// current page's data, and every one of those caches all start fresh.
+document.getElementById('sidebar-refresh').addEventListener('click', () => {
+  window.location.reload();
+});
+
 // Full screen / focus mode -- hides the sidebar entirely so the current
 // page fills the whole window, by request. Deliberately NOT persisted
 // to localStorage (unlike theme/sidebar-collapsed above) -- this reads
@@ -551,6 +564,24 @@ function applyAutoMobileView() {
   }
   setFocusMode(true);
 }
+
+// Also re-applies when the viewport BECOMES narrow without a fresh page
+// navigation -- e.g. the page was already open on a desktop-width window
+// (or a phone in landscape) and the window gets resized/rotated narrow
+// afterward. loadPage() below only ever calls applyAutoMobileView() once,
+// right after mounting a page -- confirmed the hard way (a real user
+// report: "works if I click Mobile View" but not automatically) that this
+// left a real gap, not just a theoretical one -- a MediaQueryList's own
+// `change` event is the correct primitive for this (fires only when the
+// query's boolean result actually flips, unlike a raw `resize` listener,
+// which would fire on every pixel of drag). Deliberately does NOT undo
+// anything when the query stops matching (narrow -> wide again) -- by the
+// same "runs on every navigation, doesn't fight a manual toggle-back-off"
+// reasoning applyAutoMobileView()'s own comment above already documents,
+// this is additive only, same direction that comment already commits to.
+window.matchMedia(MOBILE_VIEWPORT_QUERY).addEventListener('change', (e) => {
+  if (e.matches) applyAutoMobileView();
+});
 
 async function loadPage(id) {
   const page = pagesById.get(id) || pagesById.get(flattenPageIds()[0]);

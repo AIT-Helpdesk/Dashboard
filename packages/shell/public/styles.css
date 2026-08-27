@@ -103,6 +103,11 @@ html[data-sidebar-collapsed="true"] .theme-toggle {
 html[data-sidebar-collapsed="true"] .sidebar-pin-toggle {
   display: none;
 }
+/* Same reasoning as .sidebar-pin-toggle just above -- the Refresh button
+   only matters once the sidebar is actually expanded. */
+html[data-sidebar-collapsed="true"] #sidebar-refresh {
+  display: none;
+}
 
 .sidebar-toggle-row {
   display: flex;
