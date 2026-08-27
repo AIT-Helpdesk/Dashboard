@@ -2365,37 +2365,82 @@ tr.row-units-changed {
   display: inline-flex;
   align-items: center;
 }
-/* The "stamp" -- dim and small until a question is actually left, then
-   big/bold, by request ("leaving a note causes it to appear" reads here
-   as that visual jump, since the icon has to always be clickable even
-   when empty -- there'd otherwise be no way to add the FIRST question).
-   Colour is left alone -- ❓ is already a solid red/orange glyph in every
-   emoji set, unlike plain text glyphs CSS `color` can't override it. */
-.wsp-flag-icon {
+/* The "stamp" -- Q ("?") and A ("A") icons, dim and small until something's
+   actually been left, then big/bold and coloured, by request ("leaving a
+   note causes it to appear" reads here as that visual jump, since the Q
+   icon has to always be clickable even when both are empty -- there'd
+   otherwise be no way to add the first one). Plain text characters, not
+   emoji -- a plain text glyph is what actually lets CSS `color` control it
+   at all; the ❓ emoji this originally used renders as a fixed-color glyph
+   from the font/OS's own emoji set, which CSS can't override. font-weight
+   makes up for a plain character reading thinner than a bold emoji glyph.
+   See qaIconsHtml() in client.js for which icon(s) actually render, based
+   on which of Question/Answer has real content. */
+.wsp-qa-icon {
   cursor: pointer;
   display: inline-block;
   line-height: 1;
-  font-size: 0.8rem;
-  opacity: 0.28;
+  font-size: 0.9rem;
+  font-weight: 700;
   transition: opacity 0.15s ease, transform 0.15s ease;
 }
-.wsp-flag-icon:hover {
+/* Orange -- the same #f39c12 the Priority legend's own "In Progress" dot
+   and TC Elite Rollout's "Started" cell already use, not a new one-off
+   colour, by request. */
+.wsp-qa-icon--q {
+  color: #f39c12;
+}
+/* Blue -- var(--accent), the same token Workshop's own "Blue" pen colour
+   (ACTION_COLOR_HEX in client.js) already uses, by request. */
+.wsp-qa-icon--a {
+  color: var(--accent);
+  /* Gap between Q and A when both show, by request -- tuned through
+     0.15rem -> 0.05rem -> -0.05rem -> 0.1rem -> settled on -0.1rem. */
+  margin-left: -0.1rem;
+}
+.wsp-qa-icon--empty {
+  opacity: 0.28;
+}
+.wsp-qa-icon--empty:hover {
   opacity: 0.6;
 }
-.wsp-flag-icon--set {
+.wsp-qa-icon--set {
   opacity: 1;
-  font-size: 1.25rem;
+  font-size: 1.4rem;
   transform: scale(1.05);
 }
-.wsp-flag-icon--set:hover {
+.wsp-qa-icon--set:hover {
   opacity: 1;
 }
-.wsp-flag-note-input {
-  width: 11rem;
+/* A a bit smaller than Q, by request -- .wsp-qa-icon--a.wsp-qa-icon--set
+   (both classes chained), not just .wsp-qa-icon--a alone, so this actually
+   wins over .wsp-qa-icon--set's own font-size above regardless of source
+   order (same specificity-tie issue confirmed the hard way on
+   .wsp-priority-select/.wsp-status-stage-select earlier -- two single-class
+   selectors on the same element is a tie CSS resolves by file order, not
+   by which one "sounds" more specific). */
+.wsp-qa-icon--a.wsp-qa-icon--set {
+  font-size: 1.15rem;
+}
+/* The combined Q&A popup form (openQaModal() in client.js) -- same
+   .history-modal-overlay/.history-modal-panel shell the History and
+   Equipment modals already use, just its own body content. */
+.wsp-qa-modal-panel {
+  width: 24rem;
+  max-width: 90vw;
+}
+.wsp-qa-modal-label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+.wsp-qa-modal-label .wsp-field {
+  flex: 1;
 }
 /* The equipment "symbol", shown inline BEFORE the Location text (see
    jobRowHtml() in client.js), by request -- same dim-when-empty/
-   bold-once-set pattern as .wsp-flag-icon just above (see
+   bold-once-set pattern as .wsp-qa-icon just above (see
    equipmentIconHtml() in client.js for why it's always rendered rather
    than only appearing once set). Margin-right gives it a little breathing
    room beyond the plain space character already between it and the
