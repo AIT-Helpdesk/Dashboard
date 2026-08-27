@@ -19,6 +19,7 @@ const {
   fetchByFieldIn,
   resolveCompanyName,
   resolveResourceName,
+  resolveResourceIdByEmail,
   mapWithConcurrency,
   aestToUtcIso,
   isoDateAest,
@@ -564,7 +565,11 @@ const CLOSED_TICKET_STATUSES = [5, 20];
 // linked ticket has since closed -- only used for the past-incomplete group
 // below; the today/tomorrow group shows every scheduled call regardless of
 // ticket linkage/status, same as it always has.
-async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } = {}) {
+// `currentUserResourceId`, when given, drives the row's own `isMine` flag
+// (client.js's "Just Mine" filter) -- null when the signed-in email didn't
+// resolve to a real Autotask resource at all, in which case every row
+// simply comes back isMine: false rather than throwing.
+async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket, currentUserResourceId } = {}) {
   if (serviceCalls.length === 0) return [];
 
   const scTickets = await fetchByFieldIn(client.serviceCallTickets, 'serviceCallID', serviceCalls.map((sc) => sc.id));
@@ -650,6 +655,10 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
       dayKey: isoDateAest(sc.startDateTime),
       allocated: resourceNames.length > 0,
       resourceNames,
+      // "Just Mine" filter, by request -- whether the signed-in user is
+      // one of this call's own allocated resources, same "isMine" concept
+      // Service Calls' own page/server.js already uses.
+      isMine: !!currentUserResourceId && resourceIds.includes(currentUserResourceId),
       // Always false in practice now -- both queries above filter
       // isComplete=false server-side, by request (this section never
       // shows completed calls at all). Kept on the row anyway (rather
@@ -700,8 +709,14 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
 // renders any dayKey that isn't today/tomorrow as an overdue tag with no
 // further server-side flag needed -- a past dayKey naturally falls into
 // that branch.
-async function fetchServiceCallsTodayTomorrow() {
+// `email` resolves the signed-in user's own Autotask resource id (for the
+// "Just Mine" filter's isMine flag, see buildServiceCallRows()'s own
+// comment) -- resolved ONCE here rather than per-row, cached across the
+// life of the server process either way (resolveResourceIdByEmail()'s own
+// cache in @dashboard/autotask-client).
+async function fetchServiceCallsTodayTomorrow(email) {
   const client = await getClient();
+  const currentUserResourceId = await resolveResourceIdByEmail(client, email);
   const today = todayAestKey();
   const [ty, tm, td] = today.split('-').map(Number);
   const startISO = aestToUtcIso(ty, tm, td);
@@ -729,8 +744,8 @@ async function fetchServiceCallsTodayTomorrow() {
   ]);
 
   const [todayTomorrowRows, pastIncompleteRows] = await Promise.all([
-    buildServiceCallRows(client, todayTomorrowCalls),
-    buildServiceCallRows(client, pastIncompleteCalls, { requireOpenTicket: true }),
+    buildServiceCallRows(client, todayTomorrowCalls, { currentUserResourceId }),
+    buildServiceCallRows(client, pastIncompleteCalls, { requireOpenTicket: true, currentUserResourceId }),
   ]);
 
   const rows = [...todayTomorrowRows, ...pastIncompleteRows];
@@ -857,7 +872,7 @@ async function buildTodayTomorrow(email) {
   const tomorrow = addDaysToKey(today, 1);
 
   const [serviceCalls, subscriptionsExpiring, stretyTasks] = await Promise.all([
-    fetchServiceCallsTodayTomorrow()
+    fetchServiceCallsTodayTomorrow(email)
       .then((rows) => ({ ok: true, rows }))
       .catch((err) => ({ ok: false, error: describeColumnError(err) })),
     fetchSubscriptionsExpiringTodayTomorrow()

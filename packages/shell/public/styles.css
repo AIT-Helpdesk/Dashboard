@@ -951,6 +951,35 @@ h1 {
   display: flex;
   flex-direction: column;
 }
+/* Service Calls' own All/Just Mine/Unallocated filter buttons sit on the
+   same line as the heading text, by request -- the other two columns'
+   plain-text headings are unaffected (ttColumn() only adds this wrapping
+   <span> either way; the buttons themselves are only ever passed in for
+   Service Calls). Wraps onto its own line on a narrow column rather than
+   overflowing, same reasoning .tt-list li's own flex-wrap uses. */
+.tt-column-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.tt-filter-buttons {
+  display: flex;
+  gap: 0.3rem;
+  /* Not uppercase/letter-spaced like the heading text it sits beside --
+     .section-heading's own text-transform would otherwise apply to these
+     buttons too, since they're nested inside it. */
+  text-transform: none;
+  letter-spacing: normal;
+}
+/* Currently-showing filter, highlighted green -- by request, same #16a34a
+   "current/positive" green used elsewhere on this dashboard (e.g.
+   .tt-tag--today), not the buttons' own default accent-blue tint. */
+.tt-filter-btn--active {
+  background: color-mix(in srgb, #16a34a 20%, transparent);
+  color: #16a34a;
+}
 .tt-column-body {
   flex: 1;
 }
