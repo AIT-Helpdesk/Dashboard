@@ -185,6 +185,12 @@ html[data-sidebar-collapsed="true"] #sidebar-refresh {
   color: var(--fg);
   text-decoration: none;
   font-size: 0.95rem;
+  /* Small caps across the whole sidebar, by request -- also applied to
+     .nav-category-header below, and to Start Here's own bespoke rules
+     further down (which had to drop their text-transform: uppercase for
+     this to actually show -- uppercase leaves nothing lowercase left for
+     small-caps to shrink, the two don't combine visually). */
+  font-variant: small-caps;
 }
 
 .nav-link:hover {
@@ -205,17 +211,18 @@ html[data-sidebar-collapsed="true"] #sidebar-refresh {
    the sidebar category headings) and its own .active rule (green fill,
    white text, by request -- overrides the default .nav-link.active blue
    fill for just this one entry, on a more specific selector so no
-   !important is needed here). */
+   !important is needed here). No text-transform: uppercase here anymore
+   -- dropped once the whole sidebar went small-caps (see .nav-link's own
+   comment) since the two don't combine visually; still reads as a
+   distinct section-label style via the bold/green/letter-spacing alone. */
 a.nav-link[href="#start-here"]:not(.active) {
   font-weight: 700;
-  text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 0.85rem;
   color: #16a34a;
 }
 a.nav-link.active[href="#start-here"] {
   font-weight: 700;
-  text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 0.85rem;
   background: #16a34a;
@@ -263,6 +270,9 @@ a.nav-link.active[href="#start-here"] {
   padding: 0.55rem 0.75rem;
   font-size: 0.85rem;
   font-weight: 700;
+  /* Reverted back to plain uppercase, by request -- small-caps stays on
+     the rest of the sidebar (.nav-link) but not the category headings
+     themselves. */
   text-transform: uppercase;
   letter-spacing: 0.04em;
   /* Same green used elsewhere on the dashboard (.cell-flag-green) rather
