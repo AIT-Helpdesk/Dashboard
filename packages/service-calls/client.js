@@ -321,6 +321,8 @@ export function mount(container) {
     menu.innerHTML = `
       ${ticket ? `<button type="button" class="entry-popup-menu-item" data-action="open-ticket">Open ticket</button>` : ''}
       <button type="button" class="entry-popup-menu-item" data-action="toggle-complete">${entry.isComplete ? 'Mark Incomplete' : 'Mark Complete'}</button>
+      <button type="button" class="entry-popup-menu-item" data-action="onsite-tba">Mark as Onsite TBA</button>
+      <button type="button" class="entry-popup-menu-item" data-action="onsite-arranged">Mark as Onsite Arranged</button>
     `;
     document.body.appendChild(menu);
     const rect = anchorEl.getBoundingClientRect();
@@ -339,6 +341,13 @@ export function mount(container) {
       });
     }
     menu.querySelector('[data-action="toggle-complete"]').addEventListener('click', () => toggleServiceCallComplete(entry.id, !entry.isComplete));
+    // 104/103 -- Autotask's own real ServiceCalls.status values for these
+    // two, confirmed against the live picklist (NOT what
+    // autotask_get_field_info itself returns for this field, which is a
+    // stale/cached 4-value list missing both -- see the route's own
+    // comment in server.js).
+    menu.querySelector('[data-action="onsite-tba"]').addEventListener('click', () => setServiceCallStatus(entry.id, 104));
+    menu.querySelector('[data-action="onsite-arranged"]').addEventListener('click', () => setServiceCallStatus(entry.id, 103));
     // Deferred, not added synchronously -- otherwise the very click that
     // opened this menu would immediately bubble up to document and close
     // it again in the same tick.
@@ -361,9 +370,23 @@ export function mount(container) {
       alert(`Error: ${err.message}`);
     }
   }
+  // Same shape as toggleServiceCallComplete() above, for the "Mark as
+  // Onsite TBA"/"Mark as Onsite Arranged" menu items -- a different
+  // field (status, not isComplete) but the same PATCH .../:id/status
+  // route, cache-bypass-refresh, and error handling.
+  async function setServiceCallStatus(id, status) {
+    closeServiceCallMenu();
+    try {
+      await fetchJson(`/api/service-calls/${id}/status`, 'PATCH', { status });
+      await load(lastMonth || defaultMonthKey(), true);
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  }
   // Exposed for the day popup's own separate window to call back into via
   // window.opener -- see dayPopupEntryHtml() below.
   window.toggleServiceCallComplete = toggleServiceCallComplete;
+  window.setServiceCallStatus = setServiceCallStatus;
 
   async function fetchJson(url, method, body) {
     const res = await fetch(url, {
@@ -436,7 +459,7 @@ export function mount(container) {
   .card dd { margin: 0; }
   a { color: ${colors.accent}; }
   .empty { color: ${colors.muted}; }
-  .mark-complete-btn { font: inherit; font-size: 0.85rem; padding: 0.15rem 0.5rem; margin-left: 0.5rem; border: 1px solid ${colors.border}; border-radius: 4px; background: ${colors.bg}; color: ${colors.fg}; cursor: pointer; }
+  .mark-complete-btn { font: inherit; font-size: 0.72rem; padding: 0.1rem 0.4rem; margin-left: 0.4rem; border: 1px solid ${colors.border}; border-radius: 4px; background: ${colors.bg}; color: ${colors.fg}; cursor: pointer; }
   .mark-complete-btn:hover { border-color: ${colors.accent}; color: ${colors.accent}; }
 </style>
 </head>
@@ -481,7 +504,10 @@ ${cardsHtml || '<p class="empty">No entries.</p>'}
           <dt>Completed</dt><dd>${e.isComplete ? 'Yes' : 'No'}
             <button type="button" class="mark-complete-btn" onclick="if (window.opener) { window.opener.toggleServiceCallComplete(${e.id}, ${!e.isComplete}); window.close(); }">${e.isComplete ? 'Mark Incomplete' : 'Mark Complete'}</button>
           </dd>
-          <dt>Service call status</dt><dd>${escapeHtml(e.serviceCallStatus)}</dd>
+          <dt>Service call status</dt><dd>${escapeHtml(e.serviceCallStatus)}
+            <button type="button" class="mark-complete-btn" onclick="if (window.opener) { window.opener.setServiceCallStatus(${e.id}, 104); window.close(); }">Mark as Onsite TBA</button>
+            <button type="button" class="mark-complete-btn" onclick="if (window.opener) { window.opener.setServiceCallStatus(${e.id}, 103); window.close(); }">Mark as Onsite Arranged</button>
+          </dd>
           ${e.description ? `<dt>Description</dt><dd>${escapeHtml(e.description)}</dd>` : ''}
           ${ticketsHtml}
         </dl>
