@@ -2379,6 +2379,15 @@ tr.row-units-changed {
   min-width: 25ch;
   max-width: 30ch;
 }
+/* The typed Client field, shown alongside the ticket-resolved client name
+   (in brackets) or alone (no ticket at all), by request -- see
+   jobRowHtml()'s own comment in client.js for the exact display logic.
+   Desktop-only (.wsp-col-client itself is hidden entirely in Mobile View
+   above) -- the separate .wsp-mobile-client-line is unaffected, plain
+   text, no grey/brackets treatment. */
+.wsp-client-typed {
+  color: var(--muted);
+}
 /* Status never wraps, by request -- it's a short dot+label (or a short
    typed free-text note), and wrapping it mid-row looked worse than
    just letting the column size to its content. */
