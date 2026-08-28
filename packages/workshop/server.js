@@ -267,8 +267,11 @@ function noteFieldSnapshot(job) {
     `Location: ${job.location || '(none)'}`,
     `Job description: ${job.jobDescription || '(none)'}`,
     `Current / required action (${NOTE_ACTION_COLOR_LABELS[job.actionColor] || job.actionColor}): ${job.actionText || '(none)'}`,
-    `Question: ${job.flagNote || '(none)'}`,
-    `Answer: ${job.flagAnswer || '(none)'}`,
+    // Question/Answer deliberately excluded, by request -- the Q&A stamp
+    // stays entirely local (the History modal and print card still show
+    // it), never sent to the ticket. See postWorkshopUpdateNote()'s own
+    // "Full history" append below for the matching exclusion on that side
+    // too (flag_note/flag_answer audit_log entries).
     `Equipment: ${equipmentSummaryText(job.equipment)}`,
   ].join('\n');
 }
@@ -318,7 +321,14 @@ async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = fa
     if (headline) lines.push(headline, '');
     lines.push(noteFieldSnapshot(job));
     if (includeFullHistory) {
-      const history = getJobHistory(jobId).map(shapeHistoryRow);
+      // flag_note/flag_answer (the Q&A stamp) excluded here too, by
+      // request -- same "never sent to the ticket" exclusion
+      // noteFieldSnapshot() applies above, just on the audit-log side of
+      // things. The local History modal (client.js) still shows every
+      // entry, including these -- only the ticket-bound copy is filtered.
+      const history = getJobHistory(jobId)
+        .map(shapeHistoryRow)
+        .filter((h) => h.field !== 'flag_note' && h.field !== 'flag_answer');
       if (history.length > 0) lines.push('', '-- Full history --', ...history.map(noteHistoryLine));
     }
     const client = await getClient();
@@ -595,8 +605,20 @@ router.patch('/jobs/:id', async (req, res) => {
     const [shaped] = attachEquipment(await withTicketDetails([shapeJob(updated)]));
     res.json(shaped);
 
-    const changedThisCall = getJobHistory(jobId).some((h) => h.id > beforeMaxId);
-    if (changedThisCall) {
+    const changedFieldsThisCall = getJobHistory(jobId)
+      .filter((h) => h.id > beforeMaxId)
+      .map((h) => h.field);
+    const changedThisCall = changedFieldsThisCall.length > 0;
+    // Q&A-only saves never reach the ticket at all, by request -- not just
+    // the CONTENT (see noteFieldSnapshot()'s/postWorkshopUpdateNote()'s own
+    // flag_note/flag_answer exclusions above), but the note itself. Editing
+    // Question/Answer and nothing else in this same call is treated
+    // exactly like "nothing worth notifying the ticket about" -- otherwise
+    // a content-free "Workshop job updated." note would still show up on
+    // the ticket every time someone answers a question, which is exactly
+    // the kind of side effect this exclusion is meant to avoid.
+    const onlyQaChanged = changedThisCall && changedFieldsThisCall.every((f) => f === 'flag_note' || f === 'flag_answer');
+    if (changedThisCall && !onlyQaChanged) {
       const ticketLinkChanged = updated.ticket_autotask_id !== existing.ticket_autotask_id;
       // A genuine transfer (had a DIFFERENT real ticket before) vs. a
       // first-time link (had none before) get distinct headlines on the
