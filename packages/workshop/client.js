@@ -372,9 +372,22 @@ export function mount(container) {
     // authoritative than the free-text Client field. The stored
     // `customer` value itself is untouched; this is display-only (see
     // withTicketDetails() in server.js).
+    //
+    // The typed Client field is still shown too now, by request -- in
+    // brackets, grey, right after the resolved ticket client (only when
+    // there's actually something typed there to show -- a ticket-resolved
+    // job with a blank Client field shows nothing extra). With no ticket
+    // at all, the typed Client field IS the only client info there is --
+    // still rendered grey (not the row's normal text colour), just
+    // without brackets, since there's nothing else it's "in addition to".
+    // Desktop-only, by request -- Mobile View hides this whole cell and
+    // shows a separate, unaffected .wsp-mobile-client-line instead (see
+    // actionCellHtml() below), which still shows just the plain
+    // ticket-or-typed name, no brackets/grey treatment.
+    const typedClient = job.customer ? escapeHtml(job.customer) : '';
     const client = job.ticketClientName
-      ? `<span title="From ${escapeHtml(job.ticketNumber || 'linked ticket')}">${escapeHtml(job.ticketClientName)}</span>`
-      : escapeHtml(job.customer) || '—';
+      ? `<span title="From ${escapeHtml(job.ticketNumber || 'linked ticket')}">${escapeHtml(job.ticketClientName)}</span>${typedClient ? ` <span class="wsp-client-typed">(${typedClient})</span>` : ''}`
+      : `<span class="wsp-client-typed">${typedClient || '—'}</span>`;
     const actionCell = actionCellHtml(job);
     // Equipment icon moved here (inline with the text), by request -- was
     // originally at the end of the Current/Required Action cell.
