@@ -13,6 +13,7 @@ let lastIncludeRenewals = false; // off by default, by request -- renewals are t
 let lastIncludeCancelled = false; // off by default, by request -- status="cancelled" orders (of any type) are failed/withdrawn attempts
 let lastStatusFilter = '';
 let lastProductFilter = '';
+let lastSortBy = 'recent'; // 'recent' (server default) or 'client' -- purely a display grouping order, see render()
 
 export function mount(container) {
   container.innerHTML = `
@@ -30,6 +31,11 @@ export function mount(container) {
           <label for="include-cancelled-input" class="inline-checkbox-label">
             <input type="checkbox" id="include-cancelled-input" /> Show Cancelled
           </label>
+          <label for="sort-input">Sort</label>
+          <select id="sort-input">
+            <option value="recent">Client: Most Recent Order</option>
+            <option value="client">Client: A-Z</option>
+          </select>
         </div>
         <div class="date-form-row">
           <label for="status-input">Status</label>
@@ -53,6 +59,7 @@ export function mount(container) {
   const clientInput = container.querySelector('#client-input');
   const statusInput = container.querySelector('#status-input');
   const productInput = container.querySelector('#product-input');
+  const sortInput = container.querySelector('#sort-input');
   const refreshButton = container.querySelector('#refresh-button');
   const loadAllButton = container.querySelector('#load-all-button');
   const statusEl = container.querySelector('#status');
@@ -72,6 +79,7 @@ export function mount(container) {
   includeCancelledInput.checked = lastIncludeCancelled;
   statusInput.value = lastStatusFilter;
   productInput.value = lastProductFilter;
+  sortInput.value = lastSortBy;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -79,6 +87,15 @@ export function mount(container) {
   });
 
   loadAllButton.addEventListener('click', loadAllDetails);
+
+  // Sort is a pure display/grouping-order choice over data already in hand --
+  // unlike every other control here, it doesn't touch the server at all, so
+  // switching it just re-renders the already-fetched result instantly rather
+  // than round-tripping for the same data again.
+  sortInput.addEventListener('change', () => {
+    lastSortBy = sortInput.value;
+    if (lastData) render(lastData);
+  });
 
   // The server caches each search (keyed by the since-date, filter terms,
   // AND the renewals toggle) for ~20 min. This is the fast base list --
@@ -173,7 +190,16 @@ export function mount(container) {
       return;
     }
 
-    for (const client of data.byClient) {
+    // Client GROUP order only -- the orders inside each group stay exactly
+    // as the server sent them (newest-to-oldest) either way. Server default
+    // ('recent') is already most-recent-order-first, so no re-sort needed;
+    // 'client' re-sorts a shallow copy alphabetically for display without
+    // touching the underlying data.byClient array (loadAllDetails() etc.
+    // still iterate that in its original order, which doesn't matter since
+    // they're order-independent operations).
+    const orderedClients = lastSortBy === 'client' ? [...data.byClient].sort((a, b) => a.clientName.localeCompare(b.clientName)) : data.byClient;
+
+    for (const client of orderedClients) {
       const groupEl = document.createElement('div');
       groupEl.className = 'resource-group';
 
