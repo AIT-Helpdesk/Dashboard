@@ -44,6 +44,10 @@ router.get('/orders', async (req, res) => {
       showAllDone: true,
       hideRenewalOrProcessingOnly: false,
     });
+    // Same "Rewst - Stage Done" icon flag Contract Checks' own page shows,
+    // by request -- this route bypasses that page's own GET / route (which
+    // is where it normally runs), so it has to be called here too.
+    await contractChecks.attachRewstStageDoneFlags(byClient.flatMap((g) => g.orders));
     res.json({ sinceDate, filterTerm: filterTerm || null, totalCount, statusCounts, byClient });
   } catch (err) {
     console.error(err);

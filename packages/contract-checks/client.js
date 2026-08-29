@@ -421,7 +421,21 @@ export function mount(container) {
     const linkOrText = o.ticketUrl
       ? `<a href="${escapeHtml(o.ticketUrl)}" target="_blank" rel="noopener" class="cc-ticket-link" title="${escapeHtml(tooltip)}">${escapeHtml(o.poNumber)}</a>`
       : `<span title="Ticket not found in Autotask">${escapeHtml(o.poNumber)}</span>`;
-    return `${linkOrText} ${editIcon}`;
+    return `${linkOrText} ${editIcon}${rewstIconHtml(o)}`;
+  }
+
+  // Small icon after the edit pencil, by request, when this ticket's
+  // status history ever passed through "Rewst - Stage Done" (server.js's
+  // attachRewstStageDoneFlags() -- a real Autotask history lookup, not
+  // guessed from the ticket's current status alone, since it may have long
+  // since moved on from there).
+  function rewstIconHtml(o) {
+    // Rewst's own real logo (packages/shell/public/rewst-icon.png), by
+    // request -- served as a plain static asset, same convention as
+    // logo.png/favicon.png already sitting in that same folder.
+    return o.hasRewstStageDone
+      ? `<img src="/rewst-icon.png" class="cc-rewst-icon" alt="Rewst" title="This ticket passed through Rewst - Stage Done" />`
+      : '';
   }
 
   // Opens `url` as a genuine separate WINDOW (not just a new tab -- a
@@ -559,11 +573,21 @@ export function mount(container) {
   // ticking ALL DONE ON when there's a real linked ticket to act on (see
   // the .cc-toggle change handler below) -- unticking, or an item with no
   // ticket link, skips this entirely.
-  function confirmCloseTicket(count = 1) {
+  //
+  // `warningLines` (by request) -- one line per order whose linked ticket's
+  // CURRENT status isn't "Billing - Contract", shown in a red box above the
+  // main message. Uses o.ticketStatus, the same field server.js's
+  // attachTicketDetails() already fetches for the ticket-number hover
+  // tooltip -- no extra request needed here. Empty/omitted renders nothing.
+  function confirmCloseTicket(count = 1, warningLines = []) {
     const message =
       count > 1
         ? `This will write ticket notes and mark ${count} tickets as COMPLETE.`
         : 'This will write the ticket note and mark the ticket as COMPLETE.';
+    const warningHtml =
+      warningLines.length > 0
+        ? `<p class="cc-confirm-warning">${warningLines.map((l) => escapeHtml(l)).join('<br>')}</p>`
+        : '';
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
       overlay.className = 'history-modal-overlay';
@@ -573,6 +597,7 @@ export function mount(container) {
             <span>${count > 1 ? 'Close Tickets?' : 'Close Ticket?'}</span>
           </div>
           <div class="history-modal-body">
+            ${warningHtml}
             <p class="status">${escapeHtml(message)}</p>
             <div class="wsp-form-actions">
               <button type="button" class="button-link cc-confirm-close-button">${count > 1 ? 'Write Notes<br>Complete Tickets' : 'Write Note<br>Complete Ticket'}</button>
@@ -727,7 +752,16 @@ export function mount(container) {
           const allTicked = [...bulkSelection.itemIds].every((id) => bulkAllDoneTicked.has(id));
           if (!allTicked) return; // still waiting on the rest -- nothing saved yet
 
-          const choice = await confirmCloseTicket(bulkSelection.itemIds.size);
+          // One warning line per selected order whose linked ticket's
+          // current status isn't "Billing - Contract" -- prefixed with its
+          // own order number here (unlike the single-item call site below)
+          // since a bulk batch can span several different tickets/statuses
+          // at once.
+          const bulkWarningLines = [...bulkSelection.itemIds]
+            .map((id) => findOrder(String(id)))
+            .filter((order) => order && order.ticketStatus && order.ticketStatus !== 'Billing - Contract')
+            .map((order) => `Warning: ${order.orderNumber} Ticket Status is ${order.ticketStatus}`);
+          const choice = await confirmCloseTicket(bulkSelection.itemIds.size, bulkWarningLines);
           if (choice === 'none') {
             // Revert just this last tick -- the OTHER already-ticked rows
             // stay ticked (still pending), ready to re-complete the set later.
@@ -787,7 +821,9 @@ export function mount(container) {
           const order = findOrder(el.dataset.id);
           if (order && order.ticketAutotaskId) {
             if (el.checked) {
-              const choice = await confirmCloseTicket();
+              const warningLines =
+                order.ticketStatus && order.ticketStatus !== 'Billing - Contract' ? [`Warning: Ticket Status is ${order.ticketStatus}`] : [];
+              const choice = await confirmCloseTicket(1, warningLines);
               if (choice === 'none') {
                 el.checked = false; // the click already toggled it visually -- revert
                 return;

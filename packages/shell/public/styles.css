@@ -890,6 +890,44 @@ h1 {
   line-height: 1.3;
   text-align: center;
 }
+/* The Close Ticket confirm dialog's own warning box (confirmCloseTicket()
+   in client.js) -- by request, "Warning: Ticket Status is X" whenever the
+   linked ticket's CURRENT status isn't Billing - Contract at the moment
+   ALL DONE is ticked. A genuine red background (not just red text, like
+   .status.error elsewhere) -- this needs to stand out against the rest of
+   the confirm dialog, not blend in as routine status text. #dc2626 is the
+   same red used dashboard-wide (.cell-flag-red etc.); the background is a
+   flat, deliberately solid red-tinted fill (not the paler --row-warn-bg
+   used for a merely-flagged table row) since this is a real warning being
+   surfaced right before a consequential action, not passive row shading. */
+.cc-confirm-warning {
+  background: color-mix(in srgb, #dc2626 18%, var(--bg));
+  border: 1px solid #dc2626;
+  border-radius: 6px;
+  color: #dc2626;
+  font-weight: 600;
+  padding: 0.5rem 0.75rem;
+  margin: 0 0 0.75rem;
+}
+/* The "Rewst - Stage Done" icon in the PO # cell (Contract Checks and
+   Check Client both), by request -- after the edit pencil on Contract
+   Checks, after the ticket link on Check Client (no pencil there, it's
+   read-only). Rewst's own real logo (an <img>, public/rewst-icon.png), not
+   an emoji -- sized to sit level with the surrounding row text rather than
+   at its native resolution. Slightly muted at rest so it doesn't compete
+   with the ticket link itself; full opacity on hover, matching the same
+   hover-brightens convention .wsp-icon-btn already uses elsewhere. */
+.cc-rewst-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  vertical-align: -0.15rem;
+  margin-left: 0.3rem;
+  opacity: 0.75;
+  cursor: default;
+}
+.cc-rewst-icon:hover {
+  opacity: 1;
+}
 /* Ticket Note modal (openTicketNoteModal() in client.js) -- ~25% wider than
    the shared .wsp-qa-modal-panel's own 24rem, by request (the height half
    of "25% wider and 25% longer" is the textarea's own rows attribute,
