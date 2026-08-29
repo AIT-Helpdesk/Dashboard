@@ -923,6 +923,14 @@ h1 {
 .check-client-page .chk-date-row {
   justify-content: flex-end;
 }
+/* Butted right up against the Autotask Client input, by request -- cancels
+   out .date-form-row's own `gap: 0.5rem` between this checkbox and the
+   input immediately before it (gap applies uniformly between every flex
+   child, so a negative margin on just this one item is what pulls it in
+   without disturbing the row's normal spacing everywhere else). */
+.check-client-page .chk-exact-client-label {
+  margin-left: -0.5rem;
+}
 .check-client-page .chk-search-spacer {
   visibility: hidden;
   pointer-events: none;

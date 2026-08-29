@@ -17,6 +17,7 @@ export const label = "Check Client";
 // remount too, so navigating away and back doesn't silently re-link a
 // value the user deliberately diverged.
 let lastAutotaskClient = '';
+let lastExactClient = false; // off by default -- the normal wildcard/contains search
 let lastIngramClient = '';
 let lastIngramClientManuallyEdited = false;
 let lastSince = null;
@@ -82,6 +83,9 @@ export function mount(container) {
         <div class="date-form-row">
           <label for="autotask-client-input">Autotask Client</label>
           <input type="text" id="autotask-client-input" name="autotaskClient" placeholder="e.g. Acme* (wildcards with *)" required />
+          <label class="inline-checkbox-label chk-exact-client-label" title="Force an exact match on the Autotask Client name (instead of the usual wildcard/contains search)">
+            <input type="checkbox" id="exact-client-input" />
+          </label>
           <label for="ingram-client-input">Ingram Client</label>
           <input type="text" id="ingram-client-input" name="ingramClient" placeholder="e.g. Acme* (wildcards with *)" required />
           <button type="submit" id="search-button">Search</button>
@@ -108,6 +112,7 @@ export function mount(container) {
   const form = container.querySelector('#filter-form');
   const clientLabelEl = container.querySelector('#client-label');
   const autotaskClientInput = container.querySelector('#autotask-client-input');
+  const exactClientInput = container.querySelector('#exact-client-input');
   const ingramClientInput = container.querySelector('#ingram-client-input');
   const sinceInput = container.querySelector('#since-input');
   const monthInput = container.querySelector('#month-input');
@@ -143,6 +148,7 @@ export function mount(container) {
   }
 
   autotaskClientInput.value = lastAutotaskClient;
+  exactClientInput.checked = lastExactClient;
   ingramClientInput.value = lastIngramClient;
   sinceInput.value = lastSince || defaultSinceISO();
   monthInput.value = lastMonth || currentMonthISO();
@@ -220,14 +226,16 @@ export function mount(container) {
   // re-enable the Search button) -- not about propagating failures.
   async function search() {
     const autotaskClient = autotaskClientInput.value.trim();
+    const exactClient = exactClientInput.checked;
     const ingramClient = ingramClientInput.value.trim();
     const since = sinceInput.value;
     const month = monthInput.value;
     searchButton.disabled = true;
     try {
-      await Promise.allSettled([loadOrders(ingramClient, since), loadSubscriptions(ingramClient), loadServices(autotaskClient, month)]);
+      await Promise.allSettled([loadOrders(ingramClient, since), loadSubscriptions(ingramClient), loadServices(autotaskClient, exactClient, month)]);
     } finally {
       lastAutotaskClient = autotaskClient;
+      lastExactClient = exactClient;
       lastIngramClient = ingramClient;
       lastIngramClientManuallyEdited = ingramClientManuallyEdited;
       lastSince = since;
@@ -718,7 +726,7 @@ export function mount(container) {
   // Section 3 -- Contract Services (current month by default)
   // ---------------------------------------------------------------------
 
-  async function loadServices(client, month) {
+  async function loadServices(client, exactClient, month) {
     servicesStatusEl.hidden = false;
     servicesStatusEl.className = 'status';
     servicesStatusEl.textContent = `Loading services active in ${formatMonth(month)}...`;
@@ -726,6 +734,7 @@ export function mount(container) {
     servicesResultsEl.innerHTML = '';
     try {
       const params = new URLSearchParams({ client, month });
+      if (exactClient) params.set('exactClient', 'true');
       const data = await fetchJson(`/api/check-client/services?${params.toString()}`, 'GET');
       lastServicesData = data;
       renderServices(data);

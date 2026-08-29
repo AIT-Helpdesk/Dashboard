@@ -404,8 +404,22 @@ export function mount(container) {
     // instead of a tab, positioned on the same monitor as this one, by
     // request. rel="noopener" either way -- the opened ticket page never
     // gets a handle back to this one.
+    //
+    // Hover tooltip, by request -- client/status/title straight from the
+    // real Autotask ticket (server.js's attachTicketDetails(), not this
+    // order's own Ingram-sourced clientName, which can legitimately name a
+    // different client than the ticket's own company). Ticket # and status
+    // share one line, by request; client and title each get their own.
+    // Any piece that failed to fetch (or the ticket has none, e.g. no
+    // title) is just left out of its line rather than showing "undefined".
+    const tooltipLines = [];
+    if (o.ticketClientName) tooltipLines.push(`Client: ${o.ticketClientName}`);
+    tooltipLines.push(`Ticket #${o.poNumber}${o.ticketStatus ? ` -- ${o.ticketStatus}` : ''}`);
+    if (o.ticketTitle) tooltipLines.push(`Title: ${o.ticketTitle}`);
+    const tooltip = tooltipLines.join('\n');
+
     const linkOrText = o.ticketUrl
-      ? `<a href="${escapeHtml(o.ticketUrl)}" target="_blank" rel="noopener" class="cc-ticket-link">${escapeHtml(o.poNumber)}</a>`
+      ? `<a href="${escapeHtml(o.ticketUrl)}" target="_blank" rel="noopener" class="cc-ticket-link" title="${escapeHtml(tooltip)}">${escapeHtml(o.poNumber)}</a>`
       : `<span title="Ticket not found in Autotask">${escapeHtml(o.poNumber)}</span>`;
     return `${linkOrText} ${editIcon}`;
   }
