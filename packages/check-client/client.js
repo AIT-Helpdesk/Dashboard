@@ -368,7 +368,20 @@ export function mount(container) {
     const rewstIcon = o.hasRewstStageDone
       ? `<img src="/rewst-icon.png" class="cc-rewst-icon" alt="Rewst" title="This ticket passed through Rewst - Stage Done" />`
       : '';
-    return `${linkOrText}${rewstIcon}`;
+    // After the link, by request -- same two mutually exclusive icons
+    // Contract Checks' own page shows (see that page's own poFlagIconHtml()
+    // comment for the full reasoning): green check when o.poNumberManual
+    // (a human already confirmed this PO#/ticket), else "?" when
+    // o.ticketDateMismatch (the ticket's own creation date is more than a
+    // day from the order's -- worth a second look). check-client/server.js's
+    // /orders route calls attachTicketDetails() (where the mismatch is
+    // computed) since this page bypasses Contract Checks' own GET / route.
+    const flagIcon = o.poNumberManual
+      ? `<span class="cc-po-manual-icon" title="PO # / Ticket manually entered">✓</span>`
+      : o.ticketDateMismatch
+        ? `<span class="cc-po-mismatch-icon" title="This ticket was created more than a day away from the order's own creation date -- worth double-checking this is the right ticket">?</span>`
+        : '';
+    return `${linkOrText}${flagIcon}${rewstIcon}`;
   }
 
   function licensesCellHtml(o) {

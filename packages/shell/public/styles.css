@@ -928,6 +928,27 @@ h1 {
 .cc-rewst-icon:hover {
   opacity: 1;
 }
+/* The two PO # flag icons (Contract Checks and Check Client both), by
+   request -- after the PO #/ticket link, before the edit pencil on
+   Contract Checks. Mutually exclusive in practice (client.js never renders
+   both at once -- see poFlagIconHtml()'s own comment), but styled
+   separately since they mean opposite things: green = confirmed by a
+   human, no need to look twice; amber = an automated signal worth a
+   second look, deliberately NOT red (this isn't a hard failure the way
+   the ALL DONE reopen-status warning is, just a prompt to verify). Same
+   #16a34a/green convention as .cell-flag-green elsewhere on this
+   dashboard; #d97706 is this dashboard's first use of amber, chosen
+   specifically to read as "worth checking" without the alarm of red. */
+.cc-po-manual-icon {
+  color: #16a34a;
+  font-weight: 700;
+  margin-left: 0.3rem;
+}
+.cc-po-mismatch-icon {
+  color: #d97706;
+  font-weight: 700;
+  margin-left: 0.3rem;
+}
 /* Ticket Note modal (openTicketNoteModal() in client.js) -- ~25% wider than
    the shared .wsp-qa-modal-panel's own 24rem, by request (the height half
    of "25% wider and 25% longer" is the textarea's own rows attribute,
