@@ -429,6 +429,61 @@ async function attachTicketDetails(orders) {
   }
 }
 
+// Flags an order's linked ticket as having passed through "Rewst - Stage
+// Done" at some point in its status history, by request (Contract Checks
+// and Check Client both show a small icon in the PO # cell when true).
+// Confirmed against the real API: TicketHistory can't be filtered by
+// multiple ticket ids at once ("you are required to supply one and only
+// one ticketID equals filter") -- unlike attachTicketDetails() above, this
+// genuinely needs one request per distinct ticket, not one batched query.
+// Bounded concurrency (mapWithConcurrency), not fully sequential, to keep
+// that from being painfully slow with several tickets on screen at once.
+//
+// Cached asymmetrically, deliberately -- history is append-only, so once a
+// ticket is confirmed to have passed through this status that fact can
+// never become false again (cached ~indefinitely, just for basic memory
+// hygiene); a "no" result, by contrast, can genuinely change the moment
+// this ticket next hits that status, so it's only cached briefly and gets
+// rechecked periodically.
+const REWST_FLAG_TRUE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const REWST_FLAG_FALSE_CACHE_TTL_MS = 20 * 60 * 1000;
+const rewstFlagCache = new Map(); // ticketAutotaskId -> { value: boolean, expiresAt }
+
+async function attachRewstStageDoneFlags(orders) {
+  const neededIds = [...new Set(orders.filter((o) => o.ticketAutotaskId).map((o) => o.ticketAutotaskId))];
+  if (neededIds.length === 0) return;
+
+  const now = Date.now();
+  const idsToFetch = neededIds.filter((id) => {
+    const cached = rewstFlagCache.get(id);
+    return !cached || now >= cached.expiresAt;
+  });
+
+  if (idsToFetch.length > 0) {
+    const client = await getClient();
+    await mapWithConcurrency(idsToFetch, 5, async (id) => {
+      try {
+        const historyRes = await client.ticketHistory.list({ filter: { ticketID: id } });
+        const rows = historyRes.data || historyRes || [];
+        const hasRewst = rows.some((r) => r.action === 'Status Changed' && /Rewst - Stage Done/i.test(r.detail || ''));
+        rewstFlagCache.set(id, { value: hasRewst, expiresAt: now + (hasRewst ? REWST_FLAG_TRUE_CACHE_TTL_MS : REWST_FLAG_FALSE_CACHE_TTL_MS) });
+      } catch (err) {
+        // Best-effort, same reasoning as attachTicketDetails() above -- and
+        // deliberately left OUT of the cache on failure (not cached as
+        // false), so a transient error here doesn't get remembered as a
+        // real "no" for the next 20 minutes.
+        console.error(`Contract Checks: failed to fetch ticket history for Rewst flag (ticket ${id}):`, err.message);
+      }
+    });
+  }
+
+  for (const o of orders) {
+    if (!o.ticketAutotaskId) continue;
+    const cached = rewstFlagCache.get(o.ticketAutotaskId);
+    if (cached) o.hasRewstStageDone = cached.value;
+  }
+}
+
 // Pulled out of GET / below into its own function, by request -- so the new
 // Check Client page (packages/check-client) can call this exact same
 // DB-read-plus-enrichment step in-process (via router.loadEnrichedItems,
@@ -491,8 +546,10 @@ router.get('/', async (req, res) => {
     });
     // Only the orders actually being returned, by request -- see
     // attachTicketDetails()'s own comment for why this runs after
-    // filtering, not before.
-    await attachTicketDetails(byClient.flatMap((g) => g.orders));
+    // filtering, not before. Run together, not sequentially -- they hit
+    // Autotask independently and don't depend on each other's results.
+    const visibleOrders = byClient.flatMap((g) => g.orders);
+    await Promise.all([attachTicketDetails(visibleOrders), attachRewstStageDoneFlags(visibleOrders)]);
 
     res.json({
       asOf: new Date().toISOString(),
@@ -783,5 +840,10 @@ router.patch('/templates/:key', (req, res) => {
 // or making an HTTP round-trip back into this same server.
 router.loadEnrichedItems = loadEnrichedItems;
 router.buildResponse = buildResponse;
+// Lets Check Client's own /orders route add the same Rewst - Stage Done
+// icon flag to its results, by request -- it calls loadEnrichedItems/
+// buildResponse above directly too, bypassing this file's own GET / route
+// (and therefore never running this function on its own).
+router.attachRewstStageDoneFlags = attachRewstStageDoneFlags;
 
 module.exports = router;

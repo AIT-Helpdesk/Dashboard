@@ -353,9 +353,22 @@ export function mount(container) {
 
   function poNumberCellHtml(o) {
     if (!o.poNumber) return '';
-    return o.ticketUrl
+    const linkOrText = o.ticketUrl
       ? `<a href="${escapeHtml(o.ticketUrl)}" target="_blank" rel="noopener" class="cc-ticket-link">${escapeHtml(o.poNumber)}</a>`
       : `<span title="Ticket not found in Autotask">${escapeHtml(o.poNumber)}</span>`;
+    // Small icon after the link, by request, when this ticket's status
+    // history ever passed through "Rewst - Stage Done" -- same
+    // attachRewstStageDoneFlags() flag Contract Checks' own page shows
+    // (check-client/server.js's /orders route calls it too, since this
+    // page's Orders section bypasses that page's own GET / route where it
+    // normally runs).
+    // Rewst's own real logo (packages/shell/public/rewst-icon.png), by
+    // request -- served as a plain static asset, same convention as
+    // logo.png/favicon.png already sitting in that same folder.
+    const rewstIcon = o.hasRewstStageDone
+      ? `<img src="/rewst-icon.png" class="cc-rewst-icon" alt="Rewst" title="This ticket passed through Rewst - Stage Done" />`
+      : '';
+    return `${linkOrText}${rewstIcon}`;
   }
 
   function licensesCellHtml(o) {
