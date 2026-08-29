@@ -33,7 +33,7 @@ export function mount(container) {
           </label>
           <label for="sort-input">Sort</label>
           <select id="sort-input">
-            <option value="recent">Client: Most Recent Order</option>
+            <option value="recent">Client + Order</option>
             <option value="client">Client: A-Z</option>
           </select>
         </div>
