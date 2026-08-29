@@ -40,6 +40,26 @@ const TICKET_STATUS_COMPLETE = 5;
 // own CLOSED_STATUSES, cross-referenced against packages/client-summary/
 // server.js), not a fresh guess.
 const TICKET_STATUS_BILLING_CONTRACT = 20;
+// FIX BILLING / Needs Internal Update -- the "reopen ticket to..." choices
+// on the ALL DONE untick confirmation, by request. Freshly verified (not
+// reused from elsewhere) against this tenant's real live ticket status
+// picklist (Tickets entityInformation/fields), which is reachable again --
+// the 401 noted above for TICKET_NOTE_TYPE/TICKET_NOTE_PUBLISH was a
+// temporary state at the time that comment was written, not a permanent
+// block.
+const TICKET_STATUS_FIX_BILLING = 50;
+const TICKET_STATUS_NEEDS_INTERNAL_UPDATE = 15;
+// The untick confirmation's own status choices, by request -- validated
+// against this set server-side (not just left to whatever the client's
+// fixed <select> happens to send) so a stray/tampered value can't set the
+// ticket to an arbitrary status through this route.
+const REOPEN_STATUS_CHOICES = [TICKET_STATUS_BILLING_CONTRACT, TICKET_STATUS_FIX_BILLING, TICKET_STATUS_NEEDS_INTERNAL_UPDATE];
+const TICKET_STATUS_LABELS = {
+  [TICKET_STATUS_BILLING_CONTRACT]: 'Billing - Contract',
+  [TICKET_STATUS_FIX_BILLING]: 'FIX Billing',
+  [TICKET_STATUS_NEEDS_INTERNAL_UPDATE]: 'Needs Internal Update',
+};
+const TICKET_NOTE_TITLE_REOPENING = 'Reopening Ticket using Dashboard Contract Checks';
 
 // autotask-node's own Tickets.update()/patch() both PUT/PATCH to
 // /Tickets/{id} -- confirmed directly against the real API this tenant
@@ -73,6 +93,51 @@ async function setTicketStatus(ticketAutotaskId, status) {
     console.error(`Contract Checks: failed to update ticket ${ticketAutotaskId} to status ${status}:`, err.message);
     return { ok: false, error: err.message };
   }
+}
+
+// Reopening a ticket (unticking ALL DONE to any status other than "Leave as
+// COMPLETE"), by request, leaves the same kind of note trail closing one
+// does -- a reviewer looking at the ticket's own note history should be
+// able to see it was reopened via this dashboard, by whom, when, and to
+// what status, not just find the status changed with no explanation. No
+// note for "Leave as COMPLETE" -- nothing actually changed on the ticket in
+// that case, so there's nothing to describe.
+async function postReopenNote(ticketAutotaskId, targetStatus, actor) {
+  const client = await getClient();
+  const statusLabel = TICKET_STATUS_LABELS[targetStatus] || `status ${targetStatus}`;
+  const description = [
+    `Ticket reopened -- status changed to ${statusLabel}.`,
+    '',
+    '-------------------------',
+    `Reopened by: ${actor.name} -- ${new Date().toLocaleString()}`,
+  ].join('\n');
+  try {
+    await client.ticketNotes.create(ticketAutotaskId, {
+      title: TICKET_NOTE_TITLE_REOPENING,
+      description,
+      noteType: TICKET_NOTE_TYPE,
+      publish: TICKET_NOTE_PUBLISH,
+    });
+    return { ok: true };
+  } catch (err) {
+    console.error(`Contract Checks: failed to post reopen note for ticket ${ticketAutotaskId}:`, err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Note-first, fail-closed -- same shape as postTicketNoteAndClose() below
+// (if the note fails, don't even attempt the status change), so a reopened
+// ticket never ends up with a real status change but no note explaining it.
+async function reopenTicketWithNote(ticketAutotaskId, targetStatus, actor) {
+  const noteResult = await postReopenNote(ticketAutotaskId, targetStatus, actor);
+  if (!noteResult.ok) {
+    return { ok: false, statusReverted: false, newStatus: targetStatus, notePosted: false, error: `Note: ${noteResult.error}` };
+  }
+  const statusResult = await setTicketStatus(ticketAutotaskId, targetStatus);
+  if (!statusResult.ok) {
+    return { ok: false, statusReverted: false, newStatus: targetStatus, notePosted: true, error: `Status: ${statusResult.error}` };
+  }
+  return { ok: true, statusReverted: true, newStatus: targetStatus, notePosted: true };
 }
 
 // Best-effort is NOT the right shape here (unlike Workshop's fire-and-forget
@@ -398,9 +463,19 @@ router.post('/sync', async (req, res) => {
 // audits (see db.js's own comment on why, unlike Workshop's equipment
 // checklist).
 router.patch('/items/:id/toggle', async (req, res) => {
-  const { field, value, closeTicket } = req.body || {};
+  const { field, value, closeTicket, reopenStatus } = req.body || {};
   if (!TOGGLE_FIELDS.includes(field)) {
     return res.status(400).json({ error: `field must be one of: ${TOGGLE_FIELDS.join(', ')}` });
+  }
+
+  // Validated up front, before setToggle() runs below -- rejecting a bad
+  // reopenStatus AFTER the checkbox has already flipped in the DB would
+  // leave the untick "successful" locally but the response reading as an
+  // error, which is confusing. 'leave' means "leave the ticket as
+  // COMPLETE" (by request) -- deliberately not sending any status change
+  // at all, not the same as reopening it TO Complete.
+  if (field === 'all_done' && !value && reopenStatus !== 'leave' && !REOPEN_STATUS_CHOICES.includes(Number(reopenStatus))) {
+    return res.status(400).json({ error: `reopenStatus must be one of ${REOPEN_STATUS_CHOICES.join(', ')}, or "leave".` });
   }
 
   // Locked once ALL DONE is ticked, by request -- every OTHER checkbox
@@ -429,10 +504,14 @@ router.patch('/items/:id/toggle', async (req, res) => {
   // the "Write Note (Don't Close)" option, by request -- ALL DONE still
   // gets ticked locally either way; only the real Autotask status change is
   // conditional.
-  // Unticking ALL DONE, by request, sends the ticket back to "Billing -
-  // Contract" status instead -- no note posted, just the status change
-  // (unlike ticking ON, which posts a note and, unless told not to, closes
-  // it). Same skip-if-no-linked-ticket rule as the ticking-ON case.
+  // Unticking ALL DONE, by request, asks which status to reopen the ticket
+  // to (see reopenStatus validation above) instead of always sending it
+  // back to "Billing - Contract" -- posts a reopen note (postReopenNote,
+  // above) describing the action, then makes the status change
+  // (reopenTicketWithNote) -- unlike the old behavior, which changed status
+  // with no note at all. "Leave as COMPLETE" skips both the note and the
+  // status change entirely -- a deliberate no-op, not a failure, so ok
+  // stays true. Same skip-if-no-linked-ticket rule as the ticking-ON case.
   let ticketAction = null;
   if (field === 'all_done' && updated.ticket_autotask_id) {
     if (value) {
@@ -443,9 +522,10 @@ router.patch('/items/:id/toggle', async (req, res) => {
         null,
         closeTicket !== false
       );
+    } else if (reopenStatus === 'leave') {
+      ticketAction = { ok: true, statusReverted: false, statusLeftAsComplete: true };
     } else {
-      const statusResult = await setTicketStatus(updated.ticket_autotask_id, TICKET_STATUS_BILLING_CONTRACT);
-      ticketAction = statusResult.ok ? { ok: true, statusReverted: true } : { ok: false, statusReverted: false, error: `Status: ${statusResult.error}` };
+      ticketAction = await reopenTicketWithNote(updated.ticket_autotask_id, Number(reopenStatus), actor);
     }
   }
 

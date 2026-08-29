@@ -55,6 +55,15 @@ const FIELD_LABELS = {
   ticket_note: 'Ticket Note',
 };
 
+// The confirmReopenTicket() choices' own labels -- server-side status ids
+// mirrored here (server.js's TICKET_STATUS_BILLING_CONTRACT/FIX_BILLING/
+// NEEDS_INTERNAL_UPDATE), used to name the status in a failure alert.
+const TICKET_STATUS_LABELS = {
+  20: 'Billing - Contract',
+  50: 'FIX Billing',
+  15: 'Needs Internal Update',
+};
+
 export function mount(container) {
   fetch('/api/me')
     .then((res) => res.json())
@@ -578,6 +587,56 @@ export function mount(container) {
     });
   }
 
+  // Same overlay/panel shell as confirmCloseTicket() above, for the
+  // opposite action -- unticking ALL DONE on an item with a real linked
+  // ticket, by request, asks which status to REOPEN it to rather than
+  // always sending it back to Billing - Contract. Resolves 'leave' (the
+  // ticket stays Complete, no Autotask call at all), a status id string
+  // ('20'/'50'/'15'), or 'cancel' (Escape/outside-click/Cancel button all
+  // resolve here, same as confirmCloseTicket()'s 'none') -- never rejects.
+  function confirmReopenTicket() {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'history-modal-overlay';
+      overlay.innerHTML = `
+        <div class="history-modal-panel wsp-qa-modal-panel">
+          <div class="history-modal-panel-header">
+            <span>Reopen Ticket?</span>
+          </div>
+          <div class="history-modal-body">
+            <p class="status">Unticking ALL DONE reopens this order. What should the linked ticket's status become?</p>
+            <select class="wsp-field cc-reopen-status-select">
+              <option value="20" selected>Set to Billing - Contract</option>
+              <option value="50">Set to FIX Billing</option>
+              <option value="15">Needs Internal Update</option>
+              <option value="leave">Leave as COMPLETE</option>
+            </select>
+            <div class="wsp-form-actions">
+              <button type="button" class="button-link cc-reopen-confirm-button">Confirm</button>
+              <button type="button" class="cc-reopen-cancel-button">Cancel</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      const finish = (value) => {
+        overlay.remove();
+        document.removeEventListener('keydown', onKeydown);
+        resolve(value);
+      };
+      function onKeydown(e) {
+        if (e.key === 'Escape') finish('cancel');
+      }
+      document.addEventListener('keydown', onKeydown);
+      const select = overlay.querySelector('.cc-reopen-status-select');
+      overlay.querySelector('.cc-reopen-confirm-button').addEventListener('click', () => finish(select.value));
+      overlay.querySelector('.cc-reopen-cancel-button').addEventListener('click', () => finish('cancel'));
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) finish('cancel');
+      });
+    });
+  }
+
   // Re-applies bulkSelection onto whatever .cc-row-select checkboxes are
   // currently in the DOM -- called after every render() (fresh checkboxes,
   // all unchecked by default) and after any selection change. Only
@@ -701,27 +760,42 @@ export function mount(container) {
         // Confirm before ticking ALL DONE ON for an item with a real
         // linked ticket -- this is the one toggle with a real side effect
         // (writing a note, and by default closing the ticket), by request.
-        // Unticking, or an item with no ticket link (nothing will actually
-        // happen), skips straight through with no popup. `closeTicket`
-        // stays true when there's nothing to confirm (no linked ticket) --
-        // harmless, since the server only ever consults it when a
-        // ticketAction is actually going to happen.
+        // Unticking one asks a different question instead -- which status
+        // to reopen the ticket to (confirmReopenTicket()), also by request.
+        // An item with no ticket link (nothing will actually happen either
+        // way) skips both popups entirely. `closeTicket`/`reopenStatus`
+        // stay at their harmless defaults when there's nothing to confirm
+        // -- the server only ever consults them when a ticketAction is
+        // actually going to happen.
         let closeTicket = true;
-        if (el.dataset.field === 'all_done' && el.checked) {
+        let reopenStatus = 'leave';
+        if (el.dataset.field === 'all_done') {
           const order = findOrder(el.dataset.id);
           if (order && order.ticketAutotaskId) {
-            const choice = await confirmCloseTicket();
-            if (choice === 'none') {
-              el.checked = false; // the click already toggled it visually -- revert
-              return;
+            if (el.checked) {
+              const choice = await confirmCloseTicket();
+              if (choice === 'none') {
+                el.checked = false; // the click already toggled it visually -- revert
+                return;
+              }
+              closeTicket = choice === 'close'; // false for "Write Note (Don't Close)"
+            } else {
+              const choice = await confirmReopenTicket();
+              if (choice === 'cancel') {
+                el.checked = true; // the click already toggled it visually -- revert
+                return;
+              }
+              reopenStatus = choice; // 'leave' or a status id string
             }
-            closeTicket = choice === 'close'; // false for "Write Note (Don't Close)"
           }
         }
         el.disabled = true;
         try {
           const body = { field: el.dataset.field, value: el.checked };
-          if (el.dataset.field === 'all_done') body.closeTicket = closeTicket;
+          if (el.dataset.field === 'all_done') {
+            body.closeTicket = closeTicket;
+            body.reopenStatus = reopenStatus;
+          }
           const result = await fetchJson(`/api/contract-checks/items/${el.dataset.id}/toggle`, 'PATCH', body);
           // Ticking ALL DONE, by request, also writes a note to the linked
           // Autotask ticket -- see PATCH /items/:id/toggle in server.js.
@@ -734,15 +808,24 @@ export function mount(container) {
           // (no ticketAction in the response at all in that case).
           // Success is silent, by request -- the confirmation before the
           // action already told the user what would happen, so nothing
-          // further is shown unless something actually went wrong. Three
-          // different shapes here: ticking ON posts a note and (unless
-          // "Write Note (Don't Close)" was chosen) closes the ticket
-          // (notePosted/statusClosed); unticking just reverts the status
-          // to Billing - Contract, no note involved (statusReverted).
+          // further is shown unless something actually went wrong. Both
+          // directions now post a note first, then change status (fail-
+          // closed -- server.js skips the status change if the note itself
+          // failed): ticking ON posts a note and (unless "Write Note
+          // (Don't Close)" was chosen) closes the ticket (notePosted/
+          // statusClosed); unticking to anything but "Leave as COMPLETE"
+          // posts a reopen note and reopens the ticket (notePosted/
+          // statusReverted) -- server.js echoes the target status back as
+          // newStatus (on success AND failure) so this message can name it.
           if (result.ticketAction && !result.ticketAction.ok) {
             const a = result.ticketAction;
             if ('statusReverted' in a) {
-              alert(`ALL DONE saved here, but reverting the ticket to Billing - Contract failed: ${a.error}`);
+              const statusLabel = TICKET_STATUS_LABELS[a.newStatus] || `status ${a.newStatus}`;
+              if (a.notePosted) {
+                alert(`ALL DONE saved here, and the reopen note WAS posted to Autotask -- but setting the ticket to ${statusLabel} failed: ${a.error}`);
+              } else {
+                alert(`ALL DONE saved here, but posting the reopen note to Autotask failed (ticket status left unchanged): ${a.error}`);
+              }
             } else if (a.notePosted) {
               // The note went through -- only the status change failed, so
               // don't imply nothing happened on the ticket.
