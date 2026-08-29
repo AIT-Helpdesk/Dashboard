@@ -8,6 +8,10 @@
     "id": "whats-on"
   },
   {
+    "type": "page",
+    "id": "workshop"
+  },
+  {
     "type": "category",
     "id": "daily-dashboards",
     "label": "Daily Dashboards",
@@ -23,10 +27,6 @@
       {
         "type": "page",
         "id": "my-strety-tasks"
-      },
-      {
-        "type": "page",
-        "id": "workshop"
       },
       {
         "type": "page",
@@ -163,5 +163,9 @@
   {
     "type": "page",
     "id": "datto-rmm"
+  },
+  {
+    "type": "page",
+    "id": "ticket-dashboards-test"
   }
 ]
