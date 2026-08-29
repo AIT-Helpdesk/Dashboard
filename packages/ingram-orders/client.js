@@ -28,7 +28,7 @@ export function mount(container) {
           <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
           <label for="sort-input">Sort</label>
           <select id="sort-input">
-            <option value="recent">Client + Order</option>
+            <option value="recent">Latest Order</option>
             <option value="client">Client: A-Z</option>
           </select>
         </div>

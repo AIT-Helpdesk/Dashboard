@@ -97,7 +97,7 @@ Grouped by resolved client name. Orders within a client are always sorted **most
 
 Client GROUPS, though, can be ordered either of two ways via the **Sort** dropdown next to the checkboxes:
 
-- **Client + Order** (default) -- whichever client has the single most recent order appears first, same as Ingram Orders' original/only behavior.
+- **Latest Order** (default) -- whichever client has the single most recent order appears first, same as Ingram Orders' original/only behavior.
 - **Client: A-Z** -- alphabetical by client name, same convention Ingram Subscriptions uses.
 
 This is a pure client-side, no-refetch display choice -- `client.js`'s `render()` re-sorts a shallow copy of the already-fetched `data.byClient` array (server response, or `lastData` on a same-session re-mount) rather than requesting anything new, so switching it is instant and isn't part of the cache key. `data.byClient` itself always arrives from the server sorted most-recent-order-first (see `server.js`'s `buildReport()`); the client only re-sorts when "Client: A-Z" is selected.
