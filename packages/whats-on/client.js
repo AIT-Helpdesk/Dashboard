@@ -140,19 +140,21 @@ export function mount(container) {
       <div id="tt-columns" class="tt-columns"></div>
     </div>
 
-    <div class="section-heading section-heading--nav section-heading-row">
-      <span>Team Shifts -- General</span>
-      <div class="date-form calendar-nav">
-        <button type="button" id="shifts-prev-button" aria-label="Previous week">&lsaquo;</button>
-        <span id="shifts-week-label" class="calendar-month-label"></span>
-        <button type="button" id="shifts-next-button" aria-label="Next week">&rsaquo;</button>
-        <button type="button" id="shifts-today-button">This Week</button>
-        <button type="button" id="shifts-refresh-button">Refresh</button>
+    <div class="wo-shifts-section">
+      <div class="section-heading section-heading--nav section-heading-row">
+        <span>Team Shifts -- General</span>
+        <div class="date-form calendar-nav">
+          <button type="button" id="shifts-prev-button" aria-label="Previous week">&lsaquo;</button>
+          <span id="shifts-week-label" class="calendar-month-label"></span>
+          <button type="button" id="shifts-next-button" aria-label="Next week">&rsaquo;</button>
+          <button type="button" id="shifts-today-button">This Week</button>
+          <button type="button" id="shifts-refresh-button">Refresh</button>
+        </div>
       </div>
+      <p id="shifts-status" class="status">Loading...</p>
+      <div id="shifts-calendar" class="results"></div>
+      <div id="shifts-legend" class="shifts-legend"></div>
     </div>
-    <p id="shifts-status" class="status">Loading...</p>
-    <div id="shifts-calendar" class="results"></div>
-    <div id="shifts-legend" class="shifts-legend"></div>
   `;
 
   const refreshButton = container.querySelector('#refresh-button');
@@ -752,7 +754,16 @@ export function mount(container) {
     // this was tooltip-only ("Type: ..."); now shown directly on the entry
     // itself, one line taller.
     const line3 = cat ? cat.label : e.displayName || '(unlabeled)';
-    const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2">${escapeHtml(line2)}</span><span class="calendar-entry-line2">${escapeHtml(line3)}</span>`;
+    // .calendar-entry-line2's shared CSS rule reads color: var(--muted) --
+    // fine normally, but once a matched-category entry's own background is
+    // pinned to its light-mode look (below), that class rule would still
+    // follow the page's real theme and go light-gray-on-pastel in dark
+    // mode. Pinned inline here too, same literal light --muted value, only
+    // when there's a real category to color -- an unmatched-label entry
+    // isn't one of these colored entries and keeps following the class
+    // rule (and the page's real theme) normally.
+    const line2Style = cat ? ' style="color: #6b7280;"' : '';
+    const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line2)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line3)}</span>`;
     const titleLines = [
       `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
       `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
@@ -767,11 +778,26 @@ export function mount(container) {
     // from an empty cell on a light background, so it gets a solid fill
     // plus a visible border instead, same special-case as the legend swatch
     // below.
+    //
+    // Every matched-category entry is pinned to its light-mode look always,
+    // by request -- narrower than the whole section (cell backgrounds, the
+    // legend, headers all still follow the page's real theme normally).
+    // Mixing toward opaque `white` here (not `transparent`, the previous
+    // value) is what actually makes this theme-independent: `transparent`
+    // composites against whatever's really painted behind the entry (the
+    // cell's own background, which follows the page theme), so the same
+    // tint looked muddy/dark once the cell itself went dark; mixing toward
+    // a fixed white keeps the pastel tint identical regardless of the
+    // cell's real color. `color`/`border` are likewise literals here, not
+    // `var(--fg)`/`var(--border)`, for the same reason -- an unmatched
+    // label (no cat at all) is the one case NOT touched, since it isn't
+    // one of these colored entries and should just read like normal page
+    // text.
     const style = !cat
       ? '' // unmatched label (e.g. real data's "Working ", or an unlabeled shift) -- plain default look, not falsely colored
       : cat.key === 'publicHoliday'
-        ? `background: #ffffff; color: #1a1a1a; border: 1px solid var(--border); border-left: 4.5px solid #9ca3af;`
-        : `background: color-mix(in srgb, ${cat.color} 22%, transparent); border-left-color: ${cat.color};`;
+        ? `background: #ffffff; color: #1a1a1a; border: 1px solid #e5e7eb; border-left: 4.5px solid #9ca3af;`
+        : `background: color-mix(in srgb, ${cat.color} 22%, white); color: #1a1a1a; border-left-color: ${cat.color};`;
     return `<div class="calendar-entry calendar-entry--allocated" style="${style}" title="${title}">${inner}</div>`;
   }
 
