@@ -1,0 +1,12 @@
+{
+  "name": "@dashboard/ingram-subscriptions-update-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "main": "../ingram-subscriptions/server.js",
+  "dashboardPage": {
+    "id": "ingram-subscriptions-update-contracts",
+    "label": "Ingram Subscriptions",
+    "client": "../ingram-subscriptions/client.js",
+    "server": "../ingram-subscriptions/server.js"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@dashboard/check-client",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "check-client",
+    "label": "Check Client",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/contract-checks": "*",
+    "@dashboard/ingram-subscriptions": "*",
+    "@dashboard/contract-services": "*",
+    "express": "^4.19.2"
+  }
+}

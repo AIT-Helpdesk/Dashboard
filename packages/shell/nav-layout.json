@@ -147,6 +147,33 @@
   },
   {
     "type": "category",
+    "id": "update-contracts",
+    "label": "Update Contracts",
+    "children": [
+      {
+        "type": "page",
+        "id": "contract-checks"
+      },
+      {
+        "type": "page",
+        "id": "check-client"
+      },
+      {
+        "type": "page",
+        "id": "contract-services-update-contracts"
+      },
+      {
+        "type": "page",
+        "id": "ingram-subscriptions-update-contracts"
+      },
+      {
+        "type": "page",
+        "id": "ingram-orders-update-contracts"
+      }
+    ]
+  },
+  {
+    "type": "category",
     "id": "security",
     "label": "Security",
     "children": [
@@ -161,11 +188,18 @@
     ]
   },
   {
-    "type": "page",
-    "id": "datto-rmm"
-  },
-  {
-    "type": "page",
-    "id": "ticket-dashboards-test"
+    "type": "category",
+    "id": "testing",
+    "label": "Testing",
+    "children": [
+      {
+        "type": "page",
+        "id": "datto-rmm"
+      },
+      {
+        "type": "page",
+        "id": "ticket-dashboards-test"
+      }
+    ]
   }
 ]

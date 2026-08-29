@@ -43,3 +43,9 @@ packages/workshop/data.db-wal
 packages/packages-received/data.db
 packages/packages-received/data.db-shm
 packages/packages-received/data.db-wal
+
+# Same reasoning, for Contract Checks' own SQLite database (synced Ingram
+# order data plus real checklist state, not source).
+packages/contract-checks/data.db
+packages/contract-checks/data.db-shm
+packages/contract-checks/data.db-wal
