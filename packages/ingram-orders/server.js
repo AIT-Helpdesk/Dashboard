@@ -48,21 +48,52 @@ async function fetchCustomers(token) {
   return all;
 }
 
-async function buildReport(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm) {
+async function buildReport(sinceDate, filterTerm, includeRenewals, includeAllRenewals, includeCancelled, statusTerm, productTerm) {
   const token = await getToken();
   const { startISO } = aestDayBoundsIso(sinceDate); // AEST midnight of the selected date, not UTC
 
   const [orders, customers] = await Promise.all([fetchOrdersSince(token, startISO), fetchCustomers(token)]);
   const customerNameById = new Map(customers.map((c) => [c.id, c.name]));
 
+  // First pass: which clients have at least one surviving NON-renewal order
+  // under the Cancelled/Status/Client filters (deliberately NOT the renewal
+  // gate itself, and NOT the Product filter -- Product is resolved later,
+  // from detail, and is orthogonal to this question). Answers "would this
+  // client be on the page anyway, for a real order" -- used below by the
+  // partial "Show Renewals" mode.
+  const nonRenewalClientIds = new Set();
+  for (const o of orders) {
+    if (o.type === 'renewal') continue;
+    if (!includeCancelled && o.status === 'cancelled') continue;
+    if (statusTerm && !matchesWildcard(o.status || '', statusTerm)) continue;
+    const clientName = customerNameById.get(o.customerId) || `Customer #${o.customerId}`;
+    if (filterTerm && !matchesWildcard(clientName, filterTerm)) continue;
+    nonRenewalClientIds.add(o.customerId);
+  }
+
   const byClientMap = new Map();
   for (const o of orders) {
-    // Off by default, by request -- renewals are typically the highest-volume,
-    // least-actionable order type (automatic, no real decision behind them),
-    // so they're excluded from both the grouping and the counts unless
-    // explicitly asked for, rather than just hidden client-side after the
-    // fact (which would still count them in totals/status breakdown).
-    if (!includeRenewals && o.type === 'renewal') continue;
+    if (o.type === 'renewal') {
+      // Two independent, off-by-default ways renewals get pulled back in --
+      // renewals are typically the highest-volume, least-actionable order
+      // type (automatic, no real decision behind them), so excluded unless
+      // explicitly asked for, same as before. Now two different asks:
+      //  - Show ALL Renewals: every renewal order, unconditionally -- this
+      //    page's original/only renewals behavior, unchanged.
+      //  - Show Renewals: only a renewal belonging to a client that's
+      //    ALREADY going to be listed for a real, non-renewal order (see
+      //    nonRenewalClientIds above) -- a client isn't pulled onto the page
+      //    SOLELY because of a renewal, but if they're here anyway, their
+      //    renewals are shown too for context. If both are checked, Show ALL
+      //    Renewals wins -- it's the strict superset.
+      if (includeAllRenewals) {
+        // include unconditionally
+      } else if (includeRenewals && nonRenewalClientIds.has(o.customerId)) {
+        // this client has another surviving order -- include the renewal too
+      } else {
+        continue;
+      }
+    }
     // Also off by default, same rationale, but keyed on STATUS rather than
     // type -- confirmed against real data these are mostly different orders
     // (a `status: 'cancelled'` order can be a `change`, `sales`, or
@@ -155,6 +186,7 @@ async function buildReport(sinceDate, filterTerm, includeRenewals, includeCancel
     statusTerm: statusTerm || null,
     productTerm: productTerm || null,
     includeRenewals: !!includeRenewals,
+    includeAllRenewals: !!includeAllRenewals,
     includeCancelled: !!includeCancelled,
     detailPreloaded,
     totalCount: matched.length,
@@ -172,17 +204,17 @@ const REPORT_CACHE_TTL_MS = 20 * 60 * 1000;
 const reportCacheByKey = new Map(); // key -> { data, expiresAt }
 const inFlightByKey = new Map(); // key -> Promise, so concurrent cold-cache requests for the same key share one build
 
-function cacheKeyFor(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm) {
+function cacheKeyFor(sinceDate, filterTerm, includeRenewals, includeAllRenewals, includeCancelled, statusTerm, productTerm) {
   const norm = (s) => (s || '').trim().toLowerCase();
-  return `${sinceDate}|${norm(filterTerm)}|${includeRenewals ? 'withRenewals' : 'noRenewals'}|${includeCancelled ? 'withCancelled' : 'noCancelled'}|${norm(statusTerm)}|${norm(productTerm)}`;
+  return `${sinceDate}|${norm(filterTerm)}|${includeRenewals ? 'someRenewals' : 'noSomeRenewals'}|${includeAllRenewals ? 'allRenewals' : 'noAllRenewals'}|${includeCancelled ? 'withCancelled' : 'noCancelled'}|${norm(statusTerm)}|${norm(productTerm)}`;
 }
 
-async function getReport(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm, force) {
-  const key = cacheKeyFor(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm);
+async function getReport(sinceDate, filterTerm, includeRenewals, includeAllRenewals, includeCancelled, statusTerm, productTerm, force) {
+  const key = cacheKeyFor(sinceDate, filterTerm, includeRenewals, includeAllRenewals, includeCancelled, statusTerm, productTerm);
   const cached = reportCacheByKey.get(key);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
   if (!inFlightByKey.has(key)) {
-    const build = buildReport(sinceDate, filterTerm, includeRenewals, includeCancelled, statusTerm, productTerm)
+    const build = buildReport(sinceDate, filterTerm, includeRenewals, includeAllRenewals, includeCancelled, statusTerm, productTerm)
       .then((data) => {
         reportCacheByKey.set(key, { data, expiresAt: Date.now() + REPORT_CACHE_TTL_MS });
         return data;
@@ -312,6 +344,7 @@ router.get('/', async (req, res) => {
       sinceDate,
       req.query.client,
       req.query.includeRenewals === 'true',
+      req.query.includeAllRenewals === 'true',
       req.query.includeCancelled === 'true',
       req.query.status,
       req.query.product,
