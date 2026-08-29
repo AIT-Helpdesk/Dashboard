@@ -433,6 +433,7 @@ export function mount(container) {
           o.poNumber = detail?.poNumber ?? null;
           o.products = detail?.products ?? [];
           o.currentTotal = detail?.currentTotal ?? null;
+          o.effectiveDate = detail?.effectiveDate ?? null;
         }
         client.detailLoaded = true;
       }
