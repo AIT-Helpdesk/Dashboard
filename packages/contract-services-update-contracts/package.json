@@ -1,0 +1,12 @@
+{
+  "name": "@dashboard/contract-services-update-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "main": "../contract-services/server.js",
+  "dashboardPage": {
+    "id": "contract-services-update-contracts",
+    "label": "Contract Services",
+    "client": "../contract-services/client.js",
+    "server": "../contract-services/server.js"
+  }
+}

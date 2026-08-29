@@ -269,4 +269,11 @@ router.get('/licenses', async (req, res) => {
   }
 });
 
+// Attached to the router (a function, so it can carry extra named
+// properties) rather than changed on module.exports itself -- the shell
+// still needs `require('./server.js')` to BE the router it mounts. Lets the
+// new Check Client page (packages/check-client) call this exact same
+// cached report-building function in-process, instead of duplicating it.
+router.getReport = getReport;
+
 module.exports = router;

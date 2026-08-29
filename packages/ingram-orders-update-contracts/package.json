@@ -1,0 +1,12 @@
+{
+  "name": "@dashboard/ingram-orders-update-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "main": "../ingram-orders/server.js",
+  "dashboardPage": {
+    "id": "ingram-orders-update-contracts",
+    "label": "Ingram Orders",
+    "client": "../ingram-orders/client.js",
+    "server": "../ingram-orders/server.js"
+  }
+}

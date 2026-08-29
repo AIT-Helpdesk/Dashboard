@@ -262,6 +262,20 @@ a.nav-link.active[href="#start-here"] {
   padding-bottom: 0.3rem;
 }
 
+/* A separator line in the Update Contracts category, by request -- between
+   Check Client and the three "*-update-contracts" alias pages after it
+   (see packages/*-update-contracts' own READMEs for what those alias pages
+   are). Targeted at the specific page's own nav item via its link's href
+   (`#<page id>`, always set that way -- see renderPageItem() in app.js)
+   rather than a new node type in nav-layout.json's own tree schema, which
+   would mean teaching reconcileTree()/drag-and-drop/rendering in app.js
+   about a whole new kind of node just for a cosmetic line. */
+.nav-item:has(> a[href="#contract-services-update-contracts"]) {
+  border-top: 1px solid var(--border);
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+}
+
 .nav-category {
   border-radius: 6px;
 }
@@ -794,6 +808,160 @@ h1 {
 .ingram-orders-table td:nth-child(8) {
   width: 8%;
   text-align: right;
+}
+
+/* Contract Checks has many more columns than any other table-based page on
+   this dashboard (Order #/Type/Status/Created/Provisioned/PO #/Product/
+   Licenses plus 5 checkboxes/Info/History), so everything from the summary
+   line down (NOT the page header/filter form above it) runs smaller, by
+   request, so more fits on screen at once. Scoped to .contract-checks-page
+   (the page's own wrapper div in client.js) rather than the shared
+   .summary/table/th/td rules, which many other pages also use at their
+   normal size. Also matches .check-client-page (Check Client's own wrapper
+   div) -- its Orders section reuses Contract Checks' own table/row shape
+   (minus the row-select column) verbatim, so it gets the same compact
+   treatment rather than a duplicated rule block. */
+.contract-checks-page .summary,
+.check-client-page .summary {
+  font-size: 0.85rem;
+}
+.contract-checks-page table th,
+.contract-checks-page table td,
+.check-client-page table th,
+.check-client-page table td {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.5rem;
+}
+.contract-checks-page table th,
+.check-client-page table th {
+  font-size: 0.68rem;
+}
+.contract-checks-page .resource-group-header,
+.check-client-page .resource-group-header {
+  font-size: 0.85rem;
+  padding: 0.5rem 0.75rem;
+}
+/* The Q/A/N info icons and the History icon scale down to match, same
+   reasoning -- otherwise they'd dominate the now-smaller row text. */
+.contract-checks-page .wsp-qa-icon,
+.check-client-page .wsp-qa-icon {
+  font-size: 0.75rem;
+}
+.contract-checks-page .wsp-qa-icon--set,
+.check-client-page .wsp-qa-icon--set {
+  font-size: 1.05rem;
+}
+.contract-checks-page .wsp-qa-icon--a.wsp-qa-icon--set,
+.check-client-page .wsp-qa-icon--a.wsp-qa-icon--set {
+  font-size: 0.9rem;
+}
+/* Ticket Note's before/after blocks in the History modal
+   (historyEntryHtml() in client.js) -- NOT scoped under .contract-checks-page
+   since the modal itself is appended to document.body, outside that
+   wrapper. white-space: pre-wrap preserves the template's own line breaks
+   instead of squashing multi-line note text onto one line. */
+.cc-history-note-label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-top: 0.3rem;
+}
+.cc-history-note-block {
+  white-space: pre-wrap;
+  background: var(--section-header-bg);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  margin-top: 0.15rem;
+  font-size: 0.82rem;
+}
+.cc-history-note-block.cc-history-note-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+/* The Close Ticket confirm dialog's 3 buttons (confirmCloseTicket() in
+   client.js) -- NOT scoped under .contract-checks-page, same reasoning as
+   the history note blocks above (this modal is also appended straight to
+   document.body). Their labels are 2 lines now (a <br> at each " - "), by
+   request -- smaller text reads better at that length than the default
+   button size. */
+.cc-confirm-close-button,
+.cc-confirm-note-only-button,
+.cc-confirm-cancel-button {
+  font-size: 0.8rem;
+  line-height: 1.3;
+  text-align: center;
+}
+/* Ticket Note modal (openTicketNoteModal() in client.js) -- ~25% wider than
+   the shared .wsp-qa-modal-panel's own 24rem, by request (the height half
+   of "25% wider and 25% longer" is the textarea's own rows attribute,
+   bumped from 9 to 11 in client.js instead of a CSS height override). */
+.cc-ticket-note-modal-panel {
+  width: 30rem;
+}
+.contract-checks-page .wsp-icon-btn,
+.check-client-page .wsp-icon-btn {
+  font-size: 0.75rem;
+}
+/* Check Client's three stacked section headings (Orders/Subscriptions/
+   Contract Services) -- this is the first page on the dashboard stacking
+   several independently-fetched sections on one screen, so there's no
+   existing heading convention to reuse for this specific element. Plain
+   and understated -- the .resource-group-header bars underneath (one per
+   client/company within a section) already carry the visual weight. */
+.check-client-page .chk-section-heading {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.check-client-page .chk-section-heading:first-of-type {
+  margin-top: 1rem;
+}
+/* Since/Month right-justified, but only up to (not past) where the Search
+   button sits on the row below, by request -- see the .chk-search-spacer
+   comment in client.js for how the stopping point is reserved without a
+   hardcoded width. */
+.check-client-page .chk-date-row {
+  justify-content: flex-end;
+}
+.check-client-page .chk-search-spacer {
+  visibility: hidden;
+  pointer-events: none;
+}
+/* "Client: <Autotask Client>[ / <Ingram Client>]" under the page title, by
+   request -- .page-header is `display: flex; justify-content: space-between`
+   with the <h1> and the filter form as its two items, so the title and this
+   new subtitle are wrapped in their own column so the pair reads as ONE
+   flex item (title above, subtitle below) instead of the subtitle becoming
+   a third item sitting beside the form. */
+.check-client-page .chk-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.check-client-page .chk-client-label {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+/* Contract Checks' own table -- a DIFFERENT class from .ingram-orders-table
+   above (even though the two pages share the same first several columns)
+   because Contract Checks has many more columns after Licenses (the
+   checkbox/Info/Ticket Note/ALL COMPLETE workflow columns), which would
+   fight .ingram-orders-table's own fixed percentage widths -- sized for
+   THAT page's narrower column count -- for space, squeezing Product too
+   hard. table-layout: auto instead, by request, so every short-content
+   column (Order #/Type/Status/Created/Provisioned/PO #) shrinks to just
+   what it needs, leaving the real space for Product (below) and the
+   workflow columns. */
+.contract-checks-table {
+  table-layout: auto;
+}
+/* Don't wrap the Product name, by request -- with table-layout: auto this
+   is what actually forces the column to size to its content's real width
+   instead of wrapping into the space auto-layout would otherwise guess at. */
+.contract-checks-table td.cc-product-cell {
+  white-space: nowrap;
 }
 
 .ticket-times-table {
@@ -2451,6 +2619,15 @@ tr.row-units-changed {
      0.15rem -> 0.05rem -> -0.05rem -> 0.1rem -> settled on -0.1rem. */
   margin-left: -0.1rem;
 }
+/* Green -- the same #16a34a .cell-flag-green already uses, not a new
+   one-off colour, by request. Contract Checks' Ticket Note icon
+   (infoIconsHtml() in packages/contract-checks/client.js) -- a separate
+   editor from Q/A now, by request, so it gets real breathing room instead
+   of the tight -0.1rem the Q/A pair themselves use to sit close together. */
+.wsp-qa-icon--t {
+  color: #16a34a;
+  margin-left: 0.5rem;
+}
 .wsp-qa-icon--empty {
   opacity: 0.28;
 }
@@ -2490,6 +2667,26 @@ tr.row-units-changed {
 }
 .wsp-qa-modal-label .wsp-field {
   flex: 1;
+}
+/* For a multi-line field in one of these labels (Contract Checks' Ticket
+   Note textarea) -- keeps the icon pinned to the first line instead of
+   vertically centering against the whole taller box. */
+.wsp-qa-modal-label--top {
+  align-items: flex-start;
+}
+.wsp-qa-modal-label--top .wsp-qa-icon {
+  margin-top: 0.2rem;
+}
+/* Plain text label (not an icon) for a wsp-qa-modal-label row -- Contract
+   Checks' Edit Template form (Name/Content), which has no Q/A-style icon
+   of its own to sit in that slot. */
+.wsp-qa-modal-field-label {
+  min-width: 3.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.wsp-qa-modal-label--top .wsp-qa-modal-field-label {
+  margin-top: 0.2rem;
 }
 /* Upload Photos modal (openPhotoUploadModal() in client.js) -- same
    overlay/panel shell as the Q&A/Equipment/History modals, its own body
