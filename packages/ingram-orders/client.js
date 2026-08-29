@@ -44,11 +44,11 @@ export function mount(container) {
           <label for="include-renewals-input" class="inline-checkbox-label">
             <input type="checkbox" id="include-renewals-input" /> Show Renewals
           </label>
-          <label for="include-all-renewals-input" class="inline-checkbox-label">
-            <input type="checkbox" id="include-all-renewals-input" /> Show ALL Renewals
-          </label>
           <label for="include-cancelled-input" class="inline-checkbox-label">
             <input type="checkbox" id="include-cancelled-input" /> Show Cancelled
+          </label>
+          <label for="include-all-renewals-input" class="inline-checkbox-label">
+            <input type="checkbox" id="include-all-renewals-input" /> Show ALL Renewals
           </label>
         </div>
       </form>
@@ -253,13 +253,33 @@ export function mount(container) {
         <td>${escapeHtml(capitalize(o.type))}</td>
         <td${o.status !== 'completed' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(capitalize(o.status))}</td>
         <td class="ticket-number">${formatDateTime(o.creationDate)}</td>
-        <td class="ticket-number">${formatDateTime(o.provisioningDate)}</td>
+        <td class="ticket-number">${provisionedCellHtml(o)}</td>
         <td class="ticket-number">${escapeHtml(o.poNumber ?? '')}</td>
         <td>${escapeHtml((o.products || []).map((p) => p.name).join(', '))}</td>
         <td class="ticket-number">${licensesCellHtml(o)}</td>
       </tr>`
       )
       .join('');
+  }
+
+  // Provisioned cell content. `provisioningDate` (a real timestamp) wins
+  // whenever Ingram has actually set it -- unchanged from before. Otherwise,
+  // for a "pending" (status: processing) order, once its detail has been
+  // loaded (click a client's name, "Load All Products & Licenses", or a
+  // Product filter -- see server.js's fetchOrderDetailWithRetry(), which is
+  // where `effectiveDate` gets resolved), show when the change will take
+  // effect instead -- either the actual date parsed from the order's own
+  // line-item description, or, when that can't be found, the subscription's
+  // next renewal date as a fallback. Shown in red either way, by request,
+  // to mark it as a projected/not-yet-provisioned date rather than a
+  // confirmed one. Blank for anything else (a non-pending order, or a
+  // pending order whose detail hasn't been loaded yet).
+  function provisionedCellHtml(o) {
+    if (o.provisioningDate) return formatDateTime(o.provisioningDate);
+    if (o.status === 'processing' && o.effectiveDate) {
+      return `<span class="cell-flag-red">${formatDate(o.effectiveDate)}</span>`;
+    }
+    return '';
   }
 
   // Licenses cell content. Two shapes:
@@ -367,6 +387,7 @@ export function mount(container) {
         o.poNumber = detail?.poNumber ?? null;
         o.products = detail?.products ?? [];
         o.currentTotal = detail?.currentTotal ?? null;
+        o.effectiveDate = detail?.effectiveDate ?? null;
       }
       client.detailLoaded = true;
 
@@ -440,6 +461,15 @@ export function mount(container) {
   function formatDateTime(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleString();
+  }
+
+  // Plain YYYY-MM-DD date (no time component) -- for effectiveDate, which is
+  // a calendar date (either parsed straight out of a description string or a
+  // subscription's own renewalDate), not a real timestamp. Same AEST-anchored
+  // convention Ingram Subscriptions' own formatDate() uses for renewalDate.
+  function formatDate(isoDateOnly) {
+    if (!isoDateOnly) return '';
+    return new Date(`${isoDateOnly}T00:00:00.000Z`).toLocaleDateString(undefined, { timeZone: 'Australia/Brisbane' });
   }
 
   function escapeHtml(str) {

@@ -160,6 +160,7 @@ async function buildReport(sinceDate, filterTerm, includeRenewals, includeAllRen
       o.poNumber = details[i].poNumber;
       o.products = details[i].products;
       o.currentTotal = details[i].currentTotal;
+      o.effectiveDate = details[i].effectiveDate;
     });
     byClient = byClient
       .map((c) => ({ ...c, orders: c.orders.filter((o) => (o.products || []).some((p) => matchesWildcard(p.name, productTerm))) }))
@@ -260,6 +261,26 @@ async function fetchOrderDetailWithRetry(id, token, attempt = 1) {
     let products = (detail.products || [])
       .filter((p) => p.name)
       .map((p) => ({ name: p.name, quantity: typeof p.quantity === 'number' ? p.quantity : null }));
+
+    // Subscription detail is fetched at most ONCE per order, lazily, and
+    // memoized here -- reused below for whichever of three things actually
+    // need it (the product-name fallback, a `change` order's current-total
+    // lookup, and the pending-effective-date fallback), rather than issuing
+    // up to three separate requests for the same subscription.
+    let sub;
+    let subFetchAttempted = false;
+    async function getSubOnce() {
+      if (subFetchAttempted || !detail.subscriptionId) return sub;
+      subFetchAttempted = true;
+      try {
+        sub = await getSubscriptionDetail(detail.subscriptionId, token);
+      } catch {
+        // Leaves sub undefined -- each caller below already treats that as
+        // "couldn't resolve", same as before this was combined into one fetch.
+      }
+      return sub;
+    }
+
     // Confirmed against real data: `renewal` and `cancellation` type orders
     // carry NO `products` (or `details`) array at all on the order itself --
     // `change`/`sales` orders do. Every order type seen still carries a
@@ -268,13 +289,8 @@ async function fetchOrderDetailWithRetry(id, token, attempt = 1) {
     // cancelled subscription. Falls back to it rather than leaving the
     // Product column blank for these order types.
     if (products.length === 0 && detail.subscriptionId) {
-      try {
-        const sub = await getSubscriptionDetail(detail.subscriptionId, token);
-        if (sub.name) products = [{ name: sub.name, quantity: totalQuantity(sub) }];
-      } catch {
-        // Subscription lookup failing isn't fatal to the order detail as a
-        // whole -- just leaves the Product column blank for this one order.
-      }
+      const s = await getSubOnce();
+      if (s?.name) products = [{ name: s.name, quantity: totalQuantity(s) }];
     }
 
     // For a `change` order specifically, also resolve the subscription's
@@ -286,15 +302,36 @@ async function fetchOrderDetailWithRetry(id, token, attempt = 1) {
     // way to get an exact-at-the-time snapshot from this API.
     let currentTotal = null;
     if (detail.type === 'change' && detail.subscriptionId && products.some((p) => typeof p.quantity === 'number')) {
-      try {
-        const sub = await getSubscriptionDetail(detail.subscriptionId, token);
-        currentTotal = totalQuantity(sub);
-      } catch {
-        // Leaves currentTotal null -- the client just shows the delta alone, no "= N".
+      const s = await getSubOnce();
+      if (s) currentTotal = totalQuantity(s);
+    }
+
+    // Provisioned column, for a "pending" (status: processing -- the same
+    // status this page's Licenses column already treats as "not final yet",
+    // see licensesCellHtml() in client.js) order: Ingram hasn't provisioned
+    // anything yet, so `provisioningDate` is empty. By request, show WHEN
+    // the change will take effect instead, once detail's been loaded.
+    // Primary source: a `change` order's own `details[].description` spells
+    // out the new billing period as free text -- confirmed against real
+    // data, e.g. "... Recurring (1 Month(s) term) from 2026-09-18 through
+    // 2026-10-17" -- the "from" date is the date this change actually
+    // activates. Not every order carries this (renewal/cancellation types
+    // have no `details` array at all -- same gap the product-name fallback
+    // above works around), so when no such date can be found, falls back to
+    // the subscription's own next `renewalDate` instead, per request.
+    let effectiveDate = null;
+    if (detail.status === 'processing') {
+      const lineWithDate = (detail.details || []).find((d) => /from\s+\d{4}-\d{2}-\d{2}\s+through/.test(d.description || ''));
+      const match = lineWithDate && lineWithDate.description.match(/from\s+(\d{4}-\d{2}-\d{2})\s+through/);
+      if (match) {
+        effectiveDate = match[1];
+      } else if (detail.subscriptionId) {
+        const s = await getSubOnce();
+        effectiveDate = s?.renewalDate || null;
       }
     }
 
-    return { poNumber: detail.poNumber || null, products, currentTotal };
+    return { poNumber: detail.poNumber || null, products, currentTotal, effectiveDate };
   } catch (err) {
     if (err.response?.status === 429 && attempt < MAX_ATTEMPTS) {
       const retryAfterHeader = err.response.headers['retry-after'];
@@ -304,7 +341,7 @@ async function fetchOrderDetailWithRetry(id, token, attempt = 1) {
       return fetchOrderDetailWithRetry(id, token, attempt + 1);
     }
     console.error(`Failed to fetch order detail for ${id}:`, err.message);
-    return { poNumber: null, products: [], currentTotal: null };
+    return { poNumber: null, products: [], currentTotal: null, effectiveDate: null };
   }
 }
 

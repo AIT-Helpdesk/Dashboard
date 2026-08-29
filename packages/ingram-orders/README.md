@@ -33,7 +33,18 @@ Both are part of the cache key (`cacheKeyFor()`) alongside since-date/client/ren
 
 ## Table columns
 
-**Order #**, **Type** (`change`, `renewal`, `sales`, `cancellation` confirmed in real data -- shown as-is, not enumerated as a fixed list, and not filterable -- see below), **Status**, **Created** (`creationDate`, a real timestamp -- shown as full date+time, browser-local, unlike Ingram Subscriptions' plain-date fields), **Provisioned** (`provisioningDate`, blank until Ingram actually provisions the order -- most non-`completed` orders won't have one yet), **PO #**, **Product**, **Licenses** (the last column, right-justified -- see below). Group headers show just the client name, nothing else -- no order count, by request.
+**Order #**, **Type** (`change`, `renewal`, `sales`, `cancellation` confirmed in real data -- shown as-is, not enumerated as a fixed list, and not filterable -- see below), **Status**, **Created** (`creationDate`, a real timestamp -- shown as full date+time, browser-local, unlike Ingram Subscriptions' plain-date fields), **Provisioned** (`provisioningDate`, blank until Ingram actually provisions the order -- most non-`completed` orders won't have one yet; for a still-`processing` order, shows a projected date instead once detail's loaded -- see "Provisioned column for pending orders" below), **PO #**, **Product**, **Licenses** (the last column, right-justified -- see below). Group headers show just the client name, nothing else -- no order count, by request.
+
+## Provisioned column for pending orders
+
+A `status: 'processing'` order (this page's "not final yet" status -- same one the Status and Licenses columns already flag blue, see "What the Licenses column actually means" below) has no `provisioningDate` yet, since Ingram hasn't actually provisioned it. By request, the Provisioned column shows **when the change will take effect** instead, once that order's detail has been loaded (click the client's name, "Load All Products & Licenses", or a Product filter -- same on-demand detail fetch as PO#/Product/Licenses, resolved in `fetchOrderDetailWithRetry()`). Blank before detail is loaded, same as PO#/Product/Licenses.
+
+Two sources, in order:
+
+1. **The order's own line-item description** -- a `change` order's `details[].description` spells out the new billing period as free text, confirmed against real data, e.g. `"Microsoft 365 Business Premium Recurring (1 Month(s) term) from 2026-09-18 through 2026-10-17"`. The `from` date is the date the change actually activates, extracted with a regex (`/from\s+(\d{4}-\d{2}-\d{2})\s+through/`) against the first line that matches.
+2. **The subscription's own next `renewalDate`** (via `getSubscriptionDetail()`) -- used whenever no such date can be found on the order itself, which is expected for `renewal`/`cancellation`-type orders (confirmed against real data these carry no `details` array at all, same gap the Product-column fallback below works around).
+
+Either way, shown in **red** (`.cell-flag-red`) to mark it as a projected/not-yet-provisioned date, distinct from a real `provisioningDate`. The subscription lookup used for this fallback is the same memoized per-order fetch (`getSubOnce()`) the product-name fallback and the `change`-order current-total lookup already use -- resolved at most once per order regardless of how many of the three need it.
 
 ## Show Renewals / Show ALL Renewals (two checkboxes, both off by default)
 
