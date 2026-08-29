@@ -949,6 +949,19 @@ h1 {
   font-weight: 700;
   margin-left: 0.3rem;
 }
+/* The PO # edit pencil (client.js's poNumberCellHtml()) -- an inline SVG
+   (fill="currentColor") now, not the ✏️ emoji it replaced, specifically so
+   it CAN be recolored at all -- a colored emoji glyph ignores `color`
+   entirely in every browser. Muted beige/yellow, by request ("the current
+   one is a bit too bright") -- overrides .wsp-icon-btn's own default
+   var(--muted), same specificity (both are single-class selectors on the
+   same element) resolved by this rule coming later in the file. Hover
+   still shifts to the shared var(--accent), same as every other
+   .wsp-icon-btn -- not overridden here on purpose, for a consistent hover
+   cue across the dashboard. */
+.cc-po-edit-btn {
+  color: #c9a468;
+}
 /* Ticket Note modal (openTicketNoteModal() in client.js) -- ~25% wider than
    the shared .wsp-qa-modal-panel's own 24rem, by request (the height half
    of "25% wider and 25% longer" is the textarea's own rows attribute,

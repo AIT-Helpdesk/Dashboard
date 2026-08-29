@@ -396,7 +396,11 @@ export function mount(container) {
   function poNumberCellHtml(o) {
     // The edit icon is ALWAYS shown, by request -- even with no PO # yet,
     // there needs to be a way to add one, not just correct an existing one.
-    const editIcon = `<button type="button" class="wsp-icon-btn cc-po-edit-btn" data-id="${o.id}" title="Edit ticket number">✏️</button>`;
+    // An inline SVG (fill="currentColor"), not the ✏️ emoji it replaced --
+    // by request, a muted beige/yellow instead of the emoji's own fixed
+    // bright colors, which CSS can't recolor at all (a colored emoji glyph
+    // ignores `color`, unlike a currentColor SVG). Styled in styles.css.
+    const editIcon = `<button type="button" class="wsp-icon-btn cc-po-edit-btn" data-id="${o.id}" title="Edit ticket number"><svg class="cc-po-edit-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>`;
     if (!o.poNumber) return editIcon;
     // target="_blank" stays as a real fallback (middle-click/ctrl-click/
     // "open in new tab" all still work normally) -- the plain-click case is
