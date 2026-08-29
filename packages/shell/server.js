@@ -286,7 +286,33 @@ function stretyAutomationRedirectUriFor(req) {
   return `${req.protocol}://${req.get('host')}/auth/strety-automation/callback`;
 }
 
+// CONFIRMED root cause (2026-08-28), not just a theoretical risk: this
+// route being reachable by any signed-in dashboard user, surfaced via a
+// "Reconnect" link on What's On to everyone, is exactly how the shared
+// automation connection ended up authorized as a real employee (Melissa)
+// instead of helpdesk@ -- she clicked a "fix the stale numbers" banner on
+// her own Helpdesk/Personal Scorecards view, and Strety's login page
+// silently reused her own already-active session rather than the
+// login_hint below. Every automated check-in since then was correctly,
+// faithfully attributed to her -- there was no bug in what Strety recorded,
+// only in who was allowed to trigger the reconnect. Gated to Amber only
+// for now (both here and its matching visibility gate in
+// packages/whats-on/server.js's canSeeAutomationStatus) while a permanent
+// design gets decided. This token store (packages/strety-autotask-sync/
+// .tokens.json, via stretyAutomationClient) is read ONLY by sync.js's
+// scheduled writes -- confirmed nothing dashboard-facing requires this
+// module anywhere else, so reconnecting it here never affects what Strety
+// data any user's own dashboard session sees.
+const STRETY_AUTOMATION_ADMIN_EMAIL = 'amber@ambientit.com.au';
+function isStretyAutomationAdmin(req) {
+  const email = req.session.user?.email;
+  return !!email && email.toLowerCase() === STRETY_AUTOMATION_ADMIN_EMAIL;
+}
+
 app.get('/auth/strety-automation/connect', (req, res) => {
+  if (!isStretyAutomationAdmin(req)) {
+    return res.status(403).send(stretyConnectPage('Reconnecting the Helpdesk automation account is restricted to Amber for now.'));
+  }
   if (!process.env.STRETY_AUTOMATION_CLIENT_ID) {
     return res.status(500).send('STRETY_AUTOMATION_CLIENT_ID is not configured in packages/strety-autotask-sync/.env.');
   }
@@ -295,25 +321,27 @@ app.get('/auth/strety-automation/connect', (req, res) => {
   url.searchParams.set('client_id', process.env.STRETY_AUTOMATION_CLIENT_ID);
   url.searchParams.set('redirect_uri', stretyAutomationRedirectUriFor(req));
   url.searchParams.set('scope', 'read write');
-  // By request -- same "hint, not a hard requirement" caveat as the shared
-  // connection's own login_hint above: this route is reachable by ANY
-  // signed-in dashboard user (requireAuth only, no admin check), and
-  // Strety's login page reuses whatever Strety session is already active
-  // in that browser regardless of this hint. Confirmed real risk if
-  // someone other than helpdesk@ reconnects it -- sync.js needs write
-  // access to the Helpdesk Task Tracker team's scorecards specifically,
-  // so a mismatched account either starts failing every scheduled run, or
-  // (worse, if it happens to have adequate access anyway) silently
-  // attributes every future automated check-in to that person's own
-  // identity instead of a recognizable automation account. Doesn't
-  // override an existing active session by itself; logging out of Strety
-  // (or using a private window) first is still the reliable way to
-  // guarantee a fresh prompt.
+  // A hint, not a hard requirement -- Strety's login page reuses whatever
+  // Strety session is already active in the connecting browser regardless
+  // of this hint. Doesn't override an existing active session by itself;
+  // logging out of Strety (or using a private window) first is still the
+  // reliable way to guarantee helpdesk@ gets prompted fresh. The admin gate
+  // above is what actually prevents the wrong PERSON from reconnecting this
+  // -- this hint alone never was that guarantee, which is exactly how it
+  // went wrong last time.
   url.searchParams.set('login_hint', 'helpdesk@ambientit.com.au');
   res.redirect(url.toString());
 });
 
 app.get('/auth/strety-automation/callback', async (req, res) => {
+  // Same admin gate as /connect above, checked again here rather than
+  // trusted from that earlier request -- STRETY_AUTOMATION_CLIENT_ID isn't
+  // treated as a secret (it's a plain OAuth query param, visible in this
+  // very URL), so someone could in principle reach this callback with a
+  // real code without ever passing through our own /connect route.
+  if (!isStretyAutomationAdmin(req)) {
+    return res.status(403).send(stretyConnectPage('Reconnecting the Helpdesk automation account is restricted to Amber for now.'));
+  }
   if (req.query.error) {
     return res.status(403).send(stretyConnectPage(`Strety authorization failed: ${escapeHtml(req.query.error_description || req.query.error)}`));
   }
