@@ -47,6 +47,18 @@ db.exec(`
     -- never written into provisioning_date, by request.
     pending_date TEXT,
     po_number TEXT,
+    -- Set to 1 whenever a human enters a PO # via the edit-pencil PATCH
+    -- route (updateItemFields() below), by request -- Ingram can (and
+    -- does -- confirmed live: a subscription's own PONumber attribute can
+    -- sit stale for months) keep returning a stale PO # on a still-
+    -- processing order's own detail response, so a human correction needs
+    -- protecting from being silently reverted by the next sync
+    -- (upsertOrder() below checks this before ever overwriting po_number/
+    -- ticket_autotask_id). Also drives the green "manually entered" icon
+    -- and suppresses the "?" date-mismatch icon (both in client.js) --
+    -- see updateItemFields()'s own comment for exactly when this flips
+    -- back to 0.
+    po_number_manual INTEGER NOT NULL DEFAULT 0,
     -- Resolved from po_number, same pattern as Workshop's
     -- resolveTicketAutotaskId() -- lets PO # link straight to the Autotask
     -- ticket that requested the change.
@@ -171,6 +183,18 @@ function migrateRenameAllCompleteToAllDone() {
   `);
 }
 migrateRenameAllCompleteToAllDone();
+
+// Adds po_number_manual to an already-existing items table -- a plain
+// NOT NULL ADD COLUMN with a DEFAULT, so it's directly supported (no
+// CHECK constraint involved, no recreate-table dance needed) and every
+// pre-existing row correctly starts at 0 (not manually entered) without a
+// separate backfill step.
+function migrateAddPoNumberManual() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('items')`).all();
+  if (columns.some((c) => c.name === 'po_number_manual')) return;
+  db.exec(`ALTER TABLE items ADD COLUMN po_number_manual INTEGER NOT NULL DEFAULT 0`);
+}
+migrateAddPoNumberManual();
 
 function nowIso() {
   return new Date().toISOString();
@@ -324,9 +348,22 @@ function updateItemFields(itemId, fields, actor) {
   // the resolved Autotask ticket id is a DERIVED value (server.js already
   // looked it up before calling this), not itself a human edit worth its
   // own audit row, and only ever set alongside a poNumber change.
+  //
+  // po_number_manual flips to 1 whenever a real value is entered here (by
+  // request -- drives the green "manually entered" icon and protects this
+  // row's po_number/ticket_autotask_id from being overwritten by a later
+  // sync, see upsertOrder() below), and back to 0 when it's cleared to
+  // blank -- an empty PO # isn't "manually confirmed", it's "nothing set",
+  // and should go back to letting sync populate it normally. Set
+  // unconditionally whenever 'poNumber' is present in the request (even if
+  // the text itself didn't change, same as the ticket_autotask_id re-set
+  // above) -- opening the editor and hitting Save is itself a real
+  // confirmation.
   if ('poNumber' in fields) {
     sets.push('ticket_autotask_id = $ticketAutotaskId');
     params.$ticketAutotaskId = fields.ticketAutotaskId ?? null;
+    sets.push('po_number_manual = $poNumberManual');
+    params.$poNumberManual = fields.poNumber ? 1 : 0;
   }
   if (sets.length === 1) return existing; // nothing actually changed
 
@@ -344,7 +381,22 @@ function updateItemFields(itemId, fields, actor) {
 // comment above). Returns the local row id.
 function upsertOrder(order) {
   const now = nowIso();
-  const existing = db.prepare('SELECT id FROM items WHERE process_type = ? AND source_order_id = ?').get(order.processType, order.sourceOrderId);
+  const existing = db
+    .prepare('SELECT id, po_number, ticket_autotask_id, po_number_manual FROM items WHERE process_type = ? AND source_order_id = ?')
+    .get(order.processType, order.sourceOrderId);
+
+  // A manually-corrected PO #/ticket link (po_number_manual, set by
+  // updateItemFields() above) is protected from being silently overwritten
+  // by a routine sync, by request -- confirmed live that Ingram can keep
+  // returning a stale PO # on a still-processing order's own detail
+  // response (the subscription's own PONumber attribute not refreshing
+  // between orders), so once a human has corrected it, "Check for more
+  // Orders in IM" must not revert that correction back to the same stale
+  // value. Every OTHER field on the row still refreshes normally either
+  // way -- this only protects these two columns. Never applies on the
+  // INSERT path below (existing is null there -- a brand-new row can't
+  // already have been manually protected).
+  const preserveManualPo = !!(existing && existing.po_number_manual);
 
   const shared = {
     $orderNumber: order.orderNumber || null,
@@ -355,8 +407,8 @@ function upsertOrder(order) {
     $creationDate: order.creationDate || null,
     $provisioningDate: order.provisioningDate || null,
     $pendingDate: order.pendingDate || null,
-    $poNumber: order.poNumber || null,
-    $ticketAutotaskId: order.ticketAutotaskId ?? null,
+    $poNumber: preserveManualPo ? existing.po_number : order.poNumber || null,
+    $ticketAutotaskId: preserveManualPo ? existing.ticket_autotask_id : order.ticketAutotaskId ?? null,
     $productsJson: JSON.stringify(order.products || []),
     $currentTotal: order.currentTotal ?? null,
   };

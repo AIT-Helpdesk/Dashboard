@@ -44,10 +44,14 @@ router.get('/orders', async (req, res) => {
       showAllDone: true,
       hideRenewalOrProcessingOnly: false,
     });
-    // Same "Rewst - Stage Done" icon flag Contract Checks' own page shows,
-    // by request -- this route bypasses that page's own GET / route (which
-    // is where it normally runs), so it has to be called here too.
-    await contractChecks.attachRewstStageDoneFlags(byClient.flatMap((g) => g.orders));
+    // Same Rewst - Stage Done icon flag and ticket-details enrichment
+    // (createDate -- drives the "?" date-mismatch icon) Contract Checks'
+    // own page shows, by request -- this route bypasses that page's own
+    // GET / route (where they normally run), so both have to be called
+    // here too. Run together, not sequentially -- same reasoning as that
+    // route's own Promise.all.
+    const visibleOrders = byClient.flatMap((g) => g.orders);
+    await Promise.all([contractChecks.attachRewstStageDoneFlags(visibleOrders), contractChecks.attachTicketDetails(visibleOrders)]);
     res.json({ sinceDate, filterTerm: filterTerm || null, totalCount, statusCounts, byClient });
   } catch (err) {
     console.error(err);

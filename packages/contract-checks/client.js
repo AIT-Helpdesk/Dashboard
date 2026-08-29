@@ -421,7 +421,28 @@ export function mount(container) {
     const linkOrText = o.ticketUrl
       ? `<a href="${escapeHtml(o.ticketUrl)}" target="_blank" rel="noopener" class="cc-ticket-link" title="${escapeHtml(tooltip)}">${escapeHtml(o.poNumber)}</a>`
       : `<span title="Ticket not found in Autotask">${escapeHtml(o.poNumber)}</span>`;
-    return `${linkOrText} ${editIcon}${rewstIconHtml(o)}`;
+    return `${linkOrText}${poFlagIconHtml(o)} ${editIcon}${rewstIconHtml(o)}`;
+  }
+
+  // After the PO #, before the edit pencil, by request -- two mutually
+  // exclusive icons over the same underlying signal (o.poNumberManual, set
+  // by db.js's updateItemFields()):
+  //   - green check, when this PO #/ticket was manually entered -- a human
+  //     already confirmed it, nothing further to flag.
+  //   - "?" (server.js's attachTicketDetails() -- o.ticketDateMismatch),
+  //     when it wasn't manually entered AND the ticket's own creation date
+  //     is more than a day from the order's, worth a second look. Deliberately
+  //     never both at once -- server.js doesn't even compute the mismatch
+  //     when poNumberManual is set, per request ("don't check the dates...
+  //     if a new ticket number has been manually provided").
+  function poFlagIconHtml(o) {
+    if (o.poNumberManual) {
+      return `<span class="cc-po-manual-icon" title="PO # / Ticket manually entered">✓</span>`;
+    }
+    if (o.ticketDateMismatch) {
+      return `<span class="cc-po-mismatch-icon" title="This ticket was created more than a day away from the order's own creation date -- worth double-checking this is the right ticket">?</span>`;
+    }
+    return '';
   }
 
   // Small icon after the edit pencil, by request, when this ticket's

@@ -259,6 +259,7 @@ function shapeItem(row) {
     provisioningDate: row.provisioning_date,
     pendingDate: row.pending_date,
     poNumber: row.po_number,
+    poNumberManual: !!row.po_number_manual,
     ticketAutotaskId: row.ticket_autotask_id,
     products: JSON.parse(row.products_json || '[]'),
     currentTotal: row.current_total,
@@ -406,6 +407,7 @@ async function attachTicketDetails(orders) {
             title: t.title || null,
             status: statusLabels.get(t.status) || (t.status != null ? `Status ${t.status}` : null),
             clientName: t.companyID != null ? await resolveCompanyName(client, t.companyID) : null,
+            createDate: t.createDate || null,
           },
           expiresAt: now + TICKET_DETAILS_CACHE_TTL_MS,
         });
@@ -426,6 +428,17 @@ async function attachTicketDetails(orders) {
     o.ticketStatus = cached.data.status;
     o.ticketTitle = cached.data.title;
     o.ticketClientName = cached.data.clientName;
+    // The "?" icon (client.js) -- flags when the ticket's own creation
+    // date is more than a day away from the ORDER's creation date, a real
+    // sign this order's PO # might have resolved to the wrong ticket
+    // (exactly the stale-subscription-PONumber issue confirmed live this
+    // session). Deliberately skipped -- not just hidden, not computed at
+    // all -- when poNumberManual is set: a human already looked at this
+    // one and confirmed/corrected it, so there's nothing left to flag.
+    if (!o.poNumberManual && cached.data.createDate && o.creationDate) {
+      const diffMs = Math.abs(new Date(cached.data.createDate).getTime() - new Date(o.creationDate).getTime());
+      o.ticketDateMismatch = diffMs > 24 * 60 * 60 * 1000;
+    }
   }
 }
 
@@ -841,9 +854,12 @@ router.patch('/templates/:key', (req, res) => {
 router.loadEnrichedItems = loadEnrichedItems;
 router.buildResponse = buildResponse;
 // Lets Check Client's own /orders route add the same Rewst - Stage Done
-// icon flag to its results, by request -- it calls loadEnrichedItems/
+// icon flag, and the same ticket-details enrichment (client/status/title/
+// createDate -- the last of which now also drives the "?" date-mismatch
+// icon), to its own results, by request -- it calls loadEnrichedItems/
 // buildResponse above directly too, bypassing this file's own GET / route
-// (and therefore never running this function on its own).
+// (and therefore never running either of these on its own).
 router.attachRewstStageDoneFlags = attachRewstStageDoneFlags;
+router.attachTicketDetails = attachTicketDetails;
 
 module.exports = router;
