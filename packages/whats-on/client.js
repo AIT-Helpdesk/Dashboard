@@ -914,7 +914,11 @@ export function mount(container) {
     if (data.automationStatus && !data.automationStatus.ok) {
       const banner = document.createElement('p');
       banner.className = 'status error';
-      banner.innerHTML = `${escapeHtml(data.automationStatus.message)}<br><a class="button-link" href="/auth/strety-automation/connect">Reconnect automation</a>`;
+      // Label spelled out deliberately -- this reconnects the SHARED
+      // Helpdesk automation account, not the viewer's own Strety login (see
+      // packages/shell/server.js's matching gate on the route itself for
+      // why that distinction matters here).
+      banner.innerHTML = `${escapeHtml(data.automationStatus.message)}<br><a class="button-link" href="/auth/strety-automation/connect">Reconnect Helpdesk Automation</a>`;
       resultsEl.appendChild(banner);
     }
 

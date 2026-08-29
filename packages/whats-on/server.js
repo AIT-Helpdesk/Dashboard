@@ -65,6 +65,19 @@ function isLocalhostRequest(req) {
   return req.hostname === 'localhost' || req.hostname === '127.0.0.1';
 }
 
+// Temporary, by request (2026-08-28): the automation's shared Strety
+// connection must run as Helpdesk, and a "Reconnect" link shown to every
+// signed-in user turned out to be exactly how it stopped -- see the
+// matching gate on the route itself in packages/shell/server.js for the
+// real story. Until there's a permanent design, only Amber gets any
+// visibility into automationStatus at all (including the harmless "last
+// synced" line below) -- everyone else gets null, same as localhost, which
+// client.js's banner render already treats as "nothing to show".
+const AUTOMATION_STATUS_ADMIN_EMAIL = 'amber@ambientit.com.au';
+function canSeeAutomationStatus(email) {
+  return !!email && email.toLowerCase() === AUTOMATION_STATUS_ADMIN_EMAIL;
+}
+
 // The staleness banner ("hasn't run in X hours") is only meaningful while
 // the automation is actually expected to be running -- it's scheduled
 // hourly, 8am-6pm only (see DEPLOYMENT.md's Windows Task Scheduler
@@ -1030,10 +1043,11 @@ router.get('/', async (req, res) => {
       status: 'ok',
       asOf: new Date().toISOString(),
       groups,
-      // null on localhost -- client.js's own banner render is already
-      // gated on `data.automationStatus && !data.automationStatus.ok`, so
-      // null suppresses it with no client-side change needed.
-      automationStatus: isLocalhostRequest(req) ? null : evaluateAutomationStatus(),
+      // null on localhost, and (temporarily -- see canSeeAutomationStatus
+      // above) for anyone but Amber. client.js's own banner render is
+      // already gated on `data.automationStatus && !data.automationStatus.ok`,
+      // so null suppresses it with no client-side change needed.
+      automationStatus: isLocalhostRequest(req) || !canSeeAutomationStatus(email) ? null : evaluateAutomationStatus(),
     });
   } catch (err) {
     if (err.strety_not_connected) {
