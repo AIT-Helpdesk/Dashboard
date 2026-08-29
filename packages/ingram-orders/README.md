@@ -75,7 +75,14 @@ Sits next to Refresh, hidden until there's at least one client group to load. Lo
 
 ## Grouping and sorting
 
-Grouped by resolved client name. Unlike Ingram Subscriptions (alphabetical by name, since subscriptions don't have a natural chronological axis worth prioritizing over their name), client groups here are sorted by **most recent order first**, and orders within a client are also sorted most-recent-first -- orders are inherently a chronological/activity feed, so recency is the more useful ordering than alphabetical.
+Grouped by resolved client name. Orders within a client are always sorted **most-recent-first** -- orders are inherently a chronological/activity feed, so recency is the more useful ordering than alphabetical, and this part of the ordering isn't affected by the **Sort** control below at all.
+
+Client GROUPS, though, can be ordered either of two ways via the **Sort** dropdown next to the checkboxes:
+
+- **Client: Most Recent Order** (default) -- whichever client has the single most recent order appears first, same as Ingram Orders' original/only behavior.
+- **Client: A-Z** -- alphabetical by client name, same convention Ingram Subscriptions uses.
+
+This is a pure client-side, no-refetch display choice -- `client.js`'s `render()` re-sorts a shallow copy of the already-fetched `data.byClient` array (server response, or `lastData` on a same-session re-mount) rather than requesting anything new, so switching it is instant and isn't part of the cache key. `data.byClient` itself always arrives from the server sorted most-recent-order-first (see `server.js`'s `buildReport()`); the client only re-sorts when "Client: A-Z" is selected.
 
 ## Caching
 
