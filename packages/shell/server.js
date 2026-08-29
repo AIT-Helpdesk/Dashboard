@@ -309,12 +309,55 @@ function isStretyAutomationAdmin(req) {
   return !!email && email.toLowerCase() === STRETY_AUTOMATION_ADMIN_EMAIL;
 }
 
+// The admin gate above (isStretyAutomationAdmin) fixed "wrong PERSON
+// triggers the reconnect" -- it does NOT fix "the right person's own
+// browser happens to already have a different Strety session active",
+// which is a second, separate way this has gone wrong (Strety's login page
+// silently reuses whatever session is already active, ignoring
+// login_hint). By request, a real interstitial page now sits in front of
+// the actual redirect -- shown by default; the redirect itself only fires
+// from THIS page's own "Continue to Strety" link (`?go=1`), never directly
+// from a bookmark/banner link straight into Strety. Also surfaces the
+// currently-connected identity (connectedIdentity() -- a plain file read,
+// works even mid-outage) so whoever's here can see at a glance whether
+// it's already wrong, and a direct "Disconnect Only" link/route (below)
+// for forcing it off without needing production file-system access.
+function stretyAutomationConnectInterstitialPage() {
+  const connectedAs = stretyAutomationClient.connectedIdentity();
+  const currentLine = connectedAs
+    ? `<p>Currently connected as: <strong>${escapeHtml(connectedAs)}</strong></p>`
+    : `<p>Not currently connected.</p>`;
+  return `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Strety</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 34rem; margin: 3rem auto; padding: 0 1.5rem; text-align: center;">
+  <h2>Reconnect Helpdesk Automation</h2>
+  ${currentLine}
+  <p style="text-align: left; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px; padding: 0.75rem 1rem;">
+    <strong>Before continuing:</strong> make sure THIS browser is not already logged into Strety as
+    anyone else -- Strety's own login page silently reuses whatever Strety session is already
+    active, regardless of which account this tries to hint at. Log out of Strety first, or use a
+    private/incognito window, then log in as <strong>helpdesk@ambientit.com.au</strong> when
+    prompted.
+  </p>
+  <p>
+    <a href="/auth/strety-automation/connect?go=1" style="display: inline-block; padding: 0.6rem 1.4rem; background: #2563eb; color: white; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 0.3rem;">Continue to Strety</a>
+    <a href="/auth/strety-automation/disconnect" style="display: inline-block; padding: 0.6rem 1.4rem; background: #b91c1c; color: white; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 0.3rem;">Disconnect Only</a>
+  </p>
+  <p><a href="/#whats-on">Return to Dashboard</a></p>
+</body>
+</html>`;
+}
+
 app.get('/auth/strety-automation/connect', (req, res) => {
   if (!isStretyAutomationAdmin(req)) {
     return res.status(403).send(stretyConnectPage('Reconnecting the Helpdesk automation account is restricted to Amber for now.'));
   }
   if (!process.env.STRETY_AUTOMATION_CLIENT_ID) {
     return res.status(500).send('STRETY_AUTOMATION_CLIENT_ID is not configured in packages/strety-autotask-sync/.env.');
+  }
+  if (req.query.go !== '1') {
+    return res.send(stretyAutomationConnectInterstitialPage());
   }
   const url = new URL(`${STRETY_BASE_URL}/oauth/authorize`);
   url.searchParams.set('response_type', 'code');
@@ -347,11 +390,51 @@ app.get('/auth/strety-automation/callback', async (req, res) => {
   }
   try {
     await stretyAutomationClient.exchangeCodeForTokens(req.query.code, stretyAutomationRedirectUriFor(req));
-    res.send(stretyConnectPage('Strety (Autotask sync automation account) connected successfully.'));
+    // Names the identity it actually just connected as, by request -- the
+    // whole point of the interstitial above is checking this BEFORE
+    // authorizing; this closes the loop by confirming it AFTER, so a wrong
+    // reconnect (the browser's own Strety session wasn't actually helpdesk@,
+    // despite the warning) is caught immediately rather than discovered
+    // later from a wrongly-attributed check-in.
+    const connectedAs = stretyAutomationClient.connectedIdentity();
+    res.send(
+      stretyConnectPage(
+        connectedAs
+          ? `Strety (Autotask sync automation account) connected successfully, as ${escapeHtml(connectedAs)}.`
+          : 'Strety (Autotask sync automation account) connected successfully.'
+      )
+    );
   } catch (err) {
     console.error('Strety automation OAuth callback failed:', err);
     res.status(500).send(stretyConnectPage('Strety automation connection failed. Check server logs.'));
   }
+});
+
+// A real "Disconnect" action, by request -- the only previous way to force
+// a stale/wrong-account connection off was deleting .tokens.json by hand on
+// the production box. Same admin gate as connect/callback above. The
+// scheduled sync (sync.js) will start failing on its next run until
+// reconnected -- that's the point, not a side effect: better a loud,
+// visible failure on What's On than continuing to write as the wrong
+// account.
+app.get('/auth/strety-automation/disconnect', (req, res) => {
+  if (!isStretyAutomationAdmin(req)) {
+    return res.status(403).send(stretyConnectPage('Disconnecting the Helpdesk automation account is restricted to Amber for now.'));
+  }
+  stretyAutomationClient.clearTokens();
+  res.send(
+    `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Strety</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1.5rem; text-align: center;">
+  <p>Helpdesk automation account disconnected. The scheduled sync will fail (visibly, on What's On) until reconnected.</p>
+  <p>
+    <a href="/auth/strety-automation/connect" style="display: inline-block; padding: 0.6rem 1.4rem; background: #2563eb; color: white; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 0.3rem;">Reconnect Now</a>
+    <a href="/#whats-on" style="display: inline-block; padding: 0.6rem 1.4rem; background: #6b7280; color: white; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 0.3rem;">Return to Dashboard</a>
+  </p>
+</body>
+</html>`
+  );
 });
 
 app.use(express.static(path.join(__dirname, 'public')));

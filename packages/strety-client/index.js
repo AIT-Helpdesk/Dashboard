@@ -196,6 +196,23 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
     return readTokens()?.connectedAs || null;
   }
 
+  // Deletes the token file outright, by request -- a real "Disconnect"
+  // action (packages/shell/server.js's /auth/strety-automation/disconnect)
+  // rather than the only previous way to force a stale/wrong-account
+  // connection off, which was deleting the file by hand on the production
+  // box. Tolerant of the file already being gone (already disconnected, or
+  // never connected at all) -- disconnecting something that isn't
+  // connected isn't an error. The connection just goes back to
+  // "not connected yet" -- isConnected()/connectedIdentity() both read
+  // straight off this same file, so nothing else needs telling.
+  function clearTokens() {
+    try {
+      fs.unlinkSync(tokenStorePath);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+  }
+
   let earliestNextRequestAt = 0;
   async function throttle() {
     const now = Date.now();
@@ -325,7 +342,7 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
     return all;
   }
 
-  return { get, post, patch, fetchAllPages, exchangeCodeForTokens, isConnected, connectedIdentity };
+  return { get, post, patch, fetchAllPages, exchangeCodeForTokens, isConnected, connectedIdentity, clearTokens };
 }
 
 // This dashboard's own default, pre-existing connection -- unchanged

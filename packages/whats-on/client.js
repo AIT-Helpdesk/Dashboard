@@ -896,8 +896,22 @@ export function mount(container) {
     // it's genuinely never run at all). Shown regardless of whether the
     // automation is currently healthy -- the banner below already covers
     // the unhealthy case in more detail, this is just a quick timestamp.
+    // connectedAs rides along on the same line, also regardless of health
+    // -- a run completing successfully says nothing about whether it ran
+    // as the RIGHT account, which has actually gone wrong silently before
+    // (see packages/shell/server.js's own comment on the real incident).
+    // A "Manage" link rides along too, EVEN when healthy -- without it,
+    // spotting a wrong "(as ...)" name here had no click-through at all
+    // unless you already knew the raw /auth/strety-automation/connect URL
+    // (the banner below only renders when the run itself failed/went
+    // stale, which "running fine as the wrong account" never trips).
+    // data.automationStatus is only ever non-null for Amber (see
+    // canSeeAutomationStatus in server.js), so this link is safe to always
+    // show whenever automationStatus itself is present at all.
+    const connectedAsSuffix = data.automationStatus?.connectedAs ? ` (as ${escapeHtml(data.automationStatus.connectedAs)})` : '';
+    const manageLink = data.automationStatus ? ` · <a href="/auth/strety-automation/connect">Manage</a>` : '';
     const syncedLine = data.automationStatus?.ranAt
-      ? `<span class="inline-subtext-tiny">Autotask -&gt; Strety sync last ran: ${formatDateTime(data.automationStatus.ranAt)}</span>`
+      ? `<span class="inline-subtext-tiny">Autotask -&gt; Strety sync last ran: ${formatDateTime(data.automationStatus.ranAt)}${connectedAsSuffix}${manageLink}</span>`
       : '';
     summaryTextEl.innerHTML = `Helpdesk Scorecards<span class="inline-subtext"> -- as at ${formatDateTime(data.asOf)}</span>${syncedLine}`;
 
@@ -914,11 +928,14 @@ export function mount(container) {
     if (data.automationStatus && !data.automationStatus.ok) {
       const banner = document.createElement('p');
       banner.className = 'status error';
+      const identityLine = data.automationStatus.connectedAs
+        ? `<br><span class="inline-subtext-tiny">Currently connected as: ${escapeHtml(data.automationStatus.connectedAs)}</span>`
+        : '';
       // Label spelled out deliberately -- this reconnects the SHARED
       // Helpdesk automation account, not the viewer's own Strety login (see
       // packages/shell/server.js's matching gate on the route itself for
       // why that distinction matters here).
-      banner.innerHTML = `${escapeHtml(data.automationStatus.message)}<br><a class="button-link" href="/auth/strety-automation/connect">Reconnect Helpdesk Automation</a>`;
+      banner.innerHTML = `${escapeHtml(data.automationStatus.message)}${identityLine}<br><a class="button-link" href="/auth/strety-automation/connect">Reconnect Helpdesk Automation</a>`;
       resultsEl.appendChild(banner);
     }
 

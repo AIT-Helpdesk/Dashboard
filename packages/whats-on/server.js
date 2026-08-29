@@ -10,6 +10,10 @@ const express = require('express');
 const { getPersonalClient, getTodoUrl } = require('@dashboard/strety-client');
 const { readLastRunStatus } = require('@dashboard/strety-autotask-sync/status.js');
 const { METRICS: AUTOTASK_SYNC_METRICS } = require('@dashboard/strety-autotask-sync/metrics.js');
+// Only for its connectedIdentity() below (a plain file read, no live API
+// call) -- confirmed nothing here needs the rest of this client (that's
+// sync.js's own job).
+const stretyAutomationClient = require('@dashboard/strety-autotask-sync/client.js');
 const {
   mondayOf,
   weekDatesFrom,
@@ -97,8 +101,17 @@ function isWithinAutomationBannerWindow() {
 
 function evaluateAutomationStatus() {
   const lastRun = readLastRunStatus();
+  // A run completing successfully only means SOME valid token was used --
+  // it says nothing about whether that token belongs to helpdesk@ or, as
+  // has actually happened, some other real employee's account. So
+  // connectedAs is included on every branch below (healthy or not, exactly
+  // like ranAt already was), not just the failure ones -- a "healthy" run
+  // under the wrong identity would otherwise stay invisible until someone
+  // happened to check Strety directly. connectedIdentity() is a plain file
+  // read (works even mid-outage), not a live API call.
+  const connectedAs = stretyAutomationClient.connectedIdentity();
   if (!lastRun) {
-    return { ok: false, message: 'The automated Autotask sync has never run yet.' };
+    return { ok: false, message: 'The automated Autotask sync has never run yet.', connectedAs };
   }
   const ageMs = Date.now() - new Date(lastRun.ranAt).getTime();
   // ranAt included on every branch (not just the healthy one) -- by
@@ -108,19 +121,20 @@ function evaluateAutomationStatus() {
   // in more detail.
   if (!lastRun.success) {
     const detail = lastRun.fatalError || lastRun.results.find((r) => !r.ok)?.detail || 'unknown error';
-    return { ok: false, message: `The automated Autotask sync last ran ${formatAge(ageMs)} ago and failed: ${detail}`, ranAt: lastRun.ranAt };
+    return { ok: false, message: `The automated Autotask sync last ran ${formatAge(ageMs)} ago and failed: ${detail}`, ranAt: lastRun.ranAt, connectedAs };
   }
   if (ageMs > AUTOMATION_STALE_THRESHOLD_MS) {
     if (!isWithinAutomationBannerWindow()) {
-      return { ok: true, ranAt: lastRun.ranAt };
+      return { ok: true, ranAt: lastRun.ranAt, connectedAs };
     }
     return {
       ok: false,
       message: `The automated Autotask sync hasn't run in ${formatAge(ageMs)} (expected hourly) -- these EOD numbers may be stale.`,
       ranAt: lastRun.ranAt,
+      connectedAs,
     };
   }
-  return { ok: true, ranAt: lastRun.ranAt };
+  return { ok: true, ranAt: lastRun.ranAt, connectedAs };
 }
 
 // The "Team Shifts" excerpt below the scorecards -- a completely separate
