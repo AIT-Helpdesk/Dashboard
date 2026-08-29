@@ -9,7 +9,8 @@ export const label = "Ingram Orders";
 let lastData = null;
 let lastSince = null;
 let lastFilter = '';
-let lastIncludeRenewals = false; // off by default, by request -- renewals are the highest-volume, least-actionable order type
+let lastIncludeRenewals = false; // off by default -- partial: renewals only for clients that already have another (non-renewal) order surviving the other filters
+let lastIncludeAllRenewals = false; // off by default -- full: every renewal order, unconditionally (the page's original/only renewals behavior)
 let lastIncludeCancelled = false; // off by default, by request -- status="cancelled" orders (of any type) are failed/withdrawn attempts
 let lastStatusFilter = '';
 let lastProductFilter = '';
@@ -25,12 +26,6 @@ export function mount(container) {
           <input type="date" id="since-input" name="since" required />
           <label for="client-input">Client</label>
           <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
-          <label for="include-renewals-input" class="inline-checkbox-label">
-            <input type="checkbox" id="include-renewals-input" /> Show Renewals
-          </label>
-          <label for="include-cancelled-input" class="inline-checkbox-label">
-            <input type="checkbox" id="include-cancelled-input" /> Show Cancelled
-          </label>
           <label for="sort-input">Sort</label>
           <select id="sort-input">
             <option value="recent">Client + Order</option>
@@ -45,15 +40,27 @@ export function mount(container) {
           <button type="submit" id="refresh-button">Refresh</button>
           <button type="button" id="load-all-button" hidden>Load All Products &amp; Licenses</button>
         </div>
+        <div class="date-form-row">
+          <label for="include-renewals-input" class="inline-checkbox-label">
+            <input type="checkbox" id="include-renewals-input" /> Show Renewals
+          </label>
+          <label for="include-all-renewals-input" class="inline-checkbox-label">
+            <input type="checkbox" id="include-all-renewals-input" /> Show ALL Renewals
+          </label>
+          <label for="include-cancelled-input" class="inline-checkbox-label">
+            <input type="checkbox" id="include-cancelled-input" /> Show Cancelled
+          </label>
+        </div>
       </form>
     </header>
-    <p id="status" class="status">Pick a date, optionally filter by client/status/product (wildcards with *), then click Refresh. Every order since that date is included, whatever its status -- renewal orders and cancelled orders are excluded by default (tick "Show Renewals"/"Show Cancelled" to include them). PO numbers and products aren't loaded up front -- click a client's name to fetch theirs, use "Load All Products &amp; Licenses" above to fetch every client's at once, or set a Product filter (which needs that same detail, so fetches it automatically).</p>
+    <p id="status" class="status">Pick a date, optionally filter by client/status/product (wildcards with *), then click Refresh. Every order since that date is included, whatever its status -- renewal orders and cancelled orders are excluded by default. Tick "Show Renewals" to include renewals only for clients that already have another order in the results, "Show ALL Renewals" to include every renewal regardless, or "Show Cancelled" to include cancelled-status orders. PO numbers and products aren't loaded up front -- click a client's name to fetch theirs, use "Load All Products &amp; Licenses" above to fetch every client's at once, or set a Product filter (which needs that same detail, so fetches it automatically).</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
   `;
 
   const form = container.querySelector('#filter-form');
   const includeRenewalsInput = container.querySelector('#include-renewals-input');
+  const includeAllRenewalsInput = container.querySelector('#include-all-renewals-input');
   const includeCancelledInput = container.querySelector('#include-cancelled-input');
   const sinceInput = container.querySelector('#since-input');
   const clientInput = container.querySelector('#client-input');
@@ -76,6 +83,7 @@ export function mount(container) {
   sinceInput.value = lastSince || defaultSinceISO();
   clientInput.value = lastFilter;
   includeRenewalsInput.checked = lastIncludeRenewals;
+  includeAllRenewalsInput.checked = lastIncludeAllRenewals;
   includeCancelledInput.checked = lastIncludeCancelled;
   statusInput.value = lastStatusFilter;
   productInput.value = lastProductFilter;
@@ -83,7 +91,15 @@ export function mount(container) {
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(sinceInput.value, clientInput.value, includeRenewalsInput.checked, includeCancelledInput.checked, statusInput.value, productInput.value);
+    load(
+      sinceInput.value,
+      clientInput.value,
+      includeRenewalsInput.checked,
+      includeAllRenewalsInput.checked,
+      includeCancelledInput.checked,
+      statusInput.value,
+      productInput.value
+    );
   });
 
   loadAllButton.addEventListener('click', loadAllDetails);
@@ -108,7 +124,7 @@ export function mount(container) {
   // `force=true`, which bypasses that cache for the current search and
   // rebuilds -- a button literally labeled "Refresh" should always get
   // current data, not a cached one.
-  async function load(since, clientFilter, includeRenewals, includeCancelled, statusFilter, productFilter) {
+  async function load(since, clientFilter, includeRenewals, includeAllRenewals, includeCancelled, statusFilter, productFilter) {
     refreshButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
@@ -122,6 +138,7 @@ export function mount(container) {
       const params = new URLSearchParams({ since, force: 'true' });
       if (clientFilter) params.set('client', clientFilter);
       if (includeRenewals) params.set('includeRenewals', 'true');
+      if (includeAllRenewals) params.set('includeAllRenewals', 'true');
       if (includeCancelled) params.set('includeCancelled', 'true');
       if (statusFilter) params.set('status', statusFilter);
       if (productFilter) params.set('product', productFilter);
@@ -132,6 +149,7 @@ export function mount(container) {
       lastSince = since;
       lastFilter = clientFilter;
       lastIncludeRenewals = includeRenewals;
+      lastIncludeAllRenewals = includeAllRenewals;
       lastIncludeCancelled = includeCancelled;
       lastStatusFilter = statusFilter;
       lastProductFilter = productFilter;
@@ -162,13 +180,16 @@ export function mount(container) {
       .sort((a, b) => b[1] - a[1])
       .map(([status, count]) => `${count} ${capitalize(status)}`)
       .join(', ');
-    // Both toggles are noted together when off, same "(... excluded)" style
-    // as before -- e.g. "(renewals, cancelled excluded)" when neither box is
-    // checked, or just one word when only one is off.
-    const excludedParts = [];
-    if (!data.includeRenewals) excludedParts.push('renewals');
-    if (!data.includeCancelled) excludedParts.push('cancelled');
-    const exclusionSuffix = excludedParts.length ? ` (${excludedParts.join(', ')} excluded)` : '';
+    // Renewals has three states now, not a plain on/off: fully included
+    // (Show ALL Renewals), partially included (Show Renewals -- only for
+    // clients that already have another order in the results), or excluded
+    // entirely (neither checked). Only the first gets no note at all.
+    const noteParts = [];
+    if (!data.includeAllRenewals) {
+      noteParts.push(data.includeRenewals ? 'renewals limited to clients with other orders' : 'renewals excluded');
+    }
+    if (!data.includeCancelled) noteParts.push('cancelled excluded');
+    const exclusionSuffix = noteParts.length ? ` (${noteParts.join(', ')})` : '';
     summaryEl.hidden = false;
     summaryEl.innerHTML = `<strong>${data.totalCount}</strong> order${data.totalCount === 1 ? '' : 's'} (${statusBreakdown}) across ${data.byClient.length} client${data.byClient.length === 1 ? '' : 's'} since ${data.sinceDate}${filterSuffix}${exclusionSuffix}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
 
