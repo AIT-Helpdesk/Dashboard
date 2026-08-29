@@ -7,7 +7,12 @@ const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getContractU
 // month-scoped contract-services fetch in-process (via router.buildReport,
 // attached below) instead of duplicating it. Behavior/return shape is
 // unchanged from when this lived inline in the route.
-async function buildReport(month, search, clientSearch) {
+//
+// `exactClient` (default false, not exposed on this page's own route --
+// only Check Client's own /services route ever passes true, by request)
+// forces an exact companyName match instead of the dashboard-wide
+// wildcard/contains convention parseWildcard() applies by default.
+async function buildReport(month, search, clientSearch, exactClient = false) {
   // AEST calendar month, not UTC -- see aestToUtcIso() in @dashboard/autotask-client.
   const [monthY, monthM] = month.split('-').map(Number);
   const monthStart = aestToUtcIso(monthY, monthM, 1);
@@ -25,7 +30,7 @@ async function buildReport(month, search, clientSearch) {
     { op: 'lt', field: 'startDate', value: monthEnd },
     { op: 'gte', field: 'endDate', value: monthStart },
   ];
-  const clientWildcard = parseWildcard(clientSearch);
+  const clientWildcard = exactClient && clientSearch ? { op: 'eq', value: clientSearch } : parseWildcard(clientSearch);
   const wildcard = parseWildcard(search);
 
   // Contracts, Services, and Service Bundles don't depend on each other's

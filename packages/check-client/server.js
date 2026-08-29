@@ -68,7 +68,11 @@ router.get('/subscriptions', async (req, res) => {
 });
 
 // Section 3 -- Contract Services, via Contract Services' own buildReport().
-// No service-name search -- just the client + month, by request.
+// No service-name search -- just the client + month, by request. exactClient
+// (by request -- the blank-label checkbox right after Autotask Client)
+// forces an exact companyName match instead of the dashboard-wide wildcard/
+// contains convention -- useful when the Autotask Client search itself
+// resolves ambiguously (a name that's a substring of another real client).
 router.get('/services', async (req, res) => {
   const month = req.query.month;
   if (!month || !/^\d{4}-\d{2}$/.test(month)) {
@@ -76,7 +80,8 @@ router.get('/services', async (req, res) => {
   }
   try {
     const filterTerm = (req.query.client || '').trim();
-    const data = await contractServices.buildReport(month, '', filterTerm);
+    const exactClient = req.query.exactClient === 'true';
+    const data = await contractServices.buildReport(month, '', filterTerm, exactClient);
     res.json(data);
   } catch (err) {
     console.error(err);

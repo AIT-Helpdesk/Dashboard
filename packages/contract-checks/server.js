@@ -1,5 +1,5 @@
 const express = require('express');
-const { matchesWildcard, aestDayBoundsIso, getTicketUrl, getClient } = require('@dashboard/autotask-client');
+const { matchesWildcard, aestDayBoundsIso, getTicketUrl, getClient, fetchByFieldIn, getPicklistLabels, resolveCompanyName, mapWithConcurrency } = require('@dashboard/autotask-client');
 const { TOGGLE_FIELDS, setToggle, updateItemFields, listItemsRaw, getItemHistory, getToggleHistories, getHistoryCounts, listTemplates, getTemplate, setTemplate, getItem } = require('./db.js');
 const { runSync, PROCESS_TYPE, resolveTicketAutotaskId } = require('./sync.js');
 
@@ -362,6 +362,73 @@ function buildResponse(items, { filterTerm, statusTerm, productTerm, includeRene
   return { totalCount: matched.length, statusCounts, byClient };
 }
 
+// Client/status/title for the ticket-number hover tooltip, by request --
+// none of this is fetched anywhere else on this page (getTicketUrl() above
+// just builds a URL from the known ticketAutotaskId, no ticket record
+// lookup at all). Called AFTER buildResponse() with only the orders it's
+// actually about to return, not the full pre-filter set -- fetching
+// details for orders that got filtered out would be pure waste. One
+// batched "id in [...]" query for every distinct linked ticket still
+// visible, not one request per row. Cached for 5 minutes per ticket
+// (short, deliberately -- unlike a note or a URL, a ticket's status is
+// exactly the kind of thing that changes often and this tooltip's whole
+// point is showing it accurately) so repeated page loads/refreshes in a
+// short span don't redo the same work.
+const TICKET_DETAILS_CACHE_TTL_MS = 5 * 60 * 1000;
+const ticketDetailsCache = new Map(); // ticketAutotaskId -> { data, expiresAt }
+
+async function attachTicketDetails(orders) {
+  const neededIds = [...new Set(orders.filter((o) => o.ticketAutotaskId).map((o) => o.ticketAutotaskId))];
+  if (neededIds.length === 0) return;
+
+  const now = Date.now();
+  const idsToFetch = neededIds.filter((id) => {
+    const cached = ticketDetailsCache.get(id);
+    return !cached || now >= cached.expiresAt;
+  });
+
+  if (idsToFetch.length > 0) {
+    try {
+      const client = await getClient();
+      const [tickets, statusLabels] = await Promise.all([
+        fetchByFieldIn(client.tickets, 'id', idsToFetch),
+        getPicklistLabels(client.tickets, 'status'),
+      ]);
+      const companyIds = [...new Set(tickets.map((t) => t.companyID).filter((id) => id != null))];
+      // Warms resolveCompanyName()'s own cache with bounded concurrency
+      // first (same pattern Contract Services' server.js already uses),
+      // rather than each ticket below awaiting its own company lookup one
+      // at a time.
+      await mapWithConcurrency(companyIds, 3, (id) => resolveCompanyName(client, id));
+      for (const t of tickets) {
+        ticketDetailsCache.set(t.id, {
+          data: {
+            title: t.title || null,
+            status: statusLabels.get(t.status) || (t.status != null ? `Status ${t.status}` : null),
+            clientName: t.companyID != null ? await resolveCompanyName(client, t.companyID) : null,
+          },
+          expiresAt: now + TICKET_DETAILS_CACHE_TTL_MS,
+        });
+      }
+    } catch (err) {
+      // Best-effort -- this tooltip is a nice-to-have, not something worth
+      // failing the whole page load over. Orders whose ticket details
+      // couldn't be fetched just fall back to whatever's already cached
+      // (possibly nothing), same as any other cache miss.
+      console.error('Contract Checks: failed to fetch ticket details for tooltip:', err.message);
+    }
+  }
+
+  for (const o of orders) {
+    if (!o.ticketAutotaskId) continue;
+    const cached = ticketDetailsCache.get(o.ticketAutotaskId);
+    if (!cached) continue;
+    o.ticketStatus = cached.data.status;
+    o.ticketTitle = cached.data.title;
+    o.ticketClientName = cached.data.clientName;
+  }
+}
+
 // Pulled out of GET / below into its own function, by request -- so the new
 // Check Client page (packages/check-client) can call this exact same
 // DB-read-plus-enrichment step in-process (via router.loadEnrichedItems,
@@ -422,6 +489,10 @@ router.get('/', async (req, res) => {
       showAllDone,
       hideRenewalOrProcessingOnly,
     });
+    // Only the orders actually being returned, by request -- see
+    // attachTicketDetails()'s own comment for why this runs after
+    // filtering, not before.
+    await attachTicketDetails(byClient.flatMap((g) => g.orders));
 
     res.json({
       asOf: new Date().toISOString(),
