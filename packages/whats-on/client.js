@@ -1097,11 +1097,12 @@ export function mount(container) {
   // A plain inline SVG (fill="currentColor", so it follows the link's own
   // text colour rather than a fixed one) marking a Personal-space metric --
   // Material "person" glyph. The Helpdesk (team) equivalent is a real image
-  // (strety-logo-icon.jpg, Strety's own logo) since that one's a specific
-  // brand mark, not a generic glyph a font/icon-set path can stand in for.
+  // (strety-logo-icon.png, Strety's own logo, transparent background) since
+  // that one's a specific brand mark, not a generic glyph a font/icon-set
+  // path can stand in for.
   const PERSON_ICON_SVG =
     '<svg class="wo-metric-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
-  const TEAM_ICON_HTML = '<img src="/strety-logo-icon.jpg" class="wo-metric-icon wo-metric-icon--logo" alt="" aria-hidden="true">';
+  const TEAM_ICON_HTML = '<img src="/strety-logo-icon.png" class="wo-metric-icon wo-metric-icon--logo" alt="" aria-hidden="true">';
 
   // `url` (server.js -- @dashboard/strety-client's getMetricUrl) opens this
   // metric's own scorecard in Strety directly, by request. Wraps the whole
