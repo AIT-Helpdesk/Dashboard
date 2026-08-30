@@ -136,6 +136,12 @@ async function buildReport(filterTerm, subscriptionTerm, allStatuses) {
           id: s.id,
           name: s.name,
           status: s.status,
+          // Whether Ingram will actually renew this subscription at
+          // expiration, vs. let it lapse -- same raw field (`renewalStatus`)
+          // and same !! coercion Subscriptions Expiring/What's On already
+          // use for this, also straight off the list-endpoint row, no extra
+          // request needed.
+          autoRenews: !!s.renewalStatus,
           // Both already present on the list-endpoint row -- no extra
           // request needed, unlike license count. `term` is how long the
           // subscription commitment runs (Ingram's `subscriptionPeriod`);
