@@ -1,0 +1,12 @@
+{
+  "name": "@dashboard/rewst-form-test",
+  "version": "1.0.0",
+  "private": true,
+  "main": "client.js",
+  "dashboardPage": {
+    "id": "rewst-form-test",
+    "label": "Rewst Form Test",
+    "client": "client.js",
+    "restrictedTo": ["amber@ambientit.com.au"]
+  }
+}

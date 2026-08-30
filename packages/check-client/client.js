@@ -32,12 +32,12 @@ let lastServicesData = null;
 // server-side) same way every page duplicates small shared enums between
 // client and server.
 const TOGGLE_COLUMNS = [
-  { field: 'checked_contract', atKey: 'checkedContractAt', label: 'Checked Contract' },
+  { field: 'checked_contract', atKey: 'checkedContractAt', label: 'Contract' },
   { field: 'm365_ok', atKey: 'm365OkAt', label: 'M365 OK' },
   { field: 'tc_elite', atKey: 'tcEliteAt', label: 'TC ELITE' },
   { field: 'tc_ess', atKey: 'tcEssAt', label: 'TC ESS' },
   { field: 'others', atKey: 'othersAt', label: 'OTHERS' },
-  { field: 'all_done', atKey: 'allDoneAt', label: 'ALL DONE' },
+  { field: 'all_done', atKey: 'allDoneAt', label: 'DONE' },
 ];
 const FIELD_LABELS = {
   checked_contract: 'Checked Contract',
@@ -299,7 +299,7 @@ export function mount(container) {
             ${TOGGLE_COLUMNS.filter((c) => c.field !== 'all_done')
               .map((c) => `<th>${escapeHtml(c.label)}</th>`)
               .join('')}
-            <th>Info</th><th>ALL DONE</th>
+            <th>Info</th><th>DONE</th>
           </tr>
         </thead>
         <tbody>${orderRowsHtml(client.orders)}</tbody>

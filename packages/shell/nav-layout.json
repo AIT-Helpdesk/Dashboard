@@ -199,6 +199,10 @@
       {
         "type": "page",
         "id": "ticket-dashboards-test"
+      },
+      {
+        "type": "page",
+        "id": "rewst-form-test"
       }
     ]
   }

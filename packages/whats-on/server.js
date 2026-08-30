@@ -7,7 +7,7 @@ const express = require('express');
 // for why). The shared connection/its own /auth/strety/connect route still
 // exist (used by nothing in this file anymore, but kept -- see that
 // README) rather than removed outright.
-const { getPersonalClient, getTodoUrl } = require('@dashboard/strety-client');
+const { getPersonalClient, getTodoUrl, getMetricUrl } = require('@dashboard/strety-client');
 const { readLastRunStatus } = require('@dashboard/strety-autotask-sync/status.js');
 const { METRICS: AUTOTASK_SYNC_METRICS } = require('@dashboard/strety-autotask-sync/metrics.js');
 // Only for its connectedIdentity() below (a plain file read, no live API
@@ -464,6 +464,7 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics, client) {
         return {
           id: m.id,
           title: m.attributes.title,
+          url: getMetricUrl(m.id),
           target: targetLabel(m.attributes.target_type, m.attributes.target_value),
           cells,
           // spaceType === 'team' -- Personal metrics are fetched with
@@ -471,6 +472,10 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics, client) {
           // targets the Helpdesk Task Tracker TEAM, so this also
           // implicitly matches sync.js's own team+title identification.
           isAutoManaged: spaceType === 'team' && AUTO_MANAGED_METRIC_TITLES.has(m.attributes.title),
+          // 'team' | 'person' -- lets the client pick which little icon
+          // (Ambient iT logo vs. a person icon) goes in front of the title,
+          // by request.
+          spaceType,
         };
       })
       // No inherent order from the API -- alphabetical by title within a cadence.
