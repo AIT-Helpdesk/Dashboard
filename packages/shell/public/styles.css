@@ -3081,7 +3081,7 @@ tr.row-units-changed {
   text-decoration: none;
 }
 
-/* The little Ambient iT logo (Helpdesk/team rows) or person glyph (Personal
+/* The little Strety logo (Helpdesk/team rows) or person glyph (Personal
    rows) in front of a scorecard metric's title -- sized to sit on the text
    baseline rather than towering over/under it. */
 .wo-metric-icon {
@@ -3089,9 +3089,6 @@ tr.row-units-changed {
   height: 13px;
   vertical-align: -2px;
   margin-right: 0.35rem;
-}
-.wo-metric-icon--logo {
-  border-radius: 2px; /* the source JPG is a filled square background, not transparent -- softens its corners slightly rather than leaving hard right-angle edges inline with rounded UI elsewhere on this page */
 }
 
 /* The linked ticket's own Autotask status, under the ticket number --
