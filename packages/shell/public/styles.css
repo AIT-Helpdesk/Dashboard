@@ -297,9 +297,12 @@ a.nav-link.active[href="#start-here"] {
    text-transform: uppercase here DOES override the inherited .nav-link
    small-caps (Start Here's own comment above notes the two don't combine
    -- uppercase leaves nothing lowercase for small-caps to shrink), but
-   that's the point this time: full uppercase is what was actually asked
-   for, and it's what makes this match a plain-uppercase category heading
-   in the first place. */
+   that's the point: plain full uppercase is what actually matches a
+   plain-uppercase category heading -- small-caps was tried here too, by
+   request, but visibly smaller than the heading at the same font-size
+   (small-caps only keeps a word's FIRST letter full height, shrinking the
+   rest) and was reverted; small-caps belongs on the tab BAR's own
+   buttons instead (.tab-button below), a separate ask, separate element. */
 .nav-link--tabbed {
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -756,6 +759,14 @@ h1 {
   color: var(--muted);
   font: inherit;
   font-size: 0.78rem;
+  /* Small-caps, by request -- same treatment as the sidebar's own
+     .nav-link (font-variant: small-caps), applied here explicitly since
+     a <button> doesn't inherit it from that unrelated element. Every tab
+     label is a real page title (Title Case), so this reads as a normal
+     first-letter-capital word with the rest of each word in small caps,
+     not the "nothing left to shrink" flattening a fully-uppercase label
+     would get (see .nav-link--tabbed's own comment for that case). */
+  font-variant: small-caps;
   white-space: nowrap;
   flex-shrink: 0;
   cursor: pointer;
