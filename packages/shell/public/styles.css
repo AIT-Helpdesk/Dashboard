@@ -741,15 +741,38 @@ h1 {
    that trick only makes sense for a single row sitting right above the
    content. A plain divider line under the strip. Compact by request
    (small padding/font, small gap) -- this is a navigation strip, not
-   the page's main content. */
+   the page's main content.
+   Sticky, by request -- tab-page-client.js's mount() renders this as the
+   very first child of #page-content itself (app.js's actual overflow-y:
+   auto scroll container, not some inner wrapper), so position: sticky
+   here pins it to the top of that same scrolling box once the mounted
+   page's own content scrolls underneath it, keeping it (and its own
+   divider line) reachable without scrolling back up first. An opaque
+   background is required for a sticky element to actually mask the
+   content scrolling behind it -- var(--card), the same light panel shade
+   the sidebar itself uses (.sidebar's own background), by request, rather
+   than var(--bg) (which would've just matched the page and shown nothing
+   at all). Padding + border-radius turn that into an actual small panel
+   around the row instead of a flat colour band with square-cut edges;
+   negative side margins pull it back out to sit flush with the rest of
+   the page's own left/right edge (#page-content's own 2rem side padding
+   otherwise doubles up with this panel's own). z-index keeps it above
+   ordinary page content (default stacking level) without needing to
+   out-rank real overlays like .tcr-tooltip/.history-modal-overlay
+   further down. */
 .tab-bar {
   display: flex;
   flex-wrap: nowrap;
   overflow-x: auto;
   gap: 0.3rem;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 0.4rem;
-  margin-bottom: 0.6rem;
+  padding: 0.5rem 0.75rem 0.4rem;
+  margin: 0 -0.75rem 0.6rem;
+  border-radius: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--card);
 }
 .tab-button {
   padding: 0.2rem 0.6rem;
