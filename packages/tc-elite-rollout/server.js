@@ -11,6 +11,7 @@ const {
   bulkSetStages,
   bulkSetColumnCells,
   bulkSetStageColumn,
+  renameClient,
   deleteClient,
   deleteStage,
 } = require('./db.js');
@@ -341,6 +342,34 @@ router.patch('/stages/:stageId/bulk-status', (req, res) => {
 
     const affectedIds = bulkSetStageColumn(stageId, newStatus, newReason, actorFrom(req), body.clientIds || null);
     res.json({ status: newStatus, reason: newReason, clientIds: affectedIds });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Rename a client -- see renameClient()'s own comment in db.js for why a
+// single update here is all that's needed for every compound column's
+// sub-sheet to also show the new name, with no separate propagation step.
+// Open to every signed-in user, same as an ordinary cell edit (unlike Add
+// Column/Add Stage, which are restricted -- a name correction isn't a
+// structural change to what's tracked).
+router.patch('/clients/:clientId/name', (req, res) => {
+  try {
+    const clientId = Number(req.params.clientId);
+    const client = db.prepare('SELECT id, name FROM clients WHERE id = ?').get(clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found.' });
+    const name = (req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name is required.' });
+    if (name !== client.name) {
+      // Same duplicate-name guard as creating a new client (POST /clients
+      // above) -- excluding this client's own current row, since renaming
+      // "Foo" to "Foo" (a no-op edit) should never trip its own check.
+      const dupe = db.prepare('SELECT id FROM clients WHERE name = ? AND id != ?').get(name, clientId);
+      if (dupe) return res.status(409).json({ error: `A client named "${name}" already exists.` });
+      renameClient(clientId, name, actorFrom(req));
+    }
+    res.json({ id: clientId, name });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

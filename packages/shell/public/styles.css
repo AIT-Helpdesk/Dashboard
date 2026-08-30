@@ -90,6 +90,7 @@ html[data-sidebar-collapsed="true"] .sidebar {
   padding: 1rem 0.5rem;
 }
 html[data-sidebar-collapsed="true"] .sidebar-logo,
+html[data-sidebar-collapsed="true"] .sidebar-hostname,
 html[data-sidebar-collapsed="true"] .nav-list,
 html[data-sidebar-collapsed="true"] .user-info,
 html[data-sidebar-collapsed="true"] .theme-toggle {
@@ -146,8 +147,20 @@ html[data-sidebar-collapsed="true"] #sidebar-refresh {
   display: block;
   max-width: 100%;
   height: auto;
-  margin-bottom: 1rem;
+  margin-bottom: 0.25rem;
   padding: 0 0.75rem;
+}
+
+/* The real machine currently serving this dashboard (os.hostname(), see
+   auth.js's /api/me), by request -- small enough to be a quiet aside, not
+   a UI element competing with the logo above it. Useful for telling a
+   local dev copy apart from the real production box at a glance. */
+.sidebar-hostname {
+  padding: 0 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-align: center;
 }
 
 /* The logo PNG has a transparent background, and its own colors (dark
@@ -2193,6 +2206,23 @@ tr.row-text-highlight-blue td {
   background: var(--row-alt-bg);
   border-radius: 6px;
   white-space: nowrap;
+}
+/* Rename-client button, same look/placement convention as
+   .tcr-bulk-row-btn right next to it -- opens .tcr-rename-editor (a
+   second, independent instance of the same .tcr-bulk-row-editor popup
+   box, see client.js's wireRenameButtons() for why it needs its own
+   class rather than reusing .tcr-bulk-row-editor's for the toggle check). */
+.tcr-rename-btn {
+  border: none;
+  background: none;
+  padding: 0 0.2rem;
+  cursor: pointer;
+  color: var(--muted);
+  vertical-align: middle;
+  line-height: 1;
+}
+.tcr-rename-btn:hover {
+  color: var(--accent);
 }
 /* "Set this whole column to the same value" button -- the column-based
    mirror of .tcr-bulk-row-btn above, sitting in a <th> instead of a <td>.

@@ -554,6 +554,27 @@ function bulkSetStageColumn(stageId, status, reason, actor, clientIds = null) {
 // client's tracking was discontinued, so there's no lingering trace meant
 // to survive the deletion. Revisit if a real client ever needs removing
 // and preserving "they used to be tracked" history turns out to matter.
+// Renames a client -- the master `clients` row is the single source of
+// truth for the name everywhere it's shown (the master grid's own GET /
+// and every compound column's GET /columns/:columnId/detail both query
+// `clients.name` fresh on every load, joined only by id, never a copy of
+// the name stored per-sheet), so updating it here is automatically
+// reflected on every sub-sheet the next time it's opened -- no separate
+// propagation step needed. Logged to audit_log the same way every other
+// change on this page is (entity_type 'client', same as the client-
+// creation event already recorded there) -- old_status/new_status hold
+// the old/new NAME here rather than a grid status, since audit_log has no
+// dedicated free-text field and those two columns have no CHECK
+// constraint tying them to the STATUSES enum (only cell_status/
+// stage_status do).
+function renameClient(clientId, newName, actor) {
+  const client = db.prepare('SELECT name FROM clients WHERE id = ?').get(clientId);
+  if (!client) return null;
+  db.prepare('UPDATE clients SET name = $name WHERE id = $id').run({ $name: newName, $id: clientId });
+  recordAudit({ entityType: 'client', clientId, oldStatus: client.name, newStatus: newName, actor });
+  return newName;
+}
+
 function deleteClient(clientId) {
   db.exec('BEGIN');
   try {
@@ -604,6 +625,7 @@ module.exports = {
   bulkSetStages,
   bulkSetColumnCells,
   bulkSetStageColumn,
+  renameClient,
   deleteClient,
   deleteStage,
 };

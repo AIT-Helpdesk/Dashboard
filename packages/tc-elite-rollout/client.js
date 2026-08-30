@@ -30,6 +30,13 @@ const COLUMN_ADMIN_EMAIL = 'amber@ambientit.com.au';
 const STATUS_LABELS = { not_done: 'Not Done', started: 'Started', done: 'Done', na: 'N/A', cancelled: 'Cancelled', issue: 'Issue' };
 const STATUS_SYMBOLS = { not_done: '✗', started: '▶', done: '✓', na: 'N/A', cancelled: '⛔', issue: '⚠️' };
 const STATUS_ORDER = ['not_done', 'started', 'done', 'na', 'cancelled', 'issue'];
+
+// Same Material "edit" pencil path Contract Checks' own PO# edit button
+// uses (fill="currentColor" so it follows .tcr-rename-btn's own colour,
+// same as that one) -- reused rather than a new icon, for a consistent
+// "this opens an edit control" look across the dashboard.
+const RENAME_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
 // Statuses that can carry an optional comment -- na's existing "why
 // doesn't this apply" reason, cancelled's "why was this cancelled"
 // comment, and issue's "what's the issue" comment. Same list server.js
@@ -333,7 +340,7 @@ export function mount(container) {
           .map(
             (client) => `
           <tr>
-            <td><button type="button" class="tcr-bulk-row-btn" data-client-id="${client.id}" title="Set every column in this row to the same value">⚙</button> ${escapeHtml(client.name)}</td>
+            <td><button type="button" class="tcr-bulk-row-btn" data-client-id="${client.id}" title="Set every column in this row to the same value">⚙</button> <button type="button" class="tcr-rename-btn" data-client-id="${client.id}" data-client-name="${escapeHtml(client.name)}" title="Rename client">${RENAME_ICON_SVG}</button> ${escapeHtml(client.name)}</td>
             ${columns.map((col) => masterCellHtml(client, col)).join('')}
           </tr>`
           )
@@ -345,6 +352,7 @@ export function mount(container) {
     wireCellInteractions(table);
     wireBulkRowButtons(table, 'master');
     wireBulkColumnButtons(table, 'master');
+    wireRenameButtons(table);
   }
 
   function masterCellHtml(client, col) {
@@ -674,6 +682,78 @@ export function mount(container) {
         });
       });
     });
+  }
+
+  // Rename a client -- master-grid only, by request. loadGrid() (see its
+  // own comment above) already re-fetches whatever compound column's
+  // detail sheet is currently open, if any, so a currently-open sub-sheet
+  // picks up the new name the same way it picks up any other change; a
+  // sub-sheet that isn't open yet just gets the new name naturally the
+  // next time it's opened, straight from the single clients.name column
+  // (see renameClient()'s own comment in db.js).
+  //
+  // Own class (.tcr-rename-editor), not .tcr-bulk-row-editor -- both
+  // buttons live in the same <td>, so reusing that class for the toggle-
+  // open/toggle-closed check below would make clicking Rename while the
+  // bulk-set editor is already open just close THAT one instead of
+  // opening this one (and vice versa). Same visual look either way (see
+  // styles.css).
+  function wireRenameButtons(table) {
+    table.querySelectorAll('.tcr-rename-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const existing = btn.parentElement.querySelector('.tcr-rename-editor');
+        if (existing) {
+          existing.remove();
+          return;
+        }
+        const clientId = btn.dataset.clientId;
+        const editor = document.createElement('div');
+        editor.className = 'tcr-bulk-row-editor tcr-rename-editor';
+        editor.innerHTML = `
+          <input type="text" class="tcr-inline-input tcr-rename-input" value="${escapeHtml(btn.dataset.clientName)}" />
+          <div class="tcr-form-actions">
+            <button type="button" class="button-link button-link--small tcr-save">Save</button>
+            <button type="button" class="tcr-cancel">Cancel</button>
+          </div>
+        `;
+        btn.insertAdjacentElement('afterend', editor);
+        const input = editor.querySelector('.tcr-rename-input');
+        input.focus();
+        input.select();
+
+        async function save() {
+          const newName = input.value.trim();
+          if (!newName) {
+            alert('Name cannot be blank.');
+            return;
+          }
+          try {
+            await fetchRenameClient(clientId, newName);
+            editor.remove();
+            await loadGrid();
+          } catch (err) {
+            alert(`Error: ${err.message}`);
+          }
+        }
+
+        editor.querySelector('.tcr-cancel').addEventListener('click', () => editor.remove());
+        editor.querySelector('.tcr-save').addEventListener('click', save);
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') save();
+          if (e.key === 'Escape') editor.remove();
+        });
+      });
+    });
+  }
+
+  async function fetchRenameClient(clientId, name) {
+    const res = await fetch(`/api/tc-elite-rollout/clients/${clientId}/name`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   }
 
   async function fetchBulkCells(clientId, status, reason) {

@@ -2,6 +2,7 @@
 // every page and every /api/* route behind a signed-in account from your own
 // tenant. See ../../README.md "Securing the dashboard" for the Entra admin
 // center setup this depends on (app registration, client secret, redirect URI).
+const os = require('os');
 const session = require('express-session');
 const { ConfidentialClientApplication } = require('@azure/msal-node');
 
@@ -164,9 +165,14 @@ function registerAuthRoutes(app) {
 
   // Lets the frontend show who's signed in / render a Sign out link without
   // guessing -- returns null rather than 401 so it's safe to call before the
-  // requireAuth guard below is even relevant.
+  // requireAuth guard below is even relevant. `hostname` (by request --
+  // small text under the sidebar logo, so it's visible which real machine
+  // is serving the data currently open, e.g. distinguishing a local dev
+  // copy from the real production box) rides along on this same response
+  // rather than a separate endpoint, since app.js already fetches this
+  // once on load anyway.
   app.get('/api/me', (req, res) => {
-    res.json({ user: req.session.user || null });
+    res.json({ user: req.session.user || null, hostname: os.hostname() });
   });
 }
 
