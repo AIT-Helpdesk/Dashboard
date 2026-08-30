@@ -43,7 +43,7 @@ License counts are also cached server-side per subscription ID (`licenseCache`, 
 
 ## Term and billing period
 
-Both come straight off the list-endpoint row (`subscriptionPeriod` -> **Term**, `billingPeriod` -> **Billing Period**) -- unlike license count, no extra request needed, so these are always populated in the base report. They can genuinely differ: a subscription can have a 1-year term billed monthly rather than prepaid annually, so they're shown as two separate columns. Both are `{type, duration}` (e.g. `{type: "month", duration: 1}`), formatted client-side (`formatPeriod()`) as "Monthly"/"Annual"/"Daily" for the common duration-1 cases, or "N months"/"N years" otherwise.
+Both come straight off the list-endpoint row (`subscriptionPeriod` -> **Term**, `billingPeriod` -> **Billing Period**) -- unlike license count, no extra request needed, so these are always populated in the base report. They can genuinely differ: a subscription can have a 1-year term billed monthly rather than prepaid annually -- shown together in one "Term / Billing Period" column (`Term / Billing Period`), by request, rather than two separate ones. Both are `{type, duration}` (e.g. `{type: "month", duration: 1}`), formatted client-side (`formatPeriod()`) as "Monthly"/"Annual"/"Daily" for the common duration-1 cases, or "N months"/"N years" otherwise.
 
 ## All statuses toggle
 
@@ -51,7 +51,7 @@ Checkbox next to the client filter, unchecked by default (active & pending only,
 
 ## Grouping
 
-Subscriptions are grouped by resolved client name, sorted alphabetically; within a client, subscriptions are sorted alphabetically by subscription name. Each client group's header shows its subscription count; each row shows the subscription name, status (pending shown in blue via the shared `.cell-flag-blue` class), license count (blank until that client's name is clicked), term, billing period, and creation/renewal/expiration dates.
+Subscriptions are grouped by resolved client name, sorted alphabetically; within a client, subscriptions are sorted alphabetically by subscription name. Each client group's header shows its subscription count; each row shows the subscription name, status (pending shown in blue via the shared `.cell-flag-blue` class), auto-renewal (green "Yes"/red "No", from the list-endpoint row's `renewalStatus` -- same field and same `!!` coercion Subscriptions Expiring/What's On already use), license count (blank until that client's name is clicked), a combined "Term / Billing Period" column (the two can genuinely differ, e.g. a 1-year term billed monthly rather than prepaid -- see below), and creation/renewal/expiration dates.
 
 ## Caching (base report)
 

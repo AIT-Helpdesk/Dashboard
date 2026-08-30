@@ -1103,6 +1103,18 @@ h1 {
   width: 10%;
 }
 
+/* Column order (both this page and Check Client's own Subscriptions
+   section, which reuses this exact class): Subscription (unset -- takes
+   whatever's left, by far the widest column), Status, Auto-Renewal,
+   Licenses, Term / Billing Period, Created, Renews, Expires. Re-tuned
+   when Auto-Renewal was added and Term+Billing Period were combined into
+   one column -- these nth-child widths are POSITIONAL, so adding/merging
+   columns without touching the numbers here would have silently kept the
+   old percentages pointed at the wrong new column (Licenses' old 8%
+   landing on Auto-Renewal, Term's old 9% landing on Licenses, etc.).
+   Licenses shrank (short digits only, plenty even smaller); Term /
+   Billing Period grew (it now carries what used to be two separate
+   columns' worth of text, e.g. "Annual / Monthly"). */
 .ingram-subscriptions-table {
   table-layout: fixed;
 }
@@ -1112,15 +1124,15 @@ h1 {
 }
 .ingram-subscriptions-table th:nth-child(3),
 .ingram-subscriptions-table td:nth-child(3) {
-  width: 8%;
+  width: 9%;
 }
 .ingram-subscriptions-table th:nth-child(4),
 .ingram-subscriptions-table td:nth-child(4) {
-  width: 9%;
+  width: 6%;
 }
 .ingram-subscriptions-table th:nth-child(5),
 .ingram-subscriptions-table td:nth-child(5) {
-  width: 11%;
+  width: 16%;
 }
 .ingram-subscriptions-table th:nth-child(6),
 .ingram-subscriptions-table td:nth-child(6) {
@@ -1133,6 +1145,22 @@ h1 {
 .ingram-subscriptions-table th:nth-child(8),
 .ingram-subscriptions-table td:nth-child(8) {
   width: 9%;
+}
+/* Matches Check Client's own compact table sizing exactly (see
+   .check-client-page table th/td further down) -- by request, so the
+   same table reads the same size whether reached from this standalone
+   page or embedded in Check Client's Subscriptions section. Applied
+   directly to this table's own class (shared by both pages) rather than
+   duplicating a page-scoped rule, since -- unlike Contract Checks/Check
+   Client's Orders section, which share row *shape* but not a table
+   class -- this one genuinely is the same table both places. */
+.ingram-subscriptions-table th,
+.ingram-subscriptions-table td {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.5rem;
+}
+.ingram-subscriptions-table th {
+  font-size: 0.68rem;
 }
 
 .ingram-orders-table {

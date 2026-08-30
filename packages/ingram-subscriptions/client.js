@@ -130,7 +130,7 @@ export function mount(container) {
       table.className = 'ingram-subscriptions-table';
       table.innerHTML = `
         <thead>
-          <tr><th>Subscription</th><th>Status</th><th>Licenses</th><th>Term</th><th>Billing Period</th><th>Created</th><th>Renews</th><th>Expires</th></tr>
+          <tr><th>Subscription</th><th>Status</th><th>Auto-Renewal</th><th>Licenses</th><th>Term / Billing Period</th><th>Created</th><th>Renews</th><th>Expires</th></tr>
         </thead>
         <tbody>${subscriptionRowsHtml(client.subscriptions)}</tbody>
       `;
@@ -146,9 +146,9 @@ export function mount(container) {
       <tr>
         <td>${escapeHtml(s.name)}</td>
         <td${s.status === 'pending' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(s.status === 'hold' ? 'On Hold' : capitalize(s.status))}</td>
+        <td class="${s.autoRenews ? 'cell-flag-green' : 'cell-flag-red'}">${s.autoRenews ? 'Yes' : 'No'}</td>
         <td class="ticket-number">${s.licenseCount ?? ''}</td>
-        <td class="ticket-number">${formatPeriod(s.term)}</td>
-        <td class="ticket-number">${formatPeriod(s.billingPeriod)}</td>
+        <td class="ticket-number">${formatPeriod(s.term)} / ${formatPeriod(s.billingPeriod)}</td>
         <td class="ticket-number">${formatDate(s.creationDate)}</td>
         <td class="ticket-number">${formatDate(s.renewalDate)}</td>
         <td class="ticket-number">${formatDate(s.expirationDate)}</td>
