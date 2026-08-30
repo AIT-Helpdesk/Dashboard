@@ -3,14 +3,20 @@ const { getClient, listAll, getCompanyUrl, getInvoiceUrl, parseWildcard, getPick
 
 const CRITERIA = new Set(['active', 'inactive', 'any', 'no-primary-contact', 'no-billing-contact', 'no-recent-invoice']);
 
-// "Since the beginning of the year before last" -- a moving two-year window, not
-// a fixed date. Recomputed on every request so it stays correct as years pass
-// (e.g. evaluated in 2026, this is 2024-01-01; in 2027 it becomes 2025-01-01).
-// Anchored to the AEST year, not UTC -- only actually matters for the ~10
-// AEST hours spanning New Year's Day, but consistent with every other date
-// boundary on this dashboard now being AEST-anchored.
+// 1 July, 2 years before the most recent PAST 1 July -- a moving window, by
+// request, not a fixed date. "Most recent past 1 July" is this AEST
+// calendar year's if today is on or after 1 July, otherwise last year's;
+// the cutoff is 2 years earlier than THAT year's 1 July. Recomputed on
+// every request so it stays correct as years pass -- e.g. evaluated any
+// time from 1 Jul 2026 through 30 Jun 2027, the most recent past 1 July is
+// 2026, so this is 2024-07-01; from 1 Jul 2027 it rolls to 2025-07-01.
+// Anchored to the AEST calendar (toAest's getUTC* getters read AEST wall-
+// clock fields, not the server's own local timezone), consistent with
+// every other date boundary on this dashboard now being AEST-anchored.
 function noRecentInvoiceCutoffISO() {
-  return aestToUtcIso(toAest(new Date()).getUTCFullYear() - 2, 1, 1);
+  const aestNow = toAest(new Date());
+  const mostRecentPastJulyYear = aestNow.getUTCMonth() + 1 >= 7 ? aestNow.getUTCFullYear() : aestNow.getUTCFullYear() - 1;
+  return aestToUtcIso(mostRecentPastJulyYear - 2, 7, 1);
 }
 
 // companyType picklist codes (Autotask-wide, not org-specific config, so safe to

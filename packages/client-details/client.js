@@ -9,13 +9,18 @@ export const label = "Client Details";
 let lastQuery = null; // { criteria, client }
 let lastData = null;
 
-// "Beginning of the year before last" is a moving two-year window, not a fixed
-// year -- computed the same way (and independently) as the server's own cutoff,
-// so the dropdown label always matches what the query actually does. AEST
-// (UTC+10, no DST in Queensland), not the browser's own local timezone --
-// only actually matters for the ~10 AEST hours spanning New Year's Day, but
-// consistent with the server side now being AEST-anchored too.
-const noRecentInvoiceCutoffYear = new Date(Date.now() + 10 * 60 * 60 * 1000).getUTCFullYear() - 2;
+// 1 July, 2 years before the most recent PAST 1 July -- a moving window, not
+// a fixed date, computed the same way (and independently) as the server's
+// own cutoff (see server.js's noRecentInvoiceCutoffISO -- same comment
+// there explains the "most recent past 1 July" logic in full), so the
+// dropdown label always matches what the query actually does. AEST (UTC+10,
+// no DST in Queensland) via the same +10h-then-read-UTC-getters trick,
+// not the browser's own local timezone -- only actually matters for the
+// ~10 AEST hours spanning 1 July's own midnight boundary, but consistent
+// with the server side now being AEST-anchored too.
+const aestNow = new Date(Date.now() + 10 * 60 * 60 * 1000);
+const mostRecentPastJulyYear = aestNow.getUTCMonth() + 1 >= 7 ? aestNow.getUTCFullYear() : aestNow.getUTCFullYear() - 1;
+const noRecentInvoiceCutoffYear = mostRecentPastJulyYear - 2;
 
 const CRITERIA_OPTIONS = [
   { value: "active", label: "Active Clients" },
@@ -23,7 +28,7 @@ const CRITERIA_OPTIONS = [
   { value: "any", label: "Any Client" },
   { value: "no-primary-contact", label: "No primary contact" },
   { value: "no-billing-contact", label: "No main billing contact set" },
-  { value: "no-recent-invoice", label: `No invoice since 1 Jan ${noRecentInvoiceCutoffYear}` },
+  { value: "no-recent-invoice", label: `No invoice since 1 Jul ${noRecentInvoiceCutoffYear}` },
 ];
 
 export function mount(container) {
