@@ -1,13 +1,14 @@
 {
-  "name": "@dashboard/external-page-builder",
+  "name": "@dashboard/contract-mgmt-tabs",
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
   "dashboardPage": {
-    "id": "external-page-builder",
-    "label": "External Page Builder",
+    "id": "contract-mgmt-tabs",
+    "label": "Contract Mgmnt",
     "client": "client.js",
-    "server": "server.js"
+    "server": "server.js",
+    "tabbed": true
   },
   "dependencies": {
     "@dashboard/shell": "*",

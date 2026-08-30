@@ -54,6 +54,10 @@
     ]
   },
   {
+    "type": "page",
+    "id": "client-info-tabs"
+  },
+  {
     "type": "category",
     "id": "client-info",
     "label": "Client Info",
@@ -78,7 +82,12 @@
         "type": "page",
         "id": "find-passwords"
       }
-    ]
+    ],
+    "hidden": true
+  },
+  {
+    "type": "page",
+    "id": "ticket-info-tabs"
   },
   {
     "type": "category",
@@ -87,7 +96,7 @@
     "children": [
       {
         "type": "page",
-        "id": "asked-for-review"
+        "id": "ticket-times"
       },
       {
         "type": "page",
@@ -99,9 +108,15 @@
       },
       {
         "type": "page",
-        "id": "ticket-times"
+        "id": "asked-for-review"
       }
-    ]
+    ],
+    "hidden": true
+  },
+  {
+    "type": "page",
+    "id": "client-financials-tabs",
+    "label": "Client Finance"
   },
   {
     "type": "category",
@@ -120,7 +135,12 @@
         "type": "page",
         "id": "client-financials"
       }
-    ]
+    ],
+    "hidden": true
+  },
+  {
+    "type": "page",
+    "id": "licensing-tabs"
   },
   {
     "type": "category",
@@ -143,7 +163,13 @@
         "type": "page",
         "id": "csp-customers"
       }
-    ]
+    ],
+    "hidden": true
+  },
+  {
+    "type": "page",
+    "id": "contract-mgmt-tabs",
+    "label": "Contract Mgmt"
   },
   {
     "type": "category",
@@ -170,7 +196,8 @@
         "type": "page",
         "id": "ingram-orders-update-contracts"
       }
-    ]
+    ],
+    "hidden": true
   },
   {
     "type": "category",
@@ -207,7 +234,12 @@
       {
         "type": "page",
         "id": "external-page-builder"
+      },
+      {
+        "type": "page",
+        "id": "tab-page-builder"
       }
-    ]
+    ],
+    "hidden": true
   }
 ]

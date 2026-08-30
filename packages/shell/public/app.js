@@ -143,6 +143,32 @@ try {
 }
 renderSidebarPinToggle();
 
+// Preview as a regular user -- admin-only, by request. Hidden by default
+// (index.html sets `hidden` on the button itself); shown/wired up from
+// init() below once loadTree() has confirmed this is actually an
+// admin's own session (`editable`), same "reveal only once the server
+// has actually confirmed admin" timing as the rest of the admin-only UI
+// in this file. See isAdminView() (near the top of this file) for what
+// this flag actually gates everywhere else.
+const previewUserToggle = document.getElementById('preview-user-toggle');
+
+function renderPreviewUserToggle() {
+  previewUserToggle.classList.toggle('preview-user-toggle--active', previewAsUser);
+  previewUserToggle.setAttribute('aria-label', previewAsUser ? 'Exit user preview (show admin view again)' : 'Preview as a regular user');
+  previewUserToggle.title = previewUserToggle.getAttribute('aria-label');
+}
+
+previewUserToggle.addEventListener('click', () => {
+  previewAsUser = !previewAsUser;
+  try {
+    localStorage.setItem(PREVIEW_AS_USER_KEY, String(previewAsUser));
+  } catch {
+    // localStorage unavailable -- the choice still applies for this page load, just won't persist.
+  }
+  renderPreviewUserToggle();
+  renderNav(currentPageId());
+});
+
 // Refresh the whole dashboard, by request -- next to the pin button. A
 // real full browser reload (not an SPA-internal re-fetch of just the
 // current page), by design: this app has no single "refresh everything"
@@ -230,13 +256,35 @@ const EXTERNAL_PAGE_ICON_SVG =
 // The whole tree is a SHARED, server-side setting (GET/PUT /api/nav-layout)
 // -- not per-browser localStorage -- because the point is that everyone
 // hitting the real dashboard URL sees the same arrangement. Only editable
-// (drag-and-drop) when the server says so, which it decides from the Host
-// header: localhost only (a local dev copy, or someone RDP'd into the
-// production box itself hitting its own localhost:3000 to edit the LIVE
-// shared layout). `editable` here just mirrors what the server already
-// enforces -- hiding the drag handles is a UX nicety, the server rejects a
-// save from anywhere else regardless of what this value says.
+// (drag-and-drop reorder, right-click hide/unhide) when the server says so,
+// which it decides from the signed-in account -- one specific email
+// (isNavAdmin() in server.js), not a hostname check. `editable` here just
+// mirrors what the server already enforces -- hiding the drag handles/
+// right-click menu is a UX nicety, the server rejects a save from anyone
+// else regardless of what this value says.
 let editable = false;
+
+// "Preview as a regular user" -- admin-only, by request: lets Amber see
+// the sidebar exactly as anyone else would (hidden items gone entirely,
+// no drag/hide/rename affordances) without signing in as anyone else.
+// Per-browser (localStorage), same "personal viewing preference"
+// reasoning as sidebarCollapsed/theme -- it's just a rendering choice on
+// top of an already-editable session, not a real permission change (the
+// server enforces the real one regardless of this). Only ever matters
+// when `editable` is also true -- see isAdminView() below, which is what
+// every admin-only rendering/interaction decision in this file now goes
+// through instead of the raw `editable` flag.
+const PREVIEW_AS_USER_KEY = 'dashboard.previewAsUser';
+let previewAsUser = false;
+try {
+  previewAsUser = localStorage.getItem(PREVIEW_AS_USER_KEY) === 'true';
+} catch {
+  // localStorage unavailable -- falls back to the normal admin view.
+}
+function isAdminView() {
+  return editable && !previewAsUser;
+}
+
 const pagesById = new Map(registeredPages.map((p) => [p.id, p]));
 
 function defaultTree() {
@@ -274,6 +322,24 @@ function reconcileTree(rawTree) {
   }
   for (const p of registeredPages) {
     if (!seen.has(p.id)) result.push({ type: 'page', id: p.id });
+  }
+  return result;
+}
+
+// Mirrors server.js's own stripHidden() (which is what a non-admin's
+// browser actually receives) -- used client-side only while an admin has
+// "preview as user" switched on, so the sidebar they're looking at is a
+// true rendering of what everyone else sees, not just a dimmed version
+// of the admin's own tree.
+function stripHiddenForPreview(rawTree) {
+  const result = [];
+  for (const node of rawTree) {
+    if (node.hidden) continue;
+    if (node.type === 'category') {
+      result.push({ ...node, children: node.children.filter((c) => !c.hidden) });
+    } else {
+      result.push(node);
+    }
   }
   return result;
 }
@@ -343,11 +409,11 @@ function sameList(a, b) {
 
 // Which categories are expanded -- purely a per-browser viewing preference,
 // deliberately separate from the shared/server-side nav tree above: everyone
-// sees the same categories and pages (admin-controlled, localhost-only edit),
-// but whether YOU currently have a given category open is personal and
-// doesn't need localhost access to change. Defaults to nothing expanded
-// (minimized) -- a category only opens because you clicked it, or because it
-// contains the page you're currently on (see renderCategory()).
+// sees the same categories and pages (admin-controlled), but whether YOU
+// currently have a given category open is personal and doesn't need admin
+// access to change. Defaults to nothing expanded (minimized) -- a category
+// only opens because you clicked it, or because it contains the page
+// you're currently on (see renderCategory()).
 const EXPANDED_KEY = 'dashboard.expandedCategories';
 function loadExpanded() {
   try {
@@ -381,6 +447,102 @@ function moveTo(targetLoc) {
   saveTree();
 }
 
+// Right-click hide/unhide, by request -- same admin-only editing this
+// sidebar's drag-and-drop reorder already is (see server.js's
+// isDashboardAdmin, which now gates both). `node.hidden` rides along on
+// the SAME shared nav-layout.json/saveTree() drag-and-drop already uses
+// -- no separate save path. A non-admin's own tree never contains a
+// hidden node in the first place (server.js strips them before sending),
+// so this toggle and its dimmed rendering only ever matter in an
+// editable session.
+function toggleHidden(node) {
+  if (node.hidden) delete node.hidden;
+  else node.hidden = true;
+  renderNav(currentPageId());
+  saveTree();
+}
+
+// Rename a TABBED page's own sidebar label, by request -- admin-only,
+// offered only for a page with dashboardPage.tabbed set (see
+// renderPageItem() below). Stores the override directly on the page's own
+// node in the shared tree (node.label, read by renderPageItem() ahead of
+// the page's own default pagesById label) -- same "just another field on
+// the node, saved through the exact same saveTree() drag-and-drop
+// already uses" approach as node.hidden above, so this needed no new
+// server route at all.
+function renamePage(node, page) {
+  const next = prompt('Rename this page:', node.label || page.label);
+  if (next === null) return; // cancelled
+  const trimmed = next.trim();
+  if (!trimmed) return;
+  node.label = trimmed;
+  renderNav(currentPageId());
+  saveTree();
+}
+
+// A small floating right-click menu -- a list of {label, onClick} actions
+// (Hide/Unhide always; Rename too, for a tabbed page -- see
+// renderPageItem() below for how that list is built). Exactly one open
+// at a time; closeNavContextMenu() is the ONE place that tears down both
+// the menu element and whichever dismiss listeners are currently
+// attached, so however it closes (a button click, a click elsewhere,
+// Escape, or scrolling) always leaves a clean slate for the next one --
+// rather than leftover once-only listeners from an Escape-closed menu
+// firing unexpectedly on a LATER menu's own first click.
+let openContextMenu = null;
+let contextMenuDismissListeners = null;
+function closeNavContextMenu() {
+  if (!openContextMenu) return;
+  openContextMenu.remove();
+  openContextMenu = null;
+  if (contextMenuDismissListeners) {
+    document.removeEventListener('click', contextMenuDismissListeners.onDismiss);
+    document.removeEventListener('scroll', contextMenuDismissListeners.onDismiss, true);
+    document.removeEventListener('keydown', contextMenuDismissListeners.onKeydown);
+    contextMenuDismissListeners = null;
+  }
+}
+// `actions` is [{label, onClick}, ...] -- rendered as one button per
+// action, top to bottom, in the order given.
+function showNavContextMenu(x, y, actions) {
+  closeNavContextMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'nav-context-menu';
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+
+  for (const action of actions) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'nav-context-menu-item';
+    btn.textContent = action.label;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeNavContextMenu();
+      action.onClick();
+    });
+    menu.appendChild(btn);
+  }
+
+  document.body.appendChild(menu);
+  openContextMenu = menu;
+
+  const onDismiss = () => closeNavContextMenu();
+  const onKeydown = (e) => {
+    if (e.key === 'Escape') closeNavContextMenu();
+  };
+  contextMenuDismissListeners = { onDismiss, onKeydown };
+  // Deferred by one tick -- otherwise the same right-click that OPENED
+  // this menu (contextmenu fires before any click) could immediately
+  // trigger its own dismiss listener before the menu's even visible.
+  setTimeout(() => {
+    document.addEventListener('click', onDismiss);
+    document.addEventListener('scroll', onDismiss, true);
+    document.addEventListener('keydown', onKeydown);
+  }, 0);
+}
+
 // Auto-opens the category containing `activeId`, but only the first time a
 // given page becomes active -- not on every re-render. Without that guard,
 // clicking a category's header to collapse it while viewing one of its
@@ -402,33 +564,69 @@ function autoOpenCategoryFor(activeId) {
 function renderNav(activeId) {
   autoOpenCategoryFor(activeId);
   navList.innerHTML = '';
-  tree.forEach((node, index) => {
+  // Every admin-only rendering/interaction decision below goes through
+  // this one computed flag, not the raw `editable` -- see isAdminView()'s
+  // own comment. While previewing as a user, the tree itself is also
+  // stripped of hidden nodes first (stripHiddenForPreview), so what's
+  // rendered is a true match for what a non-admin's own browser would
+  // receive from the server, not just an admin tree with the affordances
+  // switched off.
+  const admin = isAdminView();
+  const renderTree = admin ? tree : stripHiddenForPreview(tree);
+  renderTree.forEach((node, index) => {
     if (node.type === 'category') {
       // A category with zero children isn't necessarily really empty -- it
       // can be a category whose every page is restrictedTo someone else
       // (see server.js's pageVisibleTo/reconcileTree above), in which case
       // showing an empty header would out its existence to a viewer who
-      // isn't supposed to know it's there at all. Editable (localhost) mode
-      // is the one exception -- the whole point there is to drag a page
-      // INTO an otherwise-empty category, so keep it visible while editing.
-      if (node.children.length === 0 && !editable) return;
-      navList.appendChild(renderCategory(node, index, activeId));
+      // isn't supposed to know it's there at all. Admin view is the one
+      // exception -- the whole point there is to drag a page INTO an
+      // otherwise-empty category, so keep it visible while editing.
+      if (node.children.length === 0 && !admin) return;
+      navList.appendChild(renderCategory(node, index, activeId, admin));
     } else {
-      navList.appendChild(renderPageItem(node, { kind: 'root', index }, activeId));
+      navList.appendChild(renderPageItem(node, { kind: 'root', index }, activeId, admin));
     }
   });
   // Only meaningful as a drop target -- no point rendering it when nothing
   // on the page can be dragged.
-  if (editable) navList.appendChild(renderRootDropZone());
+  if (admin) navList.appendChild(renderRootDropZone());
 }
 
-function renderPageItem(node, loc, activeId) {
+function renderPageItem(node, loc, activeId, admin) {
   const page = pagesById.get(node.id);
+  // node.label, when present, is an admin-set rename override (see
+  // renamePage() above) -- takes precedence over the page's own default
+  // package.json label. Shared (rides along in the same tree everyone's
+  // own GET /api/nav-layout returns), not a per-viewer thing.
+  const displayLabel = node.label || page.label;
   const li = document.createElement('li');
-  li.className = 'nav-item' + (loc.kind === 'category' ? ' nav-item--nested' : '') + (editable ? '' : ' nav-item--readonly');
+  li.className =
+    'nav-item' +
+    (loc.kind === 'category' ? ' nav-item--nested' : '') +
+    (admin ? '' : ' nav-item--readonly') +
+    // node.hidden only ever appears in an admin's own tree -- see
+    // server.js's stripHidden(), which removes it before a non-admin's
+    // browser ever receives it.
+    (node.hidden ? ' nav-item--hidden' : '');
 
   const a = document.createElement('a');
   a.href = `#${page.id}`;
+  // A real <a href> is natively draggable by default in every browser
+  // (that's what lets you drag a link to a new tab/the bookmarks bar).
+  // Left alone, the browser can pick THIS element as the actual drag
+  // source (it's the closest draggable ancestor-or-self to the
+  // pointer-down target) instead of the parent <li> below -- meaning the
+  // <li>'s own custom dragstart/dataTransfer payload never fires, and
+  // what actually drags is the browser's own native link data (a URL/
+  // plain text) instead, which no custom drop target (e.g. Ticket Info's
+  // own tab bar) recognises. Prime suspect for "drag starts but nothing
+  // will accept the drop" -- not independently confirmed against a live
+  // browser (no browser access from here), but a real, well-documented
+  // gotcha of nesting a draggable ancestor around a naturally-draggable
+  // child. Explicitly turned off either way, since a plain nav link never
+  // had any legitimate reason to keep its own native drag behaviour.
+  a.draggable = false;
   // page.external (from that page's own package.json dashboardPage.external,
   // see registry.js) marks a page that's just a direct embed of an outside
   // site -- Automation Forms, Rewst Form Test, and anything published via
@@ -440,9 +638,33 @@ function renderPageItem(node, loc, activeId) {
   // see styles.css) -- without it, a plain adjacent inline SVG is a real
   // line-break opportunity in its own right, so a label right at the
   // sidebar's width limit could wrap with the icon left stranded alone on
-  // its own line, by request that it never do that.
-  a.innerHTML = `<span class="nav-link-label">${escapeHtml(page.label)}${page.external ? EXTERNAL_PAGE_ICON_SVG : ''}</span>`;
-  a.className = 'nav-link' + (page.id === activeId ? ' active' : '');
+  // its own line, by request that it never do that. The "(hidden)" badge
+  // (admin-only, see above) sits OUTSIDE that nowrap span, as its own
+  // separate sibling -- it's not part of the "never split from the icon"
+  // constraint that span exists for.
+  // A tabbed page gets a leading marker sized/spaced the same as a
+  // category header's own toggle (.nav-tabbed-icon mirrors
+  // .nav-category-toggle's own width/margin -- see styles.css), so its
+  // label lines up with the category headings it sits next to instead of
+  // starting flush left like a plain page link. A small square, not the
+  // same triangle a category uses (▸/▾) -- by request, kept visually
+  // distinct from that toggle since this one isn't expand/collapse-able,
+  // it's a static marker. Empty span, not a "▪"/"■" character -- a
+  // Unicode square glyph's own font metrics (left bearing, baseline)
+  // don't reliably match the triangle glyph's, which is exactly what threw
+  // the two out of alignment; the actual square is drawn in CSS instead
+  // (.nav-tabbed-icon::before) so its size/position is pinned exactly,
+  // not left to the font.
+  a.innerHTML =
+    (page.tabbed ? '<span class="nav-tabbed-icon"></span>' : '') +
+    `<span class="nav-link-label">${escapeHtml(displayLabel)}${page.external ? EXTERNAL_PAGE_ICON_SVG : ''}</span>` +
+    (node.hidden ? '<span class="nav-hidden-badge">(hidden)</span>' : '');
+  // page.tabbed (dashboardPage.tabbed, see registry.js/tab-page-client.js)
+  // marks a tabbed-layout page (Ticket Info, and anything built the same
+  // way since) -- coloured blue/bold in the sidebar, by request, same
+  // treatment for every tabbed page rather than one hardcoded href
+  // selector per page.
+  a.className = 'nav-link' + (page.id === activeId ? ' active' : '') + (page.tabbed ? ' nav-link--tabbed' : '');
   // Auto-minimize the sidebar on click, by request -- unless pinned open.
   // A plain click listener alongside the href navigation itself (not
   // something in loadPage()/hashchange), so this only fires for an actual
@@ -453,14 +675,40 @@ function renderPageItem(node, loc, activeId) {
   });
   li.appendChild(a);
 
-  if (editable) {
-    li.draggable = true;
-    li.addEventListener('dragstart', (e) => {
-      dragSrc = loc;
-      li.classList.add('dragging');
-      e.dataTransfer.effectAllowed = 'move';
-    });
-    li.addEventListener('dragend', () => li.classList.remove('dragging'));
+  // Draggable for EVERYONE now, not just the nav admin -- by request,
+  // dragging a sidebar page out to drop it as a tab on a tabbed page (e.g.
+  // Ticket Info) is a per-browser personal action anyone can do, unlike
+  // actually REORDERING the shared sidebar itself, which stays admin-only
+  // below (dragSrc, the thing that makes a sidebar-internal drop actually
+  // move something, is still only ever set in admin view).
+  li.draggable = true;
+  li.addEventListener('dragstart', (e) => {
+    // Read via the browser's own native drag-and-drop data channel by any
+    // drop target a currently-mounted PAGE sets up for itself (e.g.
+    // ticket-info-tabs/client.js's own tab bar) -- this works across
+    // module boundaries with zero direct JS coupling between app.js and
+    // whatever page happens to be mounted; the MIME-ish string itself is
+    // just a convention shared by both sides (see that file's own
+    // matching comment).
+    e.dataTransfer.setData('application/x-dashboard-page-id', node.id);
+    // 'copyMove', not a single fixed effect -- this one drag can end up
+    // used for either purpose depending on where it's dropped (a sidebar
+    // slot -> reorder, handled as 'move' below; a tabbed page's own drop
+    // zone, e.g. Ticket Info -> add a tab, handled as 'copy' there), and
+    // the source has no way to know which in advance. A drop target
+    // requesting an effect NOT included in effectAllowed is silently
+    // rejected by the browser itself (shown as the "not allowed" cursor)
+    // regardless of that target's own preventDefault() -- confirmed the
+    // hard way: 'move'-only here (this used to be admin-only 'move' vs.
+    // everyone-else 'copy') was exactly why Ticket Info's own 'copy'
+    // drop zone could never accept a drag from an admin's own account.
+    e.dataTransfer.effectAllowed = 'copyMove';
+    li.classList.add('dragging');
+    if (admin) dragSrc = loc;
+  });
+  li.addEventListener('dragend', () => li.classList.remove('dragging'));
+
+  if (admin) {
     li.addEventListener('dragover', (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
@@ -474,12 +722,21 @@ function renderPageItem(node, loc, activeId) {
       moveTo(loc);
       renderNav(activeId);
     });
+    li.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const actions = [{ label: node.hidden ? 'Unhide' : 'Hide', onClick: () => toggleHidden(node) }];
+      // Rename is offered only for a tabbed page (page.tabbed) -- by
+      // request, renaming any other page's sidebar label wasn't asked
+      // for, so this stays scoped rather than generalised to every page.
+      if (page.tabbed) actions.push({ label: 'Rename', onClick: () => renamePage(node, page) });
+      showNavContextMenu(e.clientX, e.clientY, actions);
+    });
   }
 
   return li;
 }
 
-function renderCategory(node, index, activeId) {
+function renderCategory(node, index, activeId, admin) {
   const li = document.createElement('li');
   li.className = 'nav-category';
 
@@ -490,8 +747,13 @@ function renderCategory(node, index, activeId) {
   const isExpanded = expandedCategories.has(node.id);
 
   const header = document.createElement('div');
-  header.className = 'nav-category-header';
-  header.innerHTML = `<span class="nav-category-toggle">${isExpanded ? '▾' : '▸'}</span>${escapeHtml(node.label)}`;
+  // node.hidden only ever appears in an admin's own tree -- see server.js's
+  // stripHidden(), which removes it before a non-admin's browser ever
+  // receives it.
+  header.className = 'nav-category-header' + (node.hidden ? ' nav-category-header--hidden' : '');
+  header.innerHTML =
+    `<span class="nav-category-toggle">${isExpanded ? '▾' : '▸'}</span>${escapeHtml(node.label)}` +
+    (node.hidden ? '<span class="nav-hidden-badge">(hidden)</span>' : '');
   header.addEventListener('click', () => {
     if (expandedCategories.has(node.id)) expandedCategories.delete(node.id);
     else expandedCategories.add(node.id);
@@ -499,7 +761,7 @@ function renderCategory(node, index, activeId) {
     renderNav(activeId);
   });
 
-  if (editable) {
+  if (admin) {
     // The header itself is the "drop into this category" target -- lands
     // the page at the end of this category's children, regardless of where
     // in the header you drop (there's no per-position meaning for a header drop).
@@ -520,6 +782,10 @@ function renderCategory(node, index, activeId) {
       saveExpanded();
       renderNav(activeId);
     });
+    header.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showNavContextMenu(e.clientX, e.clientY, [{ label: node.hidden ? 'Unhide' : 'Hide', onClick: () => toggleHidden(node) }]);
+    });
   }
   li.appendChild(header);
 
@@ -527,7 +793,7 @@ function renderCategory(node, index, activeId) {
   childList.className = 'nav-category-children';
   childList.hidden = !isExpanded;
   node.children.forEach((child, childIndex) => {
-    childList.appendChild(renderPageItem(child, { kind: 'category', categoryId: node.id, index: childIndex }, activeId));
+    childList.appendChild(renderPageItem(child, { kind: 'category', categoryId: node.id, index: childIndex }, activeId, admin));
   });
   li.appendChild(childList);
 
@@ -633,6 +899,11 @@ async function loadPage(id) {
 
 async function init() {
   tree = await loadTree();
+  // Only actually reveal the preview-user button once loadTree() has come
+  // back and confirmed this session is the real dashboard admin --
+  // `editable` is exactly that confirmation (see its own comment).
+  previewUserToggle.hidden = !editable;
+  if (editable) renderPreviewUserToggle();
   window.addEventListener('hashchange', () => loadPage(currentPageId()));
   await loadPage(currentPageId());
   renderUserInfo();

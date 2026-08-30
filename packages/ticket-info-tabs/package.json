@@ -1,13 +1,14 @@
 {
-  "name": "@dashboard/external-page-builder",
+  "name": "@dashboard/ticket-info-tabs",
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
   "dashboardPage": {
-    "id": "external-page-builder",
-    "label": "External Page Builder",
+    "id": "ticket-info-tabs",
+    "label": "Ticket Info",
     "client": "client.js",
-    "server": "server.js"
+    "server": "server.js",
+    "tabbed": true
   },
   "dependencies": {
     "@dashboard/shell": "*",

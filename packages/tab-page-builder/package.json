@@ -1,17 +1,16 @@
 {
-  "name": "@dashboard/datto-rmm",
+  "name": "@dashboard/tab-page-builder",
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
   "dashboardPage": {
-    "id": "datto-rmm",
-    "label": "Datto RMM",
+    "id": "tab-page-builder",
+    "label": "Tab Page Builder",
     "client": "client.js",
     "server": "server.js"
   },
   "dependencies": {
-    "axios": "^1.7.2",
-    "express": "^4.19.2",
-    "@dashboard/autotask-client": "*"
+    "@dashboard/shell": "*",
+    "express": "^4.19.2"
   }
 }

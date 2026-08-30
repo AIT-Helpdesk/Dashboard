@@ -1,13 +1,14 @@
 {
-  "name": "@dashboard/external-page-builder",
+  "name": "@dashboard/client-info-tabs",
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
   "dashboardPage": {
-    "id": "external-page-builder",
-    "label": "External Page Builder",
+    "id": "client-info-tabs",
+    "label": "Client Info",
     "client": "client.js",
-    "server": "server.js"
+    "server": "server.js",
+    "tabbed": true
   },
   "dependencies": {
     "@dashboard/shell": "*",

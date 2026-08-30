@@ -36,6 +36,12 @@
         <button id="sidebar-toggle" class="sidebar-toggle" type="button"></button>
         <button id="sidebar-pin-toggle" class="sidebar-toggle sidebar-pin-toggle" type="button">📌</button>
         <button id="sidebar-refresh" class="sidebar-toggle" type="button" title="Refresh the whole dashboard" aria-label="Refresh the whole dashboard">↻</button>
+        <!-- Admin-only -- hidden by default, shown by app.js once the
+             signed-in account is confirmed to be the dashboard admin.
+             Lets Amber preview the sidebar exactly as a regular user
+             would see it (hidden items removed, no drag/hide/rename
+             affordances) without actually signing in as anyone else. -->
+        <button id="preview-user-toggle" class="sidebar-toggle" type="button" title="Preview as a regular user (hides admin-only items)" aria-label="Preview as a regular user" hidden>👁</button>
       </div>
       <ul id="nav-list" class="nav-list"></ul>
       <div id="user-info" class="user-info"></div>
