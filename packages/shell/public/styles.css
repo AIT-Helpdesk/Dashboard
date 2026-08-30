@@ -3067,6 +3067,33 @@ tr.row-units-changed {
   color: var(--fg);
 }
 
+/* Helpdesk Scorecards' metric titles (What's On), same "stay plain
+   text-coloured" idea as .wsp-ticket-link above, plus no underline -- by
+   request, the little logo/person icon in front of the title is the
+   "this is a link" signal now, not underlining. A dedicated class rather
+   than reusing .wsp-ticket-link so Workshop's own ticket cell (still
+   underlined) doesn't change too. */
+.wo-scorecard-link,
+.wo-scorecard-link:visited,
+.wo-scorecard-link:hover,
+.wo-scorecard-link:active {
+  color: var(--fg);
+  text-decoration: none;
+}
+
+/* The little Ambient iT logo (Helpdesk/team rows) or person glyph (Personal
+   rows) in front of a scorecard metric's title -- sized to sit on the text
+   baseline rather than towering over/under it. */
+.wo-metric-icon {
+  width: 13px;
+  height: 13px;
+  vertical-align: -2px;
+  margin-right: 0.35rem;
+}
+.wo-metric-icon--logo {
+  border-radius: 2px; /* the source JPG is a filled square background, not transparent -- softens its corners slightly rather than leaving hard right-angle edges inline with rounded UI elsewhere on this page */
+}
+
 /* The linked ticket's own Autotask status, under the ticket number --
    small print, muted, by request. */
 .wsp-ticket-status {

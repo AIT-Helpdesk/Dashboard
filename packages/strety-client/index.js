@@ -433,4 +433,13 @@ function getTodoUrl(todoId) {
   return `https://2.strety.com/${WEB_ACCOUNT_ID}/todos/${todoId}`;
 }
 
-module.exports = { ...defaultClient, createClient, getPersonalClient, BASE_URL, getTodoUrl };
+// Deep link to a metric's own scorecard in Strety's web app -- same
+// reasoning/pattern as getTodoUrl above (no `web_url`/permalink on the real
+// API object, confirmed by pasting a real one:
+// https://2.strety.com/<WEB_ACCOUNT_ID>/metrics/<metricId>).
+function getMetricUrl(metricId) {
+  if (!metricId) return null;
+  return `https://2.strety.com/${WEB_ACCOUNT_ID}/metrics/${metricId}`;
+}
+
+module.exports = { ...defaultClient, createClient, getPersonalClient, BASE_URL, getTodoUrl, getMetricUrl };

@@ -1037,7 +1037,7 @@ export function mount(container) {
           <tr class="shaded-row"><th>Metric</th><th>Target</th><th>Check-ins</th></tr>
         </thead>
         <tbody>
-          ${rows.map((m) => `<tr><td>${titleHtml(m.title, Boolean(m.cells[0]), m.isAutoManaged)}</td><td class="ticket-number">${escapeHtml(m.target)}</td><td>No check-ins yet</td></tr>`).join('')}
+          ${rows.map((m) => `<tr><td>${titleHtml(m.title, Boolean(m.cells[0]), m.isAutoManaged, m.url, m.spaceType)}</td><td class="ticket-number">${escapeHtml(m.target)}</td><td>No check-ins yet</td></tr>`).join('')}
         </tbody>
       `;
       groupEl.appendChild(table);
@@ -1075,7 +1075,7 @@ export function mount(container) {
     }
     return `
       <tr>
-        <td>${titleHtml(m.title, Boolean(m.cells[0]), m.isAutoManaged)}</td>
+        <td>${titleHtml(m.title, Boolean(m.cells[0]), m.isAutoManaged, m.url, m.spaceType)}</td>
         <td class="ticket-number">${escapeHtml(m.target)}</td>
         ${cells.join('')}
       </tr>`;
@@ -1094,14 +1094,35 @@ export function mount(container) {
   // ahead of all that, by request -- these specific metrics are filled in
   // automatically by the Autotask -> Strety sync, not a human, so it's
   // worth flagging at a glance which ones those are.
-  function titleHtml(title, hasRecentData, isAutoManaged) {
+  // A plain inline SVG (fill="currentColor", so it follows the link's own
+  // text colour rather than a fixed one) marking a Personal-space metric --
+  // Material "person" glyph. The Helpdesk (team) equivalent is a real image
+  // (strety-logo-icon.jpg, Strety's own logo) since that one's a specific
+  // brand mark, not a generic glyph a font/icon-set path can stand in for.
+  const PERSON_ICON_SVG =
+    '<svg class="wo-metric-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
+  const TEAM_ICON_HTML = '<img src="/strety-logo-icon.jpg" class="wo-metric-icon wo-metric-icon--logo" alt="" aria-hidden="true">';
+
+  // `url` (server.js -- @dashboard/strety-client's getMetricUrl) opens this
+  // metric's own scorecard in Strety directly, by request. Wraps the whole
+  // title (including the AUTO/colour-coded prefix, plus the leading
+  // team/person icon) in one link rather than just the plain-text part, so
+  // the entire cell is clickable, not just a sliver of it. .wo-scorecard-link
+  // keeps it looking like normal text -- no browser default blue/purple, and
+  // no underline (by request -- the icon is the "this is a link" signal now,
+  // not underlining) -- a dedicated class rather than reusing Workshop's
+  // .wsp-ticket-link, so that page's own underline-free-but-otherwise-
+  // unrelated styling doesn't quietly change too.
+  function titleHtml(title, hasRecentData, isAutoManaged, url, spaceType) {
     const autoPrefix = isAutoManaged ? '<span class="text-highlight-blue">AUTO: </span>' : '';
+    const icon = spaceType === 'team' ? TEAM_ICON_HTML : spaceType === 'person' ? PERSON_ICON_SVG : '';
     const colonIndex = title.indexOf(':');
-    if (colonIndex === -1) return autoPrefix + escapeHtml(title);
-    const prefix = title.slice(0, colonIndex + 1);
-    const rest = title.slice(colonIndex + 1);
-    const cls = hasRecentData ? 'text-highlight-green' : 'text-highlight-red';
-    return `${autoPrefix}<span class="${cls}">${escapeHtml(prefix)}</span>${escapeHtml(rest)}`;
+    const inner =
+      colonIndex === -1
+        ? autoPrefix + escapeHtml(title)
+        : `${autoPrefix}<span class="${hasRecentData ? 'text-highlight-green' : 'text-highlight-red'}">${escapeHtml(title.slice(0, colonIndex + 1))}</span>${escapeHtml(title.slice(colonIndex + 1))}`;
+    if (!url) return icon + inner;
+    return `<a class="wo-scorecard-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${icon}${inner}</a>`;
   }
 
   function checkinCellHtml(c) {

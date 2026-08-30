@@ -393,6 +393,14 @@ function renderNav(activeId) {
   navList.innerHTML = '';
   tree.forEach((node, index) => {
     if (node.type === 'category') {
+      // A category with zero children isn't necessarily really empty -- it
+      // can be a category whose every page is restrictedTo someone else
+      // (see server.js's pageVisibleTo/reconcileTree above), in which case
+      // showing an empty header would out its existence to a viewer who
+      // isn't supposed to know it's there at all. Editable (localhost) mode
+      // is the one exception -- the whole point there is to drag a page
+      // INTO an otherwise-empty category, so keep it visible while editing.
+      if (node.children.length === 0 && !editable) return;
       navList.appendChild(renderCategory(node, index, activeId));
     } else {
       navList.appendChild(renderPageItem(node, { kind: 'root', index }, activeId));

@@ -34,12 +34,12 @@ const CONTRACT_CHECKS_ADMIN_EMAIL = 'amber@ambientit.com.au';
 // this is a browser module, db.js is server-side) same way other pages
 // duplicate small shared enums between client and server.
 const TOGGLE_COLUMNS = [
-  { field: 'checked_contract', atKey: 'checkedContractAt', label: 'Checked Contract' },
+  { field: 'checked_contract', atKey: 'checkedContractAt', label: 'Contract' },
   { field: 'm365_ok', atKey: 'm365OkAt', label: 'M365 OK' },
   { field: 'tc_elite', atKey: 'tcEliteAt', label: 'TC ELITE' },
   { field: 'tc_ess', atKey: 'tcEssAt', label: 'TC ESS' },
   { field: 'others', atKey: 'othersAt', label: 'OTHERS' },
-  { field: 'all_done', atKey: 'allDoneAt', label: 'ALL DONE' },
+  { field: 'all_done', atKey: 'allDoneAt', label: 'DONE' },
 ];
 const TOGGLE_FIELD_SET = new Set(TOGGLE_COLUMNS.map((c) => c.field));
 
@@ -313,13 +313,13 @@ export function mount(container) {
       table.innerHTML = `
         <thead>
           <tr>
-            <th></th>
+            <th><input type="checkbox" class="cc-select-all-checkbox" title="Select/deselect all rows for this client (bulk)" /></th>
             <th>Order #</th><th>Type</th><th>Status</th><th>Created</th><th>Provisioned</th>
             <th>PO #</th><th>Product</th><th>Licenses</th>
             ${TOGGLE_COLUMNS.filter((c) => c.field !== 'all_done')
               .map((c) => `<th>${escapeHtml(c.label)}</th>`)
               .join('')}
-            <th>Info</th><th>ALL DONE</th>
+            <th>Info</th><th>DONE</th>
           </tr>
         </thead>
         <tbody>${orderRowsHtml(client.orders)}</tbody>
@@ -712,6 +712,28 @@ export function mount(container) {
       el.checked = bulkSelection.itemIds.has(id);
       el.disabled = bulkSelection.itemIds.size > 0 && el.dataset.customerId !== bulkSelection.customerId;
     });
+    // The per-client-group "select all" header checkbox, by request --
+    // re-derived fresh here too (not tracked as its own separate state),
+    // same "recompute from bulkSelection every time" approach the row
+    // checkboxes above already use. checked = every row in this group is
+    // selected; indeterminate = some but not all (standard tri-state
+    // select-all convention); disabled = same rule as its own rows
+    // (another client's selection is active).
+    resultsEl.querySelectorAll('.cc-select-all-checkbox').forEach((selectAllEl) => {
+      const groupEl = selectAllEl.closest('.resource-group');
+      const rowEls = groupEl ? [...groupEl.querySelectorAll('.cc-row-select')] : [];
+      if (rowEls.length === 0) {
+        selectAllEl.checked = false;
+        selectAllEl.indeterminate = false;
+        selectAllEl.disabled = true;
+        return;
+      }
+      const groupCustomerId = rowEls[0].dataset.customerId;
+      const selectedCount = rowEls.filter((el) => bulkSelection.itemIds.has(Number(el.dataset.id))).length;
+      selectAllEl.disabled = bulkSelection.itemIds.size > 0 && groupCustomerId !== bulkSelection.customerId;
+      selectAllEl.checked = selectedCount === rowEls.length;
+      selectAllEl.indeterminate = selectedCount > 0 && selectedCount < rowEls.length;
+    });
     // Restores any pending (unsaved) ALL DONE ticks too -- a render()
     // triggered by an unrelated toggle elsewhere on the page shouldn't
     // silently un-tick boxes the user already ticked as part of building
@@ -740,6 +762,37 @@ export function mount(container) {
         updateRowSelectionUI();
       });
     });
+
+    // The header "select all" checkbox for this client's group, by request
+    // -- ticks/unticks every row in THIS table only (bulk selection is
+    // already single-client-only, so this never reaches across groups).
+    // Goes through the exact same bulkSelection add/delete logic as a real
+    // row click, just applied to every row at once, with updateRowSelectionUI()
+    // called once at the end rather than per row.
+    const selectAllEl = groupEl.querySelector('.cc-select-all-checkbox');
+    if (selectAllEl) {
+      selectAllEl.addEventListener('change', () => {
+        const rowEls = [...groupEl.querySelectorAll('.cc-row-select')];
+        if (selectAllEl.checked) {
+          for (const el of rowEls) {
+            const id = Number(el.dataset.id);
+            if (bulkSelection.itemIds.size === 0) bulkSelection.customerId = el.dataset.customerId;
+            bulkSelection.itemIds.add(id);
+          }
+        } else {
+          for (const el of rowEls) {
+            const id = Number(el.dataset.id);
+            bulkSelection.itemIds.delete(id);
+            bulkAllDoneTicked.delete(id);
+          }
+          if (bulkSelection.itemIds.size === 0) {
+            bulkSelection.customerId = null;
+            bulkAllDoneTicked = new Set();
+          }
+        }
+        updateRowSelectionUI();
+      });
+    }
 
     groupEl.querySelectorAll('.cc-ticket-link').forEach((el) => {
       el.addEventListener('click', (e) => {
