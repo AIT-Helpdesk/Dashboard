@@ -17,6 +17,7 @@ window.fetch = async (...args) => {
 const navList = document.getElementById('nav-list');
 const content = document.getElementById('page-content');
 const userInfoEl = document.getElementById('user-info');
+const serverHostnameEl = document.getElementById('server-hostname');
 
 // Light/dark toggle -- per-browser (localStorage), like expanded-categories
 // above, not the shared server-side nav layout. No stored preference means
@@ -192,6 +193,11 @@ async function renderUserInfo() {
   try {
     const res = await nativeFetch('/api/me');
     const data = await res.json();
+    // Set regardless of sign-in state (unlike the user-info block below,
+    // which needs a real signed-in user) -- by request, small text under
+    // the logo showing which real machine is currently serving the data,
+    // useful even while troubleshooting sign-in itself.
+    if (data.hostname && serverHostnameEl) serverHostnameEl.textContent = data.hostname;
     if (!data.user) return;
     userInfoEl.innerHTML = `
       <div class="user-name">${escapeHtml(data.user.name || data.user.email)}</div>
