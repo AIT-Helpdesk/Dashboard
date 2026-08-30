@@ -115,7 +115,8 @@
   },
   {
     "type": "page",
-    "id": "client-financials-tabs"
+    "id": "client-financials-tabs",
+    "label": "Client Finance"
   },
   {
     "type": "category",
@@ -168,7 +169,7 @@
   {
     "type": "page",
     "id": "contract-mgmt-tabs",
-    "label": "Contracts Mgmt"
+    "label": "Contract Mgmt"
   },
   {
     "type": "category",
