@@ -215,6 +215,34 @@ html[data-sidebar-collapsed="true"] #sidebar-refresh {
   color: #fff;
 }
 
+/* Wraps a nav link's label text + its .nav-external-icon (if any) as one
+   unbreakable unit, by request -- a plain adjacent inline SVG is otherwise
+   a real line-break opportunity, so a label right at the sidebar's width
+   limit could wrap with the icon left stranded alone on the next line.
+   Overflow is clipped with an ellipsis rather than left to actually
+   overflow the sidebar -- every real label here is short enough that this
+   never actually triggers, it's just a safety net. */
+.nav-link-label {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+/* "This page is a direct embed of an outside site" marker (Automation
+   Forms, Rewst Form Test, and anything published via External Page
+   Builder -- see app.js's renderPageItem()). fill="currentColor" already
+   set on the SVG itself, so it automatically follows .nav-link's own
+   colour (including the white text of .nav-link.active) -- no separate
+   colour rule needed here, just spacing/alignment. */
+.nav-external-icon {
+  margin-left: 0.35rem;
+  vertical-align: -1px;
+  opacity: 0.7;
+}
+
 /* Start Here's own sidebar entry -- a root-level page link, but styled to
    read like a section label (matching .nav-category-header's bold/
    uppercase/green look) rather than a plain page link, by request.
@@ -570,6 +598,18 @@ h1 {
   display: block;
   width: 100%;
   height: calc(100vh - 4rem);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* External Page Builder's own in-form live preview -- NOT .embedded-frame
+   above, which assumes it's the only thing on a header-less page
+   (viewport-relative height). This one sits inside a form alongside other
+   controls, so it needs a fixed, container-relative height instead. Same
+   border/radius treatment for visual consistency. */
+.pgb-preview-frame {
+  width: calc(100% - 2rem);
+  height: 480px;
   border: 1px solid var(--border);
   border-radius: 10px;
 }
