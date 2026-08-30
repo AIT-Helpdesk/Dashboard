@@ -2028,6 +2028,23 @@ tr.row-units-changed {
   background: var(--row-changed-bg) !important;
 }
 
+/* Generic reusable whole-row TEXT colour (not background) -- M365
+   Environment's Overview (Total Licenced Users / Total Guest Account) and
+   Domains (Is Default = True / the tenant's own *.onmicrosoft.com domain)
+   sections both use these, but named generically rather than m365-specific
+   so any other page can reuse them later. td.ticket-number (Overview's own
+   value cell) sets its own `color: var(--muted)` -- !important here is
+   what lets this still win regardless of a cell's own more specific rule.
+   Blue reuses var(--accent), same as .text-highlight-blue elsewhere. */
+tr.row-text-highlight-green td {
+  color: #16a34a !important;
+  font-weight: 700;
+}
+tr.row-text-highlight-blue td {
+  color: var(--accent) !important;
+  font-weight: 700;
+}
+
 /* Horizontal bar chart: nominal categories (classification names), not ordinal --
    swapping their order doesn't change meaning, so every bar takes the SAME
    single accent hue rather than a per-category or magnitude-shaded color. Bar
@@ -2087,6 +2104,13 @@ tr.row-units-changed {
   background: var(--border);
   border-radius: 4px;
   overflow: hidden;
+  /* flex, not the default inline layout, so classification-summary's own
+     two-segment stacked bars (see .cs-bar-fill below) lay their segments
+     out side-by-side rather than one below the other -- a block element's
+     normal stacking direction. A no-op for every other .bar-track user
+     still rendering just one plain .bar-fill child (ticket-dashboards-test),
+     since flex with a single child sizes identically to block. */
+  display: flex;
 }
 
 /* Plain (non-clickable) variant of .bar-row -- Ticket Dashboards (Test)'s
@@ -2447,6 +2471,41 @@ tr.row-units-changed {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+/* Clients by Classification -- each bar is a stack of two clickable
+   segments (no parent company / has a parent company), not one solid
+   .bar-fill. No border-radius of their own -- .bar-track's own
+   overflow:hidden + border-radius already clips the stack's outer corners,
+   same as the .vbar-fill--critical/--medium pair does vertically. Real
+   <button>s (see client.js), so the usual button chrome is stripped. */
+.cs-bar-fill {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.cs-bar-fill--no-parent {
+  background: var(--accent);
+}
+.cs-bar-fill--parent {
+  background: #8b5cf6; /* same purple TC Elite Rollout's "Issue" status / Workshop's "Next Up" already use */
+}
+.cs-bar-fill:hover {
+  filter: brightness(1.15);
+}
+.cs-bar-fill:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: -2px;
+}
+
+.cs-legend-swatch--no-parent {
+  background: var(--accent);
+}
+.cs-legend-swatch--parent {
+  background: #8b5cf6;
 }
 
 /* Vertical stacked bar chart -- Security Alerts' weekly chart (critical +

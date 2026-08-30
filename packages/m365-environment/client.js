@@ -208,11 +208,26 @@ export function mount(container) {
     // which reads better for a handful of headline stats. Every other
     // section here (Domains, Licences, etc.) genuinely has multiple rows,
     // so those stay in their natural horizontal shape.
+    // Overview: "Total Licenced Users" and "Total Guest Count" lines
+    // coloured green, by request -- a quick "these are the headline
+    // numbers" cue among Overview's other stat rows. Gated on the section's
+    // own title (not just `vertical`) so a future vertical section with
+    // different field names doesn't accidentally inherit this. Both
+    // spellings of "licen[cs]ed" are tolerated -- confirmed the real label
+    // spells it the AU/UK way ("Licenced"), but this stays robust either
+    // way rather than silently missing the row over a spelling variant.
+    const OVERVIEW_GREEN_LABELS = /^total (licen[cs]ed users|guest count)$/i;
+
     if (vertical) {
       wrap.innerHTML = `
         <table>
           <tbody>
-            ${table.headers.map((h, i) => `<tr><td>${escapeHtml(h)}</td><td class="ticket-number">${escapeHtml(table.rows[0]?.[i] ?? '')}</td></tr>`).join('')}
+            ${table.headers
+              .map((h, i) => {
+                const rowClass = title === 'Overview' && OVERVIEW_GREEN_LABELS.test(h.trim()) ? ' class="row-text-highlight-green"' : '';
+                return `<tr${rowClass}><td>${escapeHtml(h)}</td><td class="ticket-number">${escapeHtml(table.rows[0]?.[i] ?? '')}</td></tr>`;
+              })
+              .join('')}
           </tbody>
         </table>
         ${table.note ? `<p class="inline-subtext" style="margin: 0.5rem 0.75rem;">${escapeHtml(table.note)}</p>` : ''}
@@ -222,6 +237,15 @@ export function mount(container) {
     }
 
     if (wide) wrap.style.overflowX = 'auto';
+    // Domains: the row where "Is Default" is True gets green text, the row
+    // for the tenant's own *.onmicrosoft.com domain gets blue text, by
+    // request (text, not a row background). Matched on cell CONTENT (the
+    // "Is Default" column by its header name; the onmicrosoft.com domain by
+    // substring, in whichever column it's actually in) rather than a fixed
+    // column index, so this still works regardless of exactly which
+    // columns Rewst's own capture includes. Title-gated the same way as
+    // Overview above -- Domains is the only section this applies to.
+    const isDefaultColIdx = title === 'Domains' ? table.headers.findIndex((h) => /is\s*default/i.test(h)) : -1;
     wrap.innerHTML = `
       <table>
         <thead>
@@ -230,7 +254,21 @@ export function mount(container) {
         <tbody>
           ${table.rows.length === 0
             ? `<tr><td colspan="${table.headers.length}">None</td></tr>`
-            : table.rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
+            : table.rows
+                .map((row) => {
+                  let rowClass = '';
+                  if (title === 'Domains') {
+                    const isDefaultTrue = isDefaultColIdx !== -1 && /^true$/i.test(String(row[isDefaultColIdx] ?? '').trim());
+                    const hasOnMicrosoft = row.some((cell) => /onmicrosoft\.com/i.test(String(cell ?? '')));
+                    // "Is Default" wins if a domain is somehow both (the
+                    // primary onmicrosoft.com domain sometimes IS the
+                    // default one) -- one flag per row, not two competing
+                    // text colours.
+                    rowClass = isDefaultTrue ? ' class="row-text-highlight-green"' : hasOnMicrosoft ? ' class="row-text-highlight-blue"' : '';
+                  }
+                  return `<tr${rowClass}>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`;
+                })
+                .join('')}
         </tbody>
       </table>
       ${table.note ? `<p class="inline-subtext" style="margin: 0.5rem 0.75rem;">${escapeHtml(table.note)}</p>` : ''}
