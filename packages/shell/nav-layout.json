@@ -203,6 +203,10 @@
       {
         "type": "page",
         "id": "rewst-form-test"
+      },
+      {
+        "type": "page",
+        "id": "external-page-builder"
       }
     ]
   }

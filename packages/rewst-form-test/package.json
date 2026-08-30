@@ -7,6 +7,7 @@
     "id": "rewst-form-test",
     "label": "Rewst Form Test",
     "client": "client.js",
-    "restrictedTo": ["amber@ambientit.com.au"]
+    "restrictedTo": ["amber@ambientit.com.au"],
+    "external": true
   }
 }

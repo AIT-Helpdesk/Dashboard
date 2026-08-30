@@ -6,6 +6,7 @@
   "dashboardPage": {
     "id": "technician-forms",
     "label": "Automation Forms",
-    "client": "client.js"
+    "client": "client.js",
+    "external": true
   }
 }

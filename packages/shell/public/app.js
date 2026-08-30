@@ -216,6 +216,11 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+// Material "open_in_new" glyph -- see renderPageItem()'s own comment for
+// where/why this is used.
+const EXTERNAL_PAGE_ICON_SVG =
+  '<svg class="nav-external-icon" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zM5 5h5V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-5h-2v5H5V5z"/></svg>';
+
 // Sidebar nav is a two-level tree: top-level entries are either a page or a
 // category, and a category holds pages (not further categories -- one level
 // of grouping is all that's asked for). Shape:
@@ -424,7 +429,19 @@ function renderPageItem(node, loc, activeId) {
 
   const a = document.createElement('a');
   a.href = `#${page.id}`;
-  a.textContent = page.label;
+  // page.external (from that page's own package.json dashboardPage.external,
+  // see registry.js) marks a page that's just a direct embed of an outside
+  // site -- Automation Forms, Rewst Form Test, and anything published via
+  // External Page Builder, by request. A small "opens an external site"
+  // icon (Material "open_in_new" glyph, fill="currentColor" so it follows
+  // the link's own colour/theme rather than a fixed one) after the label,
+  // not before -- reads as "this page -> external" left-to-right. Wrapped
+  // together with the label in one white-space:nowrap span (.nav-link-label,
+  // see styles.css) -- without it, a plain adjacent inline SVG is a real
+  // line-break opportunity in its own right, so a label right at the
+  // sidebar's width limit could wrap with the icon left stranded alone on
+  // its own line, by request that it never do that.
+  a.innerHTML = `<span class="nav-link-label">${escapeHtml(page.label)}${page.external ? EXTERNAL_PAGE_ICON_SVG : ''}</span>`;
   a.className = 'nav-link' + (page.id === activeId ? ' active' : '');
   // Auto-minimize the sidebar on click, by request -- unless pinned open.
   // A plain click listener alongside the href navigation itself (not

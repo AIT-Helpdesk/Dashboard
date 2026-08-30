@@ -1,6 +1,5 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', '.env') });
 
-const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { getClient } = require('@dashboard/autotask-client');
@@ -16,73 +15,13 @@ const stretyAutomationClient = require('@dashboard/strety-autotask-sync/client.j
 const { registerAuthRoutes, requireAuth } = require('./auth');
 
 const PORT = process.env.PORT || 3000;
-const packagesRoot = path.resolve(__dirname, '..');
 
-// A "page" is any sibling package under packages/ whose package.json has a
-// `dashboardPage` field. Drop a new package in and it shows up automatically --
-// no shell code changes needed.
-function discoverPages() {
-  const dirs = fs
-    .readdirSync(packagesRoot, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && d.name !== 'shell')
-    .map((d) => d.name);
-
-  const pages = [];
-  for (const dir of dirs) {
-    const pkgPath = path.join(packagesRoot, dir, 'package.json');
-    if (!fs.existsSync(pkgPath)) continue;
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    if (!pkg.dashboardPage) continue;
-    pages.push({
-      dir,
-      root: path.join(packagesRoot, dir),
-      ...pkg.dashboardPage,
-    });
-  }
-  return pages;
-}
-
-const pages = discoverPages();
-
-// Per-page visibility gate, on top of the dashboard-wide Microsoft 365 sign-in
-// every page already requires (requireAuth below) -- a page's package.json
-// can set `dashboardPage.restrictedTo: [<lowercase email>, ...]` to hide it
-// from everyone except those exact accounts (e.g. Ticket Dashboards (Test),
-// while it's still being tried out). Checked in THREE places, not just the
-// nav: /pages-registry.js (below) so an unauthorized browser's copy of
-// registeredPages never even lists the page's id -- which also means
-// app.js's own reconcileTree() can never auto-append it into that browser's
-// sidebar, no separate nav-layout.json change needed; /pages/:id/client.js
-// (below) so the page's own JS module can't be fetched directly by URL
-// either; and the /api/<id> router mount (bottom of this file) so the
-// underlying data can't be reached by a direct API call even by someone who
-// somehow got the page id. All three answer 404, not 403 -- the point is
-// that the page doesn't appear to exist at all for anyone not on the list,
-// not merely that it's visibly locked.
-function pageVisibleTo(page, email) {
-  if (!page.restrictedTo) return true;
-  return !!email && page.restrictedTo.includes(email.toLowerCase());
-}
-
-// Shared sidebar layout (categories + page order/grouping) -- one JSON file
-// on disk, not per-browser localStorage, since the whole point is that
-// everyone hitting the real dashboard URL sees the SAME arrangement. Not
-// checked into git (see .gitignore) -- it's runtime-configured state, not
-// source, and survives a `git pull` redeploy naturally as an untracked file
-// already sitting in the working directory.
-const NAV_LAYOUT_PATH = path.join(__dirname, 'nav-layout.json');
-
-function readNavLayout() {
-  try {
-    return JSON.parse(fs.readFileSync(NAV_LAYOUT_PATH, 'utf8'));
-  } catch {
-    return null; // no file yet, or unreadable -- client falls back to its own built-in default
-  }
-}
-
-function writeNavLayout(tree) {
-  fs.writeFileSync(NAV_LAYOUT_PATH, JSON.stringify(tree, null, 2));
-}
+// Page discovery + the live, mutable `pages` array, page visibility gating,
+// and nav-layout.json read/write all now live in ./registry.js -- split out
+// so a page's own server.js (e.g. external-page-builder) can register a
+// brand-new page package at runtime and have it appear immediately, with no
+// process restart. See that module's own comment for the full reasoning.
+const { pages, pageVisibleTo, readNavLayout, writeNavLayout } = require('./registry.js');
 
 // The sidebar is only editable (drag-and-drop) when the app is reached via
 // localhost -- either a local dev copy, or RDP'ing into the production
@@ -444,7 +383,7 @@ app.get('/pages-registry.js', (req, res) => {
     .filter((p) => pageVisibleTo(p, req.session.user?.email))
     .map(
       (p) =>
-        `  { id: ${JSON.stringify(p.id)}, label: ${JSON.stringify(p.label)}, module: () => import('/pages/${p.id}/client.js') },`
+        `  { id: ${JSON.stringify(p.id)}, label: ${JSON.stringify(p.label)}, external: ${JSON.stringify(!!p.external)}, module: () => import('/pages/${p.id}/client.js') },`
     )
     .join('\n');
   res.type('application/javascript').send(`export const pages = [\n${entries}\n];\n`);
