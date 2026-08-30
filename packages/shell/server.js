@@ -17,23 +17,33 @@ const { registerAuthRoutes, requireAuth } = require('./auth');
 const PORT = process.env.PORT || 3000;
 
 // Page discovery + the live, mutable `pages` array, page visibility gating,
-// and nav-layout.json read/write all now live in ./registry.js -- split out
-// so a page's own server.js (e.g. external-page-builder) can register a
-// brand-new page package at runtime and have it appear immediately, with no
-// process restart. See that module's own comment for the full reasoning.
-const { pages, pageVisibleTo, readNavLayout, writeNavLayout } = require('./registry.js');
+// nav-layout.json read/write, and the one-person dashboard-admin check all
+// now live in ./registry.js -- split out so a page's own server.js (e.g.
+// external-page-builder, ticket-info-tabs) can reach the same shared state
+// and register a brand-new page package at runtime with no process
+// restart. See that module's own comment for the full reasoning.
+const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, setMountPageRouterImpl, mountPageRouter } = require('./registry.js');
 
-// The sidebar is only editable (drag-and-drop) when the app is reached via
-// localhost -- either a local dev copy, or RDP'ing into the production
-// server itself and hitting its own http://localhost:3000 directly
-// (bypassing Caddy) to edit the LIVE shared layout everyone else sees via
-// the real domain. `req.hostname` reflects the Host header the browser
-// actually sent -- NOT the TCP peer address, which would be useless here
-// since Caddy reverse-proxies every real request to this same box, making
-// every request look locally-sourced at the socket level regardless of who
-// is really on the other end of the public domain.
-function isLocalhostRequest(req) {
-  return req.hostname === 'localhost' || req.hostname === '127.0.0.1';
+// The sidebar (drag-and-drop reorder AND right-click hide/unhide, both in
+// app.js) is only editable by the one dashboard-admin account
+// (isDashboardAdmin, registry.js) -- by request, replacing an earlier
+// localhost-only gate (reachable only from a local dev copy, or by RDP'ing
+// into the production box itself to hit its own localhost:3000 directly)
+// entirely rather than layering this on top of it. Deliberate trade-off,
+// already reasoned through: this now works from the real public domain
+// too, for this one account specifically, not just from behind physical/
+// RDP access to the box.
+
+// Drops any `hidden: true` node (page or category) from a nav tree before
+// it's sent to a non-admin browser -- not just visually filtered client
+// side, so a hidden item's very existence never reaches anyone else's
+// network tab. A surviving category also has its own children filtered the
+// same way. The admin's own browser always gets the RAW tree (see
+// /api/nav-layout below) so they can find and unhide something.
+function stripHidden(tree) {
+  return (tree || [])
+    .filter((node) => !node.hidden)
+    .map((node) => (node.type === 'category' ? { ...node, children: node.children.filter((c) => !c.hidden) } : node));
 }
 
 const app = express();
@@ -383,7 +393,7 @@ app.get('/pages-registry.js', (req, res) => {
     .filter((p) => pageVisibleTo(p, req.session.user?.email))
     .map(
       (p) =>
-        `  { id: ${JSON.stringify(p.id)}, label: ${JSON.stringify(p.label)}, external: ${JSON.stringify(!!p.external)}, module: () => import('/pages/${p.id}/client.js') },`
+        `  { id: ${JSON.stringify(p.id)}, label: ${JSON.stringify(p.label)}, external: ${JSON.stringify(!!p.external)}, tabbed: ${JSON.stringify(!!p.tabbed)}, module: () => import('/pages/${p.id}/client.js') },`
     )
     .join('\n');
   res.type('application/javascript').send(`export const pages = [\n${entries}\n];\n`);
@@ -396,15 +406,18 @@ app.get('/pages/:id/client.js', (req, res) => {
 });
 
 app.get('/api/nav-layout', (req, res) => {
-  res.json({ tree: readNavLayout(), editable: isLocalhostRequest(req) });
+  const admin = isDashboardAdmin(req);
+  const rawTree = readNavLayout();
+  res.json({ tree: admin ? rawTree : stripHidden(rawTree), editable: admin });
 });
 
 app.put('/api/nav-layout', express.json(), (req, res) => {
   // Enforced here too, not just hidden in the UI (a hidden drag handle is
-  // not access control) -- a request to save a layout from anywhere other
-  // than localhost is rejected outright, regardless of what the client sent.
-  if (!isLocalhostRequest(req)) {
-    return res.status(403).json({ error: 'The sidebar layout can only be edited via localhost.' });
+  // not access control) -- a request to save a layout from anyone other
+  // than the one admin account is rejected outright, regardless of what
+  // the client sent.
+  if (!isDashboardAdmin(req)) {
+    return res.status(403).json({ error: 'Only Amber can edit the sidebar layout.' });
   }
   if (!Array.isArray(req.body?.tree)) {
     return res.status(400).json({ error: 'Body must be { tree: [...] }.' });
@@ -423,17 +436,23 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-for (const page of pages) {
-  if (!page.server) continue;
+// The actual /api/<id> router-mount logic -- registered here (once) as
+// registry.js's mountPageRouterImpl, so registerPage() (called by a page
+// created at RUNTIME, e.g. External Page Builder, Tab Page Builder) can
+// trigger this same mounting for a brand-new page too, not just the ones
+// discovered at startup below. Same restrictedTo check as the
+// page-serving routes above -- otherwise a page hidden from the
+// sidebar/client.js would still leak its real data to anyone who guessed
+// its /api/<id> path.
+setMountPageRouterImpl((page) => {
+  if (!page.server) return;
   const router = require(path.join(page.root, page.server));
-  // Same restrictedTo check as the page-serving routes above -- otherwise a
-  // page hidden from the sidebar/client.js would still leak its real data to
-  // anyone who guessed its /api/<id> path.
   app.use(`/api/${page.id}`, (req, res, next) => {
     if (!pageVisibleTo(page, req.session.user?.email)) return res.status(404).json({ error: 'Not found.' });
     next();
   }, router);
-}
+});
+for (const page of pages) mountPageRouter(page);
 
 // Bound to localhost-only, not every network interface -- the intended path
 // in is always through a reverse proxy (Caddy in production, terminating

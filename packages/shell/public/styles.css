@@ -74,7 +74,9 @@ body {
   flex-shrink: 0;
   background: var(--card);
   border-right: 1px solid var(--border);
-  padding: 1.5rem 1rem;
+  /* Top padding cut to 1/3 of its old 1.5rem, by request ("reduce the
+     whitespace above the logo") -- left/right/bottom untouched. */
+  padding: 0.5rem 1rem 1.5rem;
   overflow-y: auto;
   transition: width 0.15s ease, padding 0.15s ease;
 }
@@ -109,6 +111,12 @@ html[data-sidebar-collapsed="true"] .sidebar-pin-toggle {
 html[data-sidebar-collapsed="true"] #sidebar-refresh {
   display: none;
 }
+/* Same reasoning again -- the preview-as-user button (admin-only, see
+   app.js) only matters once the sidebar (and the nav list it toggles the
+   look of) is actually visible. */
+html[data-sidebar-collapsed="true"] #preview-user-toggle {
+  display: none;
+}
 
 .sidebar-toggle-row {
   display: flex;
@@ -138,6 +146,14 @@ html[data-sidebar-collapsed="true"] #sidebar-refresh {
    same convention as .nav-link.active elsewhere in the sidebar, by
    request ("pin the menu so the auto-minimize deactivates"). */
 .sidebar-pin-toggle--active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+/* Same accent-filled "on" look, own class -- the preview-as-user button
+   (admin-only, see app.js) is a separate toggle from the pin above, just
+   sharing its visual convention for "this is currently switched on". */
+.preview-user-toggle--active {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
@@ -270,6 +286,65 @@ a.nav-link.active[href="#start-here"] {
   color: #fff;
 }
 
+/* Every tabbed-layout page's own sidebar entry (page.tabbed, see
+   registry.js/tab-page-client.js -- Ticket Info was the first, every page
+   built the same way since shares this) -- by request, now reads as the
+   SAME "section label" style as a category heading (and Start Here just
+   above): bold, uppercase, 0.85rem, the sidebar's own green. Unlike Start
+   Here (a link, not a real category, but styled to pass as one) a tabbed
+   page has no [href="#..."] hook to target here -- this class is that
+   hook instead, applied by app.js's renderPageItem() for any page.tabbed.
+   text-transform: uppercase here DOES override the inherited .nav-link
+   small-caps (Start Here's own comment above notes the two don't combine
+   -- uppercase leaves nothing lowercase for small-caps to shrink), but
+   that's the point this time: full uppercase is what was actually asked
+   for, and it's what makes this match a plain-uppercase category heading
+   in the first place. */
+.nav-link--tabbed {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+}
+.nav-link--tabbed:not(.active) {
+  color: #16a34a;
+}
+.nav-link--tabbed.active {
+  background: #16a34a;
+  color: #fff;
+}
+
+/* Mirrors .nav-category-toggle's own width/margin exactly, so a tabbed
+   page's label starts at the same horizontal position as a category
+   heading's label -- see app.js's renderPageItem() comment for why. The
+   square itself is a CSS-drawn ::before block (currentColor, so it
+   follows the link's own green/white exactly like text would), not a
+   Unicode glyph -- see that comment for why a font character threw the
+   alignment off. vertical-align: middle on both the wrapper and the
+   square keeps it centred on the line, same visual weight as the
+   category toggle's own triangle glyph sitting mid-line beside it. */
+.nav-tabbed-icon {
+  display: inline-block;
+  width: 1em;
+  margin-right: 0.1rem;
+  vertical-align: middle;
+}
+.nav-tabbed-icon::before {
+  content: '';
+  display: inline-block;
+  /* 0.75em, 0.6em, 0.55em, and 0.5em were all too big -- a CSS-drawn box
+     reads bigger than a Unicode glyph's own (much thinner) ink at the
+     same em size. Nudged 2px right (relative-position, doesn't affect
+     layout of anything after it). */
+  width: 0.4em;
+  height: 0.4em;
+  position: relative;
+  left: 2px;
+  background: currentColor;
+  border-radius: 1px;
+  vertical-align: middle;
+}
+
 .nav-item {
   border-radius: 6px;
   cursor: grab;
@@ -279,11 +354,14 @@ a.nav-link.active[href="#start-here"] {
   cursor: grabbing;
 }
 
-/* Sidebar layout is only draggable via localhost (see app.js) -- everywhere
-   else, the grab cursor would advertise an interaction that doesn't work. */
-.nav-item--readonly {
-  cursor: default;
-}
+/* .nav-item--readonly (still applied in app.js for a non-admin) no longer
+   overrides the grab cursor here -- by request, dragging a sidebar item is
+   now available to everyone (to drop it as a tab on a tabbed page, e.g.
+   Ticket Info), just not REORDERING the shared sidebar itself, which is
+   still admin-only (right-click hide/unhide too; see app.js's `editable`,
+   server.js's isNavAdmin). Left with no rule here on purpose rather than
+   removed from app.js -- a hook future styling can still use, without
+   implying "not draggable" anymore. */
 
 .nav-item.dragging {
   opacity: 0.4;
@@ -291,6 +369,53 @@ a.nav-link.active[href="#start-here"] {
 
 .nav-item.drag-over {
   box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+/* Hidden-from-everyone-else pages/categories, visible only in the admin's
+   own sidebar (see app.js's renderPageItem/renderCategory -- node.hidden
+   never reaches a non-admin's tree at all, per server.js's stripHidden())
+   -- dimmed rather than removed, so they can still be found and
+   right-clicked to Unhide. */
+.nav-item--hidden .nav-link,
+.nav-category-header--hidden {
+  opacity: 0.5;
+}
+.nav-hidden-badge {
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  font-style: italic;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* Right-click menu (currently just Hide/Unhide) -- app.js's
+   showNavContextMenu(), positioned at the click coordinates via inline
+   left/top. Sits above everything else on the page (sidebar included). */
+.nav-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  padding: 0.25rem;
+  min-width: 8rem;
+}
+.nav-context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.nav-context-menu-item:hover {
+  background: var(--bg);
 }
 
 .nav-item--nested .nav-link {
@@ -435,7 +560,13 @@ a.nav-link.active[href="#start-here"] {
 .page-content {
   flex: 1;
   min-width: 0;
-  padding: 2rem;
+  /* Top padding cut to 1/3 of its old 2rem, by request ("reduce the
+     whitespace above ... all other page titles and buttons" -- and,
+     since a tabbed page's own tab bar is the first thing rendered
+     inside this element too, "above the tabs menu"). Left/right/bottom
+     untouched -- see .embedded-frame just below, whose own height calc
+     depends on the exact top+bottom total here. */
+  padding: 0.67rem 2rem 2rem;
   /* Its own independent scroll region -- see .layout's height: 100vh
      above for why this actually takes effect now. */
   overflow-y: auto;
@@ -591,13 +722,158 @@ h1 {
 
 .button-link:hover { opacity: 0.9; }
 
+/* Generic tab bar -- used by every tabbed page (shell/public/tab-page-
+   client.js's shared mount factory), first built for Ticket Info's own
+   tabbed-layout experiment. Single row, never wraps to a second line, by
+   request (an earlier version did flex-wrap; reversed since it read as a
+   ragged multi-row block instead of one strip) -- when there isn't room
+   for every tab, the strip scrolls horizontally instead of dropping
+   tabs to a new row (overflow-x: auto; flex-shrink: 0 on each button so
+   they keep their natural width rather than squeezing). The .tab-bar-
+   toggle minimize button (see styles below) is the small-screen answer
+   to the same problem, collapsing the strip down to one button instead
+   of needing to scroll it. Small bordered pill/card buttons, not the
+   earlier folder-tab illusion (rounded top corners only + a border
+   trick to visually "merge" the active tab into the page below it) --
+   that trick only makes sense for a single row sitting right above the
+   content. A plain divider line under the strip. Compact by request
+   (small padding/font, small gap) -- this is a navigation strip, not
+   the page's main content. */
+.tab-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 0.3rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+.tab-button {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: transform 0.12s ease, background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.tab-button:hover {
+  color: var(--fg);
+  transform: translateY(-1px);
+}
+.tab-button.active {
+  color: var(--accent);
+  font-weight: 600;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--card));
+}
+/* Drag-to-reorder (Ticket Info's own tab strip) -- same visual language
+   (.dragging opacity, an accent inset line for .drag-over) the sidebar's
+   own nav-layout editor already uses, just a LEFT edge here rather than a
+   top one, since these tabs sit in a horizontal row rather than a
+   vertical list. */
+.tab-button.dragging {
+  opacity: 0.4;
+}
+.tab-button.drag-over {
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+/* A utility tab (Ticket Info's own "Help" tab) set apart from the content
+   tabs beside it by request -- narrower padding and pushed to the far
+   right of the bar (of whichever row it ends up on, if the strip has
+   wrapped), rather than reading as a fifth report of equal weight to the
+   other four. */
+.tab-button--small {
+  padding: 0.2rem 0.45rem;
+  margin-left: auto;
+}
+
+/* The minimize/expand toggle, by request -- sits before the first tab so
+   it's reachable without scrolling the strip on a small screen. Same
+   compact bordered-pill language as .tab-button, but square/icon-only
+   rather than a labeled pill, and never wraps away from the strip's own
+   start (flex-shrink: 0) even if the tab labels beside it are long. */
+.tab-bar-toggle {
+  flex-shrink: 0;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.tab-bar-toggle:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* Minimized state -- every tab button is gone (tab-page-client.js's own
+   renderTabBar() renders nothing but the toggle in this state), so the
+   strip's own bottom divider/padding go too, by request ("save space on
+   a small screen"); without this the empty strip would still take up a
+   full row's worth of border+padding for nothing. */
+.tab-bar--minimized {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0.3rem;
+}
+
+/* Dragging a page in FROM the sidebar to add it as a tab (see app.js's
+   dragstart on .nav-item, and this page's own wireSidebarDropTarget()) --
+   a dashed accent outline on the whole bar while a valid drag hovers over
+   it, distinct from .tab-button.drag-over's own inset line (that one's for
+   reordering EXISTING tabs against each other, a different drag entirely
+   using a different data channel -- see that rule's own comment). */
+.tab-bar--drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* The "x" on a tab that was dragged in from the sidebar (never on the four
+   built-in report tabs, or Help) -- lets one be removed again as easily as
+   it was added. Sits inside its own tab button; stopPropagation() in
+   client.js keeps clicking it from also selecting/activating that tab. */
+.tab-remove {
+  margin-left: 0.4rem;
+  opacity: 0.6;
+}
+.tab-remove:hover {
+  opacity: 1;
+  color: #dc2626;
+}
+
+/* Every tabbed page's own embedded-page title, made small and pulled
+   right up against the tab bar's line above it, by request -- the tab
+   itself already says which page this is, so a big page-header title
+   here would be redundant. #tab-page-content is the generic id every
+   tabbed page's own mount() uses (see tab-page-client.js) -- only one
+   tabbed page is ever mounted at a time, so this id doesn't need to be
+   unique per page. Scoped to just this container (not a global
+   h1/.page-header change) so every other page's own title, reached
+   directly via the sidebar, is untouched. */
+#tab-page-content .page-header {
+  margin-bottom: 0.5rem;
+}
+#tab-page-content h1 {
+  font-size: 0.95rem;
+}
+
 /* Fills essentially the whole page -- no page-header on this page at all
    (see technician-forms/client.js), so this only needs to account for
-   .page-content's own top+bottom padding (2rem each). */
+   .page-content's own top+bottom padding (0.67rem + 2rem, see above --
+   was 2rem each/4rem total before that top padding was cut to 1/3). */
 .embedded-frame {
   display: block;
   width: 100%;
-  height: calc(100vh - 4rem);
+  height: calc(100vh - 2.67rem);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
