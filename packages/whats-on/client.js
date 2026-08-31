@@ -1187,20 +1187,30 @@ export function mount(container) {
     return `${Math.round(bytes / 1024)} KB`;
   }
 
-  // Forces every embedded image down to a real thumbnail width before
-  // sending, by request -- confirmed (both against this codebase's own
-  // Strety write logic and an independent third-party API reference)
-  // that Strety's real check-in "attachment" feature (the thumbnail +
-  // View full size/Download links seen when a photo is added through
-  // Strety's OWN UI) has no documented public API at all -- an embedded
-  // <img> in context is the only option this integration actually has,
-  // and Strety just renders it as plain HTML at whatever size it's
-  // given. This only affects what gets SENT (applied to a detached copy
-  // right before the request, in the Confirm button below) -- the
-  // editor itself still shows a pasted image at its normal readable
-  // size while composing.
+  // Shrinks the context HTML down before sending, by request -- applied
+  // to a detached copy right before the request (in the Confirm button
+  // below), never to the editor itself, which still shows everything at
+  // its normal readable size while composing.
+  //
+  // Images: forced down to a real thumbnail width. Confirmed (both
+  // against this codebase's own Strety write logic and an independent
+  // third-party API reference) that Strety's real check-in "attachment"
+  // feature (the thumbnail + View full size/Download links seen when a
+  // photo is added through Strety's OWN UI) has no documented public API
+  // at all -- an embedded <img> in context is the only option this
+  // integration actually has, and Strety just renders it as plain HTML
+  // at whatever size it's given.
+  //
+  // Text: wrapped in one explicit font-size, by request -- Strety
+  // renders context as real HTML with no size of its own asserted, so it
+  // was inheriting whatever base font size Strety's own check-in view
+  // uses, same "just renders the raw HTML" situation as the image. One
+  // wrapping <div>, not per-element styling, since it has to survive
+  // execCommand's own mix of <b>/<u>/<ul>/<a> tags without touching each
+  // one individually.
   const STRETY_IMAGE_DISPLAY_WIDTH = 400; // px -- 200px tried first, doubled by request
-  function shrinkEmbeddedImagesForStrety(html) {
+  const STRETY_TEXT_FONT_SIZE = '10px'; // 12px tried first, shrunk further by request
+  function prepareContextForStrety(html) {
     const wrapper = document.createElement('div');
     wrapper.innerHTML = html;
     wrapper.querySelectorAll('img').forEach((img) => {
@@ -1209,7 +1219,21 @@ export function mount(container) {
       img.style.width = `${STRETY_IMAGE_DISPLAY_WIDTH}px`;
       img.style.height = 'auto';
     });
-    return wrapper.innerHTML;
+    // font-size on every element individually, not just the outer
+    // wrapper -- confirmed a single wrapping div's font-size (relying on
+    // plain inheritance) didn't actually shrink the text once this was
+    // tried against real Strety. Inheritance has the LOWEST priority in
+    // the CSS cascade -- if Strety's own site CSS sets an explicit
+    // font-size on specific elements it renders inside a check-in's
+    // context (a <p>/<li>/etc., which execCommand's own output uses),
+    // that beats simple inheritance from one outer div regardless of
+    // what it says. !important on every element (not just the wrapper)
+    // is what actually survives that.
+    wrapper.style.setProperty('font-size', STRETY_TEXT_FONT_SIZE, 'important');
+    wrapper.querySelectorAll('*').forEach((el) => {
+      el.style.setProperty('font-size', STRETY_TEXT_FONT_SIZE, 'important');
+    });
+    return wrapper.outerHTML;
   }
 
   // Writes a real Strety check-in, by request -- reuses the exact
@@ -1392,14 +1416,18 @@ export function mount(container) {
     // step that returns to the compose view without losing what was
     // typed (savedValue/savedContext above).
     function renderConfirmView() {
-      const sendPreviewHtml = shrinkEmbeddedImagesForStrety(savedContext);
-      // Shown only when there's actually an image in it -- an exact
-      // preview of what Strety will receive (thumbnail-sized, per
-      // shrinkEmbeddedImagesForStrety()'s own comment), not the larger
-      // version still shown back on the compose view -- so what's
-      // confirmed here matches what's actually sent.
-      const previewHtml = sendPreviewHtml.includes('<img')
-        ? `<p class="inline-subtext" style="margin-top:0.5rem;">Context as it will be sent (images shrunk to a ${STRETY_IMAGE_DISPLAY_WIDTH}px-wide thumbnail):</p>
+      const sendPreviewHtml = prepareContextForStrety(savedContext);
+      // Shown whenever there's real content (text or an image) -- an
+      // exact preview of what Strety will receive (shrunk text/image
+      // both applied, per prepareContextForStrety()'s own comment), not
+      // the larger/normal-size version still shown back on the compose
+      // view -- so what's confirmed here matches what's actually sent.
+      // Skipped only for a genuinely blank editor (a naive tag-strip is
+      // enough here, just to avoid showing an empty box).
+      const hasContent = sendPreviewHtml.replace(/<[^>]*>/g, '').trim() !== '' || sendPreviewHtml.includes('<img');
+      const hasEmbeddedImage = sendPreviewHtml.includes('<img');
+      const previewHtml = hasContent
+        ? `<p class="inline-subtext" style="margin-top:0.5rem;">Context as it will be sent (text shrunk to ${STRETY_TEXT_FONT_SIZE}${hasEmbeddedImage ? `, image shrunk to a ${STRETY_IMAGE_DISPLAY_WIDTH}px-wide thumbnail` : ''}):</p>
            <div class="wo-update-editor" style="cursor:default;">${sendPreviewHtml}</div>`
         : '';
       bodyEl.innerHTML = `
