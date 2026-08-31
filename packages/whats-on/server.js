@@ -832,7 +832,19 @@ async function fetchSubscriptionsExpiringTodayTomorrow() {
       daysUntilExpiry,
     });
   }
-  rows.sort((a, b) => a.expirationDate.localeCompare(b.expirationDate) || a.clientName.localeCompare(b.clientName));
+  // Auto-renewing subscriptions always sort AFTER every non-renewing one,
+  // by request -- the ones that actually need someone's attention (won't
+  // renew on their own) surface first. Each row's own Today/Tomorrow tag
+  // is untouched either way (still driven by its own expirationDate,
+  // rendered separately in client.js's subscriptionRowHtml()) -- this
+  // only changes the ORDER rows appear in, not which day they're tagged.
+  // Within each renewal group, still date-then-client, same as before.
+  rows.sort(
+    (a, b) =>
+      Number(a.autoRenews) - Number(b.autoRenews) ||
+      a.expirationDate.localeCompare(b.expirationDate) ||
+      a.clientName.localeCompare(b.clientName)
+  );
   return rows;
 }
 
@@ -970,6 +982,17 @@ async function getTodayTomorrow(email, force) {
 }
 
 const router = express.Router();
+// Needed from here on -- this router's very first write route (the
+// manual check-in one, below); every route before it was read-only (GET
+// query params only), so nothing here needed a JSON body parser until now.
+// Express's own default limit here is 100kb -- confirmed the hard way
+// that's nowhere near enough once a pasted screenshot is in the body as
+// a base64 data: URL (routine for even a modest-sized image, before
+// base64's own ~33% size inflation on top). Bumped to 10mb -- generous
+// for a full-screen screenshot, this is our own server's limit, not
+// anything to do with whatever limit Strety's own API might separately
+// enforce on the request this eventually becomes.
+router.use(express.json({ limit: '10mb' }));
 
 // Deliberately a SEPARATE endpoint from the scorecards route below, not
 // folded into the same response -- paging this section forward/back a week
@@ -1084,6 +1107,105 @@ router.get('/', async (req, res) => {
     console.error(err);
     const detail = err.response ? `Strety API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
     res.status(500).json({ error: detail });
+  }
+});
+
+// Writes a real manual check-in for one metric, by request -- the
+// scorecards' own Update icon (client.js's openMetricUpdateModal(),
+// shown only when a metric has no check-in yet for the current period)
+// prompts for a Value and lets the rich-text notes box become the
+// Context, after the user confirms via its own popup. Uses the SIGNED-IN
+// USER'S OWN Strety connection (getPersonalClient(), same as the GET /
+// route above) -- whatever real write access their own Strety account
+// actually has applies here too; a 403 from Strety itself (not
+// synthesized here) is the honest outcome if their account can't write
+// to this particular metric's space.
+//
+// Same create-or-update-on-409 contract @dashboard/strety-autotask-sync's
+// own sync.js already has confirmed working against the real API --
+// Strety enforces ONE check-in per metric per period, so a second write
+// for today needs a PATCH of the existing check-in (its id comes back
+// directly in the 409's own error body), not a second POST. See that
+// package's own createOrUpdateCheckIn() -- this mirrors it exactly, not
+// a reinvented version.
+//
+// The check-in's PERIOD-identifying attributes are NOT the same across
+// cadences, confirmed the hard way (a real 422 "iso_week_year/iso_week
+// required for weekly metrics") -- sync.js's own confirmed-working `date`
+// attribute only actually covers daily metrics (the only cadence it ever
+// writes). Weekly/monthly need the SAME attribute names this page's own
+// READ side already relies on (periodKeyFor()/isoWeekInfo() above, used
+// to line up each metric's existing check-ins into shared columns) --
+// reused here rather than invented separately, since they already have
+// to match Strety's own real numbering exactly for the read side to work
+// at all.
+router.post('/metrics/:metricId/check-in', async (req, res) => {
+  try {
+    const email = req.session?.user?.email;
+    if (!email) return res.status(401).json({ error: 'not-signed-in', message: 'Not signed in.' });
+
+    const { metricId } = req.params;
+    const value = typeof req.body?.value === 'string' ? req.body.value.trim() : '';
+    if (!value) return res.status(400).json({ error: 'value-required', message: 'A value is required.' });
+    // Real HTML (the notes editor's own innerHTML), sent as-is -- see
+    // openMetricUpdateModal()'s own comment in client.js for why this
+    // isn't stripped to plain text first, by request.
+    const context = typeof req.body?.context === 'string' ? req.body.context : '';
+    const frequency = typeof req.body?.frequency === 'string' ? req.body.frequency : '';
+
+    const personalClient = getPersonalClient(email);
+    if (!personalClient.isConnected()) {
+      return res.status(409).json({ error: 'strety-not-connected', message: 'Connect your Strety account first.' });
+    }
+
+    let periodAttributes;
+    if (frequency === 'weekly') {
+      const { isoWeek, isoWeekYear } = isoWeekInfo(todayAestDate());
+      periodAttributes = { iso_week_year: isoWeekYear, iso_week: isoWeek };
+    } else if (frequency === 'monthly') {
+      const aest = todayAestDate();
+      periodAttributes = { year: aest.getUTCFullYear(), month: aest.getUTCMonth() + 1 };
+    } else {
+      // 'daily', or a missing/unrecognized frequency -- the one shape
+      // actually confirmed working (sync.js's own writes).
+      periodAttributes = { date: todayAestKey() };
+    }
+    const attributes = { value, context, ...periodAttributes };
+    try {
+      await personalClient.post(`/metrics/${metricId}/check_ins`, { data: { type: 'metric_check_in', attributes } });
+    } catch (err) {
+      if (err.response?.status !== 409) throw err;
+      const existingId = err.response.data?.errors?.[0]?.meta?.existing_check_in?.id;
+      if (!existingId) throw err; // Strety's own error shape changed/unexpected -- don't guess, surface the real error.
+      await personalClient.patch(`/metrics/${metricId}/check_ins/${existingId}`, { data: { type: 'metric_check_in', attributes } });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.strety_not_connected) {
+      return res.status(409).json({ error: 'strety-not-connected', message: 'Connect your Strety account first.' });
+    }
+    if (err.strety_reauth_required) {
+      return res.status(409).json({ error: 'strety-reauth-required', message: 'Strety needs reconnecting.' });
+    }
+    // A real 403 INVALID_SCOPE, distinct from the two tagged cases above
+    // -- the personal connection's own token is still perfectly VALID
+    // (not expired, not revoked), it just predates this feature's write
+    // access being added to /auth/strety-personal/connect's own scope
+    // request. Confirmed the hard way (a real production error, exactly
+    // this shape) that refreshing an already-issued token does NOT pick
+    // up a newly-added scope -- only a fresh browser re-authorization
+    // does, so this needs the same "go reconnect" treatment as the two
+    // cases above, not just a raw error message.
+    if (err.response?.status === 403 && err.response.data?.errors?.[0]?.code === 'INVALID_SCOPE') {
+      return res.status(409).json({
+        error: 'strety-reauth-required',
+        message: "Your Strety connection needs reconnecting to allow writing check-ins (it was only ever authorized read-only).",
+      });
+    }
+    console.error(err);
+    const detail = err.response ? `Strety API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
+    res.status(500).json({ error: 'write-failed', message: detail });
   }
 });
 
