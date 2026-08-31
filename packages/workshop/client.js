@@ -582,8 +582,13 @@ export function mount(container) {
       // By request: the ticket's own current Autotask status, in small
       // print under the number, only when it actually resolved -- an
       // unresolved ticket has no real status to show (see
-      // withTicketDetails() in server.js).
-      const statusLine = job.ticketStatus ? `<div class="wsp-ticket-status">${escapeHtml(job.ticketStatus)}</div>` : '';
+      // withTicketDetails() in server.js). Green specifically for
+      // "Complete" (Autotask's real status-5 label, confirmed against
+      // real data -- see completed-tickets/server.js's own comment), by
+      // request -- every other status stays the default muted colour.
+      const statusLine = job.ticketStatus
+        ? `<div class="wsp-ticket-status${job.ticketStatus === 'Complete' ? ' wsp-ticket-status--complete' : ''}">${escapeHtml(job.ticketStatus)}</div>`
+        : '';
       // Real popup window, not just a new tab -- same convention every
       // other ticket link on this dashboard uses.
       return `<a class="wsp-ticket-link" href="${escapeHtml(job.ticketUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(job.ticketNumber)}</a>${statusLine}`;
@@ -1339,10 +1344,10 @@ export function mount(container) {
           </div>
           <div class="wsp-form-column">
             <label>Job description
-              <input type="text" class="wsp-field" data-field="jobDescription" value="${escapeHtml(existingJob?.jobDescription || '')}" />
+              <input type="text" class="wsp-field" data-field="jobDescription" value="${escapeHtml(existingJob?.jobDescription || '')}" required />
             </label>
-            <label>Current / required action
-              <textarea class="wsp-field" data-field="actionText" rows="3">${escapeHtml(existingJob?.actionText || '')}</textarea>
+            <label>Action Current/Next/Required
+              <textarea class="wsp-field" data-field="actionText" rows="3" required>${escapeHtml(existingJob?.actionText || '')}</textarea>
             </label>
             <label>
               <span class="wsp-location-label-row">
@@ -1432,6 +1437,25 @@ export function mount(container) {
         fields[el.dataset.field] = el.type === 'checkbox' ? el.checked : el.value.trim();
       });
       fields.equipment = collectEquipmentFromEditor(equipmentEditorContainer);
+      // Client-side check for an instant error, no round trip -- server.js
+      // enforces the same thing regardless (parseJobBody()), so a direct
+      // API call can't bypass this, this is purely the fast path. This
+      // form isn't a real <form> element (the Save button is type="button",
+      // not type="submit"), so the [required] attribute on these two
+      // fields alone doesn't trigger the browser's own native validation
+      // UI -- that only fires on an actual form submit event.
+      if (!fields.jobDescription) {
+        errorEl.hidden = false;
+        errorEl.textContent = 'Error: Job description is required.';
+        wrapper.querySelector('[data-field="jobDescription"]').focus();
+        return;
+      }
+      if (!fields.actionText) {
+        errorEl.hidden = false;
+        errorEl.textContent = 'Error: Action Current/Next/Required is required.';
+        wrapper.querySelector('[data-field="actionText"]').focus();
+        return;
+      }
       try {
         if (isEdit) {
           await fetchJson(`/api/workshop/jobs/${existingJob.id}`, 'PATCH', fields);
