@@ -3603,6 +3603,14 @@ tr.row-text-highlight-blue td {
   color: var(--muted);
   margin-top: 0.1rem;
 }
+/* "Complete" specifically, by request -- every other ticket status stays
+   the plain muted colour/weight above. Same green used elsewhere on this
+   dashboard for a "done" reading (e.g. GREEN_WORKFLOW_STAGES in
+   client.js). */
+.wsp-ticket-status--complete {
+  color: #16a34a;
+  font-weight: 700;
+}
 
 /* Due Date colouring, by request -- red (not bold) if overdue, same red
    as .text-highlight-red/.cell-flag-red elsewhere on this dashboard;

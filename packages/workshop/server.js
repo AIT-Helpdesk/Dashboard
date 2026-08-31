@@ -449,8 +449,25 @@ async function parseJobBody(body, requireDefaults) {
   const fields = {};
   if ('ticketNumber' in body) fields.ticketNumber = body.ticketNumber ? String(body.ticketNumber).trim() : null;
   if ('customer' in body) fields.customer = body.customer ? String(body.customer).trim() : null;
-  if ('jobDescription' in body) fields.jobDescription = body.jobDescription ? String(body.jobDescription).trim() : null;
-  if ('actionText' in body) fields.actionText = body.actionText ? String(body.actionText).trim() : null;
+  // Mandatory, by request -- unlike every other free-text field on this
+  // form (Client/Ticket/Location, all still optional), a job needs at
+  // least a description and a current/next/required action to actually
+  // be useful on the board. Same "|| requireDefaults" pattern as
+  // actionColor/priority/workflowStage below -- required on create even
+  // via a direct API call that omits the field entirely, and rejected on
+  // update only if the field is explicitly sent blank (an update that
+  // doesn't mention the field at all leaves whatever's already saved
+  // alone, same as every other optional field here).
+  if ('jobDescription' in body || requireDefaults) {
+    const value = body.jobDescription ? String(body.jobDescription).trim() : '';
+    if (!value) throw { status: 400, message: 'jobDescription is required.' };
+    fields.jobDescription = value;
+  }
+  if ('actionText' in body || requireDefaults) {
+    const value = body.actionText ? String(body.actionText).trim() : '';
+    if (!value) throw { status: 400, message: 'actionText is required.' };
+    fields.actionText = value;
+  }
   if ('location' in body) fields.location = body.location ? String(body.location).trim() : null;
 
   if ('actionColor' in body || requireDefaults) {
