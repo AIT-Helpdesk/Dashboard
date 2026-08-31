@@ -1375,12 +1375,42 @@ h1 {
 .cc-po-edit-btn {
   color: #c9a468;
 }
-/* Ticket Note modal (openTicketNoteModal() in client.js) -- ~25% wider than
-   the shared .wsp-qa-modal-panel's own 24rem, by request (the height half
-   of "25% wider and 25% longer" is the textarea's own rows attribute,
-   bumped from 9 to 11 in client.js instead of a CSS height override). */
-.cc-ticket-note-modal-panel {
-  width: 30rem;
+/* Ticket Note modal (openTicketNoteModal() in client.js) -- ~30% wider
+   than the shared .wsp-qa-modal-panel's own 24rem, by request (the
+   height half of an earlier "25% wider and 25% longer" request is the
+   textarea's own rows attribute, bumped from 9 to 11 in client.js
+   instead of a CSS height override).
+   Compound selector (.history-modal-panel.cc-ticket-note-modal-panel),
+   not just the one class -- this rule's plain single-class form had the
+   SAME bug just fixed on .cc-confirm-close-modal-panel below: equal
+   specificity to .wsp-qa-modal-panel's own width:24rem rule, which sits
+   LATER in this file and was silently winning regardless of the number
+   set here. This modal has actually been rendering at 24rem this whole
+   time, not the 30rem this rule claimed -- confirmed by the same
+   file-order/specificity math, not guessed. */
+.history-modal-panel.cc-ticket-note-modal-panel {
+  width: 31.2rem;
+  max-width: min(31.2rem, 90vw);
+}
+/* Close Ticket confirmation modal (confirmCloseTicket() in client.js) --
+   ~50% wider than the shared .wsp-qa-modal-panel's own 24rem, by
+   request (54rem was tried and came back too wide). Own class, not a
+   change to that shared one -- Workshop's own Q&A popup and this same
+   page's Reopen Status modal both still use the shared default width.
+   Compound selector (.history-modal-panel.cc-confirm-close-modal-panel),
+   not just the one class -- confirmed the hard way that a single-class
+   selector here has the SAME specificity as .wsp-qa-modal-panel's own
+   width:24rem rule, which sits LATER in this file and was silently
+   winning regardless of what number got set here (the panel never
+   actually changed size). Also overrides max-width explicitly --
+   .history-modal-panel's own max-width: 30rem would otherwise still cap
+   this even once width itself won. */
+.history-modal-panel.cc-confirm-close-modal-panel {
+  width: 36rem;
+  /* min(), not a bare 36rem -- still shrinks to fit a narrow screen
+     (same 90vw safety net .wsp-qa-modal-panel's own max-width already
+     had) rather than overflowing it now that this rule wins outright. */
+  max-width: min(36rem, 90vw);
 }
 .contract-checks-page .wsp-icon-btn,
 .check-client-page .wsp-icon-btn {
@@ -3243,6 +3273,75 @@ tr.row-text-highlight-blue td {
 .wsp-qa-modal-panel {
   width: 24rem;
   max-width: 90vw;
+}
+/* Sticky-note look for this one modal specifically, by request -- warm
+   paper colour, a slight rotation, and a lifted/curled bottom-right
+   corner. Own class (not a change to .history-modal-panel/
+   .wsp-qa-modal-panel themselves, which every other popup on this
+   dashboard also uses) -- and, since a sticky note reads as a fixed
+   warm paper colour regardless of the site's own light/dark theme, text
+   colour and the two field backgrounds are overridden here too rather
+   than left on var(--fg)/var(--bg). */
+.wsp-qa-sticky-note {
+  position: relative;
+  background: #fef3c7;
+  color: #422006;
+  border: none;
+  border-radius: 2px;
+  /* Sharp, not rounded -- the actual paper corner under the curl. */
+  border-bottom-right-radius: 0;
+  transform: rotate(-1.5deg);
+  box-shadow: 3px 6px 14px rgba(0, 0, 0, 0.35);
+}
+.wsp-qa-sticky-note .history-modal-panel-header {
+  background: transparent;
+  color: #422006;
+  /* A sticky note has no separate header bar to pin while scrolling --
+     this modal's body never scrolls anyway (two short fields), so the
+     shared sticky positioning has nothing to do here regardless. */
+  position: static;
+}
+.wsp-qa-sticky-note .history-modal-close {
+  color: #422006;
+  opacity: 0.7;
+}
+.wsp-qa-sticky-note .history-modal-close:hover {
+  color: #422006;
+  opacity: 1;
+}
+.wsp-qa-sticky-note .wsp-field {
+  background: rgb(255 255 255 / 0.35);
+  border-color: rgb(66 32 6 / 0.3);
+  color: #422006;
+}
+/* The lifted corner itself -- two overlapping right-triangles (the
+   `border` trick: a box with only one side's width set draws a
+   triangle), not an image asset. A soft blurred shadow triangle
+   behind... */
+.wsp-qa-sticky-note::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 34px 34px;
+  border-color: transparent transparent rgb(0 0 0 / 0.3) transparent;
+  filter: blur(2px);
+}
+/* ...and a lighter triangle in front of it, on top -- the curled paper's
+   own underside catching the light. */
+.wsp-qa-sticky-note::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 29px 29px;
+  border-color: transparent transparent #fffbeb transparent;
 }
 .wsp-qa-modal-label {
   display: flex;
