@@ -975,6 +975,21 @@ export function mount(container) {
       resultsEl.appendChild(banner);
     }
 
+    // Shown only for someone whose OWN connection genuinely can't write
+    // yet (server.js's own hasWriteScope() check), by request -- the
+    // Update icon further down would otherwise fail with a real 403 the
+    // first time they tried to use it. Naturally stops appearing the
+    // moment their connection actually becomes write-capable (reconnect,
+    // or their existing token's next natural refresh if it was already
+    // write-scoped) -- no per-browser dismiss state, this just reflects
+    // real server-side fact on every load.
+    if (data.canWriteCheckIns === false) {
+      const banner = document.createElement('p');
+      banner.className = 'status error';
+      banner.innerHTML = `Your Strety connection needs reconnecting to allow writing scorecard check-ins (used by the Update button below). Reading scorecards is unaffected.<br><a class="button-link" href="/auth/strety-personal/connect">Reconnect Strety</a>`;
+      resultsEl.appendChild(banner);
+    }
+
     data.groups.forEach((group) => {
       // The Personal group is always second (see server.js -- Helpdesk is
       // pushed first, unconditionally). No separating heading here, by
