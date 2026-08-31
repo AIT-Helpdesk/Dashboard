@@ -617,7 +617,7 @@ export function mount(container) {
       const overlay = document.createElement('div');
       overlay.className = 'history-modal-overlay';
       overlay.innerHTML = `
-        <div class="history-modal-panel wsp-qa-modal-panel">
+        <div class="history-modal-panel wsp-qa-modal-panel cc-confirm-close-modal-panel">
           <div class="history-modal-panel-header">
             <span>${count > 1 ? 'Close Tickets?' : 'Close Ticket?'}</span>
           </div>

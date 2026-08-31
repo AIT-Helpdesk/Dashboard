@@ -867,19 +867,19 @@ export function mount(container) {
     overlay.className = 'history-modal-overlay';
     const title = job ? job.ticketClientName || job.customer || `Job #${jobId}` : `Job #${jobId}`;
     overlay.innerHTML = `
-      <div class="history-modal-panel wsp-qa-modal-panel">
+      <div class="history-modal-panel wsp-qa-modal-panel wsp-qa-sticky-note">
         <div class="history-modal-panel-header">
           <span>${escapeHtml(title)} -- Q &amp; A</span>
           <button type="button" class="history-modal-close" aria-label="Close">✕</button>
         </div>
         <div class="history-modal-body">
-          <label class="wsp-qa-modal-label">
+          <label class="wsp-qa-modal-label wsp-qa-modal-label--top">
             <span class="wsp-qa-icon wsp-qa-icon--q wsp-qa-icon--set">?</span>
-            <input type="text" class="wsp-field wsp-qa-question-input" value="${escapeHtml((job && job.flagNote) || '')}" placeholder="Leave a question..." maxlength="300" />
+            <textarea class="wsp-field wsp-qa-question-input" rows="2" placeholder="Leave a question..." maxlength="300">${escapeHtml((job && job.flagNote) || '')}</textarea>
           </label>
-          <label class="wsp-qa-modal-label">
+          <label class="wsp-qa-modal-label wsp-qa-modal-label--top">
             <span class="wsp-qa-icon wsp-qa-icon--a wsp-qa-icon--set">A</span>
-            <input type="text" class="wsp-field wsp-qa-answer-input" value="${escapeHtml((job && job.flagAnswer) || '')}" placeholder="Leave an answer..." maxlength="300" />
+            <textarea class="wsp-field wsp-qa-answer-input" rows="2" placeholder="Leave an answer..." maxlength="300">${escapeHtml((job && job.flagAnswer) || '')}</textarea>
           </label>
           <p class="status error wsp-qa-modal-error" hidden></p>
           <div class="wsp-form-actions">
