@@ -20,7 +20,7 @@ const {
 
 const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'coming', 'not_started'];
 const ACTION_COLORS = ['general', 'done', 'notewell', 'blue'];
-const WORKFLOW_STAGES = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected', 'dispose'];
+const WORKFLOW_STAGES = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected', 'dispose', 'workshop_gear'];
 // The two stages with a companion free-text field -- 'free_text' (type
 // anything) and 'in_car' (whose car, by request). Kept as its own list
 // (mirrors client.js's own TEXT_ENABLED_STAGES) since more than one
@@ -219,6 +219,7 @@ const NOTE_WORKFLOW_STAGE_LABELS = {
   delivered: 'Delivered',
   collected: 'Collected',
   dispose: 'Dispose',
+  workshop_gear: 'Workshop Gear',
 };
 const NOTE_ACTION_COLOR_LABELS = { general: 'Black', notewell: 'Red', blue: 'Blue', done: 'Green' };
 const NOTE_FIELD_LABELS = {
