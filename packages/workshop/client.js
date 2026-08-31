@@ -21,6 +21,14 @@ let twoColumns = false;
 // convention as showCompleted/twoColumns
 // above.
 let mobileView = false;
+// "Show Workshop Gear" -- off by default, by request. Jobs in the
+// 'workshop_gear' stage are excluded from the main table unconditionally
+// (unlike 'dispose', which always shows in its own table when non-empty),
+// and only appear in their own separate table, at the very bottom of the
+// page, while this is ticked. Persists across remounts, same convention
+// as showCompleted/twoColumns/mobileView above -- a content-filtering
+// preference, not a transient UI state like bottomPanelsCollapsed below.
+let showWorkshopGear = false;
 // The bottom-right "Deliveries" panel's own cached data -- same "restore
 // instantly instead of a blank flash on revisit" convention as lastJobs
 // above. A genuine cross-page read (this page's own client.js fetches
@@ -74,8 +82,15 @@ const WORKFLOW_STAGE_LABELS = {
   delivered: 'Delivered',
   collected: 'Collected',
   dispose: 'Dispose',
+  // Gear that lives in/belongs to the workshop itself, not a specific
+  // client job, by request. Like 'dispose', excluded from the main table
+  // entirely and shown in its own separate table -- but unlike 'dispose'
+  // (always shown when there's anything in it), this one is hidden by
+  // default behind its own checkbox at the bottom of the page (see
+  // showWorkshopGear below).
+  workshop_gear: 'Workshop Gear',
 };
-const WORKFLOW_STAGE_ORDER = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected', 'dispose'];
+const WORKFLOW_STAGE_ORDER = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected', 'dispose', 'workshop_gear'];
 // Stages with a companion free-text field -- 'free_text' (was
 // 'date_reqd', type anything), 'in_car' (whose car), and 'take_onsite'
 // (who took it onsite), by request -- see
@@ -157,6 +172,13 @@ export function mount(container) {
 
       <div id="dispose-results"></div>
 
+      <div class="date-form-row wsp-workshop-gear-toggle-row">
+        <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;font-size:0.85rem;">
+          <input type="checkbox" id="show-workshop-gear-toggle" /> Show Workshop Gear
+        </label>
+      </div>
+      <div id="workshop-gear-results"></div>
+
       <div class="wsp-bottom-panels" id="bottom-panels">
         <div class="wsp-usage-box">
           <div class="wsp-usage-box-title">
@@ -181,6 +203,8 @@ export function mount(container) {
   const statusEl = container.querySelector('#status');
   const resultsEl = container.querySelector('#results');
   const disposeResultsEl = container.querySelector('#dispose-results');
+  const showWorkshopGearToggle = container.querySelector('#show-workshop-gear-toggle');
+  const workshopGearResultsEl = container.querySelector('#workshop-gear-results');
   const legendEl = container.querySelector('#priority-legend');
   const formContainer = container.querySelector('#job-form-container');
   const addJobButton = container.querySelector('#add-job-button');
@@ -197,6 +221,7 @@ export function mount(container) {
   showCompletedToggle.checked = showCompleted;
   twoColumnToggle.checked = twoColumns;
   mobileViewToggle.checked = mobileView;
+  showWorkshopGearToggle.checked = showWorkshopGear;
   wspPageEl.classList.toggle('wsp-mobile-view', mobileView);
 
   // Deliberately a plain local variable, not module-scope like
@@ -243,6 +268,14 @@ export function mount(container) {
     // once, no re-render needed.
     wspPageEl.classList.toggle('wsp-mobile-view', mobileView);
   });
+  showWorkshopGearToggle.addEventListener('change', () => {
+    showWorkshopGear = showWorkshopGearToggle.checked;
+    // Same "purely a re-layout of jobs already in memory" reasoning as
+    // twoColumnToggle above -- Workshop Gear jobs are already in
+    // lastJobs (the server never filters them out), this just changes
+    // whether renderResults() draws their table or not.
+    if (lastJobs) renderResults(lastJobs);
+  });
 
   async function loadJobs() {
     formContainer.innerHTML = '';
@@ -252,6 +285,7 @@ export function mount(container) {
     statusEl.textContent = 'Loading...';
     resultsEl.innerHTML = '';
     disposeResultsEl.innerHTML = '';
+    workshopGearResultsEl.innerHTML = '';
     try {
       const res = await fetch(`/api/workshop/${showCompleted ? '?status=completed' : ''}`);
       const data = await res.json();
@@ -276,9 +310,19 @@ export function mount(container) {
   // Dispose jobs get their own separate table, kept apart from the main
   // list rather than mixed in with everything else still active in the
   // workshop, by request. The main table's own empty-state message is
-  // judged on the NON-dispose count, so "everything left is Dispose"
-  // correctly shows "No open jobs" up top with the real items still
-  // visible in their own table, not a misleading blank page.
+  // judged on the NON-dispose, non-workshop-gear count, so "everything
+  // left is Dispose/Workshop Gear" correctly shows "No open jobs" up top
+  // with the real items still visible in their own table(s), not a
+  // misleading blank page.
+  //
+  // Workshop Gear jobs get their own separate table too, same idea as
+  // Dispose, but hidden entirely (not rendered at all, not just an empty
+  // container) unless showWorkshopGear is ticked -- and, unlike Dispose,
+  // always in its own standalone spot at the very bottom of the page
+  // regardless of 2-column mode (Dispose folds into the 2-column layout
+  // itself, see below; Workshop Gear deliberately doesn't, by request --
+  // "a checkbox at the bottom of the page ... its own table below", not
+  // woven into the main layout the way Dispose is).
   //
   // Normally (single-column mode) the legend and the Dispose table both
   // sit in their own static full-width spots below the main table, in
@@ -290,13 +334,18 @@ export function mount(container) {
   // overridden (content moved, standalone spot emptied/hidden) only in
   // the 2-column branch below.
   function renderResults(jobs) {
-    const mainJobs = jobs.filter((j) => j.workflowStage !== 'dispose');
+    const mainJobs = jobs.filter((j) => j.workflowStage !== 'dispose' && j.workflowStage !== 'workshop_gear');
     const disposeJobs = jobs.filter((j) => j.workflowStage === 'dispose');
+    const workshopGearJobs = jobs.filter((j) => j.workflowStage === 'workshop_gear');
 
     resultsEl.innerHTML = '';
     legendEl.innerHTML = legendHtml();
     legendEl.style.display = '';
     disposeResultsEl.innerHTML = '';
+    workshopGearResultsEl.innerHTML = '';
+    if (showWorkshopGear && workshopGearJobs.length > 0) {
+      workshopGearResultsEl.appendChild(buildTableGroup(workshopGearJobs));
+    }
 
     if (mainJobs.length === 0) {
       resultsEl.innerHTML = `<p class="status">${showCompleted ? 'No completed jobs yet.' : 'No open jobs -- add one to get started.'}</p>`;
@@ -480,17 +529,21 @@ export function mount(container) {
 
   // Same distinct location-note list as the board row's own bracketed text
   // (equipmentLocationsText() above), but shown next to the edit form's
-  // Location (Job Note) label instead -- in blue (.cell-flag-blue, this
-  // dashboard's standard "reads as a link/notable value" colour), by
-  // request, so it's visually distinct from the plain "-- see equipment
-  // list" hint beside it. A static snapshot of the job's SAVED equipment
-  // (existingJob?.equipment), same as every other preview in this form --
-  // it does not live-update while the equipment editor below is being
-  // edited in the same session, only on next open/save.
+  // Location (Job Note) label instead -- in blue, by request, so it's
+  // visually distinct from the plain "-- see equipment list" hint beside
+  // it. Its own class (.wsp-location-summary), not the shared
+  // .cell-flag-blue -- that one is also bold (!important font-weight, by
+  // design for table cells elsewhere), and this was asked to be blue
+  // WITHOUT the bold, so reusing it would mean fighting its own
+  // !important rather than just not applying one in the first place. A
+  // static snapshot of the job's SAVED equipment (existingJob?.equipment),
+  // same as every other preview in this form -- it does not live-update
+  // while the equipment editor below is being edited in the same session,
+  // only on next open/save.
   function equipmentLocationsSummaryHtml(job) {
     const notes = distinctEquipmentLocationNotes(job);
     if (notes.length === 0) return '';
-    return ` <span class="cell-flag-blue">${notes.map(escapeHtml).join(', ')}</span>`;
+    return ` <span class="wsp-location-summary">${notes.map(escapeHtml).join(', ')}</span>`;
   }
 
   // One line per item, e.g. "2x Laptop (In Workshop, Configured) -- shelf

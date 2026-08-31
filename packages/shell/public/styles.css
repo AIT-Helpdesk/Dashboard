@@ -3711,6 +3711,16 @@ tr.row-text-highlight-blue td {
 #dispose-results {
   margin-top: 1.5rem;
 }
+/* "Show Workshop Gear" checkbox row, by request -- sits below the Dispose
+   table, off by default; #workshop-gear-results (its own separate table,
+   client.js's renderResults()) stays entirely empty/unrendered until
+   ticked, not just visually hidden. */
+.wsp-workshop-gear-toggle-row {
+  margin-top: 1.5rem;
+}
+#workshop-gear-results {
+  margin-top: 0.5rem;
+}
 
 /* Wraps this whole page's content -- a flex column at least as tall as
    .page-content itself (this page's own independent scroll container,
@@ -4091,14 +4101,22 @@ textarea.pgr-field {
 }
 /* The job edit form's Location (Job Note) label row, by request -- wraps
    the label text, the "-- see equipment list" hint (.inline-subtext), and
-   the blue equipment-locations summary (.cell-flag-blue) as one flexible
-   inline row above the input, so the row wraps as a whole on a narrow
-   form rather than each piece breaking independently. */
+   the blue equipment-locations summary (.wsp-location-summary, below) as
+   one flexible inline row above the input, so the row wraps as a whole
+   on a narrow form rather than each piece breaking independently. */
 .wsp-location-label-row {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.3rem;
+}
+/* The blue equipment-locations summary itself -- own class rather than
+   reusing the shared .cell-flag-blue, which is also bold (!important)
+   elsewhere for table cells; this was asked to be blue WITHOUT the bold,
+   so plain font-weight (inherits the label row's own normal weight)
+   instead of fighting that !important. */
+.wsp-location-summary {
+  color: var(--accent);
 }
 .wsp-checkbox-field .wsp-field {
   width: auto;

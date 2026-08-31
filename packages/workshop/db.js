@@ -647,6 +647,79 @@ function migrateAddSkipTicketUpdates() {
 }
 migrateAddSkipTicketUpdates();
 
+// Widens workflow_stage's CHECK to also allow 'workshop_gear' -- gear
+// that lives in/belongs to the workshop itself rather than a specific
+// client job, by request. Like 'dispose', no companion free-text field;
+// unlike 'dispose' (always shown, in its own table below the priority
+// legend), jobs in this stage are hidden entirely by default -- shown in
+// their own separate table only when the "Show Workshop Gear" checkbox
+// at the bottom of the page is ticked (off by default, not persisted
+// across remounts) -- see client.js's renderResults()/the
+// show-workshop-gear-toggle wiring. Every existing value keeps its
+// original name/meaning -- only 'workshop_gear' is new, so no data
+// remapping is needed, just the same recreate-table-and-copy dance as
+// the other CHECK-widening migrations. jobs_new's own column list/order
+// here is NOT just copied from migrateAddDisposeStage()'s own template
+// above -- three more columns (flag_note/flag_answer/
+// skip_ticket_updates) were added as plain ALTER TABLE ADD COLUMNs
+// since then, and a positional `INSERT ... SELECT *` requires jobs_new's
+// declared order to exactly match the LIVE table's real physical column
+// order or every value after the first mismatch silently lands in the
+// wrong column. Confirmed directly against the real live database
+// (`PRAGMA table_info(jobs)`), not inferred from reading this file's own
+// migration order top-to-bottom -- the two do NOT match here (flag_note,
+// skip_ticket_updates, flag_answer is the real physical order, not the
+// flag_note, flag_answer, skip_ticket_updates the file's own function
+// order above would suggest).
+function migrateAddWorkshopGearStage() {
+  const table = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'`).get();
+  if (table && table.sql && table.sql.includes("'workshop_gear'")) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE jobs_new (
+        id INTEGER PRIMARY KEY,
+        reqd_by TEXT,
+        ticket_number TEXT,
+        ticket_autotask_id INTEGER,
+        customer TEXT,
+        job_description TEXT,
+        action_text TEXT,
+        action_color TEXT NOT NULL DEFAULT 'general' CHECK (action_color IN ('general','done','notewell','blue')),
+        location TEXT,
+        priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','in_progress','next_up','coming','not_started')),
+        workflow_stage TEXT NOT NULL DEFAULT 'new' CHECK (workflow_stage IN ('new','free_text','in_car','take_onsite','ready_to_ship','ready_for_pickup','sent','delivered','collected','dispose','workshop_gear')),
+        workflow_stage_text TEXT,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','completed')),
+        completed_at TEXT,
+        completed_by_email TEXT,
+        completed_by_name TEXT,
+        created_at TEXT NOT NULL,
+        created_by_email TEXT NOT NULL,
+        created_by_name TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by_email TEXT NOT NULL,
+        updated_by_name TEXT NOT NULL,
+        flag_note TEXT,
+        skip_ticket_updates INTEGER NOT NULL DEFAULT 0 CHECK (skip_ticket_updates IN (0, 1)),
+        flag_answer TEXT
+      );
+      INSERT INTO jobs_new SELECT * FROM jobs;
+      DROP TABLE jobs;
+      ALTER TABLE jobs_new RENAME TO jobs;
+    `);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+migrateAddWorkshopGearStage();
+
 function nowIso() {
   return new Date().toISOString();
 }
