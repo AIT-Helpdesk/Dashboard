@@ -1090,6 +1090,15 @@ router.get('/', async (req, res) => {
       // already gated on `data.automationStatus && !data.automationStatus.ok`,
       // so null suppresses it with no client-side change needed.
       automationStatus: isLocalhostRequest(req) || !canSeeAutomationStatus(email) ? null : evaluateAutomationStatus(),
+      // Lets client.js show a "reconnect to enable the Update button"
+      // banner ONLY for someone whose connection genuinely can't write
+      // yet, by request -- a plain file read (hasWriteScope(), see
+      // @dashboard/strety-client), not a live API call. Naturally stops
+      // showing per-person the moment their own connection actually
+      // becomes write-capable (an explicit reconnect, or their existing
+      // token's next natural refresh if it was already write-scoped) --
+      // no separate per-browser dismiss state needed.
+      canWriteCheckIns: personalClient.hasWriteScope(),
     });
   } catch (err) {
     if (err.strety_not_connected) {

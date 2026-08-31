@@ -116,6 +116,16 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
       // token that dies mid-flight" reasoning as Ingram's own token cache.
       expiresAt: Date.now() + (data.expires_in - 300) * 1000,
       connectedAs: connectedAs || existing?.connectedAs || null,
+      // Confirmed against a real token response that Strety's own
+      // /oauth/token DOES echo back the actually-granted scope as a
+      // plain space-separated string (e.g. "read write") -- recorded here
+      // (both at connect time AND on every refresh, since a refresh
+      // preserves whatever scope the token already had -- confirmed
+      // elsewhere that refreshing does NOT pick up a newly-requested
+      // scope) so hasWriteScope() below can tell a genuinely
+      // write-capable connection apart from one that's still on an older
+      // read-only grant, without needing a live API call to check.
+      scope: data.scope || existing?.scope || null,
     });
   }
 
@@ -194,6 +204,21 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
   // message).
   function connectedIdentity() {
     return readTokens()?.connectedAs || null;
+  }
+
+  // Whether the CURRENTLY stored token was actually granted write access,
+  // by request (What's On's own manual check-in feature needs this to
+  // decide whether to show a "reconnect to enable writing" banner, per
+  // connection, without guessing). Deliberately just a file read, no live
+  // API call -- same reasoning as connectedIdentity() above. A token
+  // saved before scope tracking existed here (persistTokenResponse()'s
+  // own comment), or one that's never been connected at all, has no
+  // recorded scope -- treated as false (assume NOT write-capable) rather
+  // than true, the safe default until proven otherwise by a real connect
+  // or the token's next natural refresh.
+  function hasWriteScope() {
+    const scope = readTokens()?.scope;
+    return !!scope && scope.split(/\s+/).includes('write');
   }
 
   // Deletes the token file outright, by request -- a real "Disconnect"
@@ -342,7 +367,7 @@ function createClient({ clientId, clientSecret, tokenStorePath, connectPath = '/
     return all;
   }
 
-  return { get, post, patch, fetchAllPages, exchangeCodeForTokens, isConnected, connectedIdentity, clearTokens };
+  return { get, post, patch, fetchAllPages, exchangeCodeForTokens, isConnected, connectedIdentity, hasWriteScope, clearTokens };
 }
 
 // This dashboard's own default, pre-existing connection -- unchanged
