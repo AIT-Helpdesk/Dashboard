@@ -559,6 +559,37 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
       }
     }
 
+    // True once stripped of tags/whitespace -- customHelpText is HTML
+    // now (see renderHelpTab() below), so a "no notes yet" check can't
+    // just be `!customHelpText`: contenteditable's own habit of leaving
+    // an empty `<div><br></div>` behind after the last character is
+    // deleted would otherwise still count as "has notes".
+    function isHelpTextBlank(html) {
+      if (!html) return true;
+      const probe = document.createElement('div');
+      probe.innerHTML = html;
+      return probe.textContent.trim() === '';
+    }
+
+    // Toolbar commands for the rich-text editor below -- Bold/Italic/
+    // Bulleted list/Numbered list/Link, by request ("rich text
+    // formatting" over a plain textarea). document.execCommand() is
+    // deprecated but still functional in every browser this dashboard
+    // actually runs in for exactly this small a command set (no rich-
+    // text library pulled in for what's a handful of admin notes --
+    // same "zero new runtime dependencies where a simple native option
+    // exists" reasoning as this dashboard's own server-side sqlite
+    // choice). `prompt` for the link URL is the simplest reliable input
+    // for a one-off value, same reasoning renamePage()/etc. elsewhere on
+    // this dashboard already use prompt() for.
+    const HELP_TOOLBAR_COMMANDS = [
+      { label: 'B', title: 'Bold', command: 'bold', style: 'font-weight:700;' },
+      { label: 'I', title: 'Italic', command: 'italic', style: 'font-style:italic;' },
+      { label: '• List', title: 'Bulleted list', command: 'insertUnorderedList' },
+      { label: '1. List', title: 'Numbered list', command: 'insertOrderedList' },
+      { label: '🔗 Link', title: 'Link', command: 'createLink', promptForUrl: true },
+    ];
+
     // Generic (not hand-written per tab) -- built-in tab NAMES are listed
     // (so it's still a useful orientation), but the mechanism itself
     // (drag to add, right-click for admin) is what's explained, since
@@ -566,26 +597,54 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     // the dashboard rather than maintained separately per page. On top
     // of it, an admin-editable CUSTOM notes section -- by request, "the
     // capability to edit the help pages" -- fetched via fetchHelpText()
-    // above, shown first, with its own inline textarea editor (admin
-    // only) toggled by helpEditing.
+    // above, shown first, with its own inline rich-text editor (admin
+    // only) toggled by helpEditing. customHelpText holds real HTML (a
+    // contenteditable div's own innerHTML), not plain text -- rendered
+    // directly (trusted, admin-authored content, same "server/admin-
+    // supplied HTML is trusted" model this dashboard's own link-building
+    // helpers already use elsewhere), not escaped.
     function renderHelpTab() {
       if (helpEditing) {
+        const toolbarHtml = HELP_TOOLBAR_COMMANDS.map(
+          (c) => `<button type="button" class="button-link button-link--small" data-help-command="${c.command}" data-help-prompt="${!!c.promptForUrl}" title="${escapeHtml(c.title)}" style="${c.style || ''}">${c.label}</button>`
+        ).join(' ');
         tabContentEl.innerHTML = `
           <div class="resource-group" style="padding: 0.25rem 1.25rem 1.25rem;">
             <h2 style="font-size: 1rem;">Edit notes for this page</h2>
-            <textarea id="help-text-input" rows="8" style="display:block; width:100%; max-width:40rem; font:inherit; box-sizing:border-box;">${escapeHtml(customHelpText)}</textarea>
+            <div style="margin-bottom:0.4rem;">${toolbarHtml}</div>
+            <div id="help-text-input" contenteditable="true" style="display:block; width:100%; max-width:40rem; min-height:8rem; font:inherit; box-sizing:border-box; border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.75rem; background:var(--bg);">${customHelpText}</div>
             <div class="date-form" style="margin-top:0.5rem;">
               <button type="button" id="save-help-btn">Save</button>
               <button type="button" id="cancel-help-btn">Cancel</button>
             </div>
           </div>
         `;
+        const editableEl = tabContentEl.querySelector('#help-text-input');
+        // preventDefault on mousedown (not click) is what actually keeps
+        // the contenteditable's current text selection alive -- a button
+        // click alone would blur the editable div FIRST (losing the
+        // selection execCommand needs to act on) before the click handler
+        // even runs.
+        tabContentEl.querySelectorAll('[data-help-command]').forEach((btn) => {
+          btn.addEventListener('mousedown', (e) => e.preventDefault());
+          btn.addEventListener('click', () => {
+            const command = btn.dataset.helpCommand;
+            if (btn.dataset.helpPrompt === 'true') {
+              const url = prompt('Link URL:', 'https://');
+              if (!url) return;
+              document.execCommand(command, false, url);
+            } else {
+              document.execCommand(command, false, null);
+            }
+            editableEl.focus();
+          });
+        });
         tabContentEl.querySelector('#cancel-help-btn').addEventListener('click', () => {
           helpEditing = false;
           renderHelpTab();
         });
         tabContentEl.querySelector('#save-help-btn').addEventListener('click', async () => {
-          const text = tabContentEl.querySelector('#help-text-input').value;
+          const text = editableEl.innerHTML;
           try {
             const res = await fetch(`${apiBase}/help-text`, {
               method: 'PUT',
@@ -604,30 +663,37 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         return;
       }
 
-      const builtInListHtml = DEFAULT_TABS.map((t) => `<li>${escapeHtml(t.label)}</li>`).join('');
       const adminNote = isPermanentAdmin
         ? `<p class="inline-subtext">You're the dashboard admin: right-click any tab you've added to make it
             permanent for everyone (or remove that status again), or drag it back out of the strip entirely to
             the same effect. You can also rename this page itself from the sidebar (right-click "${escapeHtml(label)}").</p>`
         : '';
-      const customSectionHtml = customHelpText
-        ? `<div style="white-space: pre-wrap; margin-bottom: 0.75rem;">${escapeHtml(customHelpText)}</div>`
+      // Hidden from normal users for now, by request -- still shown to the
+      // admin (grouped with adminNote below it, same isPermanentAdmin
+      // gate) since it's actually explaining THEIR own drag-to-add-a-
+      // permanent-tab capability right there. The underlying drag-to-add-
+      // a-PERSONAL-tab feature itself is unchanged and still works for
+      // everyone -- only this explanation of it is hidden.
+      const dragHelpHtml = isPermanentAdmin
+        ? `<p>Drag any other page from the sidebar onto the tab strip above to add it here too -- it stays in its
+            own place in the sidebar as well, this just adds a shortcut. Hover an added tab for a small "&times;"
+            to remove it again (or drag it back out).</p>`
         : '';
+      const hasNotes = !isHelpTextBlank(customHelpText);
+      const customSectionHtml = hasNotes ? `<div style="margin-bottom: 0.75rem;">${customHelpText}</div>` : '';
       const editButtonHtml = isHelpEditable
-        ? `<button type="button" id="edit-help-btn" class="button-link button-link--small" style="margin-bottom:0.75rem;">${customHelpText ? 'Edit Notes' : 'Add Notes'}</button>`
+        ? `<button type="button" id="edit-help-btn" class="button-link button-link--small" style="margin-bottom:0.75rem;">${hasNotes ? 'Edit Notes' : 'Add Notes'}</button>`
         : '';
 
+      // The "About this page" heading, the "Each tab above mounts..."
+      // paragraph, and the built-in-tabs list were removed, by request --
+      // just boilerplate ahead of the actually-useful bits (the custom
+      // notes, and the drag-to-add mechanism explanation right below).
       tabContentEl.innerHTML = `
         <div class="resource-group" style="padding: 0.25rem 1.25rem 1.25rem;">
-          <h2 style="font-size: 1rem;">About this page</h2>
           ${customSectionHtml}
           ${editButtonHtml}
-          <p>Each tab above mounts a real page from this dashboard, unmodified -- same data, same header, same
-            everything, exactly like opening it from the sidebar. Built in:</p>
-          <ul style="margin: 0.5rem 0; padding-left: 1.25rem;">${builtInListHtml}</ul>
-          <p>Drag any other page from the sidebar onto the tab strip above to add it here too -- it stays in its
-            own place in the sidebar as well, this just adds a shortcut. Hover an added tab for a small "&times;"
-            to remove it again (or drag it back out).</p>
+          ${dragHelpHtml}
           ${adminNote}
         </div>
       `;

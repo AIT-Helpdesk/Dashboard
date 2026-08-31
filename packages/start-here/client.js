@@ -251,6 +251,14 @@ async function loadPageList(el) {
         seen.add(node.id);
         groups.push({ label: null, items: [pagesById.get(node.id)] });
       } else if (node.type === 'category') {
+        // The whole Testing category (and everything in it) left off this
+        // page's descriptions entirely, by request -- still marked `seen`
+        // so none of its pages leak into the "Other" leftovers group
+        // below either.
+        if (node.id === 'testing') {
+          node.children.forEach((c) => seen.add(c.id));
+          continue;
+        }
         const items = node.children.filter((c) => c.id !== id && !seen.has(c.id) && pagesById.has(c.id)).map((c) => {
           seen.add(c.id);
           return pagesById.get(c.id);
