@@ -33,3 +33,7 @@ The header row and the Total row are shaded with the shared `.shaded-row` class 
 ## Invoice list column
 
 Links to the invoice itself in Autotask (`getInvoiceUrl()`, shared with Client Details), sorted newest first.
+
+## Unpaid warning
+
+An invoice whose Autotask `paidDate` is blank gets a red warning icon next to its number in the list, by request. Scoped to invoice **numbers** starting `"INV-"` only -- other `invoiceNumber` prefixes (e.g. credit memos) aren't real client invoices and can legitimately have no `paidDate` without anything actually being owing. Confirmed against real Invoice field metadata that `paidDate` (datetime, not required) is the actual Autotask field for this, rather than guessing a name.

@@ -145,6 +145,13 @@ router.get('/', async (req, res) => {
         invoiceUrl: await getInvoiceUrl(inv.id),
         invoiceDate: inv.invoiceDateTime,
         total: inv.invoiceTotal,
+        // Confirmed against real Invoice field metadata: `paidDate` (not
+        // required) is the actual Autotask field for this -- blank means
+        // unpaid. Scoped to invoice NUMBERS starting "INV-" only, by
+        // request -- other invoiceNumber prefixes (credit memos etc.)
+        // aren't real client invoices and can legitimately have no
+        // paidDate without meaning anything is actually owing.
+        isUnpaid: (inv.invoiceNumber || '').startsWith('INV-') && !inv.paidDate,
       });
     }
     invoiceRows.sort((a, b) => new Date(b.invoiceDate) - new Date(a.invoiceDate));

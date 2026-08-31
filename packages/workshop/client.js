@@ -466,9 +466,31 @@ export function mount(container) {
   // the same shelf) are only listed once, in first-seen order. Blank
   // brackets never show -- no equipment, or equipment with no location
   // notes at all, both just fall back to the plain job.location text alone.
+  // Shared by equipmentLocationsText() (board row) and
+  // equipmentLocationsSummaryHtml() (edit form) below -- one place for the
+  // actual dedup/order logic so the two displays can never drift apart.
+  function distinctEquipmentLocationNotes(job) {
+    return [...new Set((job?.equipment || []).map((item) => item.locationNote).filter(Boolean))];
+  }
+
   function equipmentLocationsText(job) {
-    const notes = [...new Set((job.equipment || []).map((item) => item.locationNote).filter(Boolean))];
+    const notes = distinctEquipmentLocationNotes(job);
     return notes.length > 0 ? ` (${notes.map(escapeHtml).join(', ')})` : '';
+  }
+
+  // Same distinct location-note list as the board row's own bracketed text
+  // (equipmentLocationsText() above), but shown next to the edit form's
+  // Location (Job Note) label instead -- in blue (.cell-flag-blue, this
+  // dashboard's standard "reads as a link/notable value" colour), by
+  // request, so it's visually distinct from the plain "-- see equipment
+  // list" hint beside it. A static snapshot of the job's SAVED equipment
+  // (existingJob?.equipment), same as every other preview in this form --
+  // it does not live-update while the equipment editor below is being
+  // edited in the same session, only on next open/save.
+  function equipmentLocationsSummaryHtml(job) {
+    const notes = distinctEquipmentLocationNotes(job);
+    if (notes.length === 0) return '';
+    return ` <span class="cell-flag-blue">${notes.map(escapeHtml).join(', ')}</span>`;
   }
 
   // One line per item, e.g. "2x Laptop (In Workshop, Configured) -- shelf
@@ -1269,7 +1291,10 @@ export function mount(container) {
             <label>Current / required action
               <textarea class="wsp-field" data-field="actionText" rows="3">${escapeHtml(existingJob?.actionText || '')}</textarea>
             </label>
-            <label>Location
+            <label>
+              <span class="wsp-location-label-row">
+                Location (Job Note) <span class="inline-subtext">-- see equipment list</span>${equipmentLocationsSummaryHtml(existingJob)}
+              </span>
               <input type="text" class="wsp-field" data-field="location" value="${escapeHtml(existingJob?.location || '')}" />
             </label>
             <label>Pen Colour

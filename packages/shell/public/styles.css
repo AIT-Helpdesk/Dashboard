@@ -1042,9 +1042,23 @@ h1 {
 .contract-services-table {
   table-layout: fixed;
 }
+/* Widened from 10%, by request ("don't wrap the contract name") -- with
+   table-layout: fixed a column's own width is a hard cap regardless of
+   content, so white-space: nowrap alone (below, .col-contract) would
+   just overflow past a too-narrow column instead of actually fitting;
+   giving it real room is what makes nowrap work in practice. Taken from
+   Service's own unset/remainder share (col 1), which still has plenty
+   left over given its own max-width: 64ch cap (.col-service). */
 .contract-services-table th:nth-child(2),
 .contract-services-table td:nth-child(2) {
-  width: 10%;
+  width: 18%;
+}
+/* Never wraps, by request -- see the column-width comment just above for
+   why the wider column (not just this alone) is what actually makes that
+   hold in practice; a name longer than even that wider column overflows
+   rather than wrapping, which is the accepted tradeoff of "don't wrap". */
+.contract-services-table td.col-contract {
+  white-space: nowrap;
 }
 .contract-services-table th:nth-child(3),
 .contract-services-table td:nth-child(3) {
@@ -1339,6 +1353,14 @@ h1 {
   color: #d97706;
   font-weight: 700;
   margin-left: 0.3rem;
+}
+/* Client Financials' unpaid-invoice warning (client.js's unpaidIconHtml())
+   -- real red, unlike the amber "worth checking" convention just above:
+   an invoice with no Date Paid recorded is an actual money-owing signal,
+   not just a prompt to double-check something. */
+.cf-unpaid-icon {
+  color: #dc2626;
+  margin-left: 0.35rem;
 }
 /* The PO # edit pencil (client.js's poNumberCellHtml()) -- an inline SVG
    (fill="currentColor") now, not the ✏️ emoji it replaced, specifically so
@@ -2417,6 +2439,22 @@ tr.row-no-next-period {
 
 tr.row-units-changed {
   background: var(--row-changed-bg) !important;
+}
+
+/* Contract Services -- marks the start of a new contract within a
+   client's table, by request, so a long list of service rows reads as
+   visually distinct contract blocks rather than one ambiguous run. Rows
+   arrive already sorted by contractName (server.js), so this only ever
+   lands between two DIFFERENT contracts, never mid-contract (see
+   client.js's own comment on where this class gets applied). Heavier
+   than every th/td's own default 1px border-top (var(--border), a very
+   faint line) -- 2px and var(--muted) (a real grey, not just a subtler
+   shade of the same faint border colour) is what actually reads as a
+   deliberate divider rather than a coincidental double-thickness of the
+   same line. No !important needed -- td's own specificity here already
+   beats the plain th/td rule. */
+tr.row-contract-boundary td {
+  border-top: 2px solid var(--muted);
 }
 
 /* Generic reusable whole-row TEXT colour (not background) -- M365
@@ -4050,6 +4088,17 @@ textarea.pgr-field {
   flex-direction: row !important;
   align-items: center;
   gap: 0.4rem !important;
+}
+/* The job edit form's Location (Job Note) label row, by request -- wraps
+   the label text, the "-- see equipment list" hint (.inline-subtext), and
+   the blue equipment-locations summary (.cell-flag-blue) as one flexible
+   inline row above the input, so the row wraps as a whole on a narrow
+   form rather than each piece breaking independently. */
+.wsp-location-label-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
 }
 .wsp-checkbox-field .wsp-field {
   width: auto;

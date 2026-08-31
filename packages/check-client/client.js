@@ -799,10 +799,15 @@ export function mount(container) {
         <tbody>
           ${group.rows
             .map(
-              (r) => `
-            <tr${rowClass(r)}>
+              // Rows arrive already sorted by contractName within a company
+              // (contract-services/server.js's shared buildReport()), so
+              // equal names are always contiguous -- same "differs from the
+              // row right above it" boundary check Contract Services' own
+              // client.js uses.
+              (r, i) => `
+            <tr${rowClass(r, i > 0 && r.contractName !== group.rows[i - 1].contractName)}>
               <td><div class="col-service">${formatServiceName(r.serviceName)}${r.internalDescription ? `<span class="cell-subtext">${escapeHtml(r.internalDescription)}</span>` : ''}</div></td>
-              <td>${contractLink(r)}</td>
+              <td class="col-contract">${contractLink(r)}</td>
               <td class="ticket-number">${unitsCell(r)}</td>
               <td class="ticket-number">${formatPrice(perItem(r.cost, r.units))}</td>
               <td class="ticket-number">${formatPrice(perItem(r.price, r.units))}</td>
@@ -823,10 +828,12 @@ export function mount(container) {
     return escapeHtml(name).replace(/\s+(AVC\d+)(?!.*AVC\d+)/i, '<br>$1');
   }
 
-  function rowClass(r) {
-    if (r.nextPeriodUnits === null) return ' class="row-no-next-period"';
-    if (r.nextPeriodUnits !== r.units) return ' class="row-units-changed"';
-    return '';
+  function rowClass(r, isContractBoundary) {
+    const classes = [];
+    if (isContractBoundary) classes.push('row-contract-boundary');
+    if (r.nextPeriodUnits === null) classes.push('row-no-next-period');
+    else if (r.nextPeriodUnits !== r.units) classes.push('row-units-changed');
+    return classes.length ? ` class="${classes.join(' ')}"` : '';
   }
 
   function unitsCell(r) {
