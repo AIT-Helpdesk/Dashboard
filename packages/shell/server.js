@@ -197,9 +197,17 @@ app.get('/auth/strety-personal/connect', (req, res) => {
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', process.env.STRETY_CLIENT_ID);
   url.searchParams.set('redirect_uri', stretyPersonalRedirectUriFor(req));
-  // Read-only -- every personal-data feature this connection powers (My
-  // Strety Tasks, Today & Tomorrow, Personal scorecards) only ever reads.
-  url.searchParams.set('scope', 'read');
+  // 'read write', not just 'read' -- this connection was read-only when
+  // every personal-data feature it powered (My Strety Tasks, Today &
+  // Tomorrow, Personal scorecards) only ever read. What's On's own manual
+  // check-in feature (the scorecards' Update icon) now writes through
+  // this same per-user connection -- confirmed the hard way (a real
+  // 403 INVALID_SCOPE, "re-authorize the app with the required scopes")
+  // that a token issued under the old read-only scope can't be upgraded
+  // just by refreshing it; a fresh browser re-authorization via this
+  // route is what's actually needed, same fix the shared connection's own
+  // /auth/strety/connect already went through above.
+  url.searchParams.set('scope', 'read write');
   // Hints Strety's login page toward the CURRENT dashboard user's own
   // email, so the right account is pre-filled -- same "hint, not a hard
   // requirement" caveat as the shared connection's own login_hint above

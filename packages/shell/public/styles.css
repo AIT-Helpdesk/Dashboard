@@ -1887,6 +1887,74 @@ td.ticket-number {
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
+/* Update icon shown in a scorecard row's first (most recent) column when
+   that period has no check-in yet, by request. Opens
+   openMetricUpdateModal() (client.js) -- a prototype editor only, not
+   yet wired to actually save anything. Muted like an empty-state hint
+   rather than a real alert -- this is normal/expected for a metric
+   nobody's gotten to yet this period, not a problem; the cell itself
+   (.wo-update-cell) gets the pointer cursor, not the icon alone, so the
+   whole cell reads as the click target. */
+.wo-update-icon {
+  color: var(--muted);
+  vertical-align: middle;
+}
+.wo-update-cell {
+  cursor: pointer;
+}
+.wo-update-cell:hover .wo-update-icon {
+  color: var(--accent);
+}
+/* Prototype metric-update modal (openMetricUpdateModal() in client.js),
+   by request -- 40rem wide. Compound selector
+   (.history-modal-panel.wo-update-modal-panel), not just the one class
+   -- same specificity safety net Contract Checks' own modal-width
+   overrides needed (see .cc-confirm-close-modal-panel's own comment): a
+   single-class selector here would be equal specificity to
+   .wsp-qa-modal-panel's own width rule and could just as easily lose to
+   it depending on file order. */
+.history-modal-panel.wo-update-modal-panel {
+  width: 40rem;
+  max-width: min(40rem, 90vw);
+}
+.wo-update-editor {
+  display: block;
+  width: 100%;
+  min-height: 10rem;
+  max-height: 24rem;
+  overflow-y: auto;
+  font: inherit;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+}
+/* A pasted screenshot shouldn't blow out the fixed-width editor above --
+   scales down to fit, never up past its own real size. */
+.wo-update-editor img {
+  max-width: 100%;
+  height: auto;
+}
+/* The confirmation step's own Scorecard type/name/Value summary, by
+   request -- a plain key-value table, not a form, since nothing here is
+   editable at this step (Back returns to the real form for that). */
+.wo-update-confirm-table {
+  width: 100%;
+  margin: 0.5rem 0 0.75rem;
+  border-collapse: collapse;
+}
+.wo-update-confirm-table th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 500;
+  padding: 0.3rem 0.75rem 0.3rem 0;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.wo-update-confirm-table td {
+  padding: 0.3rem 0;
+}
 
 .inline-subtext {
   color: var(--muted);

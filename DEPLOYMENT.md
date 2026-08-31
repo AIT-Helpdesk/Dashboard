@@ -263,6 +263,21 @@ Restart-Service AmbientDashboard
 - `packages/shell/nav-layout.json` (the sidebar layout) can be edited directly on the server via its own `localhost:3000` (see README.md "Deploying the sidebar layout"). If that's happened since the last deploy, the file has local changes uncommitted.
 - `package-lock.json` can end up with a local diff purely from running `npm install` on the server -- a different OS/npm version than wherever the committed lockfile was last generated can normalize/reorder it slightly, with no real dependency change involved. Confirmed against a real deploy: this alone was enough to abort a `git pull`.
 
+**A third, related gotcha -- untracked runtime files, not just local changes to tracked ones**: every tabbed page (`ticket-info-tabs`, `client-info-tabs`, `client-financials-tabs`, `licensing-tabs`, `contract-mgmt-tabs`, and any future one from Tab Page Builder) can write its own `help-text.json` (admin-edited Help tab notes) and `permanent-tabs.json` (admin-made-permanent tabs) directly from the live site, the same way `nav-layout.json` can. Unlike `nav-layout.json`, these usually don't exist in git at all for a given page (nothing seeds them by default) -- so if an admin adds notes or makes a tab permanent on the *server* before that page's starter content is ever committed from a dev machine, `git pull` fails differently: not "local changes to a tracked file" but **"The following untracked working tree files would be overwritten by merge"**, since git won't silently clobber a file it never tracked in the first place. Confirmed against a real deploy (`packages/ticket-info-tabs/help-text.json`).
+
+Fix, once you've confirmed (open that page's Help tab on the live site) whether the existing content is worth keeping:
+- **Not worth keeping**: delete it, then pull.
+  ```powershell
+  Remove-Item packages/<page-id>/help-text.json -Force   # or permanent-tabs.json
+  git pull
+  ```
+- **Worth keeping**: copy it aside first, pull (which brings in git's own version, if any), then decide whether to merge the two by hand.
+  ```powershell
+  Copy-Item packages/<page-id>/help-text.json packages/<page-id>/help-text.json.server-backup
+  Remove-Item packages/<page-id>/help-text.json -Force
+  git pull
+  ```
+
 Running `git checkout -- <path>` on both first always resolves this ahead of time (a no-op if there are no local changes, a clean discard if there are), so `git pull` never has anything to fail on. Deliberate for `nav-layout.json`, by request -- git is the source of truth for that file, any layout change made only on the server and never committed is expected to be lost on the next deploy. Just a practical necessity for `package-lock.json` -- its local drift is never a real deliberate edit worth keeping.
 
 ## Deploying TC Elite Rollout (first-time)

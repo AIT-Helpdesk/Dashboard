@@ -178,6 +178,16 @@ export function mount(container) {
 
   refreshButton.addEventListener('click', load);
 
+  // Delegated once on the stable #results container, not re-wired per
+  // render -- scorecardTable() rebuilds this element's content on every
+  // load, same "listener on the ancestor keeps working regardless"
+  // convention #tt-columns' own delegated listener below already uses.
+  resultsEl.addEventListener('click', (e) => {
+    const updateCell = e.target.closest('.wo-update-cell');
+    if (!updateCell) return;
+    openMetricUpdateModal(updateCell.dataset.metricId, updateCell.dataset.metricTitle || 'Metric', updateCell.dataset.scorecardType || '', updateCell.dataset.frequency || '');
+  });
+
   // Set by shell/server.js's Strety personal-connect callback page's own
   // "Return to Dashboard" link (?strety_connected=1) right after a real
   // (re)connect succeeds -- Today & Tomorrow's own response is cached
@@ -994,7 +1004,7 @@ export function mount(container) {
       }
       for (const freq of frequenciesPresent) {
         const { columns, rows } = group.byFrequency[freq];
-        resultsEl.appendChild(scorecardTable(group.label, FREQUENCY_LABELS[freq], columns, rows));
+        resultsEl.appendChild(scorecardTable(group.label, FREQUENCY_LABELS[freq], columns, rows, freq));
       }
     });
   }
@@ -1010,7 +1020,7 @@ export function mount(container) {
     return p;
   }
 
-  function scorecardTable(prefix, suffix, columns, rows) {
+  function scorecardTable(prefix, suffix, columns, rows, freq) {
     const groupEl = document.createElement('div');
     groupEl.className = 'resource-group';
 
@@ -1060,18 +1070,45 @@ export function mount(container) {
         </tr>
       </thead>
       <tbody>
-        ${rows.map((m) => metricRowHtml(m, columns.length)).join('')}
+        ${rows.map((m) => metricRowHtml(m, columns.length, `${prefix} -- ${suffix}`, freq)).join('')}
       </tbody>
     `;
     groupEl.appendChild(table);
     return groupEl;
   }
 
-  function metricRowHtml(m, columnCount) {
+  // Reuses Contract Checks' own pencil path (its cc-po-edit-btn icon) --
+  // same dashboard-wide "editable/update" convention, not a one-off
+  // design here.
+  const UPDATE_ICON_SVG =
+    '<svg class="wo-update-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
+
+  function metricRowHtml(m, columnCount, scorecardType, freq) {
     const cells = [];
     for (let i = 0; i < columnCount; i++) {
       const c = m.cells[i];
-      cells.push(c ? checkinCellHtml(c) : '<td></td>');
+      if (c) {
+        cells.push(checkinCellHtml(c));
+      } else if (i === 0) {
+        // No value yet for the most recent period -- an Update icon, by
+        // request, but ONLY in this first/latest column, never any
+        // earlier empty column (a metric that's simply never had a
+        // check-in for an OLDER period stays a plain blank cell, same as
+        // before). Opens openMetricUpdateModal() below (see its own
+        // comment), which actually writes a real Strety check-in.
+        // data-scorecard-type ("Helpdesk Task Tracker -- Daily" etc.) and
+        // data-metric-title feed that modal's own confirmation step
+        // (Scorecard type + Scorecard name), by request. data-frequency
+        // ('daily'/'weekly'/'monthly') tells server.js which period
+        // attributes this metric's check-in actually needs -- confirmed
+        // the hard way these genuinely differ by cadence (see server.js's
+        // own comment on its new POST route).
+        cells.push(
+          `<td class="checkin-cell wo-update-cell" data-metric-id="${escapeHtml(m.id)}" data-metric-title="${escapeHtml(m.title)}" data-scorecard-type="${escapeHtml(scorecardType)}" data-frequency="${escapeHtml(freq)}" title="No check-in yet for this period -- click to update">${UPDATE_ICON_SVG}</td>`
+        );
+      } else {
+        cells.push('<td></td>');
+      }
     }
     return `
       <tr>
@@ -1079,6 +1116,343 @@ export function mount(container) {
         <td class="ticket-number">${escapeHtml(m.target)}</td>
         ${cells.join('')}
       </tr>`;
+  }
+
+  // Toolbar for openMetricUpdateModal() below -- Bold/Underline/Bulleted
+  // list/Link, by request. Same contenteditable + document.execCommand()
+  // approach (and the same mousedown-preventDefault-to-keep-the-
+  // selection-alive trick) as the tabbed-pages' own Help notes editor
+  // (@dashboard/shell/public/tab-page-client.js) -- duplicated here, not
+  // imported, since this is a separate page package and the two editors
+  // don't otherwise share anything.
+  const UPDATE_MODAL_TOOLBAR_COMMANDS = [
+    { label: 'B', title: 'Bold', command: 'bold', style: 'font-weight:700;' },
+    { label: 'U', title: 'Underline', command: 'underline', style: 'text-decoration:underline;' },
+    { label: '• List', title: 'Bulleted list', command: 'insertUnorderedList' },
+    { label: '🔗 Link', title: 'Link', command: 'createLink', promptForUrl: true },
+  ];
+
+  // Downscales/recompresses a pasted screenshot before it's inserted, by
+  // request -- a clipboard image (especially a full-screen capture on a
+  // high-DPI display) can easily run several MB as a raw PNG data: URL,
+  // which is unnecessary weight for what's meant to be a readable inline
+  // reference, not a pixel-perfect copy. Capped to MAX_IMAGE_DIMENSION on
+  // its longest side (only ever shrinks -- an already-small image is left
+  // at its own real size, never upscaled) and re-encoded as JPEG at
+  // IMAGE_JPEG_QUALITY, which alone is typically a much bigger size win
+  // than the resize for a UI screenshot (large flat colour areas). A
+  // canvas round-trip, not a library -- no new dependency for what the
+  // browser already does natively.
+  const MAX_IMAGE_DIMENSION = 1400;
+  const IMAGE_JPEG_QUALITY = 0.82;
+  function resizeImageDataUrl(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
+          const scale = MAX_IMAGE_DIMENSION / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY));
+      };
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+  }
+
+  // Exact decoded byte length of a data: URL's own base64 payload --
+  // used only to show the before/after size below the editor (see the
+  // paste handler), by request, after "that resize didn't seem to do
+  // anything" turned out to be the compression working correctly but
+  // being visually invisible: this image's pixel dimensions were already
+  // under MAX_IMAGE_DIMENSION, so only the underlying bytes shrank
+  // (PNG -> JPEG), which looks identical on screen at the same display
+  // size. atob() is exact (not an estimate off the base64 string's own
+  // length, which overcounts for padding).
+  function dataUrlByteLength(dataUrl) {
+    const base64 = dataUrl.split(',')[1] || '';
+    try {
+      return atob(base64).length;
+    } catch {
+      return Math.round((base64.length * 3) / 4);
+    }
+  }
+  function formatKb(bytes) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+
+  // Forces every embedded image down to a real thumbnail width before
+  // sending, by request -- confirmed (both against this codebase's own
+  // Strety write logic and an independent third-party API reference)
+  // that Strety's real check-in "attachment" feature (the thumbnail +
+  // View full size/Download links seen when a photo is added through
+  // Strety's OWN UI) has no documented public API at all -- an embedded
+  // <img> in context is the only option this integration actually has,
+  // and Strety just renders it as plain HTML at whatever size it's
+  // given. This only affects what gets SENT (applied to a detached copy
+  // right before the request, in the Confirm button below) -- the
+  // editor itself still shows a pasted image at its normal readable
+  // size while composing.
+  const STRETY_IMAGE_DISPLAY_WIDTH = 400; // px -- 200px tried first, doubled by request
+  function shrinkEmbeddedImagesForStrety(html) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = html;
+    wrapper.querySelectorAll('img').forEach((img) => {
+      img.removeAttribute('width');
+      img.removeAttribute('height');
+      img.style.width = `${STRETY_IMAGE_DISPLAY_WIDTH}px`;
+      img.style.height = 'auto';
+    });
+    return wrapper.innerHTML;
+  }
+
+  // Writes a real Strety check-in, by request -- reuses the exact
+  // create-or-update-on-409 contract @dashboard/strety-autotask-sync's
+  // own sync.js already has confirmed working against the real API
+  // (value/context/date attributes; see server.js's own new route for
+  // the actual POST/PATCH). Two things NOT resolved yet, tried anyway by
+  // request rather than blocked on:
+  //  - Strety's check-in "context" is plain text everywhere else it's
+  //    used in this codebase -- sent here as real HTML regardless (this
+  //    editor's own innerHTML), to actually see what Strety does with
+  //    it rather than pre-emptively stripping formatting.
+  //  - A pasted screenshot has no confirmed place to go in Strety's
+  //    check-in API at all (no known attachment/image field) -- sent
+  //    anyway, as an inline <img src="data:..."> inside that same HTML,
+  //    same "try it and see" reasoning.
+  // The confirmation step (Scorecard type + Scorecard name + Value,
+  // Confirm/Back) is the actual safety net, by request -- nothing goes
+  // to Strety without it.
+  function openMetricUpdateModal(metricId, title, scorecardType, frequency) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel wo-update-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>${escapeHtml(title)} -- Update</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body wo-update-modal-body"></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const bodyEl = overlay.querySelector('.wo-update-modal-body');
+    // Carried across a Confirm -> Back round trip, so backing out of the
+    // confirmation step doesn't lose what was typed/pasted.
+    let savedValue = '';
+    let savedContext = '';
+
+    function renderComposeView() {
+      const toolbarHtml = UPDATE_MODAL_TOOLBAR_COMMANDS.map(
+        (c) =>
+          `<button type="button" class="button-link button-link--small" data-wo-command="${c.command}" data-wo-prompt="${!!c.promptForUrl}" title="${escapeHtml(c.title)}" style="${c.style || ''}">${c.label}</button>`
+      ).join(' ');
+      bodyEl.innerHTML = `
+        <label class="wsp-qa-modal-label">
+          <span class="wsp-qa-modal-field-label">Value</span>
+          <input type="text" class="wsp-field wo-update-value-input" placeholder="e.g. 12" value="${escapeHtml(savedValue)}" />
+        </label>
+        <div style="margin-bottom:0.4rem;">${toolbarHtml}</div>
+        <div id="wo-update-editor" class="wo-update-editor" contenteditable="true">${savedContext}</div>
+        <p class="inline-subtext wo-update-image-status" style="margin-top:0.3rem;" hidden></p>
+        <p class="inline-subtext" style="margin-top:0.4rem;">Strety's own check-in notes are plain text elsewhere on this dashboard -- formatting may not carry over exactly, and a pasted screenshot may not display there at all (no confirmed image support in Strety's check-in API).</p>
+        <p class="status error wo-update-error" hidden></p>
+        <div class="wsp-form-actions" style="margin-top:0.75rem;">
+          <button type="button" class="button-link wo-update-send-button">Send to Strety</button>
+          <button type="button" class="wo-update-close-button">Cancel</button>
+        </div>
+      `;
+      const editorEl = bodyEl.querySelector('#wo-update-editor');
+      const valueInput = bodyEl.querySelector('.wo-update-value-input');
+      const errorEl = bodyEl.querySelector('.wo-update-error');
+
+      bodyEl.querySelector('.wo-update-close-button').addEventListener('click', close);
+
+      // preventDefault on mousedown (not click) is what actually keeps
+      // the contenteditable's current text selection alive -- a button
+      // click alone would blur the editable div FIRST (losing the
+      // selection execCommand needs to act on) before the click handler
+      // even runs.
+      bodyEl.querySelectorAll('[data-wo-command]').forEach((btn) => {
+        btn.addEventListener('mousedown', (e) => e.preventDefault());
+        btn.addEventListener('click', () => {
+          const command = btn.dataset.woCommand;
+          if (btn.dataset.woPrompt === 'true') {
+            const url = prompt('Link URL:', 'https://');
+            if (!url) return;
+            document.execCommand(command, false, url);
+          } else {
+            document.execCommand(command, false, null);
+          }
+          editorEl.focus();
+        });
+      });
+
+      // Screenshot/image paste -- inserted as a data: URL <img> at the
+      // current cursor position (falling back to just appending it if
+      // there's no live selection inside the editor, e.g. right after
+      // it's first focused). Only intercepts an actual image on the
+      // clipboard; a plain-text or rich-text paste (e.g. copied from a
+      // webpage) is left alone to go through the browser's own default
+      // paste.
+      editorEl.addEventListener('paste', (e) => {
+        const items = e.clipboardData?.items || [];
+        const imageItem = [...items].find((item) => item.type.startsWith('image/'));
+        if (!imageItem) return;
+        e.preventDefault();
+        const file = imageItem.getAsFile();
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async () => {
+          // Falls back to the original, un-shrunk data: URL if the resize
+          // itself fails for any reason (a malformed/unusual image type,
+          // say), OR if it somehow comes back BIGGER than the original
+          // (JPEG re-encoding a very simple/already-small image can lose
+          // to PNG occasionally) -- whichever is actually smaller wins,
+          // never a blind "always use the JPEG" swap.
+          let src = reader.result;
+          try {
+            const resized = await resizeImageDataUrl(reader.result);
+            if (dataUrlByteLength(resized) < file.size) src = resized;
+          } catch {
+            // Best-effort -- fall through with the original.
+          }
+          // Shown below the editor, by request -- the compression itself
+          // is otherwise invisible on screen whenever the image's pixel
+          // dimensions were already under MAX_IMAGE_DIMENSION (only the
+          // underlying bytes shrink in that case, which looks identical
+          // at the same on-screen display size). file.size is the exact
+          // original; dataUrlByteLength() decodes the exact result size,
+          // not an estimate.
+          const statusEl = bodyEl.querySelector('.wo-update-image-status');
+          if (statusEl) {
+            const afterBytes = dataUrlByteLength(src);
+            statusEl.hidden = false;
+            statusEl.textContent =
+              afterBytes < file.size
+                ? `Pasted image: ${formatKb(file.size)} → ${formatKb(afterBytes)} (compressed before sending)`
+                : `Pasted image: ${formatKb(file.size)} (already small -- sent as-is)`;
+          }
+          const img = document.createElement('img');
+          img.src = src;
+          const selection = window.getSelection();
+          if (selection && selection.rangeCount > 0 && editorEl.contains(selection.anchorNode)) {
+            const range = selection.getRangeAt(0);
+            range.deleteContents();
+            range.insertNode(img);
+            range.setStartAfter(img);
+            range.setEndAfter(img);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          } else {
+            editorEl.appendChild(img);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+
+      bodyEl.querySelector('.wo-update-send-button').addEventListener('click', () => {
+        const value = valueInput.value.trim();
+        if (!value) {
+          errorEl.hidden = false;
+          errorEl.textContent = 'Error: enter a value first.';
+          valueInput.focus();
+          return;
+        }
+        savedValue = value;
+        savedContext = editorEl.innerHTML;
+        renderConfirmView();
+      });
+
+      editorEl.focus();
+    }
+
+    // The actual safety net, by request -- Scorecard type + Scorecard
+    // name + Value, shown plainly before anything is sent, with a Back
+    // step that returns to the compose view without losing what was
+    // typed (savedValue/savedContext above).
+    function renderConfirmView() {
+      const sendPreviewHtml = shrinkEmbeddedImagesForStrety(savedContext);
+      // Shown only when there's actually an image in it -- an exact
+      // preview of what Strety will receive (thumbnail-sized, per
+      // shrinkEmbeddedImagesForStrety()'s own comment), not the larger
+      // version still shown back on the compose view -- so what's
+      // confirmed here matches what's actually sent.
+      const previewHtml = sendPreviewHtml.includes('<img')
+        ? `<p class="inline-subtext" style="margin-top:0.5rem;">Context as it will be sent (images shrunk to a ${STRETY_IMAGE_DISPLAY_WIDTH}px-wide thumbnail):</p>
+           <div class="wo-update-editor" style="cursor:default;">${sendPreviewHtml}</div>`
+        : '';
+      bodyEl.innerHTML = `
+        <p>You're about to send this check-in to Strety:</p>
+        <table class="wo-update-confirm-table">
+          <tbody>
+            <tr><th>Scorecard type</th><td>${escapeHtml(scorecardType)}</td></tr>
+            <tr><th>Scorecard name</th><td>${escapeHtml(title)}</td></tr>
+            <tr><th>Value</th><td>${escapeHtml(savedValue)}</td></tr>
+          </tbody>
+        </table>
+        ${previewHtml}
+        <p class="status error wo-update-confirm-error" hidden></p>
+        <div class="wsp-form-actions" style="margin-top:0.75rem;">
+          <button type="button" class="button-link wo-update-confirm-button">Confirm &amp; Send</button>
+          <button type="button" class="wo-update-back-button">Back</button>
+        </div>
+      `;
+      bodyEl.querySelector('.wo-update-back-button').addEventListener('click', renderComposeView);
+
+      const confirmBtn = bodyEl.querySelector('.wo-update-confirm-button');
+      const confirmErrorEl = bodyEl.querySelector('.wo-update-confirm-error');
+      confirmBtn.addEventListener('click', async () => {
+        confirmBtn.disabled = true;
+        confirmErrorEl.hidden = true;
+        try {
+          const res = await fetch(`/api/whats-on/metrics/${encodeURIComponent(metricId)}/check-in`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: savedValue, context: sendPreviewHtml, frequency }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const err = new Error(data.message || data.error || `Request failed (${res.status})`);
+            if (data.error === 'strety-not-connected' || data.error === 'strety-reauth-required') err.needsConnect = true;
+            throw err;
+          }
+          close();
+          // Refreshes the whole scorecards section from real data -- the
+          // Update icon on this row disappears once the real check-in
+          // this just wrote comes back from Strety.
+          load();
+        } catch (err) {
+          confirmErrorEl.hidden = false;
+          confirmErrorEl.innerHTML = err.needsConnect
+            ? `${escapeHtml(err.message)} <a href="/auth/strety-personal/connect">Connect Strety</a>`
+            : `Error: ${escapeHtml(err.message)}`;
+          confirmBtn.disabled = false;
+        }
+      });
+    }
+
+    renderComposeView();
   }
 
   // Bold+green/red for a title's own leading "PREFIX:" convention (e.g.
