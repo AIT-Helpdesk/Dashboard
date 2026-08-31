@@ -55,7 +55,8 @@
   },
   {
     "type": "page",
-    "id": "client-info-tabs"
+    "id": "client-info-tabs",
+    "label": "Client Lookup"
   },
   {
     "type": "category",

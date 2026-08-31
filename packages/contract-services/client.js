@@ -116,10 +116,16 @@ export function mount(container) {
         <tbody>
           ${group.rows
             .map(
-              (r) => `
-            <tr${rowClass(r)}>
+              // Rows arrive already sorted by contractName within a company
+              // (server.js), so equal names are always contiguous -- a
+              // simple "differs from the row right above it" check is
+              // enough to mark exactly the boundaries between contracts,
+              // never the top of the very first row (i === 0, nothing
+              // above it to differ from).
+              (r, i) => `
+            <tr${rowClass(r, i > 0 && r.contractName !== group.rows[i - 1].contractName)}>
               <td><div class="col-service">${formatServiceName(r.serviceName)}${r.internalDescription ? `<span class="cell-subtext">${escapeHtml(r.internalDescription)}</span>` : ''}</div></td>
-              <td>${contractLink(r)}</td>
+              <td class="col-contract">${contractLink(r)}</td>
               <td class="ticket-number">${unitsCell(r)}</td>
               <td class="ticket-number">${formatPrice(perItem(r.cost, r.units))}</td>
               <td class="ticket-number">${formatPrice(perItem(r.price, r.units))}</td>
@@ -147,10 +153,15 @@ export function mount(container) {
     return escapeHtml(name).replace(/\s+(AVC\d+)(?!.*AVC\d+)/i, '<br>$1');
   }
 
-  function rowClass(r) {
-    if (r.nextPeriodUnits === null) return ' class="row-no-next-period"';
-    if (r.nextPeriodUnits !== r.units) return ' class="row-units-changed"';
-    return '';
+  function rowClass(r, isContractBoundary) {
+    // Independent of each other -- a row can be both the start of a new
+    // contract AND have a units change, so these build a class list rather
+    // than the old single either/or return.
+    const classes = [];
+    if (isContractBoundary) classes.push('row-contract-boundary');
+    if (r.nextPeriodUnits === null) classes.push('row-no-next-period');
+    else if (r.nextPeriodUnits !== r.units) classes.push('row-units-changed');
+    return classes.length ? ` class="${classes.join(' ')}"` : '';
   }
 
   function unitsCell(r) {

@@ -152,7 +152,7 @@ export function mount(container) {
             .map(
               (inv) => `
             <tr>
-              <td>${invoiceLink(inv)}</td>
+              <td>${invoiceLink(inv)}${unpaidIconHtml(inv)}</td>
               <td class="ticket-number">${formatDate(inv.invoiceDate)}</td>
               <td class="ticket-number">${formatPrice(inv.total)}</td>
             </tr>`
@@ -195,6 +195,17 @@ export function mount(container) {
     // place the URL needs escaping (the href attribute) instead of two. Same
     // pattern as Client Details' Last Invoice link.
     return `<a href="${escapeHtml(inv.invoiceUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1000,height=800'); return false;">${label}</a>`;
+  }
+
+  // `isUnpaid` (server.js) -- Autotask's own `paidDate` field is blank, scoped
+  // to invoice numbers starting "INV-" only (other prefixes, e.g. credit
+  // memos, aren't real client invoices and can legitimately have no
+  // paidDate). A plain warning glyph, by request, not a full row highlight --
+  // this is meant to catch the eye on an otherwise plain invoice list without
+  // implying every OTHER row was specifically checked and confirmed paid.
+  function unpaidIconHtml(inv) {
+    if (!inv.isUnpaid) return '';
+    return `<span class="cf-unpaid-icon" title="Unpaid -- no Date Paid recorded in Autotask">&#9888;</span>`;
   }
 
   function formatDate(iso) {
