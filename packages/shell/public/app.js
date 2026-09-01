@@ -320,8 +320,27 @@ function reconcileTree(rawTree) {
       result.push({ ...node, children });
     }
   }
-  for (const p of registeredPages) {
-    if (!seen.has(p.id)) result.push({ type: 'page', id: p.id });
+  // Admin-only, by request -- this fallback exists so a brand-new,
+  // never-placed page still surfaces for the ADMIN to notice and drag
+  // into a category; a non-admin has no ability to reorder/place
+  // anything regardless, so there's nothing for them to gain from seeing
+  // an orphaned page. Confirmed the hard way this was a real bug, not
+  // just a theoretical one: for a NON-admin, `rawTree` here is the
+  // server's own stripHidden() result (server.js), which removes a
+  // hidden category (and every child under it) from the tree entirely
+  // BEFORE this function ever runs -- so every one of those children was
+  // never marked `seen` above, and this loop (unconditional before this
+  // fix) silently re-added every single one of them as a loose top-level
+  // page, undoing the hide entirely for anyone but the admin. Gated on
+  // the real `editable` flag (server-authoritative), not the "preview as
+  // user" toggle's own isAdminView() -- the real admin should still see
+  // this fallback regardless of whether they're currently previewing,
+  // since preview is just a rendering choice, not a change to what
+  // they're actually able to fetch/edit.
+  if (editable) {
+    for (const p of registeredPages) {
+      if (!seen.has(p.id)) result.push({ type: 'page', id: p.id });
+    }
   }
   return result;
 }
