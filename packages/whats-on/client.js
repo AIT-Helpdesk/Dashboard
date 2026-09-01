@@ -313,6 +313,8 @@ export function mount(container) {
       id: row.dataset.scId,
       isComplete: row.dataset.scComplete === 'true',
       ticketUrl: row.dataset.scTicketUrl || null,
+      startDateTime: row.dataset.scStart || null,
+      endDateTime: row.dataset.scEnd || null,
     });
   });
   if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
@@ -570,7 +572,7 @@ export function mount(container) {
     // linked ticket at all still needs to be clickable for Mark Complete
     // (see the delegated click listener on ttColumnsEl above).
     return `
-      <li class="tt-service-call-row" data-sc-id="${row.id}" data-sc-complete="${row.isComplete ? 'true' : 'false'}" data-sc-ticket-url="${escapeHtml(row.ticketUrl || '')}">
+      <li class="tt-service-call-row" data-sc-id="${row.id}" data-sc-complete="${row.isComplete ? 'true' : 'false'}" data-sc-ticket-url="${escapeHtml(row.ticketUrl || '')}" data-sc-start="${escapeHtml(row.startDateTime || '')}" data-sc-end="${escapeHtml(row.endDateTime || '')}">
         ${ttDayTag(row.dayKey, today, tomorrow, row.ticketUrl, tooltip)}
         <span class="tt-time">${formatTime(row.startDateTime)}</span>
         <strong>${escapeHtml(row.companyName)}</strong>
@@ -602,6 +604,7 @@ export function mount(container) {
     menu.className = 'entry-popup-menu';
     menu.innerHTML = `
       ${entry.ticketUrl ? `<button type="button" class="entry-popup-menu-item" data-action="open-ticket">Open ticket</button>` : ''}
+      <button type="button" class="entry-popup-menu-item" data-action="change-datetime">Change Date/Time</button>
       <button type="button" class="entry-popup-menu-item" data-action="toggle-complete">${entry.isComplete ? 'Mark Incomplete' : 'Mark Complete'}</button>
       <button type="button" class="entry-popup-menu-item" data-action="onsite-tba">Mark as Onsite TBA</button>
       <button type="button" class="entry-popup-menu-item" data-action="onsite-arranged">Mark as Onsite Arranged</button>
@@ -621,6 +624,7 @@ export function mount(container) {
         closeServiceCallMenu();
       });
     }
+    menu.querySelector('[data-action="change-datetime"]').addEventListener('click', () => openChangeDateTimeModal(entry));
     menu.querySelector('[data-action="toggle-complete"]').addEventListener('click', () => toggleServiceCallComplete(entry.id, !entry.isComplete));
     // 104/103 -- Autotask's own real ServiceCalls.status values for these
     // two, confirmed against the live picklist -- see Service Calls' own
@@ -661,6 +665,112 @@ export function mount(container) {
     } catch (err) {
       alert(`Error: ${err.message}`);
     }
+  }
+
+  // ---- Change Date/Time modal -- opened from the popup menu above, by
+  // request. Same .history-modal-* overlay/panel shell (and the same
+  // .wsp-field/.wsp-form-actions field/button styling) Contract Checks' own
+  // small single-purpose edit modals use -- not shared code, just the same
+  // established shape, and a near-duplicate of Service Calls' own copy of
+  // this same modal (that page's own client.js), since these are separate
+  // page packages. Calls the SAME /api/service-calls/:id/datetime route
+  // that page's own copy does -- a cross-page call, not a duplicated write.
+  function openChangeDateTimeModal(entry) {
+    closeServiceCallMenu();
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel wsp-qa-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>Change Date/Time</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <label class="wsp-qa-modal-label wsp-qa-modal-label--top">Start
+            <input type="datetime-local" class="wsp-field sc-datetime-start-input" value="${escapeHtml(toDatetimeLocalValue(entry.startDateTime))}" />
+          </label>
+          <label class="wsp-qa-modal-label wsp-qa-modal-label--top">End
+            <input type="datetime-local" class="wsp-field sc-datetime-end-input" value="${escapeHtml(toDatetimeLocalValue(entry.endDateTime))}" />
+          </label>
+          <p class="status error sc-datetime-modal-error" hidden></p>
+          <div class="wsp-form-actions">
+            <button type="button" class="button-link sc-datetime-save-button">Save</button>
+            <button type="button" class="sc-datetime-cancel-button">Cancel</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.querySelector('.sc-datetime-cancel-button').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const startInput = overlay.querySelector('.sc-datetime-start-input');
+    const endInput = overlay.querySelector('.sc-datetime-end-input');
+    const errorEl = overlay.querySelector('.sc-datetime-modal-error');
+    const saveButton = overlay.querySelector('.sc-datetime-save-button');
+
+    saveButton.addEventListener('click', async () => {
+      errorEl.hidden = true;
+      const startDateTime = fromDatetimeLocalValue(startInput.value);
+      const endDateTime = fromDatetimeLocalValue(endInput.value);
+      if (!startDateTime || !endDateTime) {
+        errorEl.hidden = false;
+        errorEl.textContent = 'Both a start and end date/time are required.';
+        return;
+      }
+      if (new Date(endDateTime) <= new Date(startDateTime)) {
+        errorEl.hidden = false;
+        errorEl.textContent = 'End time must be after start time.';
+        return;
+      }
+      saveButton.disabled = true;
+      saveButton.textContent = 'Saving...';
+      try {
+        await fetchJson(`/api/service-calls/${entry.id}/datetime`, 'PATCH', { startDateTime, endDateTime });
+        close();
+        await loadTodayTomorrow(true);
+      } catch (err) {
+        errorEl.hidden = false;
+        errorEl.textContent = `Error: ${err.message}`;
+        saveButton.disabled = false;
+        saveButton.textContent = 'Save';
+      }
+    });
+    startInput.focus();
+  }
+
+  // <input type="datetime-local"> needs "YYYY-MM-DDTHH:mm" in LOCAL time (no
+  // timezone suffix) -- built from the Date object's own local getters, not
+  // a slice of its ISO string (which is always UTC and would silently shift
+  // the displayed time). Same helper packages-received/client.js and
+  // Service Calls' own client.js already use, duplicated here since these
+  // are separate page packages.
+  function toDatetimeLocalValue(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  // Reverse of the above -- relies on the browser parsing a bare (no
+  // timezone suffix) datetime-local string as LOCAL time, which is exactly
+  // what toISOString() then converts correctly from. Only actually correct
+  // when the browser's own local timezone is AEST, same assumption every
+  // other AEST-anchored piece of this dashboard already makes (this is an
+  // Australian company's internal tool).
+  function fromDatetimeLocalValue(value) {
+    if (!value) return null;
+    return new Date(value).toISOString();
   }
 
   async function fetchJson(url, method, body) {

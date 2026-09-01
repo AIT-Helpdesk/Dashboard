@@ -684,6 +684,11 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket, c
       companyName: await resolveCompanyName(client, sc.companyID),
       description: sc.description || null,
       startDateTime: sc.startDateTime,
+      // Not shown anywhere on this page's own rows -- only carried through
+      // for the Open ticket/Mark Complete popup's "Change Date/Time" action
+      // (client.js), so it has both ends to pre-fill without a second
+      // fetch. Same field Service Calls' own server.js already returns.
+      endDateTime: sc.endDateTime,
       dayKey: isoDateAest(sc.startDateTime),
       allocated: resourceNames.length > 0,
       resourceNames,
