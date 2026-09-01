@@ -137,6 +137,18 @@ html[data-sidebar-collapsed="true"] #preview-user-toggle {
   font-size: 1rem;
   cursor: pointer;
 }
+/* .sidebar-toggle's own `display: flex` above has equal specificity to the
+   browser's built-in `[hidden] { display: none }` rule, and an author rule
+   always beats the UA default regardless of source order or specificity
+   ties -- so the preview-user-toggle button's native `hidden` attribute
+   (set by app.js's init(), `previewUserToggle.hidden = !editable`, to keep
+   it admin-only) was being silently ignored, showing the Eye button to
+   every user. Same CSS-specificity bug class as the Contract Checks modal
+   width fix earlier -- fixed the same way, with an explicit override that
+   wins regardless of file order. */
+.sidebar-toggle[hidden] {
+  display: none;
+}
 .sidebar-toggle:hover {
   background: var(--accent);
   color: #fff;
