@@ -15,7 +15,7 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', '.env') });
 const { getToken, getPage, fetchAllPages, getOrderDetail, getSubscriptionDetail } = require('@dashboard/ingram-client');
 const { getClient, listAll, matchesWildcard } = require('@dashboard/autotask-client');
-const { upsertOrder, getSyncState, saveSyncState, listOutstandingProcessing, nowIso } = require('./db.js');
+const { upsertOrder, getSyncState, saveSyncState, listOutstandingProcessing, listCompletedMissingProvisioningDate, nowIso } = require('./db.js');
 
 const PROCESS_TYPE = 'ingram_subscription';
 // Confirmed with Amber during planning: the first-ever sync reaches back to
@@ -139,6 +139,14 @@ async function fetchOrderDetailWithRetry(id, token, attempt = 1) {
       customerId: detail.customerId || null,
       orderNumber: detail.orderNumber || null,
       poNumber: detail.poNumber || null,
+      // Confirmed live: the per-order detail endpoint carries its own real
+      // provisioningDate, same field/value as the /orders list stub's own
+      // copy -- not previously read here, which was the actual bug: the
+      // "refresh outstanding" resync path (syncOneOrder below, called with
+      // just {id}, no list stub at all) had no provisioningDate to fall
+      // back on, so a status flip from processing -> completed picked up
+      // via THAT path landed with provisioning_date left permanently blank.
+      provisioningDate: detail.provisioningDate || null,
       products,
       currentTotal,
       pendingDate,
@@ -211,7 +219,13 @@ async function syncOneOrder(orderStub, token, customerNameById) {
     clientName: customerNameById.get(customerId) || (customerId ? `Customer #${customerId}` : null),
     status: detail.status || orderStub.status || null,
     creationDate: detail.creationDate || orderStub.creationDate || null,
-    provisioningDate: orderStub.provisioningDate || null,
+    // detail's own copy wins -- it's always present (fetched every call),
+    // while orderStub.provisioningDate is only ever populated when this
+    // order came from a /orders list page (the list stub carries it too);
+    // the refresh-outstanding path below passes just {id}, so orderStub
+    // never has it there at all. See fetchOrderDetailWithRetry's own
+    // comment on this same field for the bug this fixes.
+    provisioningDate: detail.provisioningDate || orderStub.provisioningDate || null,
     pendingDate: detail.pendingDate,
     poNumber,
     ticketAutotaskId,
@@ -275,7 +289,18 @@ async function runSync() {
       // "created OR PROCESSED since you last collected them"), and keeps
       // the bootstrap's Annual stragglers current going forward without
       // ever needing another full-history scan.
-      const outstanding = listOutstandingProcessing(PROCESS_TYPE);
+      //
+      // Also includes any row already 'completed' but still missing its
+      // provisioning_date -- a real, confirmed bug (see
+      // fetchOrderDetailWithRetry's own comment on provisioningDate above):
+      // a status flip caught THROUGH THIS SAME refresh-outstanding path
+      // (rather than the fresh-orders paths above, which get it from the
+      // list stub) previously landed with provisioning_date left blank
+      // forever, since nothing ever refetched a 'completed' row again once
+      // it left 'processing'. Self-healing -- once a row picks up a real
+      // date it stops matching this query, so it's a one-time catch-up for
+      // every row already stuck this way, not a repeated no-op re-check.
+      const outstanding = [...listOutstandingProcessing(PROCESS_TYPE), ...listCompletedMissingProvisioningDate(PROCESS_TYPE)];
       for (const row of outstanding) {
         if (newIds.has(row.source_order_id)) continue;
         if (await syncOneOrder({ id: row.source_order_id }, token, customerNameById)) refreshedCount++;

@@ -489,6 +489,20 @@ function listOutstandingProcessing(processType) {
   return db.prepare(`SELECT * FROM items WHERE process_type = ? AND status = 'processing'`).all(processType);
 }
 
+// Backfill target for a real bug: sync.js's "refresh outstanding" step used
+// to only refetch rows still 'processing' -- but the actual event that
+// needs a refetch (a status flip processing -> completed, which is when
+// Ingram's own provisioning_date first gets set) landed the row in
+// 'completed' by the time this query would see it, so it was never
+// refetched again and provisioning_date stayed permanently blank. sync.js
+// now also refreshes any row matching THIS query alongside the outstanding
+// 'processing' ones -- self-healing: once a row picks up a real
+// provisioning_date, it stops matching and is never refetched for this
+// reason again.
+function listCompletedMissingProvisioningDate(processType) {
+  return db.prepare(`SELECT * FROM items WHERE process_type = ? AND status = 'completed' AND (provisioning_date IS NULL OR provisioning_date = '')`).all(processType);
+}
+
 // One batched COUNT per item, for the History icon's "N records" hover
 // tooltip -- avoids a full history fetch (or one COUNT query per row) just
 // to show a number on every row of the list view.
@@ -549,6 +563,7 @@ module.exports = {
   saveSyncState,
   listItemsRaw,
   listOutstandingProcessing,
+  listCompletedMissingProvisioningDate,
   getItemHistory,
   getHistoryCounts,
   getToggleHistories,
