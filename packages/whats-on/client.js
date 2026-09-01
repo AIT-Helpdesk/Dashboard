@@ -549,8 +549,12 @@ export function mount(container) {
   }
 
   function serviceCallRowHtml(row, today, tomorrow) {
+    // Blue, not bold, wrapped in angle brackets -- matches Service Calls'
+    // own client.js (its entryHtml()) exactly, same shared .text-highlight-blue
+    // class, same &lt;/&gt; reasoning (real visible bracket characters, not
+    // risking being read as the start of a tag).
     const allocation = row.allocated
-      ? `<span class="text-highlight-green">${escapeHtml(row.resourceNames.join(', '))}</span>`
+      ? `<span class="text-highlight-blue">&lt;${escapeHtml(row.resourceNames.join(', '))}&gt;</span>`
       : '<span class="text-highlight-red">Unallocated</span>';
     // Ticket number/title/status on hover, by request -- the Ticket Status
     // line is only included alongside the ticket number/title (null when
