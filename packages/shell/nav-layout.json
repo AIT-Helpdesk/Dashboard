@@ -12,6 +12,10 @@
     "id": "workshop"
   },
   {
+    "type": "page",
+    "id": "tickets-dashboard"
+  },
+  {
     "type": "category",
     "id": "daily-dashboards",
     "label": "Daily Dashboards",
