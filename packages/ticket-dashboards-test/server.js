@@ -7,6 +7,10 @@ const {
   aestDayBoundsIso,
   todayAestKey,
   isoDateAest,
+  resolveCompanyName,
+  resolveResourceName,
+  getTicketUrl,
+  mapWithConcurrency,
 } = require('@dashboard/autotask-client');
 
 // Experimental first cut at pulling Autotask "dashboard"-style metrics into
@@ -20,6 +24,14 @@ const {
 // restrictedTo mechanism) while this is being tried out.
 
 const TREND_WINDOW_DAYS = 30;
+
+// "P1 - CRITICAL" -- confirmed live against Tickets' own priority picklist
+// (value 4). Two real values matched "critical" on this account (the other
+// being status 58, "License Update (CRITICAL)", a narrow license-renewal
+// workflow status, not a general urgency marker) -- confirmed with Amber
+// this widget means priority, matching every other breakdown on this page
+// (byPriority) and the normal MSP sense of "critical tickets".
+const CRITICAL_PRIORITY_VALUE = 4;
 
 // "Open" here is simply "has no completedDate yet" -- the same field Autotask
 // itself sets on the 5 ("Complete") transition. NOT the same definition
@@ -142,9 +154,38 @@ router.get('/', async (req, res) => {
     ]);
     const trend = await fetchTrend(client);
 
+    const criticalTickets = openTickets.filter((t) => t.priority === CRITICAL_PRIORITY_VALUE);
+    // Pre-resolves each unique client/resource name once, concurrently --
+    // same "warm the cache before the per-row loop" pattern this file's
+    // own resolveCompanyName() calls elsewhere already use. statusLabels
+    // is the SAME picklist already fetched above for byStatus -- no
+    // second fetch needed.
+    const uniqueCriticalCompanyIds = [...new Set(criticalTickets.map((t) => t.companyID).filter((cid) => cid !== null && cid !== undefined))];
+    const uniqueCriticalResourceIds = [...new Set(criticalTickets.map((t) => t.assignedResourceID).filter((rid) => rid !== null && rid !== undefined))];
+    await Promise.all([
+      mapWithConcurrency(uniqueCriticalCompanyIds, 3, (cid) => resolveCompanyName(client, cid)),
+      mapWithConcurrency(uniqueCriticalResourceIds, 3, (rid) => resolveResourceName(client, rid)),
+    ]);
+    const criticalTicketRows = await Promise.all(
+      criticalTickets.map(async (t) => ({
+        id: t.id,
+        status: statusLabels.get(t.status) || `#${t.status}`,
+        ticketNumber: t.ticketNumber,
+        title: t.title,
+        clientName: await resolveCompanyName(client, t.companyID),
+        // "Unassigned", not blank -- same convention Completed Tickets'
+        // own equivalent resource column already uses for a null resource.
+        resourceName: t.assignedResourceID ? await resolveResourceName(client, t.assignedResourceID) : 'Unassigned',
+        ticketUrl: await getTicketUrl(t.id),
+      }))
+    );
+    criticalTicketRows.sort((a, b) => (a.ticketNumber || '').localeCompare(b.ticketNumber || ''));
+
     res.json({
       generatedAt: new Date().toISOString(),
       openCount: openTickets.length,
+      criticalOpenCount: criticalTickets.length,
+      criticalTickets: criticalTicketRows,
       byStatus: groupCounts(openTickets, 'status', statusLabels),
       byQueue: groupCounts(openTickets, 'queueID', queueLabels),
       byPriority: groupCounts(openTickets, 'priority', priorityLabels),

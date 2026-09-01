@@ -2267,6 +2267,53 @@ ul.start-here-checklist-other {
   font-size: 0.85rem;
 }
 
+/* Tickets Dashboard / Ticket Dashboards (Test)'s own Critical Open Tickets
+   widget -- the donut card beside a plain ticket list, by request. Reuses
+   Datto RMM's .datto-card-grid/.datto-card/.datto-donut-* classes for the
+   card itself (see that section's own comment: these are plain,
+   page-agnostic SVG despite the name), just laid out in a row alongside
+   the new list rather than in Datto's own auto-fill grid. */
+.critical-tickets-layout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+  padding: 0.75rem 1rem;
+}
+/* Keeps the single donut card at its own natural size within the flex row
+   -- .datto-card-grid's own auto-fill grid-template-columns would
+   otherwise stretch a lone card to fill all available width. */
+.critical-donut-grid {
+  flex: 0 0 auto;
+}
+.critical-tickets-list {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* 50% bigger than Datto RMM's own default donut (7.5rem -> 11.25rem, size
+   120 -> 180 passed to donutSvg() on the JS side), by request. A compound
+   selector (.datto-donut-wrap.critical-donut-wrap--large), not a bare
+   .critical-donut-wrap--large alone -- confirmed elsewhere on this
+   dashboard (Contract Checks' own modal-width bug) that two same-
+   specificity single-class rules setting the same property silently pick
+   whichever sits LATER in this file, regardless of which one "should"
+   win; a compound selector's higher specificity wins on its own merits,
+   independent of file order. */
+.datto-donut-wrap.critical-donut-wrap--large {
+  width: 11.25rem;
+  height: 11.25rem;
+}
+.critical-donut-wrap--large .datto-donut-count {
+  font-size: 1.95rem;
+}
+@media (max-width: 720px) {
+  /* Same breakpoint every other multi-column layout on this dashboard
+     collapses at -- donut and list stacked instead of side-by-side once
+     the window's too narrow for both to read comfortably. */
+  .critical-tickets-layout {
+    flex-direction: column;
+  }
+}
+
 .start-here-buttons {
   display: flex;
   flex-direction: column;
