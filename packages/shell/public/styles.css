@@ -2289,6 +2289,14 @@ ul.start-here-checklist-other {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* Bigger than the plain browser-default 0.9rem every other <td> on this
+   dashboard falls back to, by request -- a descendant selector already
+   outranks the bare `td` rule on specificity alone (0,1,1 vs 0,0,1), so
+   this wins regardless of file order without needing a compound-class
+   trick. */
+.critical-tickets-list td {
+  font-size: 1.1rem;
+}
 /* 50% bigger than Datto RMM's own default donut (7.5rem -> 11.25rem, size
    120 -> 180 passed to donutSvg() on the JS side), by request. A compound
    selector (.datto-donut-wrap.critical-donut-wrap--large), not a bare
