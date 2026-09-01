@@ -3782,52 +3782,21 @@ tr.row-text-highlight-blue td {
    Client/Action also get a light background tint, but only for
    TINTED_PRIORITIES (see client.js) -- Coming and Not Started
    deliberately have NO tint, by request (their bars still carry the
-   colour on their own).
-
-   These two cells always render as LIGHT MODE, by request, regardless of
-   the page's own theme -- every design token they (or anything inside
-   them) might read via var(--fg)/var(--muted)/var(--accent)/etc. is
-   re-pinned here to its literal light-mode value, scoped to just this
-   element and its descendants (CSS custom properties inherit down the
-   tree same as `color` does), so this stays correct even for a future
-   child element that reads a token this rule doesn't explicitly mention
-   yet. The tint's own background also switched from mixing against
-   `transparent` to mixing against a literal `white` -- `transparent` let
-   the PAGE's real background show through underneath, which is exactly
-   what made these two cells go dark and hard to read in dark mode: the
-   same 8% mix looks like a pale tint on a light page and a barely-visible
-   dark smear on a dark one. */
-.wsp-row-tint--urgent,
-.wsp-row-tint--complete,
-.wsp-row-tint--nearly_complete,
-.wsp-row-tint--in_progress,
-.wsp-row-tint--next_up {
-  --bg: #ffffff;
-  --fg: #1a1a1a;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --card: #f9fafb;
-  --accent: #2563eb;
-  --section-header-bg: #eff6ff;
-  --row-alt-bg: #fafafb;
-  --row-warn-bg: #fef2f3;
-  --row-changed-bg: #f2faf3;
-  color: var(--fg);
-}
+   colour on their own). */
 .wsp-row-tint--urgent {
-  background: color-mix(in srgb, #dc2626 8%, white);
+  background: color-mix(in srgb, #dc2626 8%, transparent);
 }
 .wsp-row-tint--complete {
-  background: color-mix(in srgb, #16a34a 8%, white);
+  background: color-mix(in srgb, #16a34a 8%, transparent);
 }
 .wsp-row-tint--nearly_complete {
-  background: color-mix(in srgb, #2563eb 8%, white);
+  background: color-mix(in srgb, #2563eb 8%, transparent);
 }
 .wsp-row-tint--in_progress {
-  background: color-mix(in srgb, #f97316 8%, white);
+  background: color-mix(in srgb, #f97316 8%, transparent);
 }
 .wsp-row-tint--next_up {
-  background: color-mix(in srgb, #8b5cf6 8%, white);
+  background: color-mix(in srgb, #8b5cf6 8%, transparent);
 }
 .wsp-bar-left--urgent {
   border-left: 4px solid #dc2626;
