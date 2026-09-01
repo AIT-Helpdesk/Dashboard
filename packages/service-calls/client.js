@@ -225,17 +225,23 @@ export function mount(container) {
 
   function entryHtml(e) {
     // Three lines per entry, by request -- time/company, the allocation
-    // state (resource name(s) in green when allocated, matching What's
-    // On's own Service Calls section; "Unallocated" stays the default
-    // muted colour), and the first line of the call's own description, so
-    // all three are visible on the calendar itself without needing to
-    // hover for the tooltip. Line 3 always renders (an em dash when
-    // there's no description) so every entry keeps the same 3-line shape,
-    // rather than shorter entries looking inconsistent next to ones that
-    // have a description.
+    // state (resource name(s), wrapped in angle brackets, in blue -- not
+    // bold -- when allocated, matching What's On's own Service Calls
+    // section; "Unallocated" stays the default muted colour), and the
+    // first line of the call's own description, so all three are visible
+    // on the calendar itself without needing to hover for the tooltip.
+    // Line 3 always renders (an em dash when there's no description) so
+    // every entry keeps the same 3-line shape, rather than shorter
+    // entries looking inconsistent next to ones that have a description.
     const line1 = `${formatTime(e.startDateTime)} ${escapeHtml(e.companyName)}`;
+    // .text-highlight-blue (shared, styles.css) -- not a new class -- is
+    // already exactly right (var(--accent) blue, font-weight: 400) without
+    // needing to touch .text-highlight-green itself, which m365-environment's
+    // own client.js also uses for something unrelated. &lt;/&gt;, not raw
+    // </> characters, so they render as literal visible brackets rather
+    // than risk being read as the start of a real tag.
     const line2 = e.allocated
-      ? `<span class="text-highlight-green">${e.resourceNames.map(escapeHtml).join(', ')}</span>`
+      ? `<span class="text-highlight-blue">&lt;${e.resourceNames.map(escapeHtml).join(', ')}&gt;</span>`
       : 'Unallocated';
     // Descriptions are often multi-paragraph free text -- split on real
     // newlines and take the first non-blank one, rather than just letting
