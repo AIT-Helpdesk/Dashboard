@@ -748,6 +748,17 @@ function startRotation() {
   pinStateBeforeRotation = isSidebarPinned();
   if (pinStateBeforeRotation) setSidebarPinned(false);
   setFocusMode(true);
+  // Real browser fullscreen (F11-equivalent), by request -- on top of this
+  // app's own Focus Mode above, which only hides the sidebar via CSS, not
+  // the browser's own tab bar/address bar. Must be called synchronously
+  // from this same click -- browsers reject requestFullscreen() called
+  // from anywhere that isn't a direct, fresh user gesture (a timer, code
+  // after an earlier await, etc). `?.()` guards a browser/context where
+  // it doesn't exist at all; .catch() swallows a rejection (fullscreen
+  // disabled by policy, e.g. inside an iframe with no
+  // allow="fullscreen") rather than an unhandled rejection -- either way,
+  // the rest of rotation still starts regardless.
+  document.documentElement.requestFullscreen?.().catch(() => {});
   const startId = list.includes(currentPageId()) ? currentPageId() : list[0];
   if (startId === currentPageId()) {
     // Same "force a genuinely fresh fetch" reasoning preloadPage() uses
@@ -782,8 +793,29 @@ function stopRotation() {
   if (pinStateBeforeRotation) setSidebarPinned(true);
   pinStateBeforeRotation = null;
   setFocusMode(false);
+  // Exits real browser fullscreen too, if actually in it right now --
+  // guarded, since calling exitFullscreen() while NOT in fullscreen
+  // throws (e.g. the user already exited it themselves via Escape/F11,
+  // which is also independently caught by the fullscreenchange listener
+  // below, so this guard also avoids a redundant no-op call in that
+  // case).
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   renderNav(currentPageId());
 }
+
+// Any way real browser fullscreen ends OTHER than stopRotation() itself
+// causing it (Escape, F11, clicking the browser's own "exit fullscreen"
+// affordance) -- stops rotation to match, same "manual navigation/manual
+// focus-mode-exit stops rotation" philosophy every other rotation-exit
+// path already follows. Guarded on rotationActive so this is a no-op for
+// someone using real fullscreen outside of rotation entirely. Never
+// double-fires with stopRotation()'s own exitFullscreen() call above --
+// that call already sets rotationActive = false FIRST, so by the time
+// this listener's fullscreenchange event actually arrives, the condition
+// below is already false.
+document.addEventListener('fullscreenchange', () => {
+  if (rotationActive && !document.fullscreenElement) stopRotation();
+});
 
 // Looks up the REAL tree node for a rotated page id, when there is one --
 // so a Rotate entry shows the same label override/tabbed marker/hidden
