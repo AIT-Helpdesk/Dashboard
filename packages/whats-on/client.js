@@ -64,6 +64,89 @@ const FREQUENCY_LABELS = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' 
 // once, before mount() is ever called the first time.
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// Same bug class as MONTH_SHORT above, confirmed for real on production:
+// "Cannot access 'TEAM_ICON_HTML' before initialization" on every
+// second-or-later visit to this page in one browser session. These two were
+// added later (for the scorecard row icons) without following that same
+// module-scope fix -- they sat inside mount(), after the early
+// `if (lastData) { render(lastData); }` cache-restore call, but are read by
+// titleHtml() for EVERY scorecard row, so a revisit hit the same temporal
+// dead zone every single time. Moved to true module scope for the same
+// reason MONTH_SHORT was.
+//
+// A plain inline SVG (fill="currentColor", so it follows the link's own
+// text colour rather than a fixed one) marking a Personal-space metric --
+// Material "person" glyph. The Helpdesk (team) equivalent is a real image
+// (strety-logo-icon.png, Strety's own logo, transparent background) since
+// that one's a specific brand mark, not a generic glyph a font/icon-set
+// path can stand in for.
+const PERSON_ICON_SVG =
+  '<svg class="wo-metric-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
+const TEAM_ICON_HTML = '<img src="/strety-logo-icon.png" class="wo-metric-icon wo-metric-icon--logo" alt="" aria-hidden="true">';
+
+// Also moved to module scope alongside PERSON_ICON_SVG/TEAM_ICON_HTML above:
+// metricRowHtml() (called from the same early render(lastData) path) reads
+// UPDATE_ICON_SVG whenever a row's most-recent period has no check-in yet,
+// which is a common, real case -- same latent risk, same fix.
+//
+// Reuses Contract Checks' own pencil path (its cc-po-edit-btn icon) --
+// same dashboard-wide "editable/update" convention, not a one-off design
+// here.
+const UPDATE_ICON_SVG =
+  '<svg class="wo-update-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
+
+// The remaining constants below (the update-modal toolbar/image/text
+// settings) are only ever read inside openMetricUpdateModal() and its
+// nested helpers, which run solely in response to a user's click on the
+// Update icon -- never reachable from the synchronous early-render path
+// above, so they were never actually TDZ-vulnerable. Moved to module scope
+// anyway, alongside the others, so nothing in this constant group can ever
+// regress into that bug class if the code around them changes later.
+//
+// Rich-text toolbar for the Update editor -- same command set as the Help
+// tab's own toolbar (@dashboard/shell/public/tab-page-client.js) --
+// duplicated here, not imported, since this is a separate page package and
+// the two editors don't otherwise share anything.
+const UPDATE_MODAL_TOOLBAR_COMMANDS = [
+  { label: 'B', title: 'Bold', command: 'bold', style: 'font-weight:700;' },
+  { label: 'U', title: 'Underline', command: 'underline', style: 'text-decoration:underline;' },
+  { label: '• List', title: 'Bulleted list', command: 'insertUnorderedList' },
+  { label: '🔗 Link', title: 'Link', command: 'createLink', promptForUrl: true },
+];
+
+// Downscales/recompresses a pasted screenshot before it's inserted, by
+// request -- a clipboard image (especially a full-screen capture on a
+// high-DPI display) can easily run several MB as a raw PNG data: URL,
+// which is unnecessary weight for what's meant to be a readable inline
+// reference, not a pixel-perfect copy. Capped to MAX_IMAGE_DIMENSION on
+// its longest side (only ever shrinks -- an already-small image is left
+// at its own real size, never upscaled) and re-encoded as JPEG at
+// IMAGE_JPEG_QUALITY, which alone is typically a much bigger size win
+// than the resize for a UI screenshot (large flat colour areas).
+const MAX_IMAGE_DIMENSION = 1400;
+const IMAGE_JPEG_QUALITY = 0.82;
+
+// Shrinks the context HTML down before sending, by request -- applied to a
+// detached copy right before the request (in the Confirm button), never to
+// the editor itself, which still shows everything at its normal readable
+// size while composing.
+//
+// Images: forced down to a real thumbnail width. Confirmed (both against
+// this codebase's own Strety write logic and an independent third-party
+// API reference) that Strety's real check-in "attachment" feature (the
+// thumbnail + View full size/Download links seen when a photo is added
+// through Strety's OWN UI) has no documented public API at all -- an
+// embedded <img> in context is the only option this integration actually
+// has, and Strety just renders it as plain HTML at whatever size it's
+// given.
+//
+// Text: wrapped in one explicit font-size, by request -- Strety renders
+// context as real HTML with no size of its own asserted, so it was
+// inheriting whatever base font size Strety's own check-in view uses, same
+// "just renders the raw HTML" situation as the image.
+const STRETY_IMAGE_DISPLAY_WIDTH = 400; // px -- 200px tried first, doubled by request
+const STRETY_TEXT_FONT_SIZE = '10px'; // 12px tried first, shrunk further by request
+
 // Fixed legend, by request -- matched against each entry's own `displayName`
 // (case-insensitive), which for a regular shift is the shift's own label and
 // for a time-off entry is its RESOLVED timeOffReason name (see
@@ -1092,12 +1175,6 @@ export function mount(container) {
     return groupEl;
   }
 
-  // Reuses Contract Checks' own pencil path (its cc-po-edit-btn icon) --
-  // same dashboard-wide "editable/update" convention, not a one-off
-  // design here.
-  const UPDATE_ICON_SVG =
-    '<svg class="wo-update-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
-
   function metricRowHtml(m, columnCount, scorecardType, freq) {
     const cells = [];
     for (let i = 0; i < columnCount; i++) {
@@ -1133,33 +1210,8 @@ export function mount(container) {
       </tr>`;
   }
 
-  // Toolbar for openMetricUpdateModal() below -- Bold/Underline/Bulleted
-  // list/Link, by request. Same contenteditable + document.execCommand()
-  // approach (and the same mousedown-preventDefault-to-keep-the-
-  // selection-alive trick) as the tabbed-pages' own Help notes editor
-  // (@dashboard/shell/public/tab-page-client.js) -- duplicated here, not
-  // imported, since this is a separate page package and the two editors
-  // don't otherwise share anything.
-  const UPDATE_MODAL_TOOLBAR_COMMANDS = [
-    { label: 'B', title: 'Bold', command: 'bold', style: 'font-weight:700;' },
-    { label: 'U', title: 'Underline', command: 'underline', style: 'text-decoration:underline;' },
-    { label: '• List', title: 'Bulleted list', command: 'insertUnorderedList' },
-    { label: '🔗 Link', title: 'Link', command: 'createLink', promptForUrl: true },
-  ];
-
-  // Downscales/recompresses a pasted screenshot before it's inserted, by
-  // request -- a clipboard image (especially a full-screen capture on a
-  // high-DPI display) can easily run several MB as a raw PNG data: URL,
-  // which is unnecessary weight for what's meant to be a readable inline
-  // reference, not a pixel-perfect copy. Capped to MAX_IMAGE_DIMENSION on
-  // its longest side (only ever shrinks -- an already-small image is left
-  // at its own real size, never upscaled) and re-encoded as JPEG at
-  // IMAGE_JPEG_QUALITY, which alone is typically a much bigger size win
-  // than the resize for a UI screenshot (large flat colour areas). A
-  // canvas round-trip, not a library -- no new dependency for what the
+  // A canvas round-trip, not a library -- no new dependency for what the
   // browser already does natively.
-  const MAX_IMAGE_DIMENSION = 1400;
-  const IMAGE_JPEG_QUALITY = 0.82;
   function resizeImageDataUrl(dataUrl) {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -1202,29 +1254,9 @@ export function mount(container) {
     return `${Math.round(bytes / 1024)} KB`;
   }
 
-  // Shrinks the context HTML down before sending, by request -- applied
-  // to a detached copy right before the request (in the Confirm button
-  // below), never to the editor itself, which still shows everything at
-  // its normal readable size while composing.
-  //
-  // Images: forced down to a real thumbnail width. Confirmed (both
-  // against this codebase's own Strety write logic and an independent
-  // third-party API reference) that Strety's real check-in "attachment"
-  // feature (the thumbnail + View full size/Download links seen when a
-  // photo is added through Strety's OWN UI) has no documented public API
-  // at all -- an embedded <img> in context is the only option this
-  // integration actually has, and Strety just renders it as plain HTML
-  // at whatever size it's given.
-  //
-  // Text: wrapped in one explicit font-size, by request -- Strety
-  // renders context as real HTML with no size of its own asserted, so it
-  // was inheriting whatever base font size Strety's own check-in view
-  // uses, same "just renders the raw HTML" situation as the image. One
-  // wrapping <div>, not per-element styling, since it has to survive
-  // execCommand's own mix of <b>/<u>/<ul>/<a> tags without touching each
-  // one individually.
-  const STRETY_IMAGE_DISPLAY_WIDTH = 400; // px -- 200px tried first, doubled by request
-  const STRETY_TEXT_FONT_SIZE = '10px'; // 12px tried first, shrunk further by request
+  // One wrapping <div>, not per-element styling for the outer shell -- it
+  // has to survive execCommand's own mix of <b>/<u>/<ul>/<a> tags without
+  // touching each one individually.
   function prepareContextForStrety(html) {
     const wrapper = document.createElement('div');
     wrapper.innerHTML = html;
@@ -1511,16 +1543,6 @@ export function mount(container) {
   // ahead of all that, by request -- these specific metrics are filled in
   // automatically by the Autotask -> Strety sync, not a human, so it's
   // worth flagging at a glance which ones those are.
-  // A plain inline SVG (fill="currentColor", so it follows the link's own
-  // text colour rather than a fixed one) marking a Personal-space metric --
-  // Material "person" glyph. The Helpdesk (team) equivalent is a real image
-  // (strety-logo-icon.png, Strety's own logo, transparent background) since
-  // that one's a specific brand mark, not a generic glyph a font/icon-set
-  // path can stand in for.
-  const PERSON_ICON_SVG =
-    '<svg class="wo-metric-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
-  const TEAM_ICON_HTML = '<img src="/strety-logo-icon.png" class="wo-metric-icon wo-metric-icon--logo" alt="" aria-hidden="true">';
-
   // `url` (server.js -- @dashboard/strety-client's getMetricUrl) opens this
   // metric's own scorecard in Strety directly, by request. Wraps the whole
   // title (including the AUTO/colour-coded prefix, plus the leading
