@@ -320,4 +320,39 @@ router.patch('/:id/status', async (req, res) => {
   }
 });
 
+// "Change Date/Time", by request -- added to the same Open ticket/Mark
+// Complete popup as the other two write actions above. Confirmed via real
+// field info that BOTH startDateTime and endDateTime are genuinely
+// isRequired on this entity (unlike isComplete/status, which aren't), so
+// this always sends both together, never just one -- a partial update
+// could otherwise leave them mismatched (e.g. a new start later than the
+// still-old end) and get rejected, or silently blow past Autotask's own
+// required-field validation depending on which single field were sent.
+router.patch('/:id/datetime', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid service call id.' });
+  const startDateTime = typeof req.body?.startDateTime === 'string' ? req.body.startDateTime : null;
+  const endDateTime = typeof req.body?.endDateTime === 'string' ? req.body.endDateTime : null;
+  const startMs = startDateTime ? Date.parse(startDateTime) : NaN;
+  const endMs = endDateTime ? Date.parse(endDateTime) : NaN;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return res.status(400).json({ error: 'A valid start and end date/time are both required.' });
+  }
+  if (endMs <= startMs) {
+    return res.status(400).json({ error: 'End time must be after start time.' });
+  }
+  try {
+    const client = await getClient();
+    // Same PATCH-to-collection-endpoint shape as /complete and /status
+    // above, and for the same reason (this entity 405s on both .patch(id,
+    // ...) and .update(id, ...) at the per-resource URL).
+    await client.serviceCalls.axios.patch('/ServiceCalls', { id, startDateTime, endDateTime });
+    reportCacheByKey.clear();
+    res.json({ ok: true, startDateTime, endDateTime });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
