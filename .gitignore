@@ -49,3 +49,9 @@ packages/packages-received/data.db-wal
 packages/contract-checks/data.db
 packages/contract-checks/data.db-shm
 packages/contract-checks/data.db-wal
+
+# Same reasoning, for Updates' own SQLite database (real changelog entries,
+# not source).
+packages/updates/data.db
+packages/updates/data.db-shm
+packages/updates/data.db-wal

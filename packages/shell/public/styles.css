@@ -2032,6 +2032,43 @@ td.ticket-number {
   border-radius: 6px;
   padding: 0.75rem 1rem;
   margin: 0.5rem 0 1rem;
+  /* Two columns, by request -- the original content (unchanged) in the
+     first, a second column (currently just a "Recent Updates" heading/
+     link, real content designed later) alongside it. Flex, not the
+     multi-column layout #page-groups uses below -- these two columns hold
+     genuinely different content, not one list that should flow across
+     both, so an explicit side-by-side split is the correct tool here. */
+  display: flex;
+  gap: 1.5rem;
+}
+.start-here-checklist-col-main {
+  flex: 1 1 auto;
+  min-width: 0; /* lets the main column's own content (e.g. long links) shrink/wrap rather than forcing the box wider */
+}
+.start-here-checklist-col-updates {
+  /* 40% of the row's available width, by request -- flex-basis (not
+     width) so it still plays correctly with the gap/padding around it;
+     grow/shrink both 0 so it holds that 40% rather than the main column's
+     own content pushing it wider or narrower. */
+  flex: 0 0 40%;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  padding-left: 1.25rem;
+}
+@media (max-width: 720px) {
+  /* Same breakpoint the page's own two-column #page-groups list already
+     collapses at -- stacked instead of side-by-side once the window's too
+     narrow for both to read comfortably. */
+  .start-here-checklist-featured {
+    flex-direction: column;
+  }
+  .start-here-checklist-col-updates {
+    flex-basis: auto;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding-left: 0;
+    padding-top: 0.75rem;
+  }
 }
 .start-here-checklist-title {
   font-size: 1.2rem;
@@ -2072,6 +2109,77 @@ ul.start-here-checklist-other {
 .start-here-checklist-other .cell-subtext {
   display: inline;
   margin-top: 0;
+}
+
+/* Start Here's "Recent Updates" second column -- a compact excerpt list,
+   see @dashboard/start-here/client.js's buildUpdatesColumnHtml() and
+   @dashboard/updates for the real page. */
+.start-here-updates-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.start-here-update-item {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+}
+.start-here-update-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+/* Inline now, not its own line -- by request, combined onto the first
+   line's own link text instead, in brackets right after it (see
+   updatesExcerptItemHtml() in client.js). */
+.start-here-update-date {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+/* Only the first line is a link (jumps to the real entry on the Updates
+   page), by request -- the second line, when there is one, is plain text
+   right underneath it. Both are truncated to a single visual line each
+   (ellipsis on overflow) -- "the first 2 lines only" means exactly that
+   regardless of how long either line's own text is or how narrow this
+   40%-wide column ends up (a long line would otherwise wrap onto a THIRD
+   visual row on screen even though it's still only "2 lines" of extracted
+   text, which defeats the point of capping it at 2). The date (now inline
+   inside this same link, in brackets) is part of that same truncated run --
+   a very long line-1 can crowd the date off the end, same as any other
+   overflow here. */
+.start-here-update-link {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--fg);
+  text-decoration: none;
+}
+.start-here-update-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.start-here-update-line2 {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 0.1rem;
+}
+/* Deliberately NOT .tt-column-footer (What's On's own equivalent) -- that
+   class carries its own horizontal padding, meant for a bare .tt-column
+   with none of its own; this column already gets padding from its parent
+   .start-here-checklist-featured, so reusing it here would double up the
+   indent. */
+.start-here-updates-footer {
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
 }
 
 /* Datto RMM's card grid -- donut-ring cards (ported look from
@@ -4182,6 +4290,172 @@ textarea.pgr-field {
 .wsp-delivery-tag--yesterday {
   background: color-mix(in srgb, #f39c12 18%, transparent);
   color: #f39c12;
+}
+
+/* Updates page (@dashboard/updates) -- a simple admin-maintained changelog,
+   three columns per entry (date / thumbnail / rich text), by request. Grid,
+   not flex, so every row's three columns line up at the same width
+   regardless of that row's own content -- the 4th (actions) column only
+   ever appears for the admin, sized by its own content via `auto`. */
+.updates-page-toolbar {
+  margin-bottom: 0.75rem;
+}
+.updates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.updates-row {
+  display: grid;
+  /* Image column doubled (8rem -> 16rem), then another 50% on top of that
+     (16rem -> 24rem), by request. */
+  grid-template-columns: 7rem 24rem 1fr auto;
+  gap: 1rem;
+  align-items: start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  background: var(--card);
+}
+.updates-col {
+  min-width: 0;
+}
+.updates-col-date {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.updates-thumb {
+  display: block;
+  max-width: 100%;
+  /* Doubled (6rem -> 12rem), then another 50% (12rem -> 18rem), alongside
+     the column itself, so the image actually renders bigger rather than
+     just sitting in more empty space next to it. */
+  max-height: 18rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+.updates-col-text p,
+.updates-col-text ul {
+  margin: 0 0 0.4rem;
+}
+.updates-col-text p:last-child,
+.updates-col-text ul:last-child {
+  margin-bottom: 0;
+}
+.updates-row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-end;
+}
+
+/* Briefly highlights the entry Start Here's own excerpt link jumped to --
+   fades back to nothing over 3s, same purpose (draw the eye, then get out
+   of the way) as .row-changed-bg's use elsewhere, just as a real animation
+   here since this is a one-time "you just arrived here" cue, not a
+   persisted state. */
+.updates-row--highlight {
+  animation: updates-row-highlight-fade 3s ease-out;
+}
+@keyframes updates-row-highlight-fade {
+  from {
+    background: var(--row-changed-bg);
+  }
+  to {
+    background: var(--card);
+  }
+}
+
+/* ---- Edit/compose row -- same 4-column grid as the plain view row above,
+   just with real form controls in place of rendered content. ---- */
+.updates-edit-row {
+  border-color: var(--accent);
+}
+.updates-date-input {
+  width: 100%;
+  font: inherit;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.updates-image-preview {
+  width: 100%;
+  /* Doubled (4.5rem -> 9rem), then another 50% (9rem -> 13.5rem), alongside
+     .updates-thumb above, so the edit view's own placeholder/preview box
+     matches the plain view's now-bigger image size. */
+  min-height: 13.5rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  text-align: center;
+  cursor: text;
+}
+.updates-image-preview:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.updates-image-preview img {
+  max-width: 100%;
+  max-height: 18rem;
+  border-radius: 4px;
+}
+.updates-image-placeholder {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.updates-editor-toolbar {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+}
+.updates-toolbar-btn {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+.updates-toolbar-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.updates-rich-editor {
+  min-height: 4.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg);
+  color: var(--fg);
+}
+.updates-rich-editor:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.updates-row-form-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+@media (max-width: 720px) {
+  /* Same breakpoint every other multi-column layout on this dashboard
+     collapses at -- four columns of a date/thumbnail/text/actions row
+     don't fit a phone-width screen, so they stack instead. */
+  .updates-row {
+    grid-template-columns: 1fr;
+  }
+  .updates-row-actions {
+    flex-direction: row;
+    align-items: center;
+  }
 }
 .wsp-delivery-tag--older {
   background: color-mix(in srgb, var(--accent) 18%, transparent);

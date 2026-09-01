@@ -147,28 +147,40 @@ const DAILY_CHECKLIST_HTML = `
   <div class="resource-group start-here-checklist">
     <div class="section-heading section-heading--nav">Daily Checklist</div>
     <div class="start-here-checklist-featured">
-      <a href="#whats-on" class="start-here-checklist-title">What's On</a>
-      <p>Check this page for:</p>
-      <ul>
-        <li>Helpdesk Task Tracker, plus your own personal To Dos.
-          <ul>
-            <li>Complete any Helpdesk Daily, Weekly, Monthly metrics and Jobs.</li>
-            <li>Jobs marked as <strong>AUTO:</strong> are managed/filled by automated processes.</li>
-          </ul>
-        </li>
-        <li>Team Shifts: know who's On Call, who's Helpdesk Handler, who's away, etc.
-          <ul>
-            <li>Apply for leave in Autotask, but make sure it's also entered in Shifts.</li>
-          </ul>
-        </li>
-      </ul>
-	  </br>
-      <p class="start-here-checklist-subheading">Other Daily Activities -- check these dashboard pages:</p>
-      <ul class="start-here-checklist-other">
-        <li><a href="#service-calls">Service Calls</a> <span class="cell-subtext">-- what's scheduled in Autotask</span></li>
-        <li><a href="#subscriptions-expiring">Subscriptions Expiring</a> <span class="cell-subtext">-- Ingram Micro / Microsoft licenses</span></li>
-        <li><a href="#my-strety-tasks">My Strety Tasks</a> <span class="cell-subtext">-- your to-dos. Don't leave it till the last moment.</span></li>
-      </ul>
+      <div class="start-here-checklist-col start-here-checklist-col-main">
+        <a href="#whats-on" class="start-here-checklist-title">What's On</a>
+        <p>Check this page for:</p>
+        <ul>
+          <li>Helpdesk Task Tracker, plus your own personal To Dos.
+            <ul>
+              <li>Complete any Helpdesk Daily, Weekly, Monthly metrics and Jobs.</li>
+              <li>Jobs marked as <strong>AUTO:</strong> are managed/filled by automated processes.</li>
+            </ul>
+          </li>
+          <li>Team Shifts: know who's On Call, who's Helpdesk Handler, who's away, etc.
+            <ul>
+              <li>Apply for leave in Autotask, but make sure it's also entered in Shifts.</li>
+            </ul>
+          </li>
+        </ul>
+        </br>
+        <p class="start-here-checklist-subheading">Other Daily Activities -- check these dashboard pages:</p>
+        <ul class="start-here-checklist-other">
+          <li><a href="#service-calls">Service Calls</a> <span class="cell-subtext">-- what's scheduled in Autotask</span></li>
+          <li><a href="#subscriptions-expiring">Subscriptions Expiring</a> <span class="cell-subtext">-- Ingram Micro / Microsoft licenses</span></li>
+          <li><a href="#my-strety-tasks">My Strety Tasks</a> <span class="cell-subtext">-- your to-dos. Don't leave it till the last moment.</span></li>
+        </ul>
+      </div>
+      <!-- Second column, by request -- a heading linking to the real
+           Updates page (@dashboard/updates), plus a live excerpt of its
+           most recent entries (fetched below -- see loadUpdatesExcerpt()).
+           Its own .start-here-checklist-col class (shared with the main
+           column above) carries the flex sizing; this one additionally
+           gets the dividing border -- see styles.css. -->
+      <div class="start-here-checklist-col start-here-checklist-col-updates">
+        <a href="#updates" class="start-here-checklist-title">Recent Updates</a>
+        <div id="updates-excerpt"><p class="status">Loading...</p></div>
+      </div>
     </div>
   </div>
 `;
@@ -191,6 +203,89 @@ export function mount(container) {
   `;
 
   loadPageList(container.querySelector('#page-groups'));
+  loadUpdatesExcerpt(container.querySelector('#updates-excerpt'));
+}
+
+const UPDATES_EXCERPT_LIMIT = 5;
+
+// Cross-page fetch to @dashboard/updates' own /recent route (returns
+// content_html only, no images -- see that page's server.js) -- the same
+// "cross-page call to that page's own route" convention What's On already
+// uses for Service Calls, not a duplicated read of its data/DB.
+async function loadUpdatesExcerpt(el) {
+  try {
+    const res = await fetch(`/api/updates/recent?limit=${UPDATES_EXCERPT_LIMIT}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    renderUpdatesExcerpt(el, data.entries);
+  } catch {
+    // Quiet failure -- this is a small callout on the way to the real
+    // Updates page, not a page of its own; no real page-level Loading/Error
+    // state is worth showing here just for this one column.
+    el.innerHTML = '<p class="status">Recent updates unavailable.</p>';
+  }
+}
+
+function renderUpdatesExcerpt(el, entries) {
+  if (entries.length === 0) {
+    el.innerHTML = '<p class="status">No updates yet.</p>';
+    return;
+  }
+  el.innerHTML = `
+    <ul class="start-here-updates-list">
+      ${entries.map(updatesExcerptItemHtml).join('')}
+    </ul>
+    <div class="start-here-updates-footer"><a class="button-link button-link--small" href="#updates">Show All Updates</a></div>
+  `;
+}
+
+// Only the FIRST line is a link (jumps straight to this entry on the real
+// Updates page, via its own ?entry=<id> deep link -- see
+// @dashboard/updates/client.js's scrollToDeepLinkedEntry()); the second, if
+// there is one, is plain text underneath it, by request ("the first 2 lines
+// only with a clickable on the first line"). The date, by request, is
+// combined onto that same first line -- in brackets, right after the text
+// -- rather than sitting on its own line above it.
+function updatesExcerptItemHtml(entry) {
+  const [line1, line2] = firstTwoTextLines(entry.contentHtml);
+  const dateLabel = escapeHtml(formatShortDate(entry.entryDate));
+  const line1Html = `<a class="start-here-update-link" href="/?entry=${encodeURIComponent(entry.id)}#updates">${escapeHtml(line1 || '(no details)')} <span class="start-here-update-date">(${dateLabel})</span></a>`;
+  const line2Html = line2 ? `<div class="start-here-update-line2">${escapeHtml(line2)}</div>` : '';
+  return `<li class="start-here-update-item">${line1Html}${line2Html}</li>`;
+}
+
+// Reads an update entry's rich HTML as up to 2 plain-text "lines" -- block
+// boundaries (paragraphs/list items/line breaks, exactly what the rich text
+// toolbar's own Bold/Underline/Bulleted-list/Link output produces) count as
+// line breaks, not just wherever a long run of text happens to wrap on
+// screen. Plain text, not HTML -- this excerpt intentionally drops
+// formatting (bold/links/etc), which doesn't carry any real meaning at this
+// compact a size.
+function firstTwoTextLines(html) {
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = html || '';
+  wrapper.querySelectorAll('br').forEach((br) => br.replaceWith('\n'));
+  // Inserted BEFORE each block element, not appended after it -- a
+  // contenteditable's own FIRST line is commonly left as bare text with no
+  // wrapping <p>/<div> at all (only lines added later, after pressing
+  // Enter, get wrapped), so appending after each block left that leading
+  // unwrapped run with no separator in front of the next block's text at
+  // all -- confirmed the hard way ("the sample case is combining line 1
+  // and line 2 into one"). Inserting before instead correctly separates
+  // that leading text (wrapped or not) from whatever block follows it.
+  wrapper.querySelectorAll('p, li, div').forEach((el) => el.before('\n'));
+  return wrapper.textContent
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 2);
+}
+
+function formatShortDate(dateKey) {
+  if (!dateKey) return '';
+  const d = new Date(`${dateKey}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dateKey;
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
 // Same .resource-group + .section-heading--nav card look the left
@@ -234,16 +329,16 @@ async function loadPageList(el) {
     const pagesById = new Map(pages.map((p) => [p.id, p]));
     const tree = Array.isArray(nav.tree) ? nav.tree : [];
 
-    // Never list this page about itself, and never re-list What's On --
-    // it's already featured prominently in its own green "Daily
-    // Checklist" callout above (DAILY_CHECKLIST_HTML), so listing it
-    // again down here would just be redundant. Adding 'whats-on' to
-    // `seen` up front (rather than a special-case check per branch below)
-    // means this holds regardless of whether it's a top-level page or
-    // gets dragged into a category later -- both the `node.type ===
-    // 'page'` branch and the leftovers fallback already skip anything in
-    // `seen`.
-    const seen = new Set([id, 'whats-on']);
+    // Never list this page about itself, and never re-list What's On or
+    // Updates -- both are already featured prominently in their own green
+    // "Daily Checklist" callout above (DAILY_CHECKLIST_HTML, one column
+    // each), so listing either again down here would just be redundant.
+    // Adding them to `seen` up front (rather than a special-case check per
+    // branch below) means this holds regardless of whether it's a
+    // top-level page or gets dragged into a category later -- both the
+    // `node.type === 'page'` branch and the leftovers fallback already
+    // skip anything in `seen`.
+    const seen = new Set([id, 'whats-on', 'updates']);
     const groups = [];
     for (const node of tree) {
       if (node.type === 'page') {
