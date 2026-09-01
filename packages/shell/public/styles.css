@@ -373,10 +373,13 @@ a.nav-link.active[href="#start-here"] {
    overrides the grab cursor here -- by request, dragging a sidebar item is
    now available to everyone (to drop it as a tab on a tabbed page, e.g.
    Ticket Info), just not REORDERING the shared sidebar itself, which is
-   still admin-only (right-click hide/unhide too; see app.js's `editable`,
-   server.js's isNavAdmin). Left with no rule here on purpose rather than
-   removed from app.js -- a hook future styling can still use, without
-   implying "not draggable" anymore. */
+   still admin-only (right-click Hide/Rename too; see app.js's `editable`,
+   server.js's isNavAdmin). Right-click ITSELF isn't admin-only anymore,
+   though -- Add/Remove Rotate (app.js's renderPageItem()) is available to
+   everyone regardless of `editable`, it's just personal/per-browser rather
+   than the shared nav layout Hide/Rename touch. Left with no rule here on
+   purpose rather than removed from app.js -- a hook future styling can
+   still use, without implying "not draggable" anymore. */
 
 .nav-item.dragging {
   opacity: 0.4;
@@ -493,6 +496,30 @@ a.nav-link.active[href="#start-here"] {
   display: inline-block;
   width: 1em;
   margin-right: 0.1rem;
+}
+
+/* Rotate category's own header only -- lays out the play/pause button
+   (app.js's renderRotateCategory()) against the right edge, without
+   touching every other category header's own plain layout, which has no
+   button to place. */
+.nav-category-header--rotate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.nav-rotate-play-btn {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+}
+.nav-rotate-play-btn:hover {
+  color: var(--accent);
 }
 
 .nav-category-children {
@@ -3798,47 +3825,48 @@ tr.row-text-highlight-blue td {
 .wsp-row-tint--next_up {
   background: color-mix(in srgb, #8b5cf6 8%, transparent);
 }
+/* 4px -> 6px, about 50% wider, by request. */
 .wsp-bar-left--urgent {
-  border-left: 4px solid #dc2626;
+  border-left: 6px solid #dc2626;
 }
 .wsp-bar-left--complete {
-  border-left: 4px solid #16a34a;
+  border-left: 6px solid #16a34a;
 }
 .wsp-bar-left--nearly_complete {
-  border-left: 4px solid #2563eb;
+  border-left: 6px solid #2563eb;
 }
 .wsp-bar-left--in_progress {
-  border-left: 4px solid #f97316;
+  border-left: 6px solid #f97316;
 }
 .wsp-bar-left--next_up {
-  border-left: 4px solid #8b5cf6;
+  border-left: 6px solid #8b5cf6;
 }
 .wsp-bar-left--coming {
-  border-left: 4px solid #eab308;
+  border-left: 6px solid #eab308;
 }
 .wsp-bar-left--not_started {
-  border-left: 4px solid #6b7280;
+  border-left: 6px solid #6b7280;
 }
 .wsp-bar-right--urgent {
-  border-right: 4px solid #dc2626;
+  border-right: 6px solid #dc2626;
 }
 .wsp-bar-right--complete {
-  border-right: 4px solid #16a34a;
+  border-right: 6px solid #16a34a;
 }
 .wsp-bar-right--nearly_complete {
-  border-right: 4px solid #2563eb;
+  border-right: 6px solid #2563eb;
 }
 .wsp-bar-right--in_progress {
-  border-right: 4px solid #f97316;
+  border-right: 6px solid #f97316;
 }
 .wsp-bar-right--next_up {
-  border-right: 4px solid #8b5cf6;
+  border-right: 6px solid #8b5cf6;
 }
 .wsp-bar-right--coming {
-  border-right: 4px solid #eab308;
+  border-right: 6px solid #eab308;
 }
 .wsp-bar-right--not_started {
-  border-right: 4px solid #6b7280;
+  border-right: 6px solid #6b7280;
 }
 
 /* Ticket links on the main board, by request -- stay plain text-coloured
@@ -4312,9 +4340,31 @@ textarea.pgr-field {
   grid-template-columns: 7rem 24rem 1fr auto;
   gap: 1rem;
   align-items: start;
-  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.75rem 1rem;
+  /* Always renders as LIGHT MODE, by request, regardless of the page's own
+     theme -- every design token this row (or anything inside it -- the
+     thumbnail border, the rich text, the Edit/Delete links, and in edit
+     mode the date input/image preview/toolbar/editor) might read via
+     var(--bg)/var(--fg)/var(--border)/var(--accent)/etc is re-pinned here
+     to its literal light-mode value. CSS custom properties inherit down
+     the tree the same as `color` does, so this stays correct for any
+     current or future child that reads one of these tokens, not just the
+     ones this rule happens to set directly below. .updates-edit-row
+     carries this same .updates-row class, so the edit/compose form gets
+     the identical treatment -- no separate rule needed. */
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --card: #f9fafb;
+  --accent: #2563eb;
+  --section-header-bg: #eff6ff;
+  --row-alt-bg: #fafafb;
+  --row-warn-bg: #fef2f3;
+  --row-changed-bg: #f2faf3;
+  color: var(--fg);
+  border: 1px solid var(--border);
   background: var(--card);
 }
 .updates-col {
