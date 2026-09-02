@@ -198,6 +198,27 @@ document.getElementById('sidebar-refresh').addEventListener('click', () => {
 // something full-screen" is a near-universal expectation.
 const focusToggle = document.getElementById('focus-toggle');
 const focusExitBtn = document.getElementById('focus-exit');
+// Present on every page, bottom of the screen, while a Rotate cycle is
+// running -- specifically so it's still reachable in Full Screen mode,
+// where the sidebar's own play/pause/skip controls (on the Rotate
+// category header/entries) are hidden along with the rest of the
+// sidebar. See renderRotateControls() further down (defined alongside
+// the rotation engine itself) for how the group's visibility -- and the
+// Pause/Play button's own icon/colour -- is actually driven. Back/Forward
+// skip immediately WITHOUT stopping rotation -- see skipRotation()'s own
+// comment. Pause only stops the auto-advance TIMER (rotation stays "on"
+// -- full screen, unpinned sidebar, this whole row all stay as they are)
+// -- see pauseRotation()/resumeRotation(). Stop is the real exit, same as
+// this row's own button always was before Pause existed.
+const rotateControlsEl = document.getElementById('rotate-controls');
+const rotateBackBtn = document.getElementById('rotate-back-btn');
+const rotatePauseBtn = document.getElementById('rotate-pause-btn');
+const rotateStopBtn = document.getElementById('rotate-stop-btn');
+const rotateForwardBtn = document.getElementById('rotate-forward-btn');
+rotateBackBtn.addEventListener('click', () => skipRotation(-1));
+rotatePauseBtn.addEventListener('click', () => (rotationPaused ? resumeRotation() : pauseRotation()));
+rotateStopBtn.addEventListener('click', () => stopRotation());
+rotateForwardBtn.addEventListener('click', () => skipRotation(1));
 
 function isFocusMode() {
   return document.documentElement.getAttribute('data-focus-mode') === 'true';
@@ -597,6 +618,14 @@ let rotationTimer = null;
 // rotation instead of hijacking wherever they just went (see loadPage()
 // below).
 let rotationNavInProgress = false;
+// True while Pause is on -- distinct from rotationActive (which just
+// means "a Rotate cycle is running at all, paused or not"). Only ever
+// gates whether scheduleNextRotation() actually arms a timer -- everything
+// else (full screen, unpinned sidebar, this whole control row, Back/
+// Forward) stays exactly as rotationActive alone already left it. Always
+// reset to false by both startRotation() and stopRotation(), so a fresh
+// session never silently starts (or stays) paused from a previous one.
+let rotationPaused = false;
 
 // Loads the NEXT page off-screen before switching to it, by request ("do
 // the refresh and then switch") -- rather than switching first and letting
@@ -621,8 +650,34 @@ const ROTATE_PRELOAD_BUFFER_MS = 1500;
 function scheduleNextRotation() {
   clearTimeout(rotationTimer);
   rotationTimer = null;
-  if (!rotationActive) return;
+  // Paused means specifically "don't auto-advance" -- a page arrived at
+  // via Back/Forward (or the timer firing right before Pause was hit)
+  // still calls this, and correctly leaves no timer armed rather than
+  // silently un-pausing.
+  if (!rotationActive || rotationPaused) return;
   rotationTimer = setTimeout(advanceRotation, getRotateSeconds(currentPageId()) * 1000);
+}
+
+// Pause only stops the auto-advance timer -- rotation stays fully "on"
+// (full screen, unpinned sidebar, the whole bottom control row) the
+// entire time, by request. Resuming re-arms a FRESH timer for the
+// CURRENT page's own full configured duration, not whatever time was
+// left when paused -- simpler, and matches how this control row's other
+// actions (Back/Forward) already treat "how long has been shown so far"
+// as not worth tracking precisely.
+function pauseRotation() {
+  if (!rotationActive || rotationPaused) return;
+  rotationPaused = true;
+  clearTimeout(rotationTimer);
+  rotationTimer = null;
+  renderRotateControls();
+}
+
+function resumeRotation() {
+  if (!rotationActive || !rotationPaused) return;
+  rotationPaused = false;
+  scheduleNextRotation();
+  renderRotateControls();
 }
 
 // Mounts `pageId`'s module onto a real, detached-but-in-document DOM node
@@ -729,6 +784,30 @@ function advanceRotation() {
   preloadAndAdvance(nextId);
 }
 
+// Back/Forward, by request -- jumps immediately to the previous/next
+// Rotate page, skipping however much of the CURRENT page's own timer is
+// left, WITHOUT stopping rotation: the arrived-at page still gets the
+// same preload-then-switch treatment as a normal advance (see
+// preloadAndAdvance()'s own comment), and loadPage() reschedules the
+// timer for THAT page's own duration once it's showing, exactly as if
+// the timer itself had fired there -- rotation just keeps going from the
+// new spot. `offset` is +1 (forward) or -1 (back); wraps both directions
+// (back from the first page reaches the last, same as forward wrapping
+// past the last back to the first). Cancels whatever timer was already
+// pending FIRST, so the old one can't also fire mid-skip and cause a
+// second, unintended advance on top of this one.
+function skipRotation(offset) {
+  if (!rotationActive) return;
+  const list = orderedRotatePageIds();
+  if (list.length === 0) return;
+  clearTimeout(rotationTimer);
+  rotationTimer = null;
+  const curIndex = list.indexOf(currentPageId());
+  const targetId = list[(curIndex + offset + list.length) % list.length] ?? list[0];
+  if (targetId === currentPageId()) return; // only one page -- nothing to skip to
+  preloadAndAdvance(targetId);
+}
+
 // Remembers the sidebar pin state from right before rotation started, so
 // stopping restores it exactly -- by request, rotation unpins (and enters
 // full screen) for a clean, sidebar-free kiosk display while it runs, but
@@ -736,10 +815,34 @@ function advanceRotation() {
 // preference silently overwritten once they stop.
 let pinStateBeforeRotation = null;
 
+function renderRotateControls() {
+  rotateControlsEl.hidden = !rotationActive;
+  // Pause (blue, the shared base .rotate-control-btn colour) flips to
+  // Play/green while paused -- .rotate-control-btn--paused (styles.css)
+  // overrides the background only, everything else (shape/padding/etc)
+  // stays the same shared button look.
+  rotatePauseBtn.textContent = rotationPaused ? '▶' : '⏸';
+  rotatePauseBtn.title = rotationPaused ? 'Resume rotating' : 'Pause rotating';
+  rotatePauseBtn.classList.toggle('rotate-control-btn--paused', rotationPaused);
+  // The floating top-right Full Screen exit pill (.focus-exit-btn) is
+  // otherwise shown any time Focus Mode is on -- redundant once Rotate is
+  // running, since the Stop button in this same control row already does
+  // the same job, by request. Reflected as an attribute (rather than a
+  // plain .hidden toggle on the button itself) so the CSS override
+  // (html[data-focus-mode="true"][data-rotate-active="true"] .focus-exit-btn)
+  // can out-specificity the existing html[data-focus-mode="true"]
+  // .focus-exit-btn { display: flex } rule -- same specificity pitfall
+  // this session has hit before with plain [hidden].
+  if (rotationActive) document.documentElement.setAttribute('data-rotate-active', 'true');
+  else document.documentElement.removeAttribute('data-rotate-active');
+}
+
 function startRotation() {
   const list = orderedRotatePageIds();
   if (list.length === 0) return;
   rotationActive = true;
+  rotationPaused = false;
+  renderRotateControls();
   // By request -- gets the sidebar fully out of the way for the duration:
   // unpinned (so it can't stay open) AND full screen (hides it outright,
   // same as the existing Full Screen button). Order matters here only in
@@ -784,6 +887,8 @@ function startRotation() {
 
 function stopRotation() {
   rotationActive = false;
+  rotationPaused = false;
+  renderRotateControls();
   clearTimeout(rotationTimer);
   rotationTimer = null;
   // Restores exactly what startRotation() changed -- re-pins only if it

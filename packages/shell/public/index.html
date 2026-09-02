@@ -57,6 +57,35 @@
        out besides the Esc key. -->
   <button id="focus-exit" class="focus-exit-btn" type="button" title="Exit full screen (Esc)">✕ Exit Full Screen</button>
 
+  <!-- Only shown while a Rotate cycle is actually running (app.js's own
+       rotationActive -- toggled via plain .hidden, not a CSS attribute
+       selector like focus-exit above, since there's no HTML attribute
+       reflecting that state). Present on every page, bottom-centre,
+       specifically so it's still reachable in Full Screen mode -- the
+       sidebar's own play/pause button (on the Rotate category header) is
+       hidden along with the rest of the sidebar there.
+
+       Back/Forward skip to the previous/next Rotate page immediately
+       (bypassing however much of the current page's own timer is left)
+       WITHOUT stopping rotation -- it keeps auto-advancing from wherever
+       they land, same as if the timer itself had fired there (or stays
+       paused there, if Pause is currently on -- see app.js's own
+       scheduleNextRotation()).
+
+       Pause (blue, flips to Play/green while paused -- app.js's own
+       renderRotateControls()) only stops the AUTO-ADVANCE TIMER --
+       rotation stays "on" the whole time: still full screen, sidebar
+       still unpinned, this whole control row stays visible. Stop (red)
+       is the real exit, same as this row's own old single button used to
+       be -- leaves full screen, restores the sidebar pin, hides this
+       row. -->
+  <div id="rotate-controls" class="rotate-controls" hidden>
+    <button id="rotate-back-btn" class="rotate-control-btn" type="button" title="Previous page (stays in Rotate)">⏮</button>
+    <button id="rotate-pause-btn" class="rotate-control-btn" type="button" title="Pause rotating">⏸</button>
+    <button id="rotate-stop-btn" class="rotate-control-btn rotate-control-btn--stop" type="button" title="Stop rotating">⏹</button>
+    <button id="rotate-forward-btn" class="rotate-control-btn" type="button" title="Next page (stays in Rotate)">⏭</button>
+  </div>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>
