@@ -3811,6 +3811,8 @@ tr.row-text-highlight-blue td {
   opacity: 0.28;
   margin-right: 0.2rem;
   transition: opacity 0.15s ease, transform 0.15s ease;
+  /* Anchor for the green "checked today" badge below. */
+  position: relative;
 }
 .wsp-equipment-icon:hover {
   opacity: 0.6;
@@ -3822,6 +3824,26 @@ tr.row-text-highlight-blue td {
 }
 .wsp-equipment-icon--set:hover {
   opacity: 1;
+}
+/* "All items checked today" -- green, by request. The 📦 emoji itself
+   renders in its own baked-in colours regardless of CSS `color` (unlike
+   the plain-text Q/A icons above, which DO recolour via `color`), so
+   this is a small green dot badge on the icon's own corner instead of
+   trying to recolour the glyph itself -- position: relative on the base
+   class above gives this an anchor. Same green (#16a34a) as the Rotate
+   control bar's own Pause->Play state and .wsp-qa-icon--t elsewhere on
+   this page, reused rather than a fresh one-off shade. */
+.wsp-equipment-icon--checked::after {
+  content: '';
+  position: absolute;
+  right: -0.2rem;
+  bottom: -0.15rem;
+  width: 0.68rem;
+  height: 0.68rem;
+  border-radius: 50%;
+  background: #16a34a;
+  border: 1.5px solid var(--card);
+  box-shadow: 0 0 0 1px #16a34a, 0 0 2px rgb(22 163 74 / 0.6);
 }
 /* "Mobile View" checkbox, by request -- hides Location/Ticket/Due Date
    together, as one set, across EVERY table on the page at once (main
@@ -3872,6 +3894,31 @@ tr.row-text-highlight-blue td {
    documents. */
 .wsp-page.wsp-mobile-view .wsp-two-column-toggle-label {
   display: none !important;
+}
+/* "Rotation View" checkbox, by request -- hides the Completion (buttons)
+   column, across every table on the page at once via the same
+   single-class-on-.wsp-page pattern as Mobile View above. Dedicated
+   classes on both the header (.wsp-col-actions) and every cell
+   (.wsp-actions, see jobRowHtml() in client.js) rather than
+   nth-last-child arithmetic -- it's already the true last column, so no
+   maths needed. Defaults to ON automatically whenever this page mounts
+   during an active Rotate cycle (see client.js's own mount()) -- nobody
+   viewing an unattended rotation can click those buttons anyway. */
+.wsp-page.wsp-rotation-view .wsp-col-actions,
+.wsp-page.wsp-rotation-view .wsp-actions {
+  display: none;
+}
+/* Rotation View also drops the Location column down to just its own
+   equipment icon (.wsp-location-text hidden, icon left alone) and its
+   header down to blank (.wsp-location-header-text hidden) -- by request,
+   so the whole column can shrink to icon-width instead of the header
+   label's own width forcing it wide. No explicit width rule needed --
+   .wsp-table (via the base `table` rule) uses the browser's default
+   table-layout: auto, so an empty header + icon-only cells are all this
+   takes for the column to size itself down naturally. */
+.wsp-page.wsp-rotation-view .wsp-location-text,
+.wsp-page.wsp-rotation-view .wsp-location-header-text {
+  display: none;
 }
 .wsp-dot {
   display: inline-block;

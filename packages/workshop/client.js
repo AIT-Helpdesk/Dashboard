@@ -21,6 +21,44 @@ let twoColumns = false;
 // convention as showCompleted/twoColumns
 // above.
 let mobileView = false;
+// "Rotation View" -- hides the Completion (buttons) column, by request,
+// specifically for unattended display during a Rotate cycle (see
+// packages/shell/public/app.js's own Rotate feature) where nobody is
+// there to click those buttons anyway. Unticked by default for a normal
+// visit, same persists-across-remounts convention as the toggles above
+// -- forced to true the moment a Rotate cycle turns ON, and forced back
+// to false the moment it turns OFF, by request, via the
+// dashboard-rotate-active-change listener just below (fired once per
+// actual transition by app.js's renderRotateControls(), regardless of
+// whether Workshop happens to be the mounted page at that exact moment).
+// Deliberately ONLY reacts to that transition, never re-forced on a
+// later mount() while a rotation is already running (see mount()'s own
+// comment on why that was tried and reverted) -- otherwise a user who
+// manually unticks it mid-rotation would see it silently flip back on
+// the next time Workshop is rotated back to.
+let rotationView = false;
+// Live DOM refs for the currently-mounted page's own Rotation View
+// checkbox/wrapper, kept up to date at the top of mount() below (null
+// while Workshop isn't the mounted page at all). Lets the
+// dashboard-rotate-active-change listener just below react immediately
+// even when Workshop is already the VISIBLE page the moment Rotate
+// turns on/off -- see that listener's own comment, and app.js's own
+// comment on why it dispatches this event, for the full picture of why
+// mount()'s own data-rotate-active check alone isn't enough (that only
+// covers being ROTATED TO, never the page already on screen).
+let activeRotationViewToggle = null;
+let activeWspPageEl = null;
+// Global, not per-mount -- added once when this module first loads, same
+// "module scope, persists for the session" convention as the state
+// variables above, so remounting Workshop never stacks up duplicate
+// listeners. Mirrors rotationActive exactly both ways, by request: ticks
+// ON the moment Rotate starts, unticks OFF the moment it stops --
+// whether or not Workshop happens to be the mounted page either time.
+document.addEventListener('dashboard-rotate-active-change', (e) => {
+  rotationView = e.detail.active;
+  if (activeRotationViewToggle) activeRotationViewToggle.checked = rotationView;
+  if (activeWspPageEl) activeWspPageEl.classList.toggle('wsp-rotation-view', rotationView);
+});
 // "Show Workshop Gear" -- off by default, by request. Jobs in the
 // 'workshop_gear' stage are excluded from the main table unconditionally
 // (unlike 'dispose', which always shows in its own table when non-empty),
@@ -159,6 +197,9 @@ export function mount(container) {
             <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
               <input type="checkbox" id="mobile-view-toggle" data-auto-mobile-view /> Mobile View
             </label>
+            <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+              <input type="checkbox" id="rotation-view-toggle" /> Rotation View
+            </label>
           </div>
         </div>
       </header>
@@ -213,16 +254,38 @@ export function mount(container) {
   const showCompletedToggle = container.querySelector('#show-completed-toggle');
   const twoColumnToggle = container.querySelector('#two-column-toggle');
   const mobileViewToggle = container.querySelector('#mobile-view-toggle');
+  const rotationViewToggle = container.querySelector('#rotation-view-toggle');
   const wspPageEl = container.querySelector('.wsp-page');
   const bottomPanelsEl = container.querySelector('#bottom-panels');
   const bottomPanelsToggle = container.querySelector('#bottom-panels-toggle');
   const deliveriesPreviewEl = container.querySelector('#deliveries-preview');
+
+  // See these two module-scope vars' own declaration above -- keeps the
+  // dashboard-rotate-active-change listener able to reach this specific
+  // mount's own elements.
+  activeRotationViewToggle = rotationViewToggle;
+  activeWspPageEl = wspPageEl;
 
   showCompletedToggle.checked = showCompleted;
   twoColumnToggle.checked = twoColumns;
   mobileViewToggle.checked = mobileView;
   showWorkshopGearToggle.checked = showWorkshopGear;
   wspPageEl.classList.toggle('wsp-mobile-view', mobileView);
+  // Deliberately NOT re-checking documentElement's data-rotate-active
+  // attribute here on every mount -- that was tried first and caused a
+  // real bug: it forced Rotation View back ON every time Workshop was
+  // rotated BACK to, even after the user had deliberately unticked it
+  // mid-rotation, since every rotation cycle back to this page is a
+  // fresh mount(). rotationView (module-scope, persists across remounts
+  // same as every other toggle here) is set once, at the actual ON/OFF
+  // TRANSITION, by the dashboard-rotate-active-change listener above --
+  // that already covers "was already true before this mount" correctly
+  // too (the listener ran once when rotation first started, whether or
+  // not Workshop happened to be mounted at that moment), so this mount()
+  // just reads whatever rotationView already is, exactly like every
+  // other toggle on this page.
+  rotationViewToggle.checked = rotationView;
+  wspPageEl.classList.toggle('wsp-rotation-view', rotationView);
 
   // Deliberately a plain local variable, not module-scope like
   // showCompleted/twoColumns above -- by request, any refresh of this
@@ -267,6 +330,13 @@ export function mount(container) {
     // handles hiding the columns in every currently-rendered table at
     // once, no re-render needed.
     wspPageEl.classList.toggle('wsp-mobile-view', mobileView);
+  });
+  rotationViewToggle.addEventListener('change', () => {
+    rotationView = rotationViewToggle.checked;
+    // Same "just a class toggle, no re-render needed" pattern as Mobile
+    // View above -- .wsp-rotation-view (styles.css) hides the Completion
+    // column in every currently-rendered table at once.
+    wspPageEl.classList.toggle('wsp-rotation-view', rotationView);
   });
   showWorkshopGearToggle.addEventListener('change', () => {
     showWorkshopGear = showWorkshopGearToggle.checked;
@@ -398,10 +468,10 @@ export function mount(container) {
             <th class="wsp-col-status">Status</th>
             <th class="wsp-col-client">Client</th>
             <th>Current / Required Action</th>
-            <th>Location</th>
+            <th class="wsp-col-location"><span class="wsp-location-header-text">Location</span></th>
             <th>Ticket</th>
             <th>Due Date</th>
-            <th></th>
+            <th class="wsp-col-actions"></th>
           </tr>
         </thead>
         <tbody>
@@ -439,8 +509,11 @@ export function mount(container) {
       : `<span class="wsp-client-typed">${typedClient || '—'}</span>`;
     const actionCell = actionCellHtml(job);
     // Equipment icon moved here (inline with the text), by request -- was
-    // originally at the end of the Current/Required Action cell.
-    const location = `${equipmentIconHtml(job)} ${escapeHtml(job.location) || '—'}${equipmentLocationsText(job)}`;
+    // originally at the end of the Current/Required Action cell. The text
+    // half is its own span (.wsp-location-text) so Rotation View can hide
+    // just that and leave the icon alone -- see .wsp-rotation-view in
+    // styles.css.
+    const location = `${equipmentIconHtml(job)}<span class="wsp-location-text"> ${escapeHtml(job.location) || '—'}${equipmentLocationsText(job)}</span>`;
     // The solid priority-colour bar runs the full width of the row, by
     // request -- left edge of Status, both sides of Client/Action,
     // right edge of Location, AND right edge of Due Date (the true last
@@ -459,7 +532,7 @@ export function mount(container) {
         <td class="wsp-col-status wsp-bar-left--${job.priority}"><div class="wsp-status-cell-row"><span class="wsp-status-cell-main">${statusStageCellHtml(job)}</span>${qaIconsHtml(job)}</div></td>
         <td class="wsp-col-client ${tintClass}wsp-bar-left--${job.priority}">${client}</td>
         <td class="${tintClass}wsp-bar-right--${job.priority}">${actionCell}</td>
-        <td class="wsp-bar-right--${job.priority}">${location}</td>
+        <td class="wsp-col-location wsp-bar-right--${job.priority}">${location}</td>
         <td>${ticketCell}</td>
         <td class="wsp-bar-right--${job.priority}">${dueDateCell}</td>
         <td class="wsp-actions">${rowActionButtonsHtml(job)}</td>
@@ -489,18 +562,42 @@ export function mount(container) {
     return `${mobileClientLine}${body}`;
   }
 
+  // True once every one of a job's equipment items has been ticked in
+  // the Equipment Checklist popup SOMETIME TODAY (item.checkedAt --
+  // "checked" here means that popup's own tick box, see
+  // equipmentSummaryLines()'s own comment on checkedAt, not this row's
+  // icon itself). "Today" compares in the browser's own local time/date,
+  // same as every other date this page displays via toLocaleString()/
+  // toLocaleDateString() (formatDateTime()/formatDate() below) -- there's
+  // no separate "workshop timezone" concept anywhere else on this page.
+  function isCheckedToday(item) {
+    if (!item.checkedAt) return false;
+    const checked = new Date(item.checkedAt);
+    const now = new Date();
+    return checked.getFullYear() === now.getFullYear() && checked.getMonth() === now.getMonth() && checked.getDate() === now.getDate();
+  }
+
   // The equipment "symbol", shown inline with the Location text (see
   // jobRowHtml() above), by request -- same "always clickable, dim when
   // empty, bold once set" pattern as the Q/A stamp (qaIconsHtml() above):
-  // there'd otherwise be no way to add the FIRST equipment item.
-  // Hovering shows the full list via a plain native tooltip; clicking
-  // (either state) opens the standalone equipment modal -- see
-  // openEquipmentModal() and wireRowActions() below.
+  // there'd otherwise be no way to add the FIRST equipment item. A third
+  // state, by request -- green (.wsp-equipment-icon--checked, styles.css)
+  // once EVERY item has been checked off today (isCheckedToday() above);
+  // still counts as "set" (full opacity/size), just with the extra green
+  // badge on top, not a fourth size/opacity tier of its own. Hovering
+  // shows the full list (including each item's own last-checked date/
+  // time) via a plain native tooltip; clicking (any state) opens the
+  // standalone equipment modal -- see openEquipmentModal() and
+  // wireRowActions() below.
   function equipmentIconHtml(job) {
     const items = job.equipment || [];
     const hasItems = items.length > 0;
-    const cls = hasItems ? 'wsp-equipment-icon wsp-equipment-icon--set' : 'wsp-equipment-icon wsp-equipment-icon--empty';
-    const title = hasItems ? equipmentSummaryLines(items) : 'Click to add equipment';
+    const allCheckedToday = hasItems && items.every(isCheckedToday);
+    let cls = 'wsp-equipment-icon';
+    cls += hasItems ? ' wsp-equipment-icon--set' : ' wsp-equipment-icon--empty';
+    if (allCheckedToday) cls += ' wsp-equipment-icon--checked';
+    const summary = hasItems ? equipmentSummaryLines(items) : 'Click to add equipment';
+    const title = allCheckedToday ? `All items checked today\n${summary}` : summary;
     return `<span class="${cls}" data-id="${job.id}" title="${escapeHtml(title)}">\u{1F4E6}</span>`;
   }
 
