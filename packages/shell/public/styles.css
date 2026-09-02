@@ -3920,6 +3920,25 @@ tr.row-text-highlight-blue td {
 .wsp-page.wsp-rotation-view .wsp-location-header-text {
   display: none;
 }
+/* Rotation View also scales up EVERYTHING on the page, by request -- for
+   an unattended wall/TV display, bigger is more readable from across a
+   room than it is at a normal desk. `zoom`, not a font-size bump on this
+   wrapper -- almost every size on this page (icons, checkboxes, padding,
+   the priority-colour bars, table cell text) is set in rem, which is
+   always relative to the document ROOT font-size, not to any ancestor's
+   own font-size, so a plain font-size increase here would only affect
+   text that happens to inherit it directly and leave everything else
+   (icons, spacing, borders) untouched. zoom scales the whole rendered
+   subtree -- literally everything within .wsp-page -- as a single
+   multiplier, which is what "everything" actually needs. Not standard
+   CSS, but broadly supported in the Chromium-based browsers this
+   dashboard already assumes for kiosk/Rotate use (see startRotation()'s
+   own real-Fullscreen comment in app.js). Table cells simply wrap/grow
+   taller rather than the page overflowing sideways, since percentage
+   widths still resolve against the actual (unzoomed) viewport. */
+.wsp-page.wsp-rotation-view {
+  zoom: 1.3;
+}
 .wsp-dot {
   display: inline-block;
   width: 10px;
