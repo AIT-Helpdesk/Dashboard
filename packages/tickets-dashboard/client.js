@@ -19,8 +19,7 @@ const CRITICAL_DONUT_SCALE = 6;
 
 export function mount(container) {
   container.innerHTML = `
-    <header class="page-header">
-      <h1>Tickets Dashboard</h1>
+    <header class="page-header tickets-dashboard-header">
       <div class="date-form">
         <button type="button" id="refresh-button">Refresh</button>
       </div>
@@ -76,11 +75,6 @@ export function mount(container) {
   function renderCriticalSection(criticalCount, criticalTickets) {
     criticalChartEl.hidden = false;
     criticalChartEl.innerHTML = '';
-
-    const header = document.createElement('div');
-    header.className = 'resource-group-header';
-    header.innerHTML = `<span>Critical Open Tickets</span><span class="count">P1 - CRITICAL</span>`;
-    criticalChartEl.appendChild(header);
 
     const layout = document.createElement('div');
     layout.className = 'critical-tickets-layout';
