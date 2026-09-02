@@ -835,6 +835,19 @@ function renderRotateControls() {
   // this session has hit before with plain [hidden].
   if (rotationActive) document.documentElement.setAttribute('data-rotate-active', 'true');
   else document.documentElement.removeAttribute('data-rotate-active');
+  // A page can already read data-rotate-active at its own mount() time
+  // (Workshop Board's own Rotation View checkbox does exactly that, see
+  // its client.js) to pick up Rotate-specific defaults -- but that only
+  // covers being ROTATED TO. The page that's already on screen the
+  // moment Rotate is switched ON (e.g. clicking the sidebar's own
+  // play button while sitting on Workshop already) never gets a fresh
+  // mount() call at all (see startRotation() below -- the current page
+  // is just refreshed in place, not remounted), so it would otherwise
+  // never see this. This event is the generic hook for that case --
+  // any page can listen for it (module scope, once, not inside mount(),
+  // same reasoning every persisted module-scope value on this dashboard
+  // already follows) and react live without needing a remount.
+  document.dispatchEvent(new CustomEvent('dashboard-rotate-active-change', { detail: { active: rotationActive } }));
 }
 
 function startRotation() {
