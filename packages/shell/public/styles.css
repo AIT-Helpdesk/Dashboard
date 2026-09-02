@@ -3939,6 +3939,14 @@ tr.row-text-highlight-blue td {
 .wsp-page.wsp-rotation-view {
   zoom: 1.3;
 }
+/* Rotation View also hides the top intro/description box and the whole
+   bottom row (Usage instructions + Deliveries), by request -- same two
+   elements, same reasoning, as Mobile View's own identical rule above:
+   pure screen real estate an unattended display doesn't need either. */
+.wsp-page.wsp-rotation-view .wsp-intro-box,
+.wsp-page.wsp-rotation-view .wsp-bottom-panels {
+  display: none;
+}
 .wsp-dot {
   display: inline-block;
   width: 10px;
