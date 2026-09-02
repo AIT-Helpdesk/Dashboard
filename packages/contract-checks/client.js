@@ -65,6 +65,20 @@ const TICKET_STATUS_LABELS = {
 };
 
 export function mount(container) {
+  // The REAL scrolling box is always .page-content -- app.js's own
+  // overflow-y: auto region -- but `container` itself is only ever THAT
+  // element when this page is standalone. Wrapped inside a tabbed page
+  // (createTabbedPageMount(), tab-page-client.js), `container` is instead
+  // an inner div (#tab-page-content) nested inside the real .page-content,
+  // which itself never scrolls -- confirmed live (a real bug report:
+  // container.scrollTop read 0 both before AND after a checkbox toggle's
+  // own reload, every time, because that inner div genuinely never
+  // scrolls; the actual page position was being lost on the ancestor this
+  // code had no reference to at all). closest('.page-content') resolves
+  // correctly either way: standalone, `container` already IS .page-content
+  // so this just returns itself; tabbed, it walks up to the real one.
+  const scrollContainer = container.closest('.page-content') || container;
+
   fetch('/api/me')
     .then((res) => res.json())
     .then((data) => {
@@ -577,17 +591,22 @@ export function mount(container) {
   // load() fully rebuilds #results (resultsEl.innerHTML = '' then
   // re-populated) -- reloading after a toggle/Info save further down the
   // page destroys the checkbox/icon the user just interacted with, and
-  // losing focus that way was jumping back to the top. `container` (the
-  // #page-content div passed into mount()) is the ACTUAL scrolling
-  // element here -- see .page-content's own overflow-y: auto in
-  // styles.css -- not window/document, which never scroll on this
+  // losing focus that way was jumping back to the top. scrollContainer
+  // (resolved once at the top of mount(), see its own comment there) is
+  // the ACTUAL scrolling element -- .page-content's own overflow-y: auto
+  // in styles.css -- not window/document, which never scroll on this
   // dashboard at all (.layout is a fixed 100vh flex row). Restoring
   // window.scrollY was a no-op the first time around for exactly that
-  // reason; container.scrollTop is the real fix.
+  // reason; scrollContainer.scrollTop is the real fix. Plain container
+  // (rather than scrollContainer) was the original version of this fix --
+  // correct only while this page is standalone; broke silently, always
+  // restoring 0 onto an inner div that never itself scrolls, the moment
+  // it got wrapped inside a tabbed page (confirmed live via console
+  // logging -- see scrollContainer's own comment for the full story).
   async function loadPreservingScroll() {
-    const y = container.scrollTop;
+    const y = scrollContainer.scrollTop;
     await load();
-    container.scrollTop = y;
+    scrollContainer.scrollTop = y;
   }
 
   // A real "Close Ticket" / "Write Note (Don't Close)" / "Do Neither"
