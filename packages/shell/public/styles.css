@@ -1021,6 +1021,15 @@ h1 {
   font-size: 0.95rem;
 }
 
+/* Tickets Dashboard has no <h1> in its .page-header (removed by request) --
+   .page-header's shared `justify-content: space-between` puts a single
+   remaining flex item (the Refresh button's .date-form) at the start, so
+   push it to the end instead. Scoped to this page's own header class, not
+   a global .page-header change. */
+.tickets-dashboard-header {
+  justify-content: flex-end;
+}
+
 /* Fills essentially the whole page -- no page-header on this page at all
    (see technician-forms/client.js), so this only needs to account for
    .page-content's own top+bottom padding (0.67rem + 2rem, see above --
