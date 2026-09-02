@@ -15,9 +15,48 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', '.env') });
 const { getToken, getPage, fetchAllPages, getOrderDetail, getSubscriptionDetail } = require('@dashboard/ingram-client');
 const { getClient, listAll, matchesWildcard } = require('@dashboard/autotask-client');
-const { upsertOrder, getSyncState, saveSyncState, listOutstandingProcessing, listCompletedMissingProvisioningDate, nowIso } = require('./db.js');
+const { upsertOrder, getItemBySource, getSyncState, saveSyncState, listOutstandingProcessing, listCompletedMissingProvisioningDate, nowIso } = require('./db.js');
 
 const PROCESS_TYPE = 'ingram_subscription';
+// A subscription that's terminated OUTSIDE Ingram's own ordering system --
+// e.g. Ingram terminates it directly, no `cancellation`-type order ever
+// gets raised for it -- never shows up in the orders-based sync above at
+// all (confirmed with Amber: "there won't be an order"). Ingram's own
+// /subscriptions list endpoint reports current STATUS directly though, so
+// this is synced separately from the orders sync above -- but written into
+// THIS SAME process_type (by request -- Amber wants terminations sitting
+// in the normal "Ingram Micro Subscription Updates" list, not off in a
+// separate Process Type of their own), tagged as its own order_type
+// ('termination', never a real Ingram order type) so it's still clearly
+// distinguishable within that shared list (Type/Status columns both read
+// "Termination"/"Terminated").
+//
+// TWO Ingram statuses count as "ended" here, not just 'terminated' --
+// confirmed live via a real missed case (a Business Standard subscription
+// for "Brett Emery - Nevahnek" that ended 2026-09-01 with genuinely no
+// order behind it, exactly the gap this feature exists to catch, but
+// Ingram reported it as status 'removed', not 'terminated'). 'removed' is
+// a MUCH bigger bucket though (confirmed live: ~1,056 company-wide vs. 3
+// 'terminated' at the same moment) -- most of it looks like routine
+// month-to-month NCE subscription turnover (a fresh subscription record
+// every renewal cycle, the old one marked 'removed'), not real endings.
+// TERMINATION_CUTOFF_DATE below is what keeps that bucket from flooding
+// this page with noise (confirmed with Amber: "we only want to get things
+// that are terminated and their subscription end date in since 1/8/2026"
+// -- 17 rows total across both statuses with that scoping, vs. ~1,059
+// unscoped). Every row synced from either status still lands with the
+// same literal status: 'terminated' below -- Ingram's status vocabulary
+// split is plumbing, not something Amber's staff need to see two
+// different words for.
+// source_order_id is Ingram's own SUBSCRIPTION id here rather than an order
+// id -- TERMINATION_ID_PREFIX keeps it in its own namespace within the
+// UNIQUE(process_type, source_order_id) key now that it shares a
+// process_type with orders, since Ingram's order ids and subscription ids
+// are separate, unconfirmed-disjoint numbering sequences (no observed
+// collision, but nothing rules one out either) -- prefixing costs nothing
+// and removes the question entirely.
+const TERMINATION_ID_PREFIX = 'sub-';
+const TERMINATION_STATUSES = ['terminated', 'removed'];
 // Confirmed with Amber during planning: the first-ever sync reaches back to
 // 1 August 2026 for ordinary orders (see runSync()'s bootstrap step for the
 // separate full-history scan that also catches older still-processing
@@ -27,6 +66,11 @@ const PROCESS_TYPE = 'ingram_subscription';
 // aestDayBoundsIso() used for the "Since" filter people actually pick on
 // the page, a few hours of slop here doesn't matter.
 const BOOTSTRAP_CUTOFF_ISO = '2026-08-01T00:00:00Z';
+// Same real cutoff date as orders' own BOOTSTRAP_CUTOFF_ISO above (by
+// request, same "since 1/8/2026" scope in both places) -- plain date-string
+// comparison against a subscription's own expirationDate ('YYYY-MM-DD'),
+// which is what actually bounds the 'removed'-status noise described above.
+const TERMINATION_CUTOFF_DATE = BOOTSTRAP_CUTOFF_ISO.slice(0, 10);
 
 // Same paginate-and-stop-early method as packages/ingram-orders/server.js's
 // fetchOrdersSince() -- Ingram's /orders returns its full history sorted
@@ -235,6 +279,126 @@ async function syncOneOrder(orderStub, token, customerNameById) {
   return true;
 }
 
+// Terminations, unlike orders, have no per-event date to cursor on --
+// Ingram's /subscriptions list reports current STATUS, not a "terminated
+// on" timestamp, so there's no equivalent of fetchOrdersSince()'s "walk
+// forward from where we left off" here. Instead: every run pulls the FULL
+// current ended list across BOTH TERMINATION_STATUSES (a fixed cutoff, not
+// a moving cursor -- there's nothing to "walk forward" from with only a
+// current-status snapshot to work with either way), then narrows to
+// TERMINATION_CUTOFF_DATE (see both constants' own comments above for why
+// -- 'removed' alone is far too large to sync unscoped).
+//
+// "Only flag NEW terminations" (Amber's choice) means the ONE-TIME,
+// expensive work -- the per-subscription detail fetch, for products -- only
+// ever runs for a subscription id not already in the DB, via the same
+// UNIQUE(process_type, source_order_id) row every item here is keyed on.
+// (PO#/ticket resolution used to be part of that one-time work too, but is
+// gone entirely now -- see the upsertOrder() call below's own comment on
+// why.) It does NOT mean an already-known termination row is frozen
+// forever, though -- the cheap fields the LIST response already carries for
+// free (status/client name/dates) refresh on EVERY run, same "sync-driven
+// fields stay current, human-entered fields never get touched" convention
+// the orders sync's own refresh-outstanding pass already follows
+// (upsertOrder's UPDATE path never touches checked_contract/the checkboxes/
+// ticket_note/all_done regardless). This is also what self-heals a row
+// synced under an earlier, less accurate date field (see the
+// creationDate/provisioningDate comment below) the next time this runs,
+// without needing a one-off backfill script.
+async function syncTerminations(token, customerNameById) {
+  const byStatus = await Promise.all(TERMINATION_STATUSES.map((status) => fetchAllPages('/subscriptions', token, { status })));
+  // Confirmed live: some 'removed'/'terminated' subscriptions carry an
+  // expirationDate years in the future (e.g. a handful of "Windows 11 Home
+  // to Pro Upgrade" perpetual-license SKUs dated 2027/2035/2036) despite
+  // already being ended TODAY -- that field is evidently the SKU's own
+  // nominal term end, not a real "when did this actually end" signal for
+  // those rows. Excluded here (by request, after finding a batch of these
+  // in the live data) same as anything before TERMINATION_CUTOFF_DATE --
+  // a termination whose own "end date" hasn't happened yet is nonsensical
+  // to show as one. Same UTC-vs-AEST few-hours-of-slop tolerance as
+  // BOOTSTRAP_CUTOFF_ISO's own comment -- not day-boundary-precise, and
+  // doesn't need to be.
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const ended = byStatus.flat().filter((sub) => {
+    const end = sub.expirationDate || '';
+    return end >= TERMINATION_CUTOFF_DATE && end <= todayDate;
+  });
+  let newCount = 0;
+
+  for (const sub of ended) {
+    const id = TERMINATION_ID_PREFIX + sub.id;
+    const existing = getItemBySource(PROCESS_TYPE, id);
+
+    let products = [];
+
+    if (existing) {
+      // Preserve the expensive field already resolved on this row's first
+      // sync -- never re-fetched for a subscription already known.
+      try {
+        products = JSON.parse(existing.products_json || '[]');
+      } catch {
+        products = [];
+      }
+    } else {
+      try {
+        const detail = await getSubscriptionDetail(sub.id, token);
+        products = (detail.products || []).filter((p) => p.name).map((p) => ({ name: p.name, quantity: typeof p.quantity === 'number' ? p.quantity : null }));
+      } catch (err) {
+        // Same "don't fail the whole sync over one subscription's detail
+        // call" reasoning as fetchOrderDetailWithRetry -- the row still
+        // gets synced below, just without product/license info this run
+        // (a later run won't retry it either, since it'll already exist by
+        // then, but losing that one cosmetic detail is far better than
+        // losing the termination flag entirely over a transient failure).
+        console.error(`Contract Checks: failed to fetch termination detail for subscription ${id}:`, err.message);
+      }
+      newCount++;
+    }
+
+    // PO # is deliberately left blank here, always, by request -- Ingram's
+    // own `attributes.PONumber` on a terminated/removed subscription is
+    // stale leftover data from whenever the subscription was last actually
+    // ordered/changed, not anything meaningful about the termination
+    // itself, so showing it (or resolving a ticket link from it) would be
+    // actively misleading rather than merely incomplete. This never
+    // overwrites a PO # a human enters manually via the edit pencil either
+    // -- upsertOrder()'s own po_number_manual protection (db.js) applies
+    // here exactly the same as it does for orders.
+    upsertOrder({
+      processType: PROCESS_TYPE,
+      sourceOrderId: id,
+      orderNumber: sub.name || null,
+      orderType: 'termination',
+      customerId: sub.customerId || null,
+      clientName: customerNameById.get(sub.customerId) || (sub.customerId ? `Customer #${sub.customerId}` : null),
+      status: 'terminated',
+      // The subscription's own end date, by request -- NOT lastModifiedDate
+      // (an earlier version of this used that instead, but it's actually
+      // when the non-renewal DECISION was recorded, e.g. months before the
+      // term actually ends, not when the subscription itself terminates).
+      // expirationDate is the real "when did/does this end" field, so it
+      // drives both the Since-date filter (creationDate, same field every
+      // other row here sorts/filters by) and the Provisioned column
+      // (provisioningDate) -- both intentionally the same date for a
+      // termination row, since there's nothing else meaningfully
+      // "provisioned" about one; reusing that column beats adding a new
+      // one just for this. Falls back to lastModifiedDate/creationDate only
+      // if a row genuinely has no expirationDate at all, so filtering never
+      // breaks outright, but that's not expected to actually happen
+      // (confirmed live -- present on every terminated subscription seen).
+      creationDate: sub.expirationDate || sub.lastModifiedDate || sub.creationDate || null,
+      provisioningDate: sub.expirationDate || null,
+      pendingDate: null,
+      poNumber: null,
+      ticketAutotaskId: null,
+      products,
+      currentTotal: null,
+    });
+  }
+
+  return newCount;
+}
+
 // The one job this package runs, either from the "Check for more Orders in
 // IM" button (server.js's POST /sync) or, later, standalone via
 // `node sync.js` if a scheduled task ever gets added -- see the
@@ -247,6 +411,7 @@ async function runSync() {
 
   let newCount = 0;
   let refreshedCount = 0;
+  let newTerminationsCount = 0;
 
   try {
     if (!state.bootstrap_done) {
@@ -312,9 +477,14 @@ async function runSync() {
       }
     }
 
-    const message = `Synced ${newCount} new, refreshed ${refreshedCount} outstanding.`;
+    // Runs every call regardless of the orders bootstrap/incremental branch
+    // above -- see syncTerminations()'s own comment for why it's a full
+    // snapshot rather than something with its own cursor/bootstrap state.
+    newTerminationsCount = await syncTerminations(token, customerNameById);
+
+    const message = `Synced ${newCount} new, refreshed ${refreshedCount} outstanding, ${newTerminationsCount} new termination${newTerminationsCount === 1 ? '' : 's'}.`;
     saveSyncState(PROCESS_TYPE, { last_run_at: nowIso(), last_run_ok: 1, last_run_message: message, last_run_new_count: newCount, last_run_refreshed_count: refreshedCount });
-    return { ok: true, newCount, refreshedCount, message };
+    return { ok: true, newCount, refreshedCount, newTerminationsCount, message };
   } catch (err) {
     console.error('Contract Checks sync failed:', err);
     saveSyncState(PROCESS_TYPE, {
@@ -324,7 +494,7 @@ async function runSync() {
       last_run_new_count: newCount,
       last_run_refreshed_count: refreshedCount,
     });
-    return { ok: false, newCount, refreshedCount, message: err.message };
+    return { ok: false, newCount, refreshedCount, newTerminationsCount, message: err.message };
   }
 }
 

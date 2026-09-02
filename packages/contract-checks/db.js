@@ -196,6 +196,45 @@ function migrateAddPoNumberManual() {
 }
 migrateAddPoNumberManual();
 
+// One-time correction: terminations first synced into their own
+// 'ingram_termination' process_type, before being merged into the main
+// 'ingram_subscription' list by request, so they show up alongside
+// regular orders instead of behind a separate Process Type selection.
+// Moves any row still under the old process_type into the new shape --
+// process_type 'ingram_subscription', source_order_id prefixed 'sub-'
+// (sync.js's own TERMINATION_ID_PREFIX, which all NEW termination rows
+// already write under, kept distinct from real Ingram order ids since
+// those two id spaces aren't confirmed disjoint). Idempotent: once run,
+// no row is left under 'ingram_termination' for a second call to find.
+// order_type stays 'termination' throughout, untouched -- already the
+// real marker (alongside status 'terminated') that tells these apart from
+// actual orders within the now-shared list.
+function migrateMergeTerminationsIntoSubscriptionType() {
+  const rows = db.prepare(`SELECT id, source_order_id FROM items WHERE process_type = 'ingram_termination'`).all();
+  for (const row of rows) {
+    db.prepare(`UPDATE items SET process_type = 'ingram_subscription', source_order_id = 'sub-' || source_order_id WHERE id = ?`).run(row.id);
+  }
+}
+migrateMergeTerminationsIntoSubscriptionType();
+
+// One-time correction: PO #/ticket link on a termination row used to be
+// resolved from Ingram's own attributes.PONumber (same as an order), before
+// catching that it's stale leftover data from whenever the subscription was
+// last actually ordered/changed, never anything meaningful about the
+// termination itself (by request: "The PO number will never be correct on
+// the removed and terminated entries, please leave them blank"). sync.js
+// no longer writes one going forward, and its own per-run refresh already
+// clears it for any row still in TERMINATION_CUTOFF_DATE's scope -- this
+// migration is only for rows that predate that cutoff and so never get
+// touched by a sync run again, otherwise permanently stuck with the old
+// value. `po_number_manual = 0` guard is the same protection upsertOrder()
+// itself always respects -- never clears a PO # a human has actually typed
+// in via the edit pencil.
+function migrateBlankAutoTerminationPoNumbers() {
+  db.prepare(`UPDATE items SET po_number = NULL, ticket_autotask_id = NULL WHERE order_type = 'termination' AND po_number_manual = 0 AND (po_number IS NOT NULL OR ticket_autotask_id IS NOT NULL)`).run();
+}
+migrateBlankAutoTerminationPoNumbers();
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -371,6 +410,16 @@ function updateItemFields(itemId, fields, actor) {
   return getItem(itemId);
 }
 
+// Whether a row already exists for a given (process_type, source_order_id)
+// -- exported for sync.js's termination sync (see its own comment), which
+// needs to know NEW-ness *before* deciding whether it's worth an extra
+// per-subscription detail fetch, not just after the fact like upsertOrder's
+// own internal check below (which upsertOrder now reuses, rather than
+// keeping its own separate inline query).
+function getItemBySource(processType, sourceOrderId) {
+  return db.prepare('SELECT * FROM items WHERE process_type = ? AND source_order_id = ?').get(processType, sourceOrderId);
+}
+
 // Insert-or-update one synced order, keyed on (process_type,
 // source_order_id). The UPDATE path ONLY EVER touches the Ingram-sourced
 // columns -- it never touches checked_contract/info/the 4 checkboxes/
@@ -381,9 +430,7 @@ function updateItemFields(itemId, fields, actor) {
 // comment above). Returns the local row id.
 function upsertOrder(order) {
   const now = nowIso();
-  const existing = db
-    .prepare('SELECT id, po_number, ticket_autotask_id, po_number_manual FROM items WHERE process_type = ? AND source_order_id = ?')
-    .get(order.processType, order.sourceOrderId);
+  const existing = getItemBySource(order.processType, order.sourceOrderId);
 
   // A manually-corrected PO #/ticket link (po_number_manual, set by
   // updateItemFields() above) is protected from being silently overwritten
@@ -559,6 +606,7 @@ module.exports = {
   setToggle,
   updateItemFields,
   upsertOrder,
+  getItemBySource,
   getSyncState,
   saveSyncState,
   listItemsRaw,
