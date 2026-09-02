@@ -100,7 +100,7 @@ export function mount(container) {
           <label for="product-input">Product</label>
           <input type="text" id="product-input" name="product" placeholder="optional, e.g. *Business Basic* (wildcards with *)" />
           <button type="submit" id="refresh-button">Refresh</button>
-          <button type="button" id="sync-button">Check for more Orders in IM</button>
+          <button type="button" id="sync-button">Check IM for More</button>
         </div>
         <div class="date-form-row">
           <label for="include-renewals-input" class="inline-checkbox-label">
@@ -121,7 +121,7 @@ export function mount(container) {
         </div>
       </form>
     </header>
-    <p id="status" class="status">Pick a date, optionally filter by client/status/product (wildcards with *), then click Refresh. A row still "processing" always shows regardless of the Since date -- that's exactly the kind of outstanding item this page exists to surface. "Check for more Orders in IM" pulls anything new (or changed) from Ingram Micro into this page's own database -- every other control here reads from that database, not Ingram live.</p>
+    <p id="status" class="status">Pick a date, optionally filter by client/status/product (wildcards with *), then click Refresh. A row still "processing" always shows regardless of the Since date -- that's exactly the kind of outstanding item this page exists to surface. "Check IM for More" pulls anything new (or changed) from Ingram Micro into this page's own database -- every other control here reads from that database, not Ingram live. A terminated subscription is flagged once, the first time it's seen, and shows up in this same list -- Type "Termination", Status "Terminated".</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
     </div>
@@ -203,7 +203,7 @@ export function mount(container) {
     refreshButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
-    statusEl.textContent = 'Checking Ingram Micro for new or changed orders -- this can take a little while...';
+    statusEl.textContent = 'Checking Ingram Micro for new or changed orders, and for new terminations -- this can take a little while...';
     try {
       const result = await fetchJson('/api/contract-checks/sync', 'POST');
       statusEl.textContent = result.message || 'Sync complete.';
