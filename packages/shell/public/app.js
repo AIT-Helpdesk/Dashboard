@@ -1591,6 +1591,32 @@ async function loadPage(id) {
   }
 }
 
+// Lets a browser's own startup/home page URL boot straight into a
+// running Rotate cycle, by request -- e.g. a kiosk/wall-display browser
+// whose home page is set to ".../?rotate=on" (add a page hash too, e.g.
+// "?rotate=on#workshop", to also choose which page it opens on first --
+// the query string and the hash-based page routing don't interfere with
+// each other at all). Accepts a few spellings of "yes" so a slightly
+// different URL someone types by hand still works. Only ever STARTS a
+// cycle -- there's no "?rotate=off" companion, since a normal visit
+// never has one already running to turn off. Silently does nothing if
+// this browser/computer has no pages actually added to Rotate yet (see
+// startRotation()'s own early return) -- there'd be nothing to rotate
+// through.
+//
+// One real limitation, unavoidable: real browser Fullscreen (the
+// F11-equivalent startRotation() also requests) can only be entered from
+// a genuine user gesture (a click/keypress) -- browsers block it from
+// ever firing on page load, even here. Rotation itself, and this app's
+// own Focus Mode (hides the sidebar via CSS), both still start normally
+// regardless. For a true no-address-bar kiosk display, launch the
+// browser itself in kiosk mode (e.g. Chrome's own --kiosk flag) rather
+// than relying on this alone to cover that part too.
+function maybeAutoStartRotation() {
+  const value = (new URLSearchParams(window.location.search).get('rotate') || '').toLowerCase();
+  if (['on', 'true', '1', 'yes'].includes(value)) startRotation();
+}
+
 async function init() {
   tree = await loadTree();
   // Only actually reveal the preview-user button once loadTree() has come
@@ -1601,5 +1627,6 @@ async function init() {
   window.addEventListener('hashchange', () => loadPage(currentPageId()));
   await loadPage(currentPageId());
   renderUserInfo();
+  maybeAutoStartRotation();
 }
 init();
