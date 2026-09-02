@@ -1,6 +1,20 @@
 const express = require('express');
 const { matchesWildcard, aestDayBoundsIso, getTicketUrl, getClient, fetchByFieldIn, getPicklistLabels, resolveCompanyName, mapWithConcurrency } = require('@dashboard/autotask-client');
-const { TOGGLE_FIELDS, setToggle, updateItemFields, listItemsRaw, getItemHistory, getToggleHistories, getHistoryCounts, listTemplates, getTemplate, setTemplate, getItem } = require('./db.js');
+const {
+  TOGGLE_FIELDS,
+  setToggle,
+  recordTicketActionOutcome,
+  updateItemFields,
+  listItemsRaw,
+  listChangeEventsSince,
+  getItemHistory,
+  getToggleHistories,
+  getHistoryCounts,
+  listTemplates,
+  getTemplate,
+  setTemplate,
+  getItem,
+} = require('./db.js');
 const { runSync, PROCESS_TYPE, resolveTicketAutotaskId } = require('./sync.js');
 
 // Edit Template (below) is restricted to Amber, by request -- same pattern
@@ -598,6 +612,46 @@ router.post('/sync', async (req, res) => {
   }
 });
 
+// The "Change Report" popup, by request -- the real change HISTORY (which
+// tick, when, and whether it actually wrote to Autotask), not a summary --
+// see listChangeEventsSince()'s own comment in db.js for the full "since"-
+// meaning/scoping story. `since` reuses the exact same required-YYYY-MM-DD
+// + aestDayBoundsIso() validation GET / already applies to its own since
+// param -- no "All" option here (unlike that route), since a report with
+// no lower bound at all isn't a meaningful ask. One JSON object per audit
+// event (not one per item) -- client.js groups/sorts these into Client ->
+// Product -> individual events itself.
+router.get('/change-report', async (req, res) => {
+  const sinceDate = req.query.since;
+  if (!sinceDate || !/^\d{4}-\d{2}-\d{2}$/.test(sinceDate)) {
+    return res.status(400).json({ error: 'Query param "since" is required in YYYY-MM-DD format.' });
+  }
+  try {
+    const startISO = aestDayBoundsIso(sinceDate).startISO;
+    const rows = listChangeEventsSince(PROCESS_TYPE, startISO);
+    const events = rows.map((row) => ({
+      auditId: row.audit_id,
+      itemId: row.item_id,
+      field: row.field,
+      action: row.new_value ? 'on' : 'off', // same ON-if-new_value-set convention getToggleHistories() already uses
+      changedAt: row.changed_at,
+      changedByName: row.changed_by_name,
+      ticketActionResult: row.ticket_action_result,
+      ticketActionError: row.ticket_action_error,
+      clientName: row.client_name,
+      orderNumber: row.order_number,
+      orderType: row.order_type,
+      status: row.status,
+      poNumber: row.po_number,
+      products: JSON.parse(row.products_json || '[]'),
+    }));
+    res.json({ sinceDate, events });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // One checkbox, one toggle -- body { field, value }. field is validated
 // against TOGGLE_FIELDS (checked_contract/m365_ok/tc_elite/tc_ess/others/
 // all_done); setToggle() stamps or clears the date-time and always
@@ -632,7 +686,7 @@ router.patch('/items/:id/toggle', async (req, res) => {
   }
 
   const actor = { email: req.session.user.email, name: req.session.user.name };
-  const updated = setToggle(Number(req.params.id), field, !!value, actor);
+  const { item: updated, auditLogId } = setToggle(Number(req.params.id), field, !!value, actor);
   if (!updated) return res.status(404).json({ error: 'Item not found.' });
 
   // Closing out the real Autotask ticket, by request -- moved here from
@@ -670,6 +724,20 @@ router.patch('/items/:id/toggle', async (req, res) => {
     }
   }
 
+  // Stamps the real Autotask outcome onto the audit_log row setToggle()
+  // already wrote above -- 'sent' (a real note/status change succeeded),
+  // 'failed' (attempted, see ticketAction.error), 'skipped' (the "Leave as
+  // COMPLETE" case above -- a deliberate non-send, not a failure). Left
+  // NULL (the no-op default) when there was nothing to send at all (a
+  // non-all_done toggle, or all_done with no linked ticket) -- by request,
+  // "whether it was written to Autotask" needs to survive as a real report
+  // answer later (see Change Report below), not just this response's own
+  // one-time ticketAction the client only ever alert()s and forgets.
+  if (ticketAction) {
+    const result = ticketAction.statusLeftAsComplete ? 'skipped' : ticketAction.ok ? 'sent' : 'failed';
+    recordTicketActionOutcome(auditLogId, result, ticketAction.ok ? null : ticketAction.error);
+  }
+
   res.json({ ok: true, ticketAction });
 });
 
@@ -704,9 +772,14 @@ router.post('/items/bulk-close', async (req, res) => {
   // Tick ALL DONE for every selected item regardless of ticket grouping --
   // each Ingram order is still its own row/record in this dashboard, with
   // its own independent audit trail, even when several of them share one
-  // real Autotask ticket below.
+  // real Autotask ticket below. auditLogId tracked per item here so the
+  // real Autotask outcome (only known once the ticket-grouped calls below
+  // resolve) can be stamped onto the exact right audit_log row afterward --
+  // same reasoning as the single-item toggle route above.
+  const auditLogIdByItemId = new Map();
   for (const item of items) {
-    setToggle(item.id, 'all_done', true, actor);
+    const { auditLogId } = setToggle(item.id, 'all_done', true, actor);
+    auditLogIdByItemId.set(item.id, auditLogId);
   }
 
   // Group by the REAL ticket, by request -- "sometimes the same ticket
@@ -751,7 +824,14 @@ router.post('/items/bulk-close', async (req, res) => {
     const bulkWithList = ticketLabels.filter((t) => t.ticketId !== ticketId).map((t) => t.label);
     const ticketAction = await postTicketNoteAndClose(ticketId, mergedNoteText, actor, bulkWithList, closeTicket);
     console.log(`Contract Checks: bulk-close result for ticket ${ticketId}:`, JSON.stringify(ticketAction));
+    // Same outcome stamp as the single-item toggle route -- every item in
+    // this ticket group shares the one merged note/status-change result,
+    // so the same 'sent'/'failed' lands on every one of their own
+    // audit_log rows (there's no per-item "skipped" case here -- bulk
+    // close has no "Leave as COMPLETE" option, unlike a single untick).
+    const result = ticketAction.ok ? 'sent' : 'failed';
     for (const item of groupItems) {
+      recordTicketActionOutcome(auditLogIdByItemId.get(item.id), result, ticketAction.ok ? null : ticketAction.error);
       results.push({ itemId: item.id, orderNumber: item.order_number, ticketAction });
     }
   }

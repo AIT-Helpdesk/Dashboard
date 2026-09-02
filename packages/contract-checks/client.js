@@ -115,6 +115,7 @@ export function mount(container) {
           <input type="text" id="product-input" name="product" placeholder="optional, e.g. *Business Basic* (wildcards with *)" />
           <button type="submit" id="refresh-button">Refresh</button>
           <button type="button" id="sync-button">Check IM for More</button>
+          <button type="button" id="change-report-button">Change Report</button>
         </div>
         <div class="date-form-row">
           <label for="include-renewals-input" class="inline-checkbox-label">
@@ -155,6 +156,7 @@ export function mount(container) {
   const hideRenewalOrProcessingOnlyInput = container.querySelector('#hide-renewal-or-processing-only-input');
   const refreshButton = container.querySelector('#refresh-button');
   const syncButton = container.querySelector('#sync-button');
+  const changeReportButton = container.querySelector('#change-report-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
@@ -230,6 +232,8 @@ export function mount(container) {
       refreshButton.disabled = false;
     }
   });
+
+  changeReportButton.addEventListener('click', () => openChangeReportModal());
 
   async function load() {
     const allDates = allDatesInput.checked;
@@ -1193,6 +1197,165 @@ export function mount(container) {
     });
 
     noteInput.focus();
+  }
+
+  // "Change Report" -- a little report of every order/termination a human
+  // has actually worked on (any checkbox toggle or field edit -- see
+  // listChangedItemsSince()'s own comment in db.js) since a date picked in
+  // a popup when the report is requested, by request. Same overlay/panel
+  // shell every other popup on this page uses -- step one (date + Generate)
+  // and step two (the results) both live in the SAME modal instance rather
+  // than opening a second one, so Escape/click-outside/the close button all
+  // still just work without extra wiring.
+  function openChangeReportModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel wsp-qa-modal-panel cc-change-report-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>Change Report</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <div class="cc-change-report-form">
+            <label class="wsp-qa-modal-label">
+              Since
+              <input type="date" class="wsp-field cc-change-report-since-input" value="${defaultSinceISO()}" />
+            </label>
+            <div class="wsp-form-actions">
+              <button type="button" class="button-link cc-change-report-generate-button">Generate</button>
+              <button type="button" class="cc-change-report-cancel-button">Cancel</button>
+            </div>
+          </div>
+          <p class="status error cc-change-report-error" hidden></p>
+          <div class="cc-change-report-results"></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.querySelector('.cc-change-report-cancel-button').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const sinceInputEl = overlay.querySelector('.cc-change-report-since-input');
+    const generateButton = overlay.querySelector('.cc-change-report-generate-button');
+    const errorEl = overlay.querySelector('.cc-change-report-error');
+    // Named distinctly from the page's own outer resultsEl (mount()-scope,
+    // the main table's own container) -- this function sits inside that
+    // same closure, so a same-named local here would shadow it rather than
+    // error, easy to trip over later.
+    const reportResultsEl = overlay.querySelector('.cc-change-report-results');
+
+    generateButton.addEventListener('click', async () => {
+      const since = sinceInputEl.value;
+      if (!since) {
+        errorEl.hidden = false;
+        errorEl.textContent = 'Pick a date first.';
+        return;
+      }
+      errorEl.hidden = true;
+      generateButton.disabled = true;
+      generateButton.textContent = 'Generating...';
+      reportResultsEl.innerHTML = '';
+      try {
+        const data = await fetchJson(`/api/contract-checks/change-report?since=${encodeURIComponent(since)}`, 'GET');
+        reportResultsEl.innerHTML = changeReportHtml(data.events, since);
+      } catch (err) {
+        errorEl.hidden = false;
+        errorEl.textContent = `Error: ${err.message}`;
+      } finally {
+        generateButton.disabled = false;
+        generateButton.textContent = 'Generate';
+      }
+    });
+    sinceInputEl.focus();
+  }
+
+  // "Sent to Autotask" / "Failed: <error>" / "Not sent (left as Complete)"
+  // / blank -- ticketActionResult is only ever set on an all_done event
+  // that actually had something to send (see recordTicketActionOutcome()'s
+  // own comment in db.js) -- blank covers both "not an all_done event" and
+  // "all_done, but no linked ticket to send anything to" alike, since
+  // neither is a real outcome worth a line of its own.
+  function ticketActionText(e) {
+    if (e.ticketActionResult === 'sent') return 'Sent to Autotask';
+    if (e.ticketActionResult === 'skipped') return 'Not sent (left as Complete)';
+    if (e.ticketActionResult === 'failed') return `Failed: ${e.ticketActionError || 'unknown error'}`;
+    return '';
+  }
+
+  // Groups already-fetched Change Report EVENTS (one per audit_log row --
+  // an earlier version of this summarized to one row per item, replaced
+  // entirely by request: "put the change history in this report instead...
+  // which ticks were ticked and when the Done was done and whether it was
+  // written to Autotask") by Client, then sorts each client's own events by
+  // Product (the same joined product-name string the main table's own
+  // Product column already builds) -- the two-level order originally
+  // requested, kept as-is; only the CONTENT under it changed. A single
+  // order with several ticks in the window shows up as several rows here,
+  // one per actual tick -- by design, this is a history, not a summary.
+  // Newest-first within a product/order, matching listChangeEventsSince()'s
+  // own ORDER BY. `since` is only used here for the "no changes" message.
+  function changeReportHtml(events, since) {
+    if (events.length === 0) return `<p class="status">No changes since ${escapeHtml(since)}.</p>`;
+
+    const productNames = (e) => (e.products || []).map((p) => p.name).join(', ');
+
+    const byClient = new Map();
+    for (const e of events) {
+      const key = e.clientName || '(unknown)';
+      if (!byClient.has(key)) byClient.set(key, []);
+      byClient.get(key).push(e);
+    }
+    const clientNames = [...byClient.keys()].sort((a, b) => a.localeCompare(b));
+
+    const itemCount = new Set(events.map((e) => e.itemId)).size;
+
+    const groupsHtml = clientNames
+      .map((clientName) => {
+        // Product first (the requested order), events already newest-first
+        // within that (the query's own ORDER BY, preserved by a stable
+        // sort here) -- not re-sorted by date, so several ticks on the
+        // same order still read top-to-bottom as they actually happened.
+        const rows = [...byClient.get(clientName)].sort((a, b) => productNames(a).localeCompare(productNames(b)));
+        const rowsHtml = rows
+          .map((e) => {
+            const actionText = e.action === 'on' ? 'Ticked ON' : 'Unticked OFF';
+            const ticketText = ticketActionText(e);
+            return `
+          <tr>
+            <td class="cc-product-cell">${escapeHtml(productNames(e))}</td>
+            <td class="ticket-number">${escapeHtml(e.orderNumber || '')}</td>
+            <td>${escapeHtml(FIELD_LABELS[e.field] || e.field)}</td>
+            <td${e.action === 'on' ? '' : ' class="cell-flag-blue"'}>${escapeHtml(actionText)}</td>
+            <td class="ticket-number">${formatDateTime(e.changedAt)}</td>
+            <td>${escapeHtml(e.changedByName || '')}</td>
+            <td${e.ticketActionResult === 'failed' ? ' class="cell-flag-red"' : ''}>${escapeHtml(ticketText)}</td>
+          </tr>`;
+          })
+          .join('');
+        return `
+        <div class="resource-group">
+          <div class="resource-group-header"><span>${escapeHtml(clientName)}</span></div>
+          <table class="contract-checks-table cc-change-report-table">
+            <thead><tr><th>Product</th><th>Order #</th><th>Field</th><th>Action</th><th>Changed</th><th>By</th><th>Autotask</th></tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>`;
+      })
+      .join('');
+
+    return `<p class="inline-subtext">${events.length} change${events.length === 1 ? '' : 's'} across ${itemCount} order${itemCount === 1 ? '' : 's'} and ${clientNames.length} client${clientNames.length === 1 ? '' : 's'} since ${escapeHtml(since)}.</p>${groupsHtml}`;
   }
 
   // Small editor for the PO # (Ticket #), by request -- same overlay/panel

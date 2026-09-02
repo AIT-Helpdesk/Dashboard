@@ -1542,6 +1542,29 @@ h1 {
      had) rather than overflowing it now that this rule wins outright. */
   max-width: min(36rem, 90vw);
 }
+/* Change Report modal (openChangeReportModal() in client.js) -- wider
+   still than the other two overrides above, since its results are a real
+   multi-column table (Product/Order #/Field/Action/Changed/By/Autotask)
+   grouped per client, not just a line or two of text. Widened twice now,
+   by request each time -- 44rem, then 64rem, both still too narrow in
+   practice once the report grew a 7th column (Autotask, which can carry a
+   real error message) -- now 84rem, a real 90/97vw split between normal
+   and narrow screens rather than one number for both, since a 7-column
+   table has much more to lose by cramming on a narrow window than the
+   shorter text-only modals above do. Same compound-selector fix as both
+   rules above (a single-class .cc-change-report-modal-panel selector would
+   lose to .wsp-qa-modal-panel's own width:24rem, same equal-specificity
+   bug already found and fixed on those two). .history-modal-panel's own
+   max-height: 80vh + overflow-y: auto (styles.css, further down) already
+   cover a report tall enough to need scrolling on screen. (A Print/Export
+   to PDF button was tried here too -- window.print() plus a @media print
+   override -- but removed again by request: a real audit report needs
+   proper scoping/design first, not a quick window.print() dump of
+   potentially hundreds of rows.) */
+.history-modal-panel.cc-change-report-modal-panel {
+  width: 84rem;
+  max-width: min(84rem, 97vw);
+}
 .contract-checks-page .wsp-icon-btn,
 .check-client-page .wsp-icon-btn {
   font-size: 0.75rem;

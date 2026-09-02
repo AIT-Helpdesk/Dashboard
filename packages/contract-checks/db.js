@@ -110,7 +110,23 @@ db.exec(`
     -- OFF -- lets the per-toggle mini-history (hover tooltip) and the full
     -- History modal both derive "ON at <new_value>" / "OFF at <changed_at>"
     -- from the same rows without a separate on/off flag column.
-    new_value TEXT
+    new_value TEXT,
+    -- Whether THIS toggle actually wrote to Autotask -- only ever set for
+    -- an all_done row (the one checkbox with a real Autotask side effect),
+    -- via recordTicketActionOutcome() below, called AFTER setToggle()
+    -- itself already wrote this row (the Autotask call only happens once
+    -- the toggle is already known to have succeeded locally, and its own
+    -- outcome isn't known until after that call resolves -- see PATCH
+    -- /items/:id/toggle and POST /items/bulk-close in server.js). NULL on
+    -- every other field, and on an all_done row where there was nothing to
+    -- send at all (no linked ticket). 'sent' (succeeded), 'failed'
+    -- (attempted, see ticket_action_error), 'skipped' (a real, deliberate
+    -- non-send -- "Leave as COMPLETE" on an untick, by request -- not a
+    -- failure). By request: "whether it was written to Autotask" needed
+    -- to survive as a real report answer, not just the one-time toggle
+    -- response alert() already showed and forgot.
+    ticket_action_result TEXT,
+    ticket_action_error TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_audit_item ON audit_log(item_id, changed_at);
 
@@ -235,6 +251,20 @@ function migrateBlankAutoTerminationPoNumbers() {
 }
 migrateBlankAutoTerminationPoNumbers();
 
+// Adds ticket_action_result/ticket_action_error to an already-existing
+// audit_log table -- plain nullable ADD COLUMNs, no CHECK constraint
+// involved, so directly supported (no recreate-table dance needed). Every
+// pre-existing row correctly starts NULL on both -- an honest "not
+// tracked" for history that predates this, not a guess at what actually
+// happened.
+function migrateAddTicketActionColumns() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('audit_log')`).all();
+  if (columns.some((c) => c.name === 'ticket_action_result')) return;
+  db.exec(`ALTER TABLE audit_log ADD COLUMN ticket_action_result TEXT`);
+  db.exec(`ALTER TABLE audit_log ADD COLUMN ticket_action_error TEXT`);
+}
+migrateAddTicketActionColumns();
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -309,19 +339,40 @@ function setTemplate(key, { name, content }, actor) {
 // `actor` is always { email, name } -- req.session.user, same shape every
 // other page on this dashboard already reads it (requireAuth guarantees a
 // signed-in session before any route runs).
+// Returns the new row's own id -- lets a caller (setToggle() below, for an
+// all_done toggle) come back LATER and stamp ticket_action_result/
+// ticket_action_error onto this exact row once the real Autotask call
+// resolves (which only happens after this row is already written, and
+// whose outcome isn't known yet at the time it's written).
 function recordAudit({ itemId, field, oldValue = null, newValue = null, actor }) {
-  db.prepare(
-    `INSERT INTO audit_log (item_id, changed_at, changed_by_email, changed_by_name, field, old_value, new_value)
-     VALUES ($itemId, $changedAt, $email, $name, $field, $oldValue, $newValue)`
-  ).run({
-    $itemId: itemId,
-    $changedAt: nowIso(),
-    $email: actor.email,
-    $name: actor.name,
-    $field: field,
-    $oldValue: oldValue,
-    $newValue: newValue,
-  });
+  const info = db
+    .prepare(
+      `INSERT INTO audit_log (item_id, changed_at, changed_by_email, changed_by_name, field, old_value, new_value)
+       VALUES ($itemId, $changedAt, $email, $name, $field, $oldValue, $newValue)`
+    )
+    .run({
+      $itemId: itemId,
+      $changedAt: nowIso(),
+      $email: actor.email,
+      $name: actor.name,
+      $field: field,
+      $oldValue: oldValue,
+      $newValue: newValue,
+    });
+  return Number(info.lastInsertRowid);
+}
+
+// Stamps the real Autotask outcome onto an audit_log row already written
+// by setToggle() (via recordAudit() above) -- called from server.js once
+// the actual Autotask call (postTicketNoteAndClose()/reopenTicketWithNote())
+// resolves, which is always AFTER the row itself was written (see that
+// row's own comment in the CREATE TABLE above for why). No-ops silently on
+// a null/falsy auditLogId -- callers pass one through even for a toggle
+// that had nothing to send (e.g. no linked ticket), where there's simply
+// nothing to stamp.
+function recordTicketActionOutcome(auditLogId, result, error = null) {
+  if (!auditLogId) return;
+  db.prepare(`UPDATE audit_log SET ticket_action_result = ?, ticket_action_error = ? WHERE id = ?`).run(result, error, auditLogId);
 }
 
 function getItem(itemId) {
@@ -332,10 +383,19 @@ function getItem(itemId) {
 // turning off clears all three columns back to NULL. ALWAYS audits (unlike
 // Workshop's equipment checklist, which deliberately skips it) -- the
 // ON/OFF history is the whole point of these checkboxes here, by request.
+// Returns { item, auditLogId } -- auditLogId is null whenever no audit_log
+// row was actually written this call (item not found, or "no real
+// change"), and the one real id otherwise, so a caller doing an all_done
+// toggle (the one with a real Autotask side effect, resolved AFTER this
+// function returns) can come back later via recordTicketActionOutcome()
+// and stamp that exact row with the real outcome. `item` is null only when
+// itemId doesn't exist at all -- every other case (including "no real
+// change") still returns the current item row, same as this function's
+// return value always did before.
 function setToggle(itemId, field, on, actor) {
   if (!TOGGLE_FIELDS.includes(field)) throw { status: 400, message: `Unknown toggle field: ${field}` };
   const existing = getItem(itemId);
-  if (!existing) return null;
+  if (!existing) return { item: null, auditLogId: null };
 
   const atCol = `${field}_at`;
   const emailCol = `${field}_by_email`;
@@ -343,7 +403,7 @@ function setToggle(itemId, field, on, actor) {
   const oldValue = existing[atCol];
   const now = nowIso();
   const newValue = on ? now : null;
-  if ((oldValue || null) === newValue) return existing; // no real change -- don't pollute the audit log
+  if ((oldValue || null) === newValue) return { item: existing, auditLogId: null }; // no real change -- don't pollute the audit log
 
   db.prepare(`UPDATE items SET ${atCol} = $at, ${emailCol} = $email, ${nameCol} = $name, updated_at = $updatedAt WHERE id = $id`).run({
     $at: newValue,
@@ -352,8 +412,8 @@ function setToggle(itemId, field, on, actor) {
     $updatedAt: now,
     $id: itemId,
   });
-  recordAudit({ itemId, field, oldValue, newValue, actor });
-  return getItem(itemId);
+  const auditLogId = recordAudit({ itemId, field, oldValue, newValue, actor });
+  return { item: getItem(itemId), auditLogId };
 }
 
 // camelCase API field name -> real column name, for the plain-text fields
@@ -528,6 +588,52 @@ function listItemsRaw(processType, sinceIso) {
     .all(processType, sinceIso);
 }
 
+// The "Change Report" -- every individual TOGGLE event (which tick was
+// ticked, when, and whether it actually wrote to Autotask) a human has
+// made on or after a given date, by request: "I want to see what was
+// updated, like which ticks were ticked and when the Done was done and
+// whether it was written to Autotask". An EARLIER version of this
+// collapsed everything down to one summary row per item -- replaced
+// entirely, by request ("put the change history in this report instead"),
+// with one row per actual audit_log entry, newest first.
+//
+// Deliberately NOT the same "since" as listItemsRaw() above (that one
+// gates on an order/termination's own creation_date -- when it happened in
+// Ingram; this one gates on changed_at -- when a human here actually
+// worked on it). Scoped to TOGGLE_FIELDS only (the six checkboxes), not
+// every audit_log field -- info_question/ticket_note/po_number edits go
+// through the exact same table but aren't "ticks", and their old_value/
+// new_value hold real text rather than the ON-timestamp/NULL shape a tick
+// event needs (see audit_log's own new_value comment above). Client/
+// Product grouping and sorting happen in client.js, same SQL-narrows-first
+// split every other list route here already follows.
+function listChangeEventsSince(processType, sinceIso) {
+  const fieldPlaceholders = TOGGLE_FIELDS.map(() => '?').join(',');
+  return db
+    .prepare(
+      `SELECT
+         audit_log.id AS audit_id,
+         audit_log.field,
+         audit_log.new_value,
+         audit_log.changed_at,
+         audit_log.changed_by_name,
+         audit_log.ticket_action_result,
+         audit_log.ticket_action_error,
+         items.id AS item_id,
+         items.client_name,
+         items.order_number,
+         items.order_type,
+         items.status,
+         items.po_number,
+         items.products_json
+       FROM audit_log
+       JOIN items ON items.id = audit_log.item_id
+       WHERE items.process_type = ? AND audit_log.changed_at >= ? AND audit_log.field IN (${fieldPlaceholders})
+       ORDER BY audit_log.changed_at DESC`
+    )
+    .all(processType, sinceIso, ...TOGGLE_FIELDS);
+}
+
 // Every currently-outstanding row for a process type -- used by sync.js's
 // "refresh outstanding" step (see the README's sync design) to re-check
 // status/pending_date on anything not yet resolved, regardless of how old
@@ -602,6 +708,7 @@ module.exports = {
   nowIso,
   TOGGLE_FIELDS,
   recordAudit,
+  recordTicketActionOutcome,
   getItem,
   setToggle,
   updateItemFields,
@@ -610,6 +717,7 @@ module.exports = {
   getSyncState,
   saveSyncState,
   listItemsRaw,
+  listChangeEventsSince,
   listOutstandingProcessing,
   listCompletedMissingProvisioningDate,
   getItemHistory,
