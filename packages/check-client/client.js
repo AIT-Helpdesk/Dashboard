@@ -339,6 +339,7 @@ export function mount(container) {
   }
 
   function provisionedCellHtml(o) {
+    if (o.status === 'cancelled') return `<span class="text-highlight-blue">Order Cancelled</span>`;
     if (o.provisioningDate) return formatDateTime(o.provisioningDate);
     if (o.status === 'processing' && o.pendingDate) {
       return `<span class="cell-flag-red">${formatDate(o.pendingDate)}</span>`;
