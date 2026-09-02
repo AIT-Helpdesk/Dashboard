@@ -48,6 +48,22 @@ let rotationView = false;
 // covers being ROTATED TO, never the page already on screen).
 let activeRotationViewToggle = null;
 let activeWspPageEl = null;
+// One-time catch-up for a gap the event above can't cover on its own:
+// this listener doesn't exist until Workshop's own client.js module is
+// first imported, which only happens the first time Workshop is actually
+// navigated to. If Rotate turns ON before that -- auto-started via
+// ?rotate=on while some other page is first to load, or Play clicked
+// from a different page during a session that hasn't visited Workshop
+// yet -- the ON transition event fires with nobody listening, and is
+// lost for good. Without this, rotationView would then stay false
+// forever despite Rotate actually running, until Workshop's very first
+// mount() this page load. Guarded by its own flag (not reused from
+// rotationView, since false is also the legitimate "user unticked it"
+// state) so this only ever runs once per page load, on that first
+// mount() -- never on a later remount, which is exactly the mount()-time
+// re-check that was already tried and reverted (see mount()'s own
+// comment) for forcing this back on after a deliberate uncheck.
+let rotationViewCaughtUp = false;
 // Global, not per-mount -- added once when this module first loads, same
 // "module scope, persists for the session" convention as the state
 // variables above, so remounting Workshop never stacks up duplicate
@@ -279,11 +295,20 @@ export function mount(container) {
   // fresh mount(). rotationView (module-scope, persists across remounts
   // same as every other toggle here) is set once, at the actual ON/OFF
   // TRANSITION, by the dashboard-rotate-active-change listener above --
-  // that already covers "was already true before this mount" correctly
-  // too (the listener ran once when rotation first started, whether or
-  // not Workshop happened to be mounted at that moment), so this mount()
-  // just reads whatever rotationView already is, exactly like every
-  // other toggle on this page.
+  // that covers "Rotate turned on/off while Workshop was already the
+  // mounted page" correctly, whether or not it was actually visible.
+  // What it CAN'T cover is "Rotate turned on before this module had even
+  // been imported yet" (the listener doesn't exist until then) -- that
+  // gap is rotationViewCaughtUp's job, see its own declaration above.
+  if (!rotationViewCaughtUp) {
+    rotationViewCaughtUp = true;
+    if (document.documentElement.getAttribute('data-rotate-active') === 'true') rotationView = true;
+  }
+  rotationViewToggle.checked = rotationView;
+  if (!rotationViewCaughtUp) {
+    rotationViewCaughtUp = true;
+    if (document.documentElement.getAttribute('data-rotate-active') === 'true') rotationView = true;
+  }
   rotationViewToggle.checked = rotationView;
   wspPageEl.classList.toggle('wsp-rotation-view', rotationView);
 
