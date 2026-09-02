@@ -659,6 +659,88 @@ html[data-focus-mode="true"] .sidebar {
 html[data-focus-mode="true"] .focus-exit-btn {
   display: flex;
 }
+/* Redundant with the Stop button in .rotate-controls (bottom-centre)
+   while a Rotate cycle is running, by request -- one more attribute
+   selector than the rule above so it wins on specificity rather than
+   source order. data-rotate-active is toggled in app.js's
+   renderRotateControls(), the same place .rotate-controls' own
+   visibility is driven from. */
+html[data-focus-mode="true"][data-rotate-active="true"] .focus-exit-btn {
+  display: none;
+}
+
+/* Present on every page, bottom-centre, by request -- specifically so
+   it's still reachable in Full Screen mode where the sidebar's own
+   play/pause/skip controls (on the Rotate category header/entries) are
+   hidden along with the rest of the sidebar. Shown any time a Rotate
+   cycle is running, not just in Full Screen -- the WHOLE GROUP's
+   visibility is toggled via plain .hidden on this wrapper in app.js
+   (renderRotateControls()), not a CSS attribute selector like
+   .focus-exit-btn above (there's no HTML attribute reflecting
+   rotationActive to select on), and not per-button either -- one toggle
+   for the group, not three. Back | Rotate Off | Forward, left to right,
+   by request. */
+.rotate-controls {
+  display: flex;
+  position: fixed;
+  bottom: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 900;
+  gap: 0.4rem;
+}
+/* Same CSS-specificity pitfall confirmed earlier this session (the
+   preview-as-user Eye button): this wrapper's own `display: flex` above
+   has equal specificity to the browser's built-in `[hidden] { display:
+   none }` rule, and an author rule always beats the UA default regardless
+   of source order or specificity ties -- without this, the native
+   `hidden` attribute set by renderRotateControls() would be silently
+   ignored, showing the whole group on every page regardless of whether
+   rotation is actually running. Only needed on the wrapper -- once IT is
+   display:none, its own children never render regardless of their own
+   display property. */
+.rotate-controls[hidden] {
+  display: none;
+}
+/* Blue, by request -- same var(--accent) background + white text
+   .button-link uses elsewhere on this dashboard, not a new one-off
+   shade. */
+.rotate-control-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-size: 0.8rem;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+}
+.rotate-control-btn:hover {
+  opacity: 0.9;
+}
+/* Stop -- red, by request. Same #dc2626 reused everywhere else on this
+   dashboard for this exact shade (.text-highlight-red, .cell-flag-red,
+   etc), not a new one-off. Compound selector (.rotate-control-btn.rotate-
+   control-btn--stop), not the modifier class alone -- same specificity
+   reasoning as .datto-donut-wrap.critical-donut-wrap--large above:
+   guarantees this wins over the shared .rotate-control-btn background
+   regardless of file order, rather than relying on this rule simply
+   sitting later. */
+.rotate-control-btn.rotate-control-btn--stop {
+  background: #dc2626;
+}
+/* Pause flips to Play/green while paused, by request -- same #16a34a
+   reused everywhere else on this dashboard for this exact shade
+   (.text-highlight-green, .cell-flag-green, etc). Toggled via
+   app.js's own renderRotateControls() (classList.toggle), not a
+   permanent class -- the SAME button element swaps looks depending on
+   rotationPaused. */
+.rotate-control-btn.rotate-control-btn--paused {
+  background: #16a34a;
+}
 
 .page-header {
   display: flex;
