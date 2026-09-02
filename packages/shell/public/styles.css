@@ -2293,9 +2293,30 @@ ul.start-here-checklist-other {
    dashboard falls back to, by request -- a descendant selector already
    outranks the bare `td` rule on specificity alone (0,1,1 vs 0,0,1), so
    this wins regardless of file order without needing a compound-class
-   trick. */
+   trick. Bumped again (1.1rem -> 1.3rem) alongside the rest of this
+   section's own text below, by request ("make the text all bigger"). */
 .critical-tickets-list td {
-  font-size: 1.1rem;
+  font-size: 1.3rem;
+}
+/* The rest of this section's own text, by request -- scoped to
+   #critical-chart (a real element id already on both pages, not a new
+   wrapper class) so this only ever affects THIS section, not
+   .resource-group-header/.datto-card-label/.datto-card-sub as used
+   elsewhere on this dashboard (Datto RMM included) or on any OTHER
+   .resource-group heading on these same two pages. An id selector already
+   outranks the bare class rules on specificity alone, regardless of file
+   order. */
+#critical-chart .resource-group-header {
+  font-size: 1.15rem;
+}
+#critical-chart .resource-group-header .count {
+  font-size: 1.05rem;
+}
+#critical-chart .datto-card-label {
+  font-size: 1.2rem;
+}
+#critical-chart .datto-card-sub {
+  font-size: 1.05rem;
 }
 /* 50% bigger than Datto RMM's own default donut (7.5rem -> 11.25rem, size
    120 -> 180 passed to donutSvg() on the JS side), by request. A compound
