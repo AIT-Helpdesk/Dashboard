@@ -28,8 +28,27 @@ const CRITICAL_PRIORITY_VALUE = 4;
 // billing still counts as open, slightly overstating the count relative
 // to Completed Tickets' own stricter definition) as Ticket Dashboards
 // (Test) uses for its own openTickets.
-async function fetchOpenTickets(client) {
-  const tickets = await listAll(client.tickets, [{ op: 'notExist', field: 'completedDate' }]);
+//
+// Filtered by priority IN THE QUERY ITSELF, not fetched-then-filtered --
+// unlike Ticket Dashboards (Test)'s own copy of this function, this page
+// has no OTHER widget that needs the full open-ticket set (this is a
+// single-widget page, see this file's own top comment), so there's no
+// reason to pull every open ticket (hundreds, account-wide) across the
+// wire just to keep a handful of critical ones. Confirmed the hard way
+// this genuinely mattered, not just tidiness -- during a Rotate cycle,
+// the shell preloads the next page and gives it a fixed buffer
+// (ROTATE_PRELOAD_BUFFER_MS in app.js) to finish its own refresh before
+// swapping it in; fetching the full open-ticket list routinely ran past
+// that buffer, so this page would show its previous (stale) data for a
+// moment after switching to it instead of the freshly-loaded one. This
+// is still functionally identical to the old fetch-all-then-filter --
+// excludeMonitoringAlerts() is a per-ticket filter, indifferent to
+// whether it's handed 400 tickets or 15.
+async function fetchCriticalOpenTickets(client) {
+  const tickets = await listAll(client.tickets, [
+    { op: 'notExist', field: 'completedDate' },
+    { op: 'eq', field: 'priority', value: CRITICAL_PRIORITY_VALUE },
+  ]);
   return excludeMonitoringAlerts(tickets);
 }
 
@@ -38,8 +57,7 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const client = await getClient();
-    const openTickets = await fetchOpenTickets(client);
-    const criticalTickets = openTickets.filter((t) => t.priority === CRITICAL_PRIORITY_VALUE);
+    const criticalTickets = await fetchCriticalOpenTickets(client);
 
     // Pre-resolves each unique client/resource name once, concurrently --
     // same "warm the cache before the per-row loop" pattern Service Calls'
