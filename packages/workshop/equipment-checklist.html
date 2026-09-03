@@ -107,6 +107,15 @@
     font-size: 0.85rem;
     color: var(--muted);
   }
+  /* Ticket Number : Ticket Status, under the client line -- by request.
+     Same small/muted treatment as .item-client above (a third-tier
+     subtext line, not a heading), just its own class so it can be omitted
+     entirely for an item whose job has no linked ticket at all, without
+     an empty line still taking up space. */
+  .item-ticket {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
   .empty {
     color: var(--muted);
     padding: 1rem 0.5rem;
@@ -184,14 +193,23 @@
     // Count + item name is the row's own title; the item's CLIENT (not its
     // location -- that's now the group header above it) is the subtext, by
     // request: "list all items by location with count, item name, client".
+    // Ticket Number : Ticket Status is a further subtext line UNDER the
+    // client name, by request -- both already resolved server-side (see
+    // GET /equipment-checklist's own comment) so this is a plain display
+    // concern, no extra fetch. Omitted entirely (not an empty line) for a
+    // job with no linked ticket -- item.ticketNumber is null in that case.
     function itemRowHtml(item) {
       const countPart = item.count ? `${item.count}x ` : '';
+      const ticketLine = item.ticketNumber
+        ? `<div class="item-ticket">${escapeHtml(item.ticketNumber)}${item.ticketStatus ? ` : ${escapeHtml(item.ticketStatus)}` : ''}</div>`
+        : '';
       return `
         <div class="item-row">
           <input type="checkbox" data-id="${item.equipmentId}" ${item.checkedToday ? 'checked' : ''} />
           <div class="item-desc">
             <div class="item-title${item.checkedToday ? ' checked-today' : ''}">${countPart}${escapeHtml(item.description)}</div>
             <div class="item-client">${escapeHtml(item.clientName)}</div>
+            ${ticketLine}
           </div>
         </div>`;
     }

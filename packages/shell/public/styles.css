@@ -1743,6 +1743,16 @@ h1 {
   font-weight: 400;
   color: var(--accent);
 }
+/* Tickets Dashboard's "License Update (CRITICAL)" status, shown as just
+   "License Update" (client.js's own criticalTicketsTableHtml()) -- bold,
+   same as .text-highlight-green/-red above, not the one exception
+   .text-highlight-blue makes. Same #eab308 yellow already used dashboard-
+   wide (.wsp-dot--coming, .wsp-mobile-client-line, etc), not a fresh
+   one-off shade. */
+.text-highlight-yellow {
+  font-weight: 700;
+  color: #eab308;
+}
 
 /* A plain full-width rule between two otherwise-unrelated page sections
    (e.g. What's On's Scorecards vs. its Team Shifts excerpt below) -- an
@@ -3870,6 +3880,24 @@ tr.row-text-highlight-blue td {
   border: 1.5px solid var(--card);
   box-shadow: 0 0 0 1px #16a34a, 0 0 2px rgb(22 163 74 / 0.6);
 }
+/* "SOME but not all items checked today" -- yellow, by request. Same
+   badge shape/position as the green "all checked" state above, just the
+   other established dashboard yellow (#eab308, same as .wsp-dot--coming/
+   .text-highlight-yellow elsewhere) instead of green -- the two are
+   mutually exclusive (equipmentIconHtml() only ever applies one or the
+   other), so no specificity fight between them. */
+.wsp-equipment-icon--partial::after {
+  content: '';
+  position: absolute;
+  right: -0.2rem;
+  bottom: -0.15rem;
+  width: 0.68rem;
+  height: 0.68rem;
+  border-radius: 50%;
+  background: #eab308;
+  border: 1.5px solid var(--card);
+  box-shadow: 0 0 0 1px #eab308, 0 0 2px rgb(234 179 8 / 0.6);
+}
 /* "Mobile View" checkbox, by request -- hides Location/Ticket/Due Date
    together, as one set, across EVERY table on the page at once (main
    list, both halves in 2-column mode, and the separate Dispose table)
@@ -4031,6 +4059,14 @@ tr.row-text-highlight-blue td {
 .wsp-dot--nearly_complete {
   background: #2563eb;
 }
+/* Yellow, by request -- same #eab308 as .wsp-dot--coming elsewhere on
+   this page, reused rather than a fresh one-off shade (the two tiers
+   sharing a colour is fine -- they're distinguished by position/label,
+   not colour alone, same as every other priority dot already is by
+   reading its own label in the legend). */
+.wsp-dot--waiting {
+  background: #eab308;
+}
 .wsp-dot--in_progress {
   background: #f97316;
 }
@@ -4085,6 +4121,9 @@ tr.row-text-highlight-blue td {
 .wsp-row-tint--nearly_complete {
   background: color-mix(in srgb, #2563eb 8%, transparent);
 }
+.wsp-row-tint--waiting {
+  background: color-mix(in srgb, #eab308 8%, transparent);
+}
 .wsp-row-tint--in_progress {
   background: color-mix(in srgb, #f97316 8%, transparent);
 }
@@ -4100,6 +4139,9 @@ tr.row-text-highlight-blue td {
 }
 .wsp-bar-left--nearly_complete {
   border-left: 6px solid #2563eb;
+}
+.wsp-bar-left--waiting {
+  border-left: 6px solid #eab308;
 }
 .wsp-bar-left--in_progress {
   border-left: 6px solid #f97316;
@@ -4121,6 +4163,9 @@ tr.row-text-highlight-blue td {
 }
 .wsp-bar-right--nearly_complete {
   border-right: 6px solid #2563eb;
+}
+.wsp-bar-right--waiting {
+  border-right: 6px solid #eab308;
 }
 .wsp-bar-right--in_progress {
   border-right: 6px solid #f97316;
@@ -4299,6 +4344,32 @@ tr.row-text-highlight-blue td {
    priority legend, no heading of its own (removed by request). */
 #dispose-results {
   margin-top: 1.5rem;
+}
+/* Data-safety warning directly above the Dispose table (disposeWarningEl()
+   in client.js, appended right before that table wherever it actually
+   renders -- see that function's own comment), by request. Bold, orange
+   (same #f97316 as .wsp-dot--in_progress elsewhere on this page, not a
+   fresh one-off shade), small-caps -- same treatment .nav-link/.tab-
+   button already use for a label, reused here for a warning rather than
+   navigation text. */
+.wsp-dispose-warning {
+  margin: 0 0 0.5rem;
+  font-weight: 700;
+  font-variant: small-caps;
+  color: #f97316;
+}
+/* Localhost/dev-session warning, directly above the first (main) job
+   table -- see mount()'s own comment in client.js for the full "why" and
+   its server-side counterpart (isLocalDevRequest() in server.js, which
+   silently skips every real Autotask write when this same condition is
+   true). Bold red, by request -- same #dc2626 as .text-highlight-red
+   elsewhere on this dashboard, not a fresh one-off shade. Not small-caps
+   (unlike .wsp-dispose-warning above) -- by request, that one asked for
+   it explicitly, this one didn't. */
+.wsp-localhost-warning {
+  margin: 0 0 0.75rem;
+  font-weight: 700;
+  color: #dc2626;
 }
 /* "Show Workshop Gear" checkbox row, by request -- sits below the Dispose
    table, off by default; #workshop-gear-results (its own separate table,
