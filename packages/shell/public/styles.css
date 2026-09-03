@@ -3898,6 +3898,25 @@ tr.row-text-highlight-blue td {
   border: 1.5px solid var(--card);
   box-shadow: 0 0 0 1px #eab308, 0 0 2px rgb(234 179 8 / 0.6);
 }
+/* "NOTHING checked today, and the last check (or lack of one) is more
+   than 32 hours old" -- red, by request. Same badge shape/position as
+   the green/yellow states above, same #dc2626 red used dashboard-wide
+   (.text-highlight-red/.wsp-dot--urgent etc), not a fresh one-off shade.
+   Mutually exclusive with both --checked and --partial by construction
+   (equipmentIconHtml() in client.js), so no specificity fight between
+   any of the three. */
+.wsp-equipment-icon--stale::after {
+  content: '';
+  position: absolute;
+  right: -0.2rem;
+  bottom: -0.15rem;
+  width: 0.68rem;
+  height: 0.68rem;
+  border-radius: 50%;
+  background: #dc2626;
+  border: 1.5px solid var(--card);
+  box-shadow: 0 0 0 1px #dc2626, 0 0 2px rgb(220 38 38 / 0.6);
+}
 /* "Mobile View" checkbox, by request -- hides Location/Ticket/Due Date
    together, as one set, across EVERY table on the page at once (main
    list, both halves in 2-column mode, and the separate Dispose table)
