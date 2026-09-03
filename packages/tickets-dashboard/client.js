@@ -119,7 +119,7 @@ export function mount(container) {
             .map(
               (t) => `
             <tr>
-              <td>${escapeHtml(t.status)}</td>
+              <td>${statusCellHtml(t.status)}</td>
               <td class="ticket-number">${ticketLink(t)}</td>
               <td>${escapeHtml(t.clientName)}</td>
               <td>${escapeHtml(t.title)}</td>
@@ -130,6 +130,22 @@ export function mount(container) {
         </tbody>
       </table>
     `;
+  }
+
+  // "License Update (CRITICAL)" shown as just "License Update", in yellow,
+  // by request -- the "(CRITICAL)" suffix is redundant on a page that's
+  // already scoped to critical tickets only, and yellow flags it apart
+  // from the statuses around it. Exact-string match (not a wildcard/prefix
+  // check) -- the one real status label with its own display-text swap.
+  // Every OTHER status on this list is red, by request -- every ticket
+  // here is already critical, so red is the "needs attention" default and
+  // License Update is the one deliberate exception (already flagged
+  // yellow instead) rather than the other way round.
+  function statusCellHtml(status) {
+    if (status === 'License Update (CRITICAL)') {
+      return `<span class="text-highlight-yellow">License Update</span>`;
+    }
+    return `<span class="text-highlight-red">${escapeHtml(status)}</span>`;
   }
 
   // Red, by request, when a critical ticket has no resource assigned --
