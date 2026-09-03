@@ -4139,6 +4139,17 @@ tr.row-text-highlight-blue td {
 .wsp-page.wsp-rotation-view .wsp-actions {
   display: none;
 }
+/* Rotation View also hides every header toolbar button except Refresh, by
+   request ("hide the buttons other than refresh ... only when in rotation
+   view") -- same "nobody viewing an unattended rotation can click those
+   buttons anyway" reasoning as the Completion column above. The
+   Show Completed/2 columns/Mobile View/Rotation View checkboxes are left
+   alone -- not buttons, and the Rotation View one specifically has to
+   stay visible/usable so it can be switched off again. */
+.wsp-page.wsp-rotation-view #add-job-button,
+.wsp-page.wsp-rotation-view #equipment-checklist-button {
+  display: none;
+}
 /* Rotation View also drops the Location column down to just its own
    equipment icon (.wsp-location-text hidden, icon left alone) and its
    header down to blank (.wsp-location-header-text hidden) -- by request,
