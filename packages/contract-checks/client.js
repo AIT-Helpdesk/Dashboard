@@ -64,6 +64,16 @@ const TICKET_STATUS_LABELS = {
   15: 'Needs Internal Update',
 };
 
+// Shown only when this page is reached directly via localhost (a dev/test
+// session), never in production -- matches server.js's own
+// isLocalDevRequest(req) exactly (both read the request's real host, one
+// server-side via req.hostname, one here client-side via
+// window.location.hostname), same pattern Workshop Board's own client.js
+// already established for this exact wording. server.js silently skips
+// every real Autotask write (ticket notes, status changes) from a session
+// reached this way, so this banner is what tells whoever's actually
+// looking at the page that's happening, rather than a change silently not
+// reaching the ticket with no visible explanation at all.
 export function mount(container) {
   // The REAL scrolling box is always .page-content -- app.js's own
   // overflow-y: auto region -- but `container` itself is only ever THAT
@@ -136,6 +146,7 @@ export function mount(container) {
         </div>
       </form>
     </header>
+    ${window.location.hostname === 'localhost' ? '<p class="wsp-localhost-warning">TICKETS NOT UPDATED FROM localhost DEV ENVIRONMENTS</p>' : ''}
     <p id="status" class="status">Pick a date, optionally filter by client/status/product (wildcards with *), then click Refresh. A row still "processing" always shows regardless of the Since date -- that's exactly the kind of outstanding item this page exists to surface. "Check IM for More" pulls anything new (or changed) from Ingram Micro into this page's own database -- every other control here reads from that database, not Ingram live. A terminated subscription is flagged once, the first time it's seen, and shows up in this same list -- Type "Termination", Status "Terminated".</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
@@ -1290,6 +1301,11 @@ export function mount(container) {
   function ticketActionText(e) {
     if (e.ticketActionResult === 'sent') return 'Sent to Autotask';
     if (e.ticketActionResult === 'skipped') return 'Not sent (left as Complete)';
+    // A localhost/dev session -- see isLocalDevRequest() in server.js --
+    // kept distinct from the plain 'skipped' case above so this report
+    // can tell "chose not to send" apart from "never even attempted,
+    // this was a dev session".
+    if (e.ticketActionResult === 'local_dev_skipped') return 'Not sent (localhost dev session)';
     if (e.ticketActionResult === 'failed') return `Failed: ${e.ticketActionError || 'unknown error'}`;
     return '';
   }

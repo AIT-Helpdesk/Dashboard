@@ -77,6 +77,14 @@ Columns: Product, Order #, Field, Action, Changed, By, Autotask. No "All" option
 
 Unlike Ingram Orders (whose own README notes it deliberately doesn't resolve `poNumber` into a ticket link -- "no confirmed way... without a lookup query"), Contract Checks resolves it once, at sync time, via the exact `resolveTicketAutotaskId()` pattern `packages/workshop/server.js` already uses (`listAll(client.tickets, [{ op: 'eq', field: 'ticketNumber', value: trimmed }])`) -- since this page syncs once rather than per-click, the extra lookup is nearly free, and it turns PO # into a real jump-straight-to-the-ticket link.
 
+## Local dev sessions never write to a real Autotask ticket
+
+By request -- same `isLocalDevRequest(req)` pattern (and identical banner wording) Workshop Board established first (see that page's own README for the fuller "why"): a session reached directly at `http://localhost:3000` never posts a ticket note or changes a real ticket's status, even when a checkbox/ALL DONE toggle would otherwise trigger one. Checked at the top of both `postTicketNoteAndClose()` and `reopenTicketWithNote()` -- the only two functions that ever actually talk to Autotask for this page -- before either function's own `getClient()` call, so a localhost session doesn't even authenticate against Autotask for this action, let alone write to it. The LOCAL save (the checkbox itself, `setToggle()`) always completes normally regardless -- only the real Autotask side effect is skipped.
+
+This needed its own outcome value, `'local_dev_skipped'`, alongside the Change Report's existing `'sent'`/`'skipped'`/`'failed'` (see that section above) -- both `postTicketNoteAndClose()` and `reopenTicketWithNote()` return `{ ok: true, ..., localDevSkipped: true }` in this case, which reads as a false "sent" unless every `recordTicketActionOutcome()` call site checks for it first (both the single-toggle route and bulk-close do). The Change Report's own `ticketActionText()` in `client.js` shows it as "Not sent (localhost dev session)" -- kept distinct from "Not sent (left as Complete)" so the two genuinely different reasons for a non-send stay tellable apart.
+
+The page itself shows the same bold red banner Workshop Board uses (`.wsp-localhost-warning` in `styles.css` -- already a generic, unscoped rule, reused as-is rather than duplicated) under the identical `window.location.hostname === 'localhost'` condition, so whoever's looking at the page can see why their changes aren't reaching the ticket.
+
 ## Not yet built
 
 - A scheduled (Windows Task Scheduler) run of `sync.js`, mirroring `packages/strety-autotask-sync`'s own production setup -- only the manual "Check for more Orders in IM" button was asked for this round; `sync.js` is structured (`runSync()` exported, plus a `require.main` CLI entry point) so this is a drop-in addition, not a rework, whenever it's wanted.
