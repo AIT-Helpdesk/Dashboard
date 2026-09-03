@@ -641,36 +641,66 @@ export function mount(container) {
     return checked.getFullYear() === now.getFullYear() && checked.getMonth() === now.getMonth() && checked.getDate() === now.getDate();
   }
 
+  // How long ago an item's own last check counts as genuinely stale, by
+  // request -- shared by equipmentIconHtml()'s own red badge below.
+  const STALE_CHECK_HOURS = 32;
+
+  // The most recent checkedAt across a job's equipment items, as a real
+  // Date, or null if none of them have ever been checked at all --
+  // shared by equipmentIconHtml() below to decide the red "stale" badge.
+  function mostRecentCheckedAt(items) {
+    let latest = null;
+    for (const item of items) {
+      if (!item.checkedAt) continue;
+      const at = new Date(item.checkedAt);
+      if (!latest || at > latest) latest = at;
+    }
+    return latest;
+  }
+
   // The equipment "symbol", shown inline with the Location text (see
   // jobRowHtml() above), by request -- same "always clickable, dim when
   // empty, bold once set" pattern as the Q/A stamp (qaIconsHtml() above):
-  // there'd otherwise be no way to add the FIRST equipment item. Two
+  // there'd otherwise be no way to add the FIRST equipment item. Three
   // further badge states on top of that, by request -- green
   // (.wsp-equipment-icon--checked, styles.css) once EVERY item has been
   // checked off today (isCheckedToday() above), yellow
-  // (.wsp-equipment-icon--partial) once SOME but not all have -- both
-  // still count as "set" (full opacity/size), just with the extra badge
-  // on top, not a further size/opacity tier of their own. Hovering shows
-  // the full list (including each item's own last-checked date/time) via
-  // a plain native tooltip; clicking (any state) opens the standalone
-  // equipment modal -- see openEquipmentModal() and wireRowActions()
-  // below.
+  // (.wsp-equipment-icon--partial) once SOME but not all have, red
+  // (.wsp-equipment-icon--stale) once NONE have been checked today AND
+  // the most recent check (across every item, however old) is more than
+  // STALE_CHECK_HOURS ago -- or there's never been one at all, treated
+  // the same as "infinitely stale" rather than a separate case, since
+  // both mean the same thing here: this needs attention. All three still
+  // count as "set" (full opacity/size), just with the extra badge on top,
+  // not a further size/opacity tier of their own -- and they're mutually
+  // exclusive by construction (a job with anything checked today can
+  // never also be "stale", since its own most recent check is today).
+  // Hovering shows the full list (including each item's own last-checked
+  // date/time) via a plain native tooltip; clicking (any state) opens the
+  // standalone equipment modal -- see openEquipmentModal() and
+  // wireRowActions() below.
   function equipmentIconHtml(job) {
     const items = job.equipment || [];
     const hasItems = items.length > 0;
     const checkedTodayCount = hasItems ? items.filter(isCheckedToday).length : 0;
     const allCheckedToday = hasItems && checkedTodayCount === items.length;
     const someCheckedToday = hasItems && checkedTodayCount > 0 && !allCheckedToday;
+    const lastChecked = hasItems ? mostRecentCheckedAt(items) : null;
+    const hoursSinceLastChecked = lastChecked ? (Date.now() - lastChecked.getTime()) / 3600000 : Infinity;
+    const isStale = hasItems && !allCheckedToday && !someCheckedToday && hoursSinceLastChecked > STALE_CHECK_HOURS;
     let cls = 'wsp-equipment-icon';
     cls += hasItems ? ' wsp-equipment-icon--set' : ' wsp-equipment-icon--empty';
     if (allCheckedToday) cls += ' wsp-equipment-icon--checked';
     else if (someCheckedToday) cls += ' wsp-equipment-icon--partial';
+    else if (isStale) cls += ' wsp-equipment-icon--stale';
     const summary = hasItems ? equipmentSummaryLines(items) : 'Click to add equipment';
     const title = allCheckedToday
       ? `All items checked today\n${summary}`
       : someCheckedToday
         ? `${checkedTodayCount} of ${items.length} items checked today\n${summary}`
-        : summary;
+        : isStale
+          ? `${lastChecked ? `Last checked ${formatDateTime(lastChecked.toISOString())}` : 'Never checked'}\n${summary}`
+          : summary;
     return `<span class="${cls}" data-id="${job.id}" title="${escapeHtml(title)}">\u{1F4E6}</span>`;
   }
 
