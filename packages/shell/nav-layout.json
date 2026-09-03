@@ -17,12 +17,6 @@
   },
   {
     "type": "category",
-    "id": "tv-boards",
-    "label": "TV Boards",
-    "children": []
-  },
-  {
-    "type": "category",
     "id": "daily-dashboards",
     "label": "Daily Dashboards",
     "children": [
@@ -252,6 +246,12 @@
       }
     ],
     "hidden": true
+  },
+  {
+    "type": "category",
+    "id": "tv-boards",
+    "label": "TV Boards",
+    "children": []
   },
   {
     "type": "page",
