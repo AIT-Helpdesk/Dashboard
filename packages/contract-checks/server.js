@@ -27,6 +27,23 @@ function isContractChecksAdmin(req) {
   return !!email && email.toLowerCase() === CONTRACT_CHECKS_ADMIN_EMAIL;
 }
 
+// True only for a request that reached this app AS localhost -- a direct
+// dev hit (`npm start`, http://localhost:3000), never the real production
+// domain, even though both ultimately land on this same Express process
+// (a reverse proxy -- Caddy in production -- always sits in front either
+// way). req.hostname reflects the ORIGINAL Host header the browser
+// actually sent (via X-Forwarded-Host once `app.set('trust proxy', 1)` is
+// in effect -- see auth.js), the same request-derived-host mechanism
+// redirectUriFor()/stretyRedirectUriFor() rely on elsewhere in this app --
+// so this naturally reads 'localhost' for a direct dev hit and the real
+// domain in production, correctly, with zero configuration either way.
+// Exact same helper/reasoning as Workshop's own isLocalDevRequest() in
+// packages/workshop/server.js -- by request, nothing this page does
+// should ever write to a real Autotask ticket when reached this way.
+function isLocalDevRequest(req) {
+  return req?.hostname === 'localhost';
+}
+
 // Saving a Ticket Note, by request, also closes out the real linked
 // Autotask ticket: posts the note text as a real ticket note (title below)
 // and sets the ticket's status to Complete. noteType/status are the exact
@@ -142,7 +159,15 @@ async function postReopenNote(ticketAutotaskId, targetStatus, actor) {
 // Note-first, fail-closed -- same shape as postTicketNoteAndClose() below
 // (if the note fails, don't even attempt the status change), so a reopened
 // ticket never ends up with a real status change but no note explaining it.
-async function reopenTicketWithNote(ticketAutotaskId, targetStatus, actor) {
+// `req` is a trailing param used only for isLocalDevRequest() below --
+// every real call site already has it in scope from its own route
+// handler. `localDevSkipped: true` distinguishes this from a genuine
+// success so recordTicketActionOutcome()'s own classification (both call
+// sites, below) reports it honestly, not as a false "sent".
+async function reopenTicketWithNote(ticketAutotaskId, targetStatus, actor, req) {
+  if (isLocalDevRequest(req)) {
+    return { ok: true, statusReverted: false, newStatus: targetStatus, notePosted: false, localDevSkipped: true };
+  }
   const noteResult = await postReopenNote(ticketAutotaskId, targetStatus, actor);
   if (!noteResult.ok) {
     return { ok: false, statusReverted: false, newStatus: targetStatus, notePosted: false, error: `Note: ${noteResult.error}` };
@@ -210,7 +235,19 @@ function orderNoteBody(item, { includeHeader }) {
 // outcome, not a failure -- statusClosed simply stays false while ok stays
 // true, so the existing "only alert the user on failure" logic on the
 // client correctly stays quiet for it.
-async function postTicketNoteAndClose(ticketAutotaskId, noteText, actor, bulkWithList = null, closeTicket = true) {
+// `req` is a trailing param used only for isLocalDevRequest() below --
+// every real call site (single toggle and bulk-close, both in server.js)
+// already has it in scope from its own route handler. Checked before the
+// single real network call this function makes (getClient()) -- a
+// localhost/dev session never even authenticates against Autotask for
+// this action, let alone writes to it. `localDevSkipped: true`
+// distinguishes this from a genuine success so both call sites' own
+// recordTicketActionOutcome() classification reports it honestly, not as
+// a false "sent".
+async function postTicketNoteAndClose(ticketAutotaskId, noteText, actor, bulkWithList = null, closeTicket = true, req) {
+  if (isLocalDevRequest(req)) {
+    return { ok: true, notePosted: false, statusClosed: false, error: null, localDevSkipped: true };
+  }
   const client = await getClient();
   const result = { notePosted: false, statusClosed: false, error: null };
 
@@ -715,26 +752,37 @@ router.patch('/items/:id/toggle', async (req, res) => {
         orderNoteBody(updated, { includeHeader: false }),
         actor,
         null,
-        closeTicket !== false
+        closeTicket !== false,
+        req
       );
     } else if (reopenStatus === 'leave') {
       ticketAction = { ok: true, statusReverted: false, statusLeftAsComplete: true };
     } else {
-      ticketAction = await reopenTicketWithNote(updated.ticket_autotask_id, Number(reopenStatus), actor);
+      ticketAction = await reopenTicketWithNote(updated.ticket_autotask_id, Number(reopenStatus), actor, req);
     }
   }
 
   // Stamps the real Autotask outcome onto the audit_log row setToggle()
   // already wrote above -- 'sent' (a real note/status change succeeded),
   // 'failed' (attempted, see ticketAction.error), 'skipped' (the "Leave as
-  // COMPLETE" case above -- a deliberate non-send, not a failure). Left
-  // NULL (the no-op default) when there was nothing to send at all (a
-  // non-all_done toggle, or all_done with no linked ticket) -- by request,
-  // "whether it was written to Autotask" needs to survive as a real report
-  // answer later (see Change Report below), not just this response's own
-  // one-time ticketAction the client only ever alert()s and forgets.
+  // COMPLETE" case above -- a deliberate non-send, not a failure),
+  // 'local_dev_skipped' (isLocalDevRequest() -- also a deliberate
+  // non-send, kept distinct from 'skipped' so the Change Report can tell
+  // "chose not to reopen" apart from "never even attempted, this was a
+  // dev session"). Left NULL (the no-op default) when there was nothing
+  // to send at all (a non-all_done toggle, or all_done with no linked
+  // ticket) -- by request, "whether it was written to Autotask" needs to
+  // survive as a real report answer later (see Change Report below), not
+  // just this response's own one-time ticketAction the client only ever
+  // alert()s and forgets.
   if (ticketAction) {
-    const result = ticketAction.statusLeftAsComplete ? 'skipped' : ticketAction.ok ? 'sent' : 'failed';
+    const result = ticketAction.localDevSkipped
+      ? 'local_dev_skipped'
+      : ticketAction.statusLeftAsComplete
+        ? 'skipped'
+        : ticketAction.ok
+          ? 'sent'
+          : 'failed';
     recordTicketActionOutcome(auditLogId, result, ticketAction.ok ? null : ticketAction.error);
   }
 
@@ -822,14 +870,15 @@ router.post('/items/bulk-close', async (req, res) => {
     // ticked.
     const mergedNoteText = groupItems.map((i) => orderNoteBody(i, { includeHeader: true })).join('\n\n-------------------------\n\n');
     const bulkWithList = ticketLabels.filter((t) => t.ticketId !== ticketId).map((t) => t.label);
-    const ticketAction = await postTicketNoteAndClose(ticketId, mergedNoteText, actor, bulkWithList, closeTicket);
+    const ticketAction = await postTicketNoteAndClose(ticketId, mergedNoteText, actor, bulkWithList, closeTicket, req);
     console.log(`Contract Checks: bulk-close result for ticket ${ticketId}:`, JSON.stringify(ticketAction));
     // Same outcome stamp as the single-item toggle route -- every item in
     // this ticket group shares the one merged note/status-change result,
-    // so the same 'sent'/'failed' lands on every one of their own
-    // audit_log rows (there's no per-item "skipped" case here -- bulk
-    // close has no "Leave as COMPLETE" option, unlike a single untick).
-    const result = ticketAction.ok ? 'sent' : 'failed';
+    // so the same 'sent'/'failed'/'local_dev_skipped' lands on every one
+    // of their own audit_log rows (there's no per-item "skipped" case
+    // here -- bulk close has no "Leave as COMPLETE" option, unlike a
+    // single untick).
+    const result = ticketAction.localDevSkipped ? 'local_dev_skipped' : ticketAction.ok ? 'sent' : 'failed';
     for (const item of groupItems) {
       recordTicketActionOutcome(auditLogIdByItemId.get(item.id), result, ticketAction.ok ? null : ticketAction.error);
       results.push({ itemId: item.id, orderNumber: item.order_number, ticketAction });

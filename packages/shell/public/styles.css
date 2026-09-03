@@ -4400,11 +4400,15 @@ tr.row-text-highlight-blue td {
   font-variant: small-caps;
   color: #f97316;
 }
-/* Localhost/dev-session warning, directly above the first (main) job
-   table -- see mount()'s own comment in client.js for the full "why" and
-   its server-side counterpart (isLocalDevRequest() in server.js, which
+/* Localhost/dev-session warning -- first introduced on Workshop Board
+   (directly above the first/main job table there; see mount()'s own
+   comment in that page's client.js for the full "why" and its
+   server-side counterpart, isLocalDevRequest() in server.js, which
    silently skips every real Autotask write when this same condition is
-   true). Bold red, by request -- same #dc2626 as .text-highlight-red
+   true), reused as-is (kept its "wsp-" name -- already a generic,
+   unscoped rule, same reasoning Tickets Dashboard's own reuse of
+   .wsp-usage-box already followed) by Contract Checks for the identical
+   need. Bold red, by request -- same #dc2626 as .text-highlight-red
    elsewhere on this dashboard, not a fresh one-off shade. Not small-caps
    (unlike .wsp-dispose-warning above) -- by request, that one asked for
    it explicitly, this one didn't. */
