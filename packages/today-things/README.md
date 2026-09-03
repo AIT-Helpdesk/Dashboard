@@ -5,7 +5,7 @@ A TV Boards page ("Today Things"), by request -- meant to be glanced at on a wal
 - `client.js` -- frontend module. Exports `id`, `label`, and `mount(container)`.
 - `server.js` -- Express router mounted by the shell at `/api/today-things`. Read-only -- see "No writes of its own" below.
 
-Everything renders inside a `.today-things-page` wrapper, doubled in size via `zoom: 2` (by request, "make all the text on Today Things twice as big") -- same convention Workshop's own Rotation View uses for this identical need. `zoom` scales the whole rendered subtree as one multiplier, unlike a plain font-size bump, which would only hit text that happens to inherit it directly and leave everything else (pills, gaps, padding) at their normal size -- most of this page's own font-sizes are in `rem`, always relative to the document ROOT font-size, not any ancestor's.
+Everything renders inside a `.today-things-page` wrapper, scaled up via `zoom: 1.5` (by request -- first doubled to `2`, then dialed back to "half way between what it was to start with and where it is now", i.e. 1.5) -- same convention Workshop's own Rotation View uses for this identical need. `zoom` scales the whole rendered subtree as one multiplier, unlike a plain font-size bump, which would only hit text that happens to inherit it directly and leave everything else (pills, gaps, padding) at their normal size -- most of this page's own font-sizes are in `rem`, always relative to the document ROOT font-size, not any ancestor's.
 
 ## Three day-scoped groups, each two views side by side
 
