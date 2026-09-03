@@ -1951,21 +1951,23 @@ a.tt-tag {
   text-decoration: none;
 }
 
-/* Today Things (TV Boards) -- the whole page doubled in size, by request
-   ("make all the text on Today Things twice as big"). zoom, not a
-   font-size bump -- same convention Workshop's own Rotation View uses
-   for this identical need (.wsp-page.wsp-rotation-view, see that rule's
-   own comment for the full "why"): most of this page's own font-sizes
-   are in rem, always relative to the document ROOT font-size rather than
-   any ancestor's, so a plain font-size increase here would only hit text
-   that happens to inherit it directly and leave everything else (pills,
-   gaps, padding) untouched. zoom scales the whole rendered subtree --
-   literally everything within .today-things-page -- as one multiplier,
-   which is what "everything" actually needs. Not standard CSS, but
-   broadly supported in the Chromium-based browsers this dashboard
-   already assumes for kiosk/TV-board use. */
+/* Today Things (TV Boards) -- the whole page scaled up 1.5x, by request
+   (originally doubled at 2x -- "I went too far ... change that to 1/2
+   way between what it was to start with [1x] and where it is now [2x]",
+   i.e. 1.5). zoom, not a font-size bump -- same convention Workshop's own
+   Rotation View uses for this identical need (.wsp-page.wsp-rotation-view,
+   see that rule's own comment for the full "why"): most of this page's
+   own font-sizes are in rem, always relative to the document ROOT
+   font-size rather than any ancestor's, so a plain font-size increase
+   here would only hit text that happens to inherit it directly and leave
+   everything else (pills, gaps, padding) untouched. zoom scales the
+   whole rendered subtree -- literally everything within
+   .today-things-page -- as one multiplier, which is what "everything"
+   actually needs. Not standard CSS, but broadly supported in the
+   Chromium-based browsers this dashboard already assumes for kiosk/
+   TV-board use. */
 .today-things-page {
-  zoom: 2;
+  zoom: 1.5;
 }
 
 /* Today Things (TV Boards) -- Service Calls, three rows of two columns
