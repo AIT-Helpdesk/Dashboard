@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/today-things",
+  "version": "1.0.0",
+  "private": true,
+  "main": "client.js",
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "express": "^4.19.2"
+  },
+  "dashboardPage": {
+    "id": "today-things",
+    "label": "Today Things",
+    "client": "client.js",
+    "server": "server.js"
+  }
+}
