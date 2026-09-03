@@ -46,14 +46,27 @@ export function mount(container) {
   // No <h1> page heading, by request -- a wall-display TV board doesn't
   // need its own title the way a normal work page does. The Refresh
   // button stays, just without the heading it used to sit beside.
+  //
+  // Wrapped in .today-things-page so styles.css can scale the WHOLE page
+  // up via `zoom` (by request, "make all the text twice as big") -- same
+  // convention Workshop's own Rotation View uses for this identical need
+  // (see .wsp-page.wsp-rotation-view's own comment): most of this page's
+  // font-sizes are in rem, which is always relative to the document ROOT
+  // font-size, not any ancestor's, so a plain font-size bump here would
+  // only hit text that happens to inherit it directly and leave
+  // everything else (pills, gaps, padding) untouched. zoom scales the
+  // whole rendered subtree as one multiplier, which is what "everything"
+  // actually needs.
   container.innerHTML = `
-    <header class="page-header today-things-header">
-      <div class="date-form">
-        <button type="button" id="refresh-button">Refresh</button>
-      </div>
-    </header>
-    <p id="status" class="status">Loading...</p>
-    <div id="results"></div>
+    <div class="today-things-page">
+      <header class="page-header today-things-header">
+        <div class="date-form">
+          <button type="button" id="refresh-button">Refresh</button>
+        </div>
+      </header>
+      <p id="status" class="status">Loading...</p>
+      <div id="results"></div>
+    </div>
   `;
 
   const refreshButton = container.querySelector('#refresh-button');
