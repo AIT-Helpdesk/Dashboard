@@ -2431,18 +2431,41 @@ ul.start-here-checklist-other {
    elsewhere on this dashboard (Datto RMM included) or on any OTHER
    .resource-group heading on these same two pages. An id selector already
    outranks the bare class rules on specificity alone, regardless of file
-   order. */
-#critical-chart .resource-group-header {
+   order. #triage-chart (Tickets Dashboard's own second widget,
+   client.js's renderTicketWidget()) shares every one of these -- same
+   visual treatment as Critical (P1), by request ("a widget like the
+   Critical (P1) widget"), so listed alongside it rather than duplicated. */
+#critical-chart .resource-group-header,
+#triage-chart .resource-group-header {
   font-size: 1.15rem;
 }
-#critical-chart .resource-group-header .count {
+#critical-chart .resource-group-header .count,
+#triage-chart .resource-group-header .count {
   font-size: 1.05rem;
 }
-#critical-chart .datto-card-label {
+#critical-chart .datto-card-label,
+#triage-chart .datto-card-label {
   font-size: 1.2rem;
 }
-#critical-chart .datto-card-sub {
+#critical-chart .datto-card-sub,
+#triage-chart .datto-card-sub {
   font-size: 1.05rem;
+}
+/* Tickets Dashboard's own "Autotask Selection Criteria" notes box
+   (#widget-notes in client.js), by request -- reuses .wsp-usage-box's
+   existing "reference material, not another data table" look wholesale
+   (Workshop Board's own class, already generic -- not scoped to that
+   page), just spaced to sit below the widgets above it. Hidden entirely
+   while Rotate is running, by request -- html[data-rotate-active="true"]
+   is the same attribute app.js's own renderRotateControls() already
+   toggles on <html> for every Rotate-aware page on this dashboard (see
+   .focus-exit-btn's own rule above for the precedent), so this needs no
+   page-specific JS at all, just this one CSS rule. */
+.tickets-dashboard-notes {
+  margin-top: 1.5rem;
+}
+html[data-rotate-active="true"] .tickets-dashboard-notes {
+  display: none;
 }
 /* 50% bigger than Datto RMM's own default donut (7.5rem -> 11.25rem, size
    120 -> 180 passed to donutSvg() on the JS side), by request. A compound

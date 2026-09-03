@@ -10,8 +10,9 @@ const {
   mapWithConcurrency,
 } = require('@dashboard/autotask-client');
 
-// A real, generally-available page -- just the one widget by request,
-// copied out of the experimental Ticket Dashboards (Test) page
+// A real, generally-available page -- started as just the one widget (see
+// TRIAGE_PRIORITY_VALUE's own comment below for the second one added
+// since), copied out of the experimental Ticket Dashboards (Test) page
 // (packages/ticket-dashboards-test), which stays as-is (still
 // restrictedTo one account while the rest of it is being tried out).
 
@@ -22,6 +23,13 @@ const {
 // 58, "License Update (CRITICAL)", a narrow license-renewal workflow
 // status, not general urgency) and why priority is the right one.
 const CRITICAL_PRIORITY_VALUE = 4;
+
+// "!! TO BE SCHEDULED" -- confirmed live against the same priority
+// picklist as CRITICAL_PRIORITY_VALUE above (a fresh GET against Tickets'
+// own priority field, not guessed/reused from anywhere else -- this
+// account's picklist has several superficially similar values, e.g. "P3 -
+// SCHEDULED" (7) and plain "Scheduled" (6), neither of which is this one).
+const TRIAGE_PRIORITY_VALUE = 12;
 
 // "Open" here is simply "has no completedDate yet" -- same definition (and
 // same caveat -- a status-20 "Billing - Contract" ticket sitting in
@@ -44,55 +52,78 @@ const CRITICAL_PRIORITY_VALUE = 4;
 // is still functionally identical to the old fetch-all-then-filter --
 // excludeMonitoringAlerts() is a per-ticket filter, indifferent to
 // whether it's handed 400 tickets or 15.
-async function fetchCriticalOpenTickets(client) {
+// Shared by both this page's widgets (Critical (P1) and Triage Now,
+// below) -- same query shape, just a different priority value each time.
+async function fetchOpenTicketsByPriority(client, priorityValue) {
   const tickets = await listAll(client.tickets, [
     { op: 'notExist', field: 'completedDate' },
-    { op: 'eq', field: 'priority', value: CRITICAL_PRIORITY_VALUE },
+    { op: 'eq', field: 'priority', value: priorityValue },
   ]);
   return excludeMonitoringAlerts(tickets);
 }
 
 const router = express.Router();
 
+// Shapes one priority-group's raw tickets into the plain row shape both
+// widgets' own tables need -- status/client/resource names all resolved
+// from the SAME pre-warmed caches (resolveCompanyName()/
+// resolveResourceName() both cache internally; see the batched
+// mapWithConcurrency() calls below that warm them ONCE across BOTH
+// groups combined, not once per widget) so a client/resource appearing in
+// both the Critical and Triage Now lists is still only ever looked up
+// once.
+async function shapeTicketRows(client, tickets, statusLabels) {
+  const rows = await Promise.all(
+    tickets.map(async (t) => ({
+      id: t.id,
+      status: statusLabels.get(t.status) || `#${t.status}`,
+      ticketNumber: t.ticketNumber,
+      title: t.title,
+      clientName: await resolveCompanyName(client, t.companyID),
+      // "Unassigned", not blank -- same convention Completed Tickets'
+      // own equivalent resource column already uses for a null resource.
+      resourceName: t.assignedResourceID ? await resolveResourceName(client, t.assignedResourceID) : 'Unassigned',
+      ticketUrl: await getTicketUrl(t.id),
+    }))
+  );
+  rows.sort((a, b) => (a.ticketNumber || '').localeCompare(b.ticketNumber || ''));
+  return rows;
+}
+
 router.get('/', async (req, res) => {
   try {
     const client = await getClient();
-    const criticalTickets = await fetchCriticalOpenTickets(client);
+    const [criticalTickets, triageTickets] = await Promise.all([
+      fetchOpenTicketsByPriority(client, CRITICAL_PRIORITY_VALUE),
+      fetchOpenTicketsByPriority(client, TRIAGE_PRIORITY_VALUE),
+    ]);
 
-    // Pre-resolves each unique client/resource name once, concurrently --
-    // same "warm the cache before the per-row loop" pattern Service Calls'
-    // own server.js already uses -- rather than however many duplicate
-    // lookups a client/resource with more than one critical ticket open
-    // would otherwise cause (resolveCompanyName()/resolveResourceName()
-    // both cache internally, so this is the only real network cost
-    // either way, just batched instead of serial).
-    const uniqueCompanyIds = [...new Set(criticalTickets.map((t) => t.companyID).filter((cid) => cid !== null && cid !== undefined))];
-    const uniqueResourceIds = [...new Set(criticalTickets.map((t) => t.assignedResourceID).filter((rid) => rid !== null && rid !== undefined))];
+    // Pre-resolves each unique client/resource name once, concurrently,
+    // across BOTH widgets' tickets combined -- same "warm the cache
+    // before the per-row loop" pattern Service Calls' own server.js
+    // already uses -- rather than however many duplicate lookups a
+    // client/resource appearing on more than one ticket (in either or
+    // both lists) would otherwise cause.
+    const allTickets = [...criticalTickets, ...triageTickets];
+    const uniqueCompanyIds = [...new Set(allTickets.map((t) => t.companyID).filter((cid) => cid !== null && cid !== undefined))];
+    const uniqueResourceIds = [...new Set(allTickets.map((t) => t.assignedResourceID).filter((rid) => rid !== null && rid !== undefined))];
     const [statusLabels] = await Promise.all([
       getPicklistLabels(client.tickets, 'status'),
       mapWithConcurrency(uniqueCompanyIds, 3, (cid) => resolveCompanyName(client, cid)),
       mapWithConcurrency(uniqueResourceIds, 3, (rid) => resolveResourceName(client, rid)),
     ]);
 
-    const criticalTicketRows = await Promise.all(
-      criticalTickets.map(async (t) => ({
-        id: t.id,
-        status: statusLabels.get(t.status) || `#${t.status}`,
-        ticketNumber: t.ticketNumber,
-        title: t.title,
-        clientName: await resolveCompanyName(client, t.companyID),
-        // "Unassigned", not blank -- same convention Completed Tickets'
-        // own equivalent resource column already uses for a null resource.
-        resourceName: t.assignedResourceID ? await resolveResourceName(client, t.assignedResourceID) : 'Unassigned',
-        ticketUrl: await getTicketUrl(t.id),
-      }))
-    );
-    criticalTicketRows.sort((a, b) => (a.ticketNumber || '').localeCompare(b.ticketNumber || ''));
+    const [criticalTicketRows, triageTicketRows] = await Promise.all([
+      shapeTicketRows(client, criticalTickets, statusLabels),
+      shapeTicketRows(client, triageTickets, statusLabels),
+    ]);
 
     res.json({
       generatedAt: new Date().toISOString(),
       criticalOpenCount: criticalTickets.length,
       criticalTickets: criticalTicketRows,
+      triageOpenCount: triageTickets.length,
+      triageTickets: triageTicketRows,
     });
   } catch (err) {
     console.error(err);

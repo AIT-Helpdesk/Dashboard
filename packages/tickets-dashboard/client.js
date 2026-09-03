@@ -7,15 +7,16 @@ export const label = "Tickets Dashboard";
 let lastData = null;
 
 // Same palette Datto RMM's own donut cards use (STATUS_COLORS there) --
-// only the two shades this page's single critical-tickets donut actually
-// needs.
+// only the two shades this page's donut widgets actually need, shared by
+// both Critical (P1) and Triage Now.
 const DONUT_COLORS = { danger: '#dc3545', healthy: '#28a745' };
 
-// Fixed denominator for the ring's own sweep -- NOT the open-ticket total
-// (see renderCriticalDonut()'s own comment). 6 critical tickets (or more)
-// fills the ring completely. Same value as Ticket Dashboards (Test)'s own
-// copy of this widget.
-const CRITICAL_DONUT_SCALE = 6;
+// Fixed denominator for each ring's own sweep -- NOT the open-ticket total
+// (see renderTicketWidget()'s own comment). 6 open tickets (or more) fills
+// a ring completely. Same value as Ticket Dashboards (Test)'s own copy of
+// the original Critical widget -- reused as-is for Triage Now too, absent
+// any reason to pick a different fullness point for it.
+const WIDGET_DONUT_SCALE = 6;
 
 export function mount(container) {
   container.innerHTML = `
@@ -26,11 +27,21 @@ export function mount(container) {
     </header>
     <p id="status" class="status">Loading...</p>
     <div id="critical-chart" class="resource-group" hidden></div>
+    <div id="triage-chart" class="resource-group" hidden></div>
+    <div id="widget-notes" class="wsp-usage-box tickets-dashboard-notes" hidden>
+      <div class="wsp-usage-box-title">Autotask Selection Criteria</div>
+      <ul>
+        <li><strong>Critical (P1)</strong> -- open tickets (no Completed Date) with Priority = "P1 - CRITICAL", excluding monitoring alerts.</li>
+        <li><strong>Triage Now</strong> -- open tickets (no Completed Date) with Priority = "!! TO BE SCHEDULED", excluding monitoring alerts.</li>
+      </ul>
+    </div>
   `;
 
   const refreshButton = container.querySelector('#refresh-button');
   const statusEl = container.querySelector('#status');
   const criticalChartEl = container.querySelector('#critical-chart');
+  const triageChartEl = container.querySelector('#triage-chart');
+  const notesEl = container.querySelector('#widget-notes');
 
   refreshButton.addEventListener('click', load);
 
@@ -40,6 +51,8 @@ export function mount(container) {
     statusEl.className = 'status';
     statusEl.textContent = 'Loading...';
     criticalChartEl.hidden = true;
+    triageChartEl.hidden = true;
+    notesEl.hidden = true;
 
     try {
       const res = await fetch('/api/tickets-dashboard');
@@ -57,69 +70,99 @@ export function mount(container) {
 
   function render(data) {
     statusEl.hidden = true;
-    renderCriticalSection(data.criticalOpenCount, data.criticalTickets);
+    renderTicketWidget(criticalChartEl, data.criticalOpenCount, data.criticalTickets, {
+      label: 'Critical (P1)',
+      sub: 'Critical/Urgent/Licenses',
+      statusColored: true, // every ticket here IS critical -- see statusCellHtml()'s own comment
+    });
+    renderTicketWidget(triageChartEl, data.triageOpenCount, data.triageTickets, {
+      label: 'Triage Now',
+      // Display text only, by request -- the real Autotask priority name
+      // ("!! TO BE SCHEDULED") stays exactly as-is in the Notes area's own
+      // selection-criteria text below and in TRIAGE_PRIORITY_VALUE's own
+      // comment in server.js; this is purely the human-friendlier sub-line
+      // shown under the widget's own label, same role Critical (P1)'s own
+      // "Critical/Urgent/Licenses" sub-line plays.
+      sub: 'Might be Urgent !',
+      statusColored: false, // not inherently critical -- forcing red here would be misleading
+    });
+    // Notes area shown alongside the widgets, EXCEPT while Rotate is
+    // running -- by request. Pure CSS (html[data-rotate-active="true"]
+    // #widget-notes, styles.css), same attribute app.js's own
+    // renderRotateControls() already toggles on <html> for every other
+    // Rotate-aware page on this dashboard -- no extra JS/event listener
+    // needed here, this element just isn't hidden/shown by anything but
+    // the normal load()/error flow above.
+    notesEl.hidden = false;
   }
 
-  // Copied from Ticket Dashboards (Test) -- see that page's own client.js
-  // for the fuller reasoning behind every choice here (fixed
-  // CRITICAL_DONUT_SCALE denominator rather than the open-ticket total;
-  // reuses Datto RMM's own .datto-card/.datto-donut-* classes and
-  // donut-arc drawing, duplicated rather than imported, same "separate
-  // page package" convention every small shared UI helper on this
-  // dashboard already follows). The ticket list sits beside the donut, by
-  // request -- .critical-tickets-layout (styles.css) is a plain flex row,
-  // donut card first then the list, stacking on narrow screens. The
-  // donut's own ring size (180, up from the default 120 -- see
-  // .critical-donut-wrap--large in styles.css for the matching CSS-side
+  // Originally copied from Ticket Dashboards (Test) as one single-purpose
+  // function for the Critical (P1) widget alone; generalized once Triage
+  // Now needed the exact same layout with just a different priority/
+  // label/count -- see that page's own client.js for the fuller reasoning
+  // behind every choice here (fixed WIDGET_DONUT_SCALE denominator rather
+  // than the open-ticket total; reuses Datto RMM's own .datto-card/
+  // .datto-donut-* classes and donut-arc drawing, duplicated rather than
+  // imported, same "separate page package" convention every small shared
+  // UI helper on this dashboard already follows). The ticket list sits
+  // beside the donut, by request -- .critical-tickets-layout (styles.css,
+  // a generic class despite the name -- predates Triage Now, kept as-is
+  // rather than renamed) is a plain flex row, donut card first then the
+  // list, stacking on narrow screens. The donut's own ring size (180, up
+  // from the default 120 -- see .critical-donut-wrap--large in
+  // styles.css, same reused-name reasoning, for the matching CSS-side
   // size bump) is 50% bigger than Datto RMM's own default, by request.
-  function renderCriticalSection(criticalCount, criticalTickets) {
-    criticalChartEl.hidden = false;
-    criticalChartEl.innerHTML = '';
+  // `statusColored` is the one real behavioural difference between the
+  // two widgets -- see statusCellHtml()'s own comment for why Critical
+  // (P1) forces every status red but Triage Now doesn't.
+  function renderTicketWidget(containerEl, count, tickets, { label, sub, statusColored }) {
+    containerEl.hidden = false;
+    containerEl.innerHTML = '';
 
     const layout = document.createElement('div');
     layout.className = 'critical-tickets-layout';
 
     const donutWrap = document.createElement('div');
     donutWrap.className = 'datto-card-grid critical-donut-grid';
-    const color = criticalCount > 0 ? DONUT_COLORS.danger : DONUT_COLORS.healthy;
+    const color = count > 0 ? DONUT_COLORS.danger : DONUT_COLORS.healthy;
     const card = document.createElement('div');
     card.className = 'datto-card';
     card.innerHTML = `
       <div class="datto-donut-wrap critical-donut-wrap--large">
-        ${donutSvg(criticalCount, CRITICAL_DONUT_SCALE, color, 180)}
-        <div class="datto-donut-center"><span class="datto-donut-count">${criticalCount}</span></div>
+        ${donutSvg(count, WIDGET_DONUT_SCALE, color, 180)}
+        <div class="datto-donut-center"><span class="datto-donut-count">${count}</span></div>
       </div>
-      <div class="datto-card-label">Critical (P1)</div>
-      <div class="datto-card-sub">Critical/Urgent/Licenses</div>
+      <div class="datto-card-label">${escapeHtml(label)}</div>
+      <div class="datto-card-sub">${escapeHtml(sub)}</div>
     `;
     donutWrap.appendChild(card);
     layout.appendChild(donutWrap);
 
     const listWrap = document.createElement('div');
     listWrap.className = 'critical-tickets-list';
-    listWrap.innerHTML = criticalTicketsTableHtml(criticalTickets);
+    listWrap.innerHTML = ticketsTableHtml(tickets, statusColored);
     layout.appendChild(listWrap);
 
-    criticalChartEl.appendChild(layout);
+    containerEl.appendChild(layout);
   }
 
   // Plain <table> (no page-specific width class -- the generic base
   // table/th/td styling in styles.css already looks right for a simple
   // list like this), by request: Status, Ticket Number, Client Name,
-  // Ticket Title, Resource (last) for every currently-critical open
-  // ticket. No header row, by request -- just the widget and items.
-  function criticalTicketsTableHtml(criticalTickets) {
-    if (!criticalTickets || criticalTickets.length === 0) {
-      return '<p class="status">No critical tickets currently open.</p>';
+  // Ticket Title, Resource (last) for every currently-matching ticket. No
+  // header row, by request -- just the widget and items.
+  function ticketsTableHtml(tickets, statusColored) {
+    if (!tickets || tickets.length === 0) {
+      return '<p class="status">No tickets currently open.</p>';
     }
     return `
       <table>
         <tbody>
-          ${criticalTickets
+          ${tickets
             .map(
               (t) => `
             <tr>
-              <td>${statusCellHtml(t.status)}</td>
+              <td>${statusCellHtml(t.status, statusColored)}</td>
               <td class="ticket-number">${ticketLink(t)}</td>
               <td>${escapeHtml(t.clientName)}</td>
               <td>${escapeHtml(t.title)}</td>
@@ -137,14 +180,19 @@ export function mount(container) {
   // already scoped to critical tickets only, and yellow flags it apart
   // from the statuses around it. Exact-string match (not a wildcard/prefix
   // check) -- the one real status label with its own display-text swap.
-  // Every OTHER status on this list is red, by request -- every ticket
-  // here is already critical, so red is the "needs attention" default and
-  // License Update is the one deliberate exception (already flagged
-  // yellow instead) rather than the other way round.
-  function statusCellHtml(status) {
+  //
+  // `statusColored` (Critical (P1) only, by request) forces every OTHER
+  // status red -- every ticket in THAT widget is already critical, so red
+  // is the "needs attention" default and License Update is the one
+  // deliberate exception (already flagged yellow instead) rather than the
+  // other way round. Triage Now's tickets aren't inherently critical the
+  // same way, so its own statuses render plain -- forcing them all red
+  // too would misrepresent them.
+  function statusCellHtml(status, statusColored) {
     if (status === 'License Update (CRITICAL)') {
       return `<span class="text-highlight-yellow">License Update</span>`;
     }
+    if (!statusColored) return escapeHtml(status);
     return `<span class="text-highlight-red">${escapeHtml(status)}</span>`;
   }
 
