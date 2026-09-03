@@ -43,16 +43,16 @@ db.exec(`
     -- already-live CHECK constraint.
     action_color TEXT NOT NULL DEFAULT 'general' CHECK (action_color IN ('general','done','notewell','blue')),
     location TEXT,
-    -- Urgent/Complete/Nearly Complete/In Progress/Next Up/Coming/Not
-    -- Started, by request -- a status-progression scheme replacing the
+    -- Urgent/Complete/Nearly Complete/Waiting/In Progress/Next Up/Coming/
+    -- Not Started, by request -- a status-progression scheme replacing the
     -- original time-urgency one (Today/Tomorrow/2-4 days/Over 4 days).
-    -- See migrateRetierPriorityToStatusStyle()/migrateAddComingPriority()
-    -- below for how the live data was remapped/widened. Still a
-    -- manually-chosen magnet, not computed from a ticket's due date --
-    -- plenty of jobs have no linked ticket at all, so priority has to
-    -- stay settable on its own. Defaults to 'not_started' -- a fitting
-    -- "nothing to highlight yet" default.
-    priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','in_progress','next_up','coming','not_started')),
+    -- See migrateRetierPriorityToStatusStyle()/migrateAddComingPriority()/
+    -- migrateAddWaitingPriority() below for how the live data was
+    -- remapped/widened. Still a manually-chosen magnet, not computed from
+    -- a ticket's due date -- plenty of jobs have no linked ticket at all,
+    -- so priority has to stay settable on its own. Defaults to
+    -- 'not_started' -- a fitting "nothing to highlight yet" default.
+    priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','waiting','in_progress','next_up','coming','not_started')),
     -- Workshop's own workflow stage -- named workflow_stage, not
     -- status_stage/status2, to stay clearly distinct from the plain
     -- 'status' column below (open/completed, the archive mechanism --
@@ -720,6 +720,68 @@ function migrateAddWorkshopGearStage() {
 }
 migrateAddWorkshopGearStage();
 
+// Widens priority's CHECK to also allow 'waiting' (yellow) -- a new tier,
+// by request, sorted between Nearly Complete and In Progress (see
+// PRIORITY_SORT_ORDER in server.js and PRIORITY_ORDER in client.js).
+// Every existing value keeps its original name/meaning -- only 'waiting'
+// is new, so no data remapping is needed, just the same recreate-table-
+// and-copy dance as every other CHECK-widening migration (SQLite can't
+// widen an existing CHECK in place). jobs_new's own column list/order
+// here is copied EXACTLY from migrateAddWorkshopGearStage()'s own template
+// immediately above -- see that function's own comment for why the real
+// physical column order (flag_note, skip_ticket_updates, flag_answer at
+// the end) matters for a positional `INSERT ... SELECT *` to land every
+// value in the right column, not the order this file's own functions
+// happen to be defined in.
+function migrateAddWaitingPriority() {
+  const table = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'`).get();
+  if (table && table.sql && table.sql.includes("'waiting'")) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE jobs_new (
+        id INTEGER PRIMARY KEY,
+        reqd_by TEXT,
+        ticket_number TEXT,
+        ticket_autotask_id INTEGER,
+        customer TEXT,
+        job_description TEXT,
+        action_text TEXT,
+        action_color TEXT NOT NULL DEFAULT 'general' CHECK (action_color IN ('general','done','notewell','blue')),
+        location TEXT,
+        priority TEXT NOT NULL DEFAULT 'not_started' CHECK (priority IN ('urgent','complete','nearly_complete','waiting','in_progress','next_up','coming','not_started')),
+        workflow_stage TEXT NOT NULL DEFAULT 'new' CHECK (workflow_stage IN ('new','free_text','in_car','take_onsite','ready_to_ship','ready_for_pickup','sent','delivered','collected','dispose','workshop_gear')),
+        workflow_stage_text TEXT,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','completed')),
+        completed_at TEXT,
+        completed_by_email TEXT,
+        completed_by_name TEXT,
+        created_at TEXT NOT NULL,
+        created_by_email TEXT NOT NULL,
+        created_by_name TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by_email TEXT NOT NULL,
+        updated_by_name TEXT NOT NULL,
+        flag_note TEXT,
+        skip_ticket_updates INTEGER NOT NULL DEFAULT 0 CHECK (skip_ticket_updates IN (0, 1)),
+        flag_answer TEXT
+      );
+      INSERT INTO jobs_new SELECT * FROM jobs;
+      DROP TABLE jobs;
+      ALTER TABLE jobs_new RENAME TO jobs;
+    `);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+migrateAddWaitingPriority();
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -959,16 +1021,50 @@ function setEquipmentChecked(equipmentId, checked, actor) {
 // entries per row -- the CALLER (server.js) records one summary entry for
 // the whole list, same "readable changelog, not noise" reasoning
 // everything else here follows.
+//
+// checked_at/checked_by_email/checked_by_name are the one exception to
+// "no stable identity" above -- a real bug, reported live: ANY save of
+// this list (including the ordinary Edit Job form, which always resubmits
+// the whole equipment array alongside every other field, whether or not
+// equipment itself was touched) was silently wiping the Equipment
+// Checklist tick's own date/name, because `items` (built client-side by
+// collectEquipmentFromEditor(), which only reads the plain editable
+// fields shown in that table) never carries checked_at at all -- so a
+// wholesale delete+reinsert with no preservation step just dropped it on
+// every single save, not only ones that touched equipment. Preserved here
+// by matching each NEW item to an OLD row with the same (description,
+// locationNote) pair -- the two fields that actually identify a physical
+// item to a person looking at this list -- greedily, so two old rows
+// that happen to share that same pair aren't both matched to the same new
+// row. An item with no match (genuinely new, or its description/location
+// was itself edited -- a deliberate identity change, not a bug) simply
+// starts unchecked, same as any brand-new row always has.
 function replaceEquipmentForJob(jobId, items) {
   const now = nowIso();
   db.exec('BEGIN');
   try {
+    const existing = db.prepare('SELECT description, location_note, checked_at, checked_by_email, checked_by_name FROM equipment WHERE job_id = ?').all(jobId);
+    const availableByKey = new Map(); // "description locationNote" -> queue of old rows still unclaimed
+    for (const row of existing) {
+      const key = `${row.description || ''} ${row.location_note || ''}`;
+      if (!availableByKey.has(key)) availableByKey.set(key, []);
+      availableByKey.get(key).push(row);
+    }
+    function claimChecked(item) {
+      const key = `${item.description || ''} ${item.locationNote || ''}`;
+      const queue = availableByKey.get(key);
+      if (!queue || queue.length === 0) return { checkedAt: null, checkedByEmail: null, checkedByName: null };
+      const matched = queue.shift(); // greedy, first-available -- order among identical duplicates doesn't matter, only that each old row is claimed once
+      return { checkedAt: matched.checked_at, checkedByEmail: matched.checked_by_email, checkedByName: matched.checked_by_name };
+    }
+
     db.prepare('DELETE FROM equipment WHERE job_id = ?').run(jobId);
     const insert = db.prepare(
-      `INSERT INTO equipment (job_id, count, description, in_workshop, location_note, configured, delivered, sort_order, created_at, updated_at)
-       VALUES ($jobId, $count, $description, $inWorkshop, $locationNote, $configured, $delivered, $sortOrder, $now, $now)`
+      `INSERT INTO equipment (job_id, count, description, in_workshop, location_note, configured, delivered, sort_order, checked_at, checked_by_email, checked_by_name, created_at, updated_at)
+       VALUES ($jobId, $count, $description, $inWorkshop, $locationNote, $configured, $delivered, $sortOrder, $checkedAt, $checkedByEmail, $checkedByName, $now, $now)`
     );
     items.forEach((item, index) => {
+      const carried = claimChecked(item);
       insert.run({
         $jobId: jobId,
         $count: item.count === undefined || item.count === null ? null : item.count,
@@ -978,6 +1074,9 @@ function replaceEquipmentForJob(jobId, items) {
         $configured: item.configured ? 1 : 0,
         $delivered: item.delivered ? 1 : 0,
         $sortOrder: index,
+        $checkedAt: carried.checkedAt,
+        $checkedByEmail: carried.checkedByEmail,
+        $checkedByName: carried.checkedByName,
         $now: now,
       });
     });

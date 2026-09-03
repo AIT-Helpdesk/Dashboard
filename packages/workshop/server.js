@@ -18,7 +18,7 @@ const {
   setEquipmentChecked,
 } = require('./db.js');
 
-const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'coming', 'not_started'];
+const PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'waiting', 'in_progress', 'next_up', 'coming', 'not_started'];
 const ACTION_COLORS = ['general', 'done', 'notewell', 'blue'];
 const WORKFLOW_STAGES = ['new', 'free_text', 'in_car', 'take_onsite', 'ready_to_ship', 'ready_for_pickup', 'sent', 'delivered', 'collected', 'dispose', 'workshop_gear'];
 // The two stages with a companion free-text field -- 'free_text' (type
@@ -32,6 +32,33 @@ const TEXT_ENABLED_STAGES = ['free_text', 'in_car', 'take_onsite'];
 // any route on this router runs, same as every other page's server.js.
 function actorFrom(req) {
   return { email: req.session.user.email, name: req.session.user.name };
+}
+
+// True only for a request that reached this app AS localhost -- a direct
+// dev hit (`npm start`, http://localhost:3000), never the real production
+// domain, even though both ultimately land on this same Express process
+// (server.js's own listen() is bound to localhost-only either way, with a
+// reverse proxy -- Caddy in production -- always sitting in front; see
+// that bind's own comment further down). req.hostname reflects the
+// ORIGINAL Host header the browser actually sent (via X-Forwarded-Host
+// once `app.set('trust proxy', 1)` is in effect -- see auth.js), the same
+// request-derived-host mechanism redirectUriFor()/stretyRedirectUriFor()
+// already rely on elsewhere in this app, not a fixed env var -- so this
+// naturally reads 'localhost' for a direct dev hit and the real domain in
+// production, correctly, with zero configuration either way.
+//
+// By request: NOTHING this page does should ever write to a real Autotask
+// ticket when reached this way -- a dev/test session testing Workshop
+// Board must never post a note, move a ticket, or attach a photo to a
+// REAL production ticket by accident. Deliberately a blanket, unconditional
+// skip -- stronger than (and checked ALONGSIDE, never instead of) the
+// per-job skip_ticket_updates flag, which is a user preference for
+// production behaviour, not a dev-safety switch; even the hard-delete
+// route's own "never silenced" note (see its own comment) is still
+// skipped here, since a real ticket must never see dev-environment noise
+// regardless of what other rule would otherwise force a note through.
+function isLocalDevRequest(req) {
+  return req?.hostname === 'localhost';
 }
 
 // Resolves a typed ticket number (e.g. "T20260730.0020") to the real
@@ -207,7 +234,7 @@ const TICKET_NOTE_PUBLISH = 4; // "Internal & Co-Managed"
 // access to that browser module's exports, and the note's field list is
 // meant to read the same way the on-screen print card does ("contain all
 // the current data for the fields like the print process", by request).
-const NOTE_PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', in_progress: 'In Progress', next_up: 'Next Up', coming: 'Coming', not_started: 'Not Started' };
+const NOTE_PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', waiting: 'Waiting', in_progress: 'In Progress', next_up: 'Next Up', coming: 'Coming', not_started: 'Not Started' };
 const NOTE_WORKFLOW_STAGE_LABELS = {
   new: 'New',
   free_text: 'Free Text',
@@ -305,9 +332,12 @@ function noteHistoryLine(entry) {
 // propagates -- posting a note is a courtesy on top of the real save,
 // never something that should be able to fail the job save itself. Not
 // awaited by any caller for the same reason -- fire-and-forget, so it
-// never adds latency to the job save's own response.
-async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = false } = {}) {
+// never adds latency to the job save's own response. `req` is only ever
+// used for isLocalDevRequest() below -- every caller already has it in
+// scope from its own route handler.
+async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = false } = {}, req) {
   try {
+    if (isLocalDevRequest(req)) return; // never write to a real ticket from a dev/localhost session -- see isLocalDevRequest()'s own comment
     const row = getJob(jobId);
     if (!row || !row.ticket_autotask_id) return; // nothing to notify -- no linked ticket
     // "Skip ticket update" checkbox, by request -- checked entirely inside
@@ -376,8 +406,12 @@ function ticketMovedDescription(newTicketNumber) {
 // ticketAutotaskId), so each call site passes whichever job's flag applies
 // (see below). Defaults to false so the hard-delete route -- which must
 // NEVER be silenced, see its own comment -- can simply not pass it at all.
-async function postWorkshopActionNote(ticketAutotaskId, message, skip = false) {
-  if (skip || !ticketAutotaskId) return; // nothing to notify -- no linked ticket, or this job opted out
+// `req` is a trailing, separately-optional param (unlike `skip`, which
+// every real call site always passes explicitly) -- see
+// isLocalDevRequest()'s own comment for why this check applies even to
+// the hard-delete route's otherwise-unsilenceable note.
+async function postWorkshopActionNote(ticketAutotaskId, message, skip = false, req) {
+  if (skip || isLocalDevRequest(req) || !ticketAutotaskId) return; // nothing to notify -- no linked ticket, this job opted out, or a dev/localhost session
   try {
     const client = await getClient();
     await client.ticketNotes.create(ticketAutotaskId, {
@@ -391,8 +425,8 @@ async function postWorkshopActionNote(ticketAutotaskId, message, skip = false) {
   }
 }
 
-async function postTicketMovedNote(oldTicketAutotaskId, newTicketNumber, skip = false) {
-  await postWorkshopActionNote(oldTicketAutotaskId, ticketMovedDescription(newTicketNumber), skip);
+async function postTicketMovedNote(oldTicketAutotaskId, newTicketNumber, skip = false, req) {
+  await postWorkshopActionNote(oldTicketAutotaskId, ticketMovedDescription(newTicketNumber), skip, req);
 }
 
 const router = express.Router();
@@ -406,10 +440,24 @@ const router = express.Router();
 // tool behind Microsoft 365 sign-in.
 router.use(express.json({ limit: '40mb' }));
 
-// The board -- open jobs by default, sorted by linked ticket due date
-// (soonest first, by request), ?status=completed for the archive view
-// (most recently completed first, unaffected by the due-date sort)
-// behind client.js's "Show Completed" toggle.
+// Same tier order as client.js's own PRIORITY_ORDER (kept as a separate
+// copy, not a shared import -- this package has no existing shared-
+// constants module between client.js and server.js, and duplicating one
+// eight-entry array is simpler than introducing one just for this).
+// Urgent first, by request, then completion-progress order Complete ->
+// Nearly Complete -> Waiting -> In Progress -> Next Up -> Not Started ->
+// Coming -- this REPLACES due-date as the board's primary sort (due date
+// is now only the tiebreak within a tier, see below), where before
+// priority wasn't sorted on at all. Waiting inserted between Nearly
+// Complete and In Progress, by request.
+const PRIORITY_SORT_ORDER = ['urgent', 'complete', 'nearly_complete', 'waiting', 'in_progress', 'next_up', 'not_started', 'coming'];
+const PRIORITY_RANK = new Map(PRIORITY_SORT_ORDER.map((p, i) => [p, i]));
+
+// The board -- open jobs by default, sorted by priority tier first
+// (Urgent/Complete/.../Coming, by request), then by linked ticket due
+// date (soonest first, by request) as the tiebreak WITHIN a tier.
+// ?status=completed for the archive view (most recently completed first,
+// unaffected by either sort) behind client.js's "Show Completed" toggle.
 router.get('/', async (req, res) => {
   try {
     const isCompletedView = req.query.status === 'completed';
@@ -421,12 +469,19 @@ router.get('/', async (req, res) => {
       // that resolution -- not as a SQL ORDER BY in db.js (see
       // listOpenJobs()'s own comment). Jobs with no known due date (no
       // ticket, a ticket that didn't resolve, or a resolved ticket with
-      // none set) sort FIRST, by request -- deliberately NOT sorted by
-      // ticket_number (which can be blank, or hold arbitrary free text
-      // rather than a real ticket), just kept in their existing
-      // creation-order position (listOpenJobs()'s own ORDER BY) as a
-      // stable tiebreak within this group.
+      // none set) sort FIRST within their own priority tier, by request
+      // (unchanged from before priority sorting existed) -- deliberately
+      // NOT sorted by ticket_number (which can be blank, or hold
+      // arbitrary free text rather than a real ticket), just kept in
+      // their existing creation-order position (listOpenJobs()'s own
+      // ORDER BY) as a stable tiebreak within that group. An unrecognized
+      // priority value (shouldn't happen -- db.js's own CHECK constraint
+      // guards against it -- but Map.get() on a miss returns undefined,
+      // not a crash) sorts to the very end rather than throwing.
       jobs = jobs.sort((a, b) => {
+        const rankA = PRIORITY_RANK.has(a.priority) ? PRIORITY_RANK.get(a.priority) : PRIORITY_SORT_ORDER.length;
+        const rankB = PRIORITY_RANK.has(b.priority) ? PRIORITY_RANK.get(b.priority) : PRIORITY_SORT_ORDER.length;
+        if (rankA !== rankB) return rankA - rankB;
         if (!a.ticketDueDate && !b.ticketDueDate) return 0;
         if (!a.ticketDueDate) return -1;
         if (!b.ticketDueDate) return 1;
@@ -594,7 +649,7 @@ router.post('/jobs', async (req, res) => {
     // A ticket was already linked at creation time -- treat that the same
     // as "just added" (full history, which at this point is only the
     // single "created" entry).
-    if (shaped.ticketAutotaskId) postWorkshopUpdateNote(jobId, { headline: 'Job created.', includeFullHistory: true });
+    if (shaped.ticketAutotaskId) postWorkshopUpdateNote(jobId, { headline: 'Job created.', includeFullHistory: true }, req);
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     console.error(err);
@@ -648,16 +703,20 @@ router.patch('/jobs/:id', async (req, res) => {
       // watching that ticket isn't left wondering why Workshop Board
       // notes suddenly stopped.
       if (ticketLinkChanged && existing.ticket_autotask_id) {
-        postTicketMovedNote(existing.ticket_autotask_id, updated.ticket_number, !!updated.skip_ticket_updates);
+        postTicketMovedNote(existing.ticket_autotask_id, updated.ticket_number, !!updated.skip_ticket_updates, req);
       }
       if (shaped.ticketAutotaskId) {
         // Covers both "was unlinked, now linked" and "linked to a
         // different ticket than before" -- either way this ticket has
         // never seen a Workshop Board note, so it gets the full history.
-        postWorkshopUpdateNote(jobId, {
-          headline: noteHeadlineFor(transferredFromTicket, ticketLinkChanged),
-          includeFullHistory: ticketLinkChanged,
-        });
+        postWorkshopUpdateNote(
+          jobId,
+          {
+            headline: noteHeadlineFor(transferredFromTicket, ticketLinkChanged),
+            includeFullHistory: ticketLinkChanged,
+          },
+          req
+        );
       }
     }
   } catch (err) {
@@ -682,7 +741,7 @@ router.put('/jobs/:id/equipment', (req, res) => {
     const equipment = listEquipmentForJob(jobId).map(shapeEquipmentRow);
     res.json({ equipment });
     if (changed && existing.ticket_autotask_id) {
-      postWorkshopUpdateNote(jobId, { headline: 'Equipment list updated.' });
+      postWorkshopUpdateNote(jobId, { headline: 'Equipment list updated.' }, req);
     }
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -698,7 +757,7 @@ router.patch('/jobs/:id/complete', (req, res) => {
     const actor = actorFrom(req);
     const updated = completeJob(jobId, actor);
     res.json(shapeJob(updated));
-    postWorkshopActionNote(updated.ticket_autotask_id, `Workshop Job marked as complete by ${actor.name}.`, !!updated.skip_ticket_updates);
+    postWorkshopActionNote(updated.ticket_autotask_id, `Workshop Job marked as complete by ${actor.name}.`, !!updated.skip_ticket_updates, req);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -711,7 +770,7 @@ router.patch('/jobs/:id/reopen', (req, res) => {
     if (!getJob(jobId)) return res.status(404).json({ error: 'Job not found.' });
     const updated = reopenJob(jobId, actorFrom(req));
     res.json(shapeJob(updated));
-    postWorkshopActionNote(updated.ticket_autotask_id, 'Completed Workshop Job Reopened.', !!updated.skip_ticket_updates);
+    postWorkshopActionNote(updated.ticket_autotask_id, 'Completed Workshop Job Reopened.', !!updated.skip_ticket_updates, req);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -736,7 +795,7 @@ router.patch('/jobs/:id/soft-delete', (req, res) => {
     // updateJob() above plus another from completeJob()) -- it's really
     // a single user action, not two separate changes worth notifying
     // about individually.
-    if (completed.ticket_autotask_id) postWorkshopUpdateNote(jobId, { headline: 'Job deleted from Workshop Board (marked complete).' });
+    if (completed.ticket_autotask_id) postWorkshopUpdateNote(jobId, { headline: 'Job deleted from Workshop Board (marked complete).' }, req);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -767,7 +826,7 @@ router.delete('/jobs/:id', (req, res) => {
     const actor = actorFrom(req);
     deleteJob(jobId);
     res.status(204).end();
-    postWorkshopActionNote(job.ticket_autotask_id, `Workshop Job deleted by ${actor.name}.`);
+    postWorkshopActionNote(job.ticket_autotask_id, `Workshop Job deleted by ${actor.name}.`, undefined, req);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -825,6 +884,17 @@ router.post('/jobs/:id/photos', async (req, res) => {
     if (!job) return res.status(404).json({ error: 'Job not found.' });
     if (!job.ticket_autotask_id) {
       return res.status(400).json({ error: 'Cannot upload photos -- this job has no linked ticket.' });
+    }
+    // Blocked entirely on a dev/localhost session, by request -- unlike
+    // every other note in this file, a photo upload has no "skip"
+    // parameter to just quietly not-send; the write to a real Autotask
+    // ticket IS the entire action here (see this route's own top comment
+    // on why it's not gated on skip_ticket_updates either, for the same
+    // "the attachment is the whole point" reason -- isLocalDevRequest()
+    // overrides even that). A clear 400 rather than a silent fake success,
+    // so testing this from localhost surfaces exactly why nothing uploaded.
+    if (isLocalDevRequest(req)) {
+      return res.status(400).json({ error: 'Photo uploads are disabled from a localhost/dev session -- this would attach a real file to a real Autotask ticket.' });
     }
     const files = Array.isArray(req.body?.files) ? req.body.files : [];
     if (files.length === 0) return res.status(400).json({ error: 'No files provided.' });
@@ -907,6 +977,15 @@ router.get('/equipment-checklist', async (req, res) => {
           equipmentId: item.id,
           jobId: job.id,
           clientName,
+          // Shown under the client name in the popup, by request -- both
+          // already resolved live on `job` by withTicketDetails() above
+          // (ticketNumber straight off the job row itself, ticketStatus
+          // via the same real-Autotask-status lookup the main board's own
+          // Status column uses), no extra work needed here. Null/blank
+          // for a job with no linked ticket at all -- equipmentChecklist.js
+          // decides how to render that case.
+          ticketNumber: job.ticketNumber || null,
+          ticketStatus: job.ticketStatus || null,
           description: item.description || '(unnamed item)',
           count: item.count,
           // "Show the tick if the current date-time stamp is today, blank
@@ -966,7 +1045,7 @@ router.put('/equipment-checklist/:equipmentId/checked', (req, res) => {
       const job = getJob(existing.job_id);
       const stamp = new Date().toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', dateStyle: 'medium', timeStyle: 'short' });
       const message = `Equipment checked by ${actor.name} on ${stamp}: ${existing.description || '(unnamed item)'} -- ${existing.location_note || '(no location set)'}.`;
-      postWorkshopActionNote(job?.ticket_autotask_id, message, !!job?.skip_ticket_updates);
+      postWorkshopActionNote(job?.ticket_autotask_id, message, !!job?.skip_ticket_updates, req);
     }
   } catch (err) {
     console.error(err);

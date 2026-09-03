@@ -90,18 +90,24 @@ let showWorkshopGear = false;
 // loadDeliveriesPreview() below) rather than duplicating any data/logic.
 let lastDeliveriesPreview = null;
 
-// Urgent/Complete/Nearly Complete/In Progress/Next Up/Coming/Not
+// Urgent/Complete/Nearly Complete/Waiting/In Progress/Next Up/Coming/Not
 // Started, by request -- a completion-progress scheme replacing the
 // original time-urgency one (Today/Tomorrow/2-4 days/Over 4 days -- see
 // db.js's own comment on the priority column for how existing data was
 // remapped). Still a manually-chosen magnet -- plenty of jobs have no
 // linked ticket at all, so it can't be purely computed from a due date.
-const PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', in_progress: 'In Progress', next_up: 'Next Up', coming: 'Coming', not_started: 'Not Started' };
-const PRIORITY_ORDER = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up', 'not_started', 'coming'];
+// 'waiting' (yellow, sorted between Nearly Complete and In Progress) is
+// the newest tier -- see server.js's own PRIORITY_SORT_ORDER for the
+// board's actual sort, which this array's own order also mirrors for the
+// legend/dropdowns below.
+const PRIORITY_LABELS = { urgent: 'Urgent', complete: 'Complete', nearly_complete: 'Nearly Complete', waiting: 'Waiting', in_progress: 'In Progress', next_up: 'Next Up', coming: 'Coming', not_started: 'Not Started' };
+const PRIORITY_ORDER = ['urgent', 'complete', 'nearly_complete', 'waiting', 'in_progress', 'next_up', 'not_started', 'coming'];
 // Client/Current-Required-Action background tint applies to these
 // tiers only, by request -- Coming and Not Started stay unshaded (the
-// bars still carry their colour either way).
-const TINTED_PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'in_progress', 'next_up'];
+// bars still carry their colour either way). Waiting included alongside
+// its neighbours (Nearly Complete/In Progress) -- a real active tier, not
+// a placeholder state like Coming/Not Started.
+const TINTED_PRIORITIES = ['urgent', 'complete', 'nearly_complete', 'waiting', 'in_progress', 'next_up'];
 // Plain colour names, by request -- Black (default)/Red/Blue/Green. The
 // stored values keep their original names (general/done/notewell) for
 // the three pre-existing ones plus a new 'blue' -- only the labels here
@@ -190,6 +196,15 @@ const FIELD_LABELS = {
   skip_ticket_updates: 'Skip ticket update',
 };
 
+// Shown only when this page is reached directly via localhost (a dev/test
+// session), never in production -- matches server.js's own
+// isLocalDevRequest(req) exactly (both read the request's real host, one
+// server-side via req.hostname, one here client-side via
+// window.location.hostname), by request: server.js silently skips every
+// real Autotask write (ticket notes, ticket moves, photo uploads) from a
+// session reached this way, so this banner is what tells whoever's
+// actually looking at the page that's happening, rather than a change
+// silently not reaching the ticket with no visible explanation at all.
 export function mount(container) {
   container.innerHTML = `
     <div class="wsp-page">
@@ -221,6 +236,8 @@ export function mount(container) {
       </header>
 
       <div id="job-form-container"></div>
+
+      ${window.location.hostname === 'localhost' ? '<p class="wsp-localhost-warning">TICKETS NOT UPDATED FROM localhost DEV ENVIRONMENTS</p>' : ''}
 
       <p id="status" class="status">Loading...</p>
       <div id="results"></div>
@@ -396,6 +413,19 @@ export function mount(container) {
     }
   }
 
+  // Sits directly above the Dispose table wherever it actually renders --
+  // three separate call sites below (single-column, the mainJobs-empty
+  // early-return, and 2-column's own rightCol), each already guarded on
+  // "there IS a Dispose table to show" (disposeJobs.length > 0), so this
+  // is created alongside it rather than as a permanent fixture that would
+  // otherwise sit above an empty space whenever Dispose has nothing in it.
+  function disposeWarningEl() {
+    const el = document.createElement('p');
+    el.className = 'wsp-dispose-warning';
+    el.textContent = 'Do Not Dispose of equipment containing Data | Do Not Wipe Data without WRITTEN permission';
+    return el;
+  }
+
   function legendHtml() {
     return `<span class="wsp-priority-legend-prefix">Workshop Status: </span>${PRIORITY_ORDER.map(
       (p) => `<span><span class="wsp-dot wsp-dot--${p}"></span>${escapeHtml(PRIORITY_LABELS[p])}</span>`
@@ -444,7 +474,10 @@ export function mount(container) {
 
     if (mainJobs.length === 0) {
       resultsEl.innerHTML = `<p class="status">${showCompleted ? 'No completed jobs yet.' : 'No open jobs -- add one to get started.'}</p>`;
-      if (disposeJobs.length > 0) disposeResultsEl.appendChild(buildTableGroup(disposeJobs));
+      if (disposeJobs.length > 0) {
+        disposeResultsEl.appendChild(disposeWarningEl());
+        disposeResultsEl.appendChild(buildTableGroup(disposeJobs));
+      }
       return;
     }
 
@@ -468,7 +501,10 @@ export function mount(container) {
 
       const rightCol = document.createElement('div');
       rightCol.appendChild(buildTableGroup(mainJobs.slice(mid)));
-      if (disposeJobs.length > 0) rightCol.appendChild(buildTableGroup(disposeJobs));
+      if (disposeJobs.length > 0) {
+        rightCol.appendChild(disposeWarningEl());
+        rightCol.appendChild(buildTableGroup(disposeJobs));
+      }
       layout.appendChild(rightCol);
 
       resultsEl.appendChild(layout);
@@ -479,7 +515,10 @@ export function mount(container) {
       legendEl.style.display = 'none';
     } else {
       resultsEl.appendChild(buildTableGroup(mainJobs));
-      if (disposeJobs.length > 0) disposeResultsEl.appendChild(buildTableGroup(disposeJobs));
+      if (disposeJobs.length > 0) {
+        disposeResultsEl.appendChild(disposeWarningEl());
+        disposeResultsEl.appendChild(buildTableGroup(disposeJobs));
+      }
     }
   }
 
@@ -605,24 +644,33 @@ export function mount(container) {
   // The equipment "symbol", shown inline with the Location text (see
   // jobRowHtml() above), by request -- same "always clickable, dim when
   // empty, bold once set" pattern as the Q/A stamp (qaIconsHtml() above):
-  // there'd otherwise be no way to add the FIRST equipment item. A third
-  // state, by request -- green (.wsp-equipment-icon--checked, styles.css)
-  // once EVERY item has been checked off today (isCheckedToday() above);
-  // still counts as "set" (full opacity/size), just with the extra green
-  // badge on top, not a fourth size/opacity tier of its own. Hovering
-  // shows the full list (including each item's own last-checked date/
-  // time) via a plain native tooltip; clicking (any state) opens the
-  // standalone equipment modal -- see openEquipmentModal() and
-  // wireRowActions() below.
+  // there'd otherwise be no way to add the FIRST equipment item. Two
+  // further badge states on top of that, by request -- green
+  // (.wsp-equipment-icon--checked, styles.css) once EVERY item has been
+  // checked off today (isCheckedToday() above), yellow
+  // (.wsp-equipment-icon--partial) once SOME but not all have -- both
+  // still count as "set" (full opacity/size), just with the extra badge
+  // on top, not a further size/opacity tier of their own. Hovering shows
+  // the full list (including each item's own last-checked date/time) via
+  // a plain native tooltip; clicking (any state) opens the standalone
+  // equipment modal -- see openEquipmentModal() and wireRowActions()
+  // below.
   function equipmentIconHtml(job) {
     const items = job.equipment || [];
     const hasItems = items.length > 0;
-    const allCheckedToday = hasItems && items.every(isCheckedToday);
+    const checkedTodayCount = hasItems ? items.filter(isCheckedToday).length : 0;
+    const allCheckedToday = hasItems && checkedTodayCount === items.length;
+    const someCheckedToday = hasItems && checkedTodayCount > 0 && !allCheckedToday;
     let cls = 'wsp-equipment-icon';
     cls += hasItems ? ' wsp-equipment-icon--set' : ' wsp-equipment-icon--empty';
     if (allCheckedToday) cls += ' wsp-equipment-icon--checked';
+    else if (someCheckedToday) cls += ' wsp-equipment-icon--partial';
     const summary = hasItems ? equipmentSummaryLines(items) : 'Click to add equipment';
-    const title = allCheckedToday ? `All items checked today\n${summary}` : summary;
+    const title = allCheckedToday
+      ? `All items checked today\n${summary}`
+      : someCheckedToday
+        ? `${checkedTodayCount} of ${items.length} items checked today\n${summary}`
+        : summary;
     return `<span class="${cls}" data-id="${job.id}" title="${escapeHtml(title)}">\u{1F4E6}</span>`;
   }
 
@@ -1641,7 +1689,7 @@ export function mount(container) {
     return job.customer || '—';
   }
 
-  const PRINT_PRIORITY_DOT_COLORS = { urgent: '#dc2626', complete: '#16a34a', nearly_complete: '#2563eb', in_progress: '#f97316', next_up: '#8b5cf6', coming: '#eab308', not_started: '#6b7280' };
+  const PRINT_PRIORITY_DOT_COLORS = { urgent: '#dc2626', complete: '#16a34a', nearly_complete: '#2563eb', waiting: '#eab308', in_progress: '#f97316', next_up: '#8b5cf6', coming: '#eab308', not_started: '#6b7280' };
   const PRINT_ACTION_COLORS = { general: '#111827', notewell: '#dc2626', blue: '#2563eb', done: '#16a34a' };
 
   function buildPrintCardHtml(job) {
