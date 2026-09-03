@@ -251,7 +251,12 @@
     "type": "category",
     "id": "tv-boards",
     "label": "TV Boards",
-    "children": []
+    "children": [
+      {
+        "type": "page",
+        "id": "today-things"
+      }
+    ]
   },
   {
     "type": "page",

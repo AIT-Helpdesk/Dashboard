@@ -1031,6 +1031,12 @@ h1 {
 .tickets-dashboard-header {
   justify-content: flex-end;
 }
+/* Today Things (TV Boards) has no <h1> either (removed by request -- a
+   wall-display board doesn't need its own title) -- same fix as Tickets
+   Dashboard's own .tickets-dashboard-header above, for the same reason. */
+.today-things-header {
+  justify-content: flex-end;
+}
 
 /* Fills essentially the whole page -- no page-header on this page at all
    (see technician-forms/client.js), so this only needs to account for
@@ -1943,6 +1949,117 @@ h1 {
    underline/color so it reads identically to the span variants. */
 a.tt-tag {
   text-decoration: none;
+}
+
+/* Today Things (TV Boards) -- Service Calls, three rows of two columns
+   each (Today, Yesterday, Overdue -- each split into chronological +
+   grouped by Allocated Resource), by request. Same 2-column grid shape as
+   What's On's own .tt-columns (see that rule's own comment), just 2
+   columns instead of 3 -- this page has one data source so far, not
+   three. */
+.today-things-columns {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 3px;
+  margin-bottom: 3px;
+}
+@media (max-width: 900px) {
+  .today-things-columns {
+    grid-template-columns: 1fr;
+  }
+}
+/* Overrides .resource-group's own 1rem margin-bottom, by request (a "just
+   a couple of pixels" gap between boxes) -- that margin would otherwise
+   add its own trailing space inside every grid track ON TOP OF
+   .today-things-columns' own gap/margin-bottom above, since Grid doesn't
+   collapse a child's margin the way normal block flow would. */
+.today-things-column {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+/* This page's own column headers show a colored pill (Today/Yesterday/
+   Overdue, the same green/amber/red .tt-tag--today/--tomorrow/--overdue
+   palette What's On's own day tags use) instead of a text title, by
+   request -- background removed and padding trimmed down to just fit the
+   pill's own height, tall enough for the pill alone rather than
+   .resource-group-header's usual card-title sizing. Scoped to
+   .today-things-column, not a change to .resource-group-header itself --
+   every other page reusing that class still wants its normal
+   background/padding. */
+.today-things-column .resource-group-header {
+  background: none;
+  padding: 0.4rem 0.75rem;
+}
+.today-things-column-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.today-things-column-title-suffix {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.today-things-column-body {
+  flex: 1;
+}
+/* Same row/list look as What's On's own .tt-list/.tt-service-call-row/
+   .tt-time (reused directly, not redefined here) -- this class exists
+   ONLY to drop that one's max-height: 15rem cap. That cap makes sense for
+   a compact widget sharing space with two other columns on What's On;
+   this page's whole reason to exist is showing the full day's list on a
+   wall display, so capping it to a small scrolling box would defeat the
+   point. */
+.today-things-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+/* One resource's own sub-group within a "by Resource" column -- a plain
+   sub-heading (smaller/muted, distinct from .resource-group-header's own
+   bigger card-title look) directly above that resource's own
+   .today-things-list, "Unallocated" sorting first (see
+   groupedByResourceHtml() in client.js). */
+.today-things-resource-group-heading {
+  padding: 0.4rem 1rem 0;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+/* A real resource name is blue, "Unallocated" is red, by request -- same
+   var(--accent) .text-highlight-blue uses for an allocated name and
+   #dc2626 .text-highlight-red uses for "Unallocated" everywhere else on
+   this dashboard, just promoted to the group heading itself here rather
+   than inline row text (see hideAllocation in client.js -- the row no
+   longer repeats it). Overrides the plain var(--muted) rule above. */
+.today-things-resource-group-heading--resource {
+  color: var(--accent);
+}
+.today-things-resource-group-heading--unallocated {
+  color: #dc2626;
+}
+.today-things-resource-group:first-child .today-things-resource-group-heading {
+  padding-top: 0.75rem;
+}
+/* The Ticket Number/Title and Service Call/Ticket Status lines, by
+   request -- shown only on the chronological (left) lists, previously
+   available only via hover tooltip. Slightly smaller than the normal
+   .cell-subtext description line above them (still that same class/color)
+   so they visually read as secondary detail, not a second description.
+   Each line's own bold label comes from a plain <strong> in the markup
+   (client.js), not a class here. */
+.today-things-detail-line {
+  font-size: 0.72rem;
+}
+/* Hairline between one resource group and the next, same divider role
+   .tt-column-footer's own border-top plays elsewhere -- skipped on the
+   very first group (nothing above it to separate from). */
+.today-things-resource-group + .today-things-resource-group {
+  border-top: 1px solid var(--border);
 }
 
 table {
