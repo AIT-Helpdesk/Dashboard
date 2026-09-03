@@ -670,6 +670,23 @@ html[data-focus-mode="true"] .focus-exit-btn {
 html[data-focus-mode="true"][data-rotate-active="true"] .focus-exit-btn {
   display: none;
 }
+/* Every page's own Refresh button, hidden dashboard-wide while a Rotate
+   cycle is running, by request ("hide the refresh buttons off all pages
+   in rotation view") -- nobody viewing an unattended rotation can click
+   it anyway (see the Workshop-specific Add job/Equipment Checklist hide
+   for the same reasoning). #refresh-button is this dashboard's own
+   established convention for the force-refetch button every page with
+   one uses (see app.js's own renderRotateControls()/rotation-step
+   comments for the full "why"), so one plain id selector under
+   html[data-rotate-active="true"] covers every page at once -- no
+   per-page class needed. Doesn't stop app.js from still auto-clicking it
+   on each rotation step (`[id="refresh-button"]`, that own code's
+   comment explains the id-selector-vs-querySelector distinction) -- a
+   hidden button's `.click()` still fires normally, only `disabled` would
+   block that. */
+html[data-rotate-active="true"] #refresh-button {
+  display: none;
+}
 
 /* Present on every page, bottom-centre, by request -- specifically so
    it's still reachable in Full Screen mode where the sidebar's own
@@ -4139,15 +4156,22 @@ tr.row-text-highlight-blue td {
 .wsp-page.wsp-rotation-view .wsp-actions {
   display: none;
 }
-/* Rotation View also hides every header toolbar button except Refresh, by
-   request ("hide the buttons other than refresh ... only when in rotation
-   view") -- same "nobody viewing an unattended rotation can click those
-   buttons anyway" reasoning as the Completion column above. The
+/* Rotation View also hides every header toolbar button, INCLUDING Refresh
+   (by request -- first just "the buttons other than refresh", then
+   extended dashboard-wide to "hide the refresh buttons off all pages in
+   rotation view" too) -- same "nobody viewing an unattended rotation can
+   click those buttons anyway" reasoning as the Completion column above.
+   Refresh is ALSO covered by the plain html[data-rotate-active="true"]
+   #refresh-button rule above (every page, not just this one) -- repeated
+   here so manually toggling this page's own Rotation View checkbox (a
+   preview, independent of whether a real Rotate cycle happens to be
+   running right now) still hides it too, not just a live rotation. The
    Show Completed/2 columns/Mobile View/Rotation View checkboxes are left
    alone -- not buttons, and the Rotation View one specifically has to
    stay visible/usable so it can be switched off again. */
 .wsp-page.wsp-rotation-view #add-job-button,
-.wsp-page.wsp-rotation-view #equipment-checklist-button {
+.wsp-page.wsp-rotation-view #equipment-checklist-button,
+.wsp-page.wsp-rotation-view #refresh-button {
   display: none;
 }
 /* Rotation View also drops the Location column down to just its own
