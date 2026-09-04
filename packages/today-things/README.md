@@ -12,7 +12,7 @@ Everything renders inside a `.today-things-page` wrapper, scaled up via `zoom: 1
 Three rows of two columns each, by request:
 
 1. **Today** -- every incomplete call scheduled today.
-2. **Tomorrow** -- every incomplete call scheduled tomorrow.
+2. **Tomorrow** -- every incomplete call scheduled tomorrow. On a **Friday**, by request, this widens to cover Saturday, Sunday, AND Monday -- literal tomorrow (Saturday) alone would be a near-empty, not-very-useful table on the one day of the week the actual next business day is 3 days out, not 1. `server.js`'s `fetchTodayTomorrowOverdue()` detects this via the AEST weekday of `todayAestKey()`; the client is told explicitly via a `tomorrowMultiDay` flag on the response (not left to infer from how many distinct dates happen to show up -- a sparse Friday with only one Monday call would otherwise look indistinguishable from an ordinary single-day Tomorrow table). When it's multi-day, every Tomorrow row gets its own short weekday label before the time (e.g. "Sat, 11:30 am") -- plain text, not a colored pill like Overdue's date badge, since this table only ever spans one long weekend rather than weeks of unrelated dates.
 3. **Overdue** -- incomplete calls from before today (a rolling 2-week lookback), whose linked ticket is still open. Same `requireOpenTicket`/2-week-window reasoning as What's On's own past-incomplete service call group (`packages/whats-on/server.js`) -- confirmed against real data that dropping this filter pulls in well over a thousand ancient rows on tickets that closed ages ago, noise rather than anything actionable on a wall display. Today and Tomorrow deliberately do NOT apply this filter -- both are recent enough that a still-open appointment is worth seeing even before anyone's had a chance to react to it.
 
 Each of the three groups is shown as two columns side by side:
@@ -49,6 +49,12 @@ Today's, Tomorrow's, and Overdue's calls are fetched and shaped **separately** (
 `isComplete = false` in all three queries, by request-equivalent reasoning to What's On's own identical filter -- an already-finished call isn't useful on a "what's happening" board the way it still is on Service Calls' own full calendar (which shows completed calls too, behind its own opt-in "Show Completed" toggle).
 
 10-minute server-side cache (`CACHE_TTL_MS`), same reasoning Service Calls' own `REPORT_CACHE_TTL_MS` gives for its own identical window -- a staffing gap fixed within the hour should stop showing as unallocated promptly on a board meant to be glanced at through the day, shorter than the default 20-minute window most other pages here use.
+
+## Background cache warming, for Rotate's off-screen preload
+
+Confirmed against real use: when the dashboard's Rotate feature switches to this page, it briefly showed "Loading..." rather than data already in place. Rotate's off-screen preload (`preloadPage()` in `packages/shell/public/app.js`) only gives every page a fixed 1.5s window to fetch/render before showing it regardless (`ROTATE_PRELOAD_BUFFER_MS`) -- and this page's real Autotask round trip (3 separate service-call windows, each independently joined against `ServiceCallTickets`/`ServiceCallTicketResources`/`Tickets` and resolved) can genuinely take longer than that on a cold cache. Not a bug in the preload mechanism itself, which is generic across every page.
+
+`server.js` now calls `getTodayTomorrowOverdue(true)` (a genuine re-fetch, same as the Refresh button's own `?force=true`) once immediately when the module loads, then again every 8 minutes (`CACHE_WARM_INTERVAL_MS`) -- comfortably inside the 10-minute `CACHE_TTL_MS`, so a request essentially never lands in the narrow gap right after the cache would otherwise expire. A failed background warm is logged, not thrown -- it just leaves the existing cache to expire normally, same as if this warming didn't exist. The interval is `.unref()`'d so it doesn't hold a process open on its own (confirmed with a real test: a script that only requires this module, with no explicit `process.exit()`, still exits naturally in well under a second) -- the real Express server's own listening socket already keeps the process alive regardless.
 
 ## Not yet built
 
