@@ -6,6 +6,13 @@ export const label = "Workshop Board";
 // alive for the session, same "restore instantly instead of a blank
 // flash on revisit" convention every other page here uses.
 let lastJobs = null;
+// Usage Instructions box content + the Extended Help page reached via its
+// own small help button, both admin-editable (see openHelpModal() below)
+// -- restored instantly from here on a remount, then refreshed, same
+// convention as lastJobs above. null until the first fetch resolves (the
+// Usage Instructions box's own hardcoded default HTML in the template
+// below covers that gap -- see openHelpModal()'s own comment).
+let cachedHelpContent = null; // { usageInstructions, extendedHelp, editable }
 let showCompleted = false;
 // Two side-by-side tables instead of one, for wide screens -- by
 // request, unticked by default. Persists across remounts, same
@@ -254,18 +261,21 @@ export function mount(container) {
       <div id="workshop-gear-results"></div>
 
       <div class="wsp-bottom-panels" id="bottom-panels">
-        <div class="wsp-usage-box">
+        <div class="wsp-usage-box wsp-usage-box--has-help">
           <div class="wsp-usage-box-title">
             Usage instructions
             <button type="button" class="wsp-icon-btn wsp-bottom-panels-toggle" id="bottom-panels-toggle" title="Minimize">−</button>
           </div>
-          <ul>
-            <li>The Workshop Status is about what's happening in the room -- what's in progress, up next, not started, etc. Anything else can be entered with the Free Text option.</li>
-            <li>The following Statuses can have free text added: Free Text, In Car, and Take Onsite.</li>
-            <li>When a ticket number is entered, the ticket will be updated with all item updates and information to date.</li>
-            <li>If a ticket number is changed, the old ticket will be noted with the new ticket number, and all historical info will be added to the new ticket.</li>
-            <li>The only ticket information drawn from Autotask using the ticket number is the Ticket Status and the Due Date.</li>
-          </ul>
+          <div id="usage-instructions-content">
+            <ul>
+              <li>The Workshop Status is about what's happening in the room -- what's in progress, up next, not started, etc. Anything else can be entered with the Free Text option.</li>
+              <li>The following Statuses can have free text added: Free Text, In Car, and Take Onsite.</li>
+              <li>When a ticket number is entered, the ticket will be updated with all item updates and information to date.</li>
+              <li>If a ticket number is changed, the old ticket will be noted with the new ticket number, and all historical info will be added to the new ticket.</li>
+              <li>The only ticket information drawn from Autotask using the ticket number is the Ticket Status and the Due Date.</li>
+            </ul>
+          </div>
+          <button type="button" class="wsp-help-btn" id="workshop-help-btn" title="Help">More Help</button>
         </div>
         <a href="#packages-received" class="wsp-usage-box wsp-deliveries-box wsp-deliveries-link" title="Open Goods Received">
           <div id="deliveries-preview" class="wsp-deliveries-body"><p class="wsp-deliveries-placeholder">Loading...</p></div>
@@ -283,6 +293,8 @@ export function mount(container) {
   const formContainer = container.querySelector('#job-form-container');
   const addJobButton = container.querySelector('#add-job-button');
   const equipmentChecklistButton = container.querySelector('#equipment-checklist-button');
+  const workshopHelpButton = container.querySelector('#workshop-help-btn');
+  const usageInstructionsContentEl = container.querySelector('#usage-instructions-content');
   const refreshButton = container.querySelector('#refresh-button');
   const showCompletedToggle = container.querySelector('#show-completed-toggle');
   const twoColumnToggle = container.querySelector('#two-column-toggle');
@@ -351,6 +363,13 @@ export function mount(container) {
   equipmentChecklistButton.addEventListener('click', () => {
     window.open('/api/workshop/equipment-checklist/view', 'workshop-equipment-checklist', 'width=480,height=900,scrollbars=yes');
   });
+  workshopHelpButton.addEventListener('click', () => openHelpModal());
+  // Restore instantly from whatever the last fetch returned (a remount,
+  // same convention as lastJobs above) -- the Usage Instructions box's own
+  // hardcoded default HTML in the template covers the very first-ever
+  // mount, before this has resolved even once.
+  if (cachedHelpContent) usageInstructionsContentEl.innerHTML = cachedHelpContent.usageInstructions;
+  fetchHelpContent();
   refreshButton.addEventListener('click', () => {
     loadJobs();
     loadDeliveriesPreview();
@@ -1440,6 +1459,209 @@ export function mount(container) {
         delivered: tr.querySelector('.wsp-equipment-delivered').checked,
       };
     });
+  }
+
+  // GET /api/workshop/help-content -- the Usage Instructions box's own
+  // content, plus the Extended Help page reached via the small "?" button
+  // in its bottom-right corner, by request. Best-effort, same convention
+  // fetchDeliveriesPreview()/every other secondary fetch on this page
+  // uses -- a failed fetch just leaves the box showing its last-known (or
+  // hardcoded-default, on a first-ever visit) content rather than
+  // breaking the page.
+  async function fetchHelpContent() {
+    try {
+      const res = await fetch('/api/workshop/help-content');
+      const data = await res.json();
+      if (!res.ok) return;
+      cachedHelpContent = data;
+      usageInstructionsContentEl.innerHTML = data.usageInstructions;
+      // Only re-render if the modal is open right now showing THIS content
+      // -- this fetch can resolve well after the viewer's already closed
+      // it (or opened a job's own modal instead), and clobbering that with
+      // Help's own content would be wrong.
+      if (document.querySelector('.wsp-help-modal-panel')) renderHelpModal();
+    } catch {
+      // Best-effort, as above.
+    }
+  }
+
+  // Same overlay+panel shape as every other modal on this page
+  // (.history-modal-*), reused rather than a separate one-off dialog.
+  // View mode (everyone) shows just the Extended Help page -- the Usage
+  // Instructions box's own content is already visible right there on the
+  // page, so repeating it here would be redundant. Edit mode (admin only,
+  // gated server-side too -- see server.js's own isDashboardAdmin() check)
+  // shows BOTH areas together, by request ("have it be able to have 2 edit
+  // areas") -- editing Usage Instructions inline in that small box isn't
+  // practical, so it's edited from here instead, alongside Extended Help.
+  // Same rich-text contenteditable + execCommand toolbar as every tabbed
+  // page's own Help-tab notes editor (packages/shell/public/tab-page-client.js)
+  // -- not shared code (this isn't a tabbed page), just the same
+  // established shape, duplicated here for the same reason every other
+  // near-identical component on this dashboard is.
+  let helpModalEditing = false;
+  // Set by openHelpModal() below, read by renderHelpModal() -- a plain
+  // mount-scoped variable rather than stashing the close function on the
+  // overlay DOM node, since renderHelpModal() (called both from here and
+  // from fetchHelpContent()'s own "refresh it if it's already open"
+  // check) needs to reach the SAME close()/onKeydown pair every time it
+  // re-renders the panel's content in place, not recreate the overlay
+  // itself. Same "one open at a time" convention Today Things' own
+  // openEntryMenuEl uses for this identical kind of tracked popup state.
+  let helpModalCloseFn = null;
+  function openHelpModal() {
+    helpModalEditing = false;
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `<div class="history-modal-panel wsp-help-modal-panel"></div>`;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+      helpModalCloseFn = null;
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    helpModalCloseFn = close;
+    renderHelpModal();
+  }
+
+  const HELP_TOOLBAR_COMMANDS = [
+    { label: 'B', title: 'Bold', command: 'bold', style: 'font-weight:700;' },
+    { label: 'I', title: 'Italic', command: 'italic', style: 'font-style:italic;' },
+    { label: '• List', title: 'Bulleted list', command: 'insertUnorderedList' },
+    { label: '1. List', title: 'Numbered list', command: 'insertOrderedList' },
+    { label: '🔗 Link', title: 'Link', command: 'createLink', promptForUrl: true },
+  ];
+
+  function isHelpContentBlank(html) {
+    if (!html) return true;
+    const probe = document.createElement('div');
+    probe.innerHTML = html;
+    return probe.textContent.trim() === '';
+  }
+
+  function helpToolbarHtml() {
+    return HELP_TOOLBAR_COMMANDS.map(
+      (c) => `<button type="button" class="button-link button-link--small" data-help-command="${c.command}" data-help-prompt="${!!c.promptForUrl}" title="${escapeHtml(c.title)}" style="${c.style || ''}">${c.label}</button>`
+    ).join(' ');
+  }
+
+  // Wires one editor block's own toolbar to its own adjacent contenteditable
+  // div (via closest('.wsp-help-editor-block'), not a hardcoded id) --
+  // reused for both the Usage Instructions and Extended Help blocks below,
+  // each block's toolbar only ever affecting its own editor. Same
+  // mousedown-preventDefault trick tab pages' own help editor uses -- keeps
+  // the contenteditable's current text selection alive (a button click
+  // alone would blur the editable div FIRST, losing the selection
+  // execCommand needs to act on).
+  function wireHelpToolbar(blockEl) {
+    const editableEl = blockEl.querySelector('[contenteditable]');
+    blockEl.querySelectorAll('[data-help-command]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => {
+        const command = btn.dataset.helpCommand;
+        if (btn.dataset.helpPrompt === 'true') {
+          const url = prompt('Link URL:', 'https://');
+          if (!url) return;
+          document.execCommand(command, false, url);
+        } else {
+          document.execCommand(command, false, null);
+        }
+        editableEl.focus();
+      });
+    });
+  }
+
+  function renderHelpModal() {
+    const panel = document.querySelector('.wsp-help-modal-panel');
+    if (!panel || !helpModalCloseFn) return; // closed already
+    const close = helpModalCloseFn;
+    const content = cachedHelpContent || { usageInstructions: usageInstructionsContentEl.innerHTML, extendedHelp: '', editable: false };
+
+    if (helpModalEditing) {
+      panel.innerHTML = `
+        <div class="history-modal-panel-header">
+          <span>Edit Help</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <div class="wsp-help-editor-block">
+            <h3>Usage Instructions</h3>
+            <div class="wsp-help-toolbar">${helpToolbarHtml()}</div>
+            <div class="wsp-help-editor" contenteditable="true" data-field="usageInstructions">${content.usageInstructions}</div>
+          </div>
+          <div class="wsp-help-editor-block">
+            <h3>Extended Help</h3>
+            <div class="wsp-help-toolbar">${helpToolbarHtml()}</div>
+            <div class="wsp-help-editor" contenteditable="true" data-field="extendedHelp">${content.extendedHelp}</div>
+          </div>
+          <p class="status error wsp-help-modal-error" hidden></p>
+          <div class="wsp-form-actions">
+            <button type="button" class="button-link wsp-help-save-button">Save</button>
+            <button type="button" class="wsp-help-cancel-button">Cancel</button>
+          </div>
+        </div>
+      `;
+      panel.querySelectorAll('.wsp-help-editor-block').forEach(wireHelpToolbar);
+      panel.querySelector('.history-modal-close').addEventListener('click', close);
+      panel.querySelector('.wsp-help-cancel-button').addEventListener('click', () => {
+        helpModalEditing = false;
+        renderHelpModal();
+      });
+      panel.querySelector('.wsp-help-save-button').addEventListener('click', async () => {
+        const errorEl = panel.querySelector('.wsp-help-modal-error');
+        errorEl.hidden = true;
+        const usageInstructions = panel.querySelector('[data-field="usageInstructions"]').innerHTML;
+        const extendedHelp = panel.querySelector('[data-field="extendedHelp"]').innerHTML;
+        try {
+          const res = await fetch('/api/workshop/help-content', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ usageInstructions, extendedHelp }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+          cachedHelpContent = { usageInstructions, extendedHelp, editable: true };
+          usageInstructionsContentEl.innerHTML = usageInstructions;
+          helpModalEditing = false;
+          renderHelpModal();
+        } catch (err) {
+          errorEl.hidden = false;
+          errorEl.textContent = `Error: ${err.message}`;
+        }
+      });
+      return;
+    }
+
+    const hasExtendedHelp = !isHelpContentBlank(content.extendedHelp);
+    const extendedHelpHtml = hasExtendedHelp ? content.extendedHelp : '<p class="status">No extended help added yet.</p>';
+    const editButtonHtml = content.editable
+      ? `<button type="button" class="button-link wsp-help-edit-button">${hasExtendedHelp || !isHelpContentBlank(content.usageInstructions) ? 'Edit Help' : 'Add Help'}</button>`
+      : '';
+    panel.innerHTML = `
+      <div class="history-modal-panel-header">
+        <span>Help</span>
+        <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="history-modal-body">
+        <div class="wsp-help-extended-content">${extendedHelpHtml}</div>
+        ${editButtonHtml}
+      </div>
+    `;
+    panel.querySelector('.history-modal-close').addEventListener('click', close);
+    const editBtn = panel.querySelector('.wsp-help-edit-button');
+    if (editBtn) {
+      editBtn.addEventListener('click', () => {
+        helpModalEditing = true;
+        renderHelpModal();
+      });
+    }
   }
 
   // Standalone equipment modal -- opened by clicking the row's own
