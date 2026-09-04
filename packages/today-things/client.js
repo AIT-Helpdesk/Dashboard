@@ -32,6 +32,10 @@ let lastData = null; // module-scope, survives the shell's teardown/re-mount, sa
 // revisit -- module scope sidesteps it entirely, fully initialized once
 // before mount() is ever called the first time.
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// Same module-scope-not-inside-mount() reasoning as MONTH_SHORT above --
+// used by Tomorrow's own Sat/Sun/Mon weekday label (see
+// formatWeekdayShort()/tomorrowMultiDay below).
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // Column heading pill -- same green/amber/red 3-color
 // .tt-tag--today/--tomorrow/--overdue palette What's On's own day tags
 // already use, reused here as the column TITLE itself rather than a
@@ -125,8 +129,8 @@ export function mount(container) {
         ${serviceCallColumnHtml('today', data.today, { byResource: true })}
       </div>
       <div class="today-things-columns">
-        ${serviceCallColumnHtml('tomorrow', data.tomorrow)}
-        ${serviceCallColumnHtml('tomorrow', data.tomorrow, { byResource: true })}
+        ${serviceCallColumnHtml('tomorrow', data.tomorrow, { showWeekday: data.tomorrowMultiDay })}
+        ${serviceCallColumnHtml('tomorrow', data.tomorrow, { byResource: true, showWeekday: data.tomorrowMultiDay })}
       </div>
       <div class="today-things-columns">
         ${serviceCallColumnHtml('overdue', data.overdue)}
@@ -140,15 +144,21 @@ export function mount(container) {
   // reasoning What's On's own ttColumn() follows for its three columns.
   // Overdue's rows additionally fold their own date into the time text
   // (showDate, derived from dayScope) -- Today's and Tomorrow's own
-  // tables are each already single-day (the header pill already says
+  // tables are each USUALLY single-day (the header pill already says
   // which), but Overdue spans up to 2 weeks of different dates, so its
-  // rows need their own date shown to tell them apart. The chronological
-  // (left) list shows each row's full ticket/service-call detail line
+  // rows need their own date shown to tell them apart. Tomorrow is the
+  // one exception to "usually" -- on a Friday it widens to Saturday
+  // through Monday (see server.js's own comment), so its rows get their
+  // own short weekday label instead (showWeekday, from the caller's own
+  // `data.tomorrowMultiDay` -- server-told, not inferred from how many
+  // distinct dates happen to show up, so a sparse Friday with only one
+  // Monday call still gets labelled correctly). The chronological (left)
+  // list shows each row's full ticket/service-call detail line
   // (showDetails); the by-Resource (right) list doesn't repeat it and
   // additionally drops the allocation text before the description
   // (hideAllocation) -- both by request, since the resource-group heading
   // already says who's allocated there.
-  function serviceCallColumnHtml(dayScope, rows, { byResource = false } = {}) {
+  function serviceCallColumnHtml(dayScope, rows, { byResource = false, showWeekday = false } = {}) {
     const showDate = dayScope === 'overdue';
     let body;
     if (!rows || rows.length === 0) {
@@ -157,9 +167,9 @@ export function mount(container) {
       // was just extra noise across all three day-scopes.
       body = '';
     } else if (byResource) {
-      body = groupedByResourceHtml(rows, { showDate });
+      body = groupedByResourceHtml(rows, { showDate, showWeekday });
     } else {
-      body = `<ul class="today-things-list">${rows.map((row) => serviceCallRowHtml(row, { showDate, showDetails: true })).join('')}</ul>`;
+      body = `<ul class="today-things-list">${rows.map((row) => serviceCallRowHtml(row, { showDate, showWeekday, showDetails: true })).join('')}</ul>`;
     }
     const pill = DAY_SCOPE_PILLS[dayScope];
     const titleHtml = `
@@ -185,7 +195,7 @@ export function mount(container) {
   // var(--accent) blue .text-highlight-blue uses for an allocated name
   // everywhere else on this dashboard; "Unallocated" stays red, same
   // #dc2626 .text-highlight-red uses for that everywhere else too.
-  function groupedByResourceHtml(rows, { showDate = false } = {}) {
+  function groupedByResourceHtml(rows, { showDate = false, showWeekday = false } = {}) {
     const byGroup = new Map(); // group label -> rows[]
     for (const row of rows) {
       const key = row.allocated ? row.resourceNames.join(', ') : 'Unallocated';
@@ -204,7 +214,7 @@ export function mount(container) {
         return `
         <div class="today-things-resource-group">
           <div class="today-things-resource-group-heading ${headingModifier}">${escapeHtml(name)}</div>
-          <ul class="today-things-list">${groupRows.map((row) => serviceCallRowHtml(row, { showDate, hideAllocation: true })).join('')}</ul>
+          <ul class="today-things-list">${groupRows.map((row) => serviceCallRowHtml(row, { showDate, showWeekday, hideAllocation: true })).join('')}</ul>
         </div>`;
       })
       .join('');
@@ -214,13 +224,18 @@ export function mount(container) {
   // <resource names> / red "Unallocated" allocation text, the ticket
   // number/title/status + service call status hover tooltip, the whole
   // row as the click target for the popup menu below. NO day tag on
-  // Today/Tomorrow (unlike What's On's copy) -- those two tables are
-  // each already split by day, so a tag would just repeat what the
-  // column heading already says. Overdue is the one exception -- `showDate`
-  // shows the row's date+time together in the same red `.tt-tag--overdue`
-  // pill (instead of the plain `.tt-time` every other row uses), by
-  // request, since that table alone can span up to 2 weeks of different
-  // dates.
+  // Today/Tomorrow normally (unlike What's On's copy) -- those two
+  // tables are each usually already split by day, so a tag would just
+  // repeat what the column heading already says. Overdue is one
+  // exception -- `showDate` shows the row's date+time together in the
+  // same red `.tt-tag--overdue` pill (instead of the plain `.tt-time`
+  // every other row uses), by request, since that table alone can span
+  // up to 2 weeks of different dates. Tomorrow-on-a-Friday is the other
+  // -- `showWeekday` prefixes the plain time with a short weekday label
+  // (e.g. "Sat, 11:30 am"), by request, no pill -- that table only ever
+  // spans the 3 days of one long weekend, not weeks of unrelated dates,
+  // so a plain text prefix reads as "this row's own day" rather than
+  // needing the same visual weight as Overdue's colored badge.
   //
   // `hideAllocation` (by-Resource lists only, by request) drops the blue/
   // red allocation text before the description -- the resource-group
@@ -230,7 +245,7 @@ export function mount(container) {
   // Call/Ticket Status -- previously only available on hover via the
   // tooltip below, which stays in place (still useful for the by-Resource
   // rows, which don't get these visible lines).
-  function serviceCallRowHtml(row, { showDate = false, hideAllocation = false, showDetails = false } = {}) {
+  function serviceCallRowHtml(row, { showDate = false, showWeekday = false, hideAllocation = false, showDetails = false } = {}) {
     const allocation = row.allocated
       ? `<span class="text-highlight-blue">&lt;${escapeHtml(row.resourceNames.join(', '))}&gt;</span>`
       : '<span class="text-highlight-red">Unallocated</span>';
@@ -242,9 +257,14 @@ export function mount(container) {
     tooltipLines.push(`Service call status: ${row.serviceCallStatus}`);
     const tooltip = tooltipLines.join('\n');
 
-    const timeHtml = showDate
-      ? `<span class="tt-tag tt-tag--overdue">${escapeHtml(formatShortDate(row.dayKey))}, ${escapeHtml(formatTime(row.startDateTime))}</span>`
-      : `<span class="tt-time">${formatTime(row.startDateTime)}</span>`;
+    let timeHtml;
+    if (showDate) {
+      timeHtml = `<span class="tt-tag tt-tag--overdue">${escapeHtml(formatShortDate(row.dayKey))}, ${escapeHtml(formatTime(row.startDateTime))}</span>`;
+    } else if (showWeekday) {
+      timeHtml = `<span class="tt-time">${escapeHtml(formatWeekdayShort(row.dayKey))}, ${formatTime(row.startDateTime)}</span>`;
+    } else {
+      timeHtml = `<span class="tt-time">${formatTime(row.startDateTime)}</span>`;
+    }
 
     const descriptionLine = hideAllocation
       ? row.description
@@ -472,6 +492,15 @@ export function mount(container) {
     if (!dateKey) return '';
     const d = new Date(`${dateKey}T00:00:00`);
     return `${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
+  }
+
+  // Tomorrow-on-a-Friday's own weekday label (Sat/Sun/Mon), by request --
+  // same bare "T00:00:00" local-time parse as formatShortDate() above,
+  // for the same UTC/local off-by-one reason.
+  function formatWeekdayShort(dateKey) {
+    if (!dateKey) return '';
+    const d = new Date(`${dateKey}T00:00:00`);
+    return WEEKDAY_SHORT[d.getDay()];
   }
 
   async function fetchJson(url, method, body) {

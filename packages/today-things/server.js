@@ -149,13 +149,26 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket } 
 // this filter pulls in over a thousand ancient rows on tickets that
 // closed ages ago, pure noise rather than anything actionable on a wall
 // display.
+//
+// On a Friday, "Tomorrow" widens to cover Saturday, Sunday, AND Monday,
+// by request -- literal tomorrow (Saturday) alone would be a near-empty,
+// not-very-useful table on the one day of the week this board's actual
+// next business day is 3 days out, not 1. `new Date(Date.UTC(ty, tm - 1,
+// td)).getUTCDay()` reads the weekday for the AEST calendar date
+// todayAestKey() already resolved -- Date.UTC's own weekday follows the
+// plain Gregorian calendar regardless of timezone, so this is safe even
+// though every other date boundary here goes through aestToUtcIso's real
+// AEST-offset conversion instead.
 async function fetchTodayTomorrowOverdue() {
   const client = await getClient();
   const today = todayAestKey();
   const [ty, tm, td] = today.split('-').map(Number);
   const todayStartISO = aestToUtcIso(ty, tm, td);
   const tomorrowStartISO = aestToUtcIso(ty, tm, td + 1);
-  const dayAfterStartISO = aestToUtcIso(ty, tm, td + 2);
+  const todayDow = new Date(Date.UTC(ty, tm - 1, td)).getUTCDay(); // 0=Sun .. 5=Fri .. 6=Sat
+  const isFriday = todayDow === 5;
+  const tomorrowWindowDays = isFriday ? 3 : 1; // Fri -> Sat+Sun+Mon; every other day -> just the 1 day after today
+  const tomorrowEndISO = aestToUtcIso(ty, tm, td + 1 + tomorrowWindowDays);
   const overduePastStartISO = aestToUtcIso(ty, tm, td - 14);
 
   const [todayCalls, tomorrowCalls, overdueCalls] = await Promise.all([
@@ -166,7 +179,7 @@ async function fetchTodayTomorrowOverdue() {
     ]),
     listAll(client.serviceCalls, [
       { op: 'gte', field: 'startDateTime', value: tomorrowStartISO },
-      { op: 'lt', field: 'startDateTime', value: dayAfterStartISO },
+      { op: 'lt', field: 'startDateTime', value: tomorrowEndISO },
       { op: 'eq', field: 'isComplete', value: false },
     ]),
     listAll(client.serviceCalls, [
@@ -192,7 +205,13 @@ async function fetchTodayTomorrowOverdue() {
   tomorrowRows.sort((a, b) => new Date(a.startDateTime) - new Date(b.startDateTime));
   overdueRows.sort((a, b) => new Date(b.startDateTime) - new Date(a.startDateTime));
 
-  return { today: todayRows, tomorrow: tomorrowRows, overdue: overdueRows };
+  // Told to the client explicitly (rather than left to infer from how
+  // many distinct dayKeys tomorrowRows happens to contain) -- a sparse
+  // Friday with only one Monday call would otherwise look
+  // indistinguishable from an ordinary single-day Tomorrow table, and
+  // client.js needs to know whether to show each row's own Sat/Sun/Mon
+  // weekday label at all.
+  return { today: todayRows, tomorrow: tomorrowRows, tomorrowMultiDay: isFriday, overdue: overdueRows };
 }
 
 // Short-lived cache, same reasoning Service Calls' own REPORT_CACHE_TTL_MS
@@ -220,12 +239,44 @@ async function getTodayTomorrowOverdue(force) {
   return inFlight;
 }
 
+// Proactively keeps the cache warm in the background, confirmed necessary
+// against real use -- Rotate's off-screen preload only gives every page a
+// fixed 1.5s window to fetch/render before it's shown regardless (see
+// app.js's own ROTATE_PRELOAD_BUFFER_MS), and this page's real Autotask
+// round trip (3 separate service-call windows -- Today/Tomorrow/Overdue --
+// each independently joined against ServiceCallTickets/
+// ServiceCallTicketResources/Tickets and resolved) can genuinely take
+// longer than that on a cold cache: a real, visible loading flash right
+// when Rotate switched to it, not a preload-mechanism bug (that mechanism
+// itself is generic across every page -- see preloadPage() in app.js).
+// Refreshed well before CACHE_TTL_MS actually expires, not right at it --
+// otherwise a request could still land in the gap right after expiry and
+// pay the full cold-fetch cost anyway, defeating the point.
+// `force: true` -- always a genuine re-fetch, same as the Refresh button's
+// own `?force=true`. Errors are swallowed (logged, not thrown) -- a failed
+// background warm just leaves the existing cache to expire normally and
+// the next real request pays for its own fetch, same as if this warming
+// didn't exist at all; it should never crash the server.
+// `.unref()` -- doesn't hold the process open on its own (the real HTTP
+// server's own listening socket already does that); lets a short-lived
+// script that merely requires this module (e.g. this package's own tests)
+// still exit naturally once its own work is done, rather than hanging on
+// a timer that runs forever.
+const CACHE_WARM_INTERVAL_MS = 8 * 60 * 1000; // comfortably inside the 10-minute CACHE_TTL_MS
+function warmCache() {
+  getTodayTomorrowOverdue(true).catch((err) => {
+    console.error('today-things: background cache warm failed:', err.message);
+  });
+}
+warmCache();
+setInterval(warmCache, CACHE_WARM_INTERVAL_MS).unref();
+
 const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
-    const { today, tomorrow, overdue } = await getTodayTomorrowOverdue(req.query.force === 'true');
-    res.json({ asOf: new Date().toISOString(), today, tomorrow, overdue });
+    const { today, tomorrow, tomorrowMultiDay, overdue } = await getTodayTomorrowOverdue(req.query.force === 'true');
+    res.json({ asOf: new Date().toISOString(), today, tomorrow, tomorrowMultiDay, overdue });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
