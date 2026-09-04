@@ -34,7 +34,7 @@ By request ("Use similar formatting as the Service Calls section on the What's O
 
 - Blue `<resource names>` / red "Unallocated" allocation text on the chronological (left) list, same `.text-highlight-blue`/`.text-highlight-red` classes used dashboard-wide (the by-Resource list carries this same distinction on its group heading instead -- see above).
 - Hovering a row shows the linked ticket's number/title/status (when there is one) plus the service call's own status, via a plain native tooltip -- kept even on the chronological list (whose rows also show this visibly now), and still the only way to see it on the by-Resource list.
-- Clicking anywhere on a row opens a popup menu: **Open ticket** (only when a ticket is actually linked), **Change Date/Time**, **Mark Complete/Mark Incomplete**, **Mark as Onsite TBA**, **Mark as Onsite Arranged**.
+- Clicking anywhere on a row opens a popup menu: **Open ticket** (only when a ticket is actually linked), **Change Date/Time**, **Mark As Complete** (only shown when the call isn't already complete -- no "Mark Incomplete" at all, by request; undoing a completed call goes through Change Status instead), and **Change Status** (a drill-down submenu listing the real, live `ServiceCalls.status` picklist -- fetched once per page load from `GET /api/service-calls/statuses`, cached, never refetched per click -- see Service Calls' own README for the full story).
 
 ## No writes of its own -- every action is a cross-page call to Service Calls' own routes
 

@@ -18,6 +18,15 @@ export const label = "Today Things";
 // page has no writes of its own at all.
 
 let lastData = null; // module-scope, survives the shell's teardown/re-mount, same convention every other page here uses
+// The real ServiceCalls.status picklist (see GET /api/service-calls/statuses
+// in that page's own server.js for the full "why"/live-vs-stale story),
+// fetched ONCE per page load (see fetchServiceCallStatusOptions() below)
+// and reused for every later "Change Status" submenu open within the same
+// session -- module-scope, same "survives a remount, never refetched
+// needlessly" convention as lastData above, and exactly what "definitely
+// don't [fetch] every time a user clicks" requires. null until the first
+// fetch resolves.
+let cachedServiceCallStatusOptions = null;
 
 // Module scope, not declared inside mount() -- same fix What's On's own
 // MONTH_SHORT/TEAM_ICON_HTML needed (see that file's own comment for the
@@ -99,6 +108,12 @@ export function mount(container) {
 
   if (lastData) render(lastData);
   else load(false);
+  // Fire-and-forget, not awaited -- primes cachedServiceCallStatusOptions
+  // (see its own module-scope comment) well before anyone actually opens
+  // a row's own "Change Status" submenu, without blocking this page's own
+  // main load. A no-op once already cached from an earlier mount this
+  // session.
+  fetchServiceCallStatusOptions();
 
   async function load(force) {
     refreshButton.disabled = true;
@@ -315,40 +330,110 @@ export function mount(container) {
   function onServiceCallMenuKeydown(e) {
     if (e.key === 'Escape') closeServiceCallMenu();
   }
+  // GET /api/service-calls/statuses -- fetched once (see
+  // cachedServiceCallStatusOptions' own module-scope comment), not
+  // refetched on every "Change Status" click. `force` (used only by the
+  // submenu's own retry-on-failure below) bypasses that cache for one
+  // real attempt when the eager mount-time prefetch itself failed. A
+  // cross-page call to Service Calls' own route, same as
+  // setServiceCallStatus() below already is.
+  async function fetchServiceCallStatusOptions(force) {
+    if (cachedServiceCallStatusOptions && !force) return cachedServiceCallStatusOptions;
+    try {
+      const res = await fetch('/api/service-calls/statuses');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      cachedServiceCallStatusOptions = data.statuses;
+      return cachedServiceCallStatusOptions;
+    } catch {
+      // Best-effort -- the submenu below shows its own "Could not load"
+      // state and offers Back; cachedServiceCallStatusOptions stays null
+      // so the NEXT attempt (another menu open, or this same submenu's
+      // own retry) tries again rather than caching a permanent failure.
+      return null;
+    }
+  }
+
   function openServiceCallMenu(anchorEl, entry) {
     closeServiceCallMenu();
     const menu = document.createElement('div');
     menu.className = 'entry-popup-menu';
-    menu.innerHTML = `
-      ${entry.ticketUrl ? `<button type="button" class="entry-popup-menu-item" data-action="open-ticket">Open ticket</button>` : ''}
-      <button type="button" class="entry-popup-menu-item" data-action="change-datetime">Change Date/Time</button>
-      <button type="button" class="entry-popup-menu-item" data-action="toggle-complete">${entry.isComplete ? 'Mark Incomplete' : 'Mark Complete'}</button>
-      <button type="button" class="entry-popup-menu-item" data-action="onsite-tba">Mark as Onsite TBA</button>
-      <button type="button" class="entry-popup-menu-item" data-action="onsite-arranged">Mark as Onsite Arranged</button>
-    `;
     document.body.appendChild(menu);
-    const rect = anchorEl.getBoundingClientRect();
-    menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
-    menu.style.left = `${rect.left + window.scrollX}px`;
-    const menuRect = menu.getBoundingClientRect();
-    if (menuRect.right > window.innerWidth) {
-      menu.style.left = `${Math.max(4, window.innerWidth - menuRect.width - 4)}px`;
-    }
     openEntryMenuEl = menu;
-    if (entry.ticketUrl) {
-      menu.querySelector('[data-action="open-ticket"]').addEventListener('click', () => {
-        window.open(entry.ticketUrl, '_blank', 'noopener,noreferrer,width=1200,height=900');
-        closeServiceCallMenu();
+
+    // Re-run after every render (the menu's own size changes between the
+    // main view and the status submenu) -- keeps it anchored under
+    // anchorEl and on-screen either way.
+    function positionMenu() {
+      const rect = anchorEl.getBoundingClientRect();
+      menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
+      menu.style.left = `${rect.left + window.scrollX}px`;
+      const menuRect = menu.getBoundingClientRect();
+      if (menuRect.right > window.innerWidth) {
+        menu.style.left = `${Math.max(4, window.innerWidth - menuRect.width - 4)}px`;
+      }
+    }
+
+    function renderMainMenu() {
+      menu.innerHTML = `
+        ${entry.ticketUrl ? `<button type="button" class="entry-popup-menu-item" data-action="open-ticket">Open ticket</button>` : ''}
+        <button type="button" class="entry-popup-menu-item" data-action="change-datetime">Change Date/Time</button>
+        ${entry.isComplete ? '' : `<button type="button" class="entry-popup-menu-item" data-action="mark-complete">Mark As Complete</button>`}
+        <button type="button" class="entry-popup-menu-item" data-action="change-status">Change Status</button>
+      `;
+      positionMenu();
+      if (entry.ticketUrl) {
+        menu.querySelector('[data-action="open-ticket"]').addEventListener('click', () => {
+          window.open(entry.ticketUrl, '_blank', 'noopener,noreferrer,width=1200,height=900');
+          closeServiceCallMenu();
+        });
+      }
+      menu.querySelector('[data-action="change-datetime"]').addEventListener('click', () => openChangeDateTimeModal(entry));
+      // No "Mark Incomplete" any more, by request -- never offered at all,
+      // in either direction. "Mark As Complete" itself only shows when
+      // the call isn't already complete (see the conditional button
+      // above) -- undoing a completed call is Change Status' own job now
+      // (the user picks a real status, not a blunt isComplete flip back
+      // to an undifferentiated "not complete" with no status context).
+      if (!entry.isComplete) {
+        menu.querySelector('[data-action="mark-complete"]').addEventListener('click', () => toggleServiceCallComplete(entry.id, true));
+      }
+      menu.querySelector('[data-action="change-status"]').addEventListener('click', () => renderStatusSubmenu());
+    }
+
+    // "Change Status" -> one option per real ServiceCalls.status picklist
+    // value (minus "New"), by request -- replaces the old fixed "Mark as
+    // Onsite TBA"/"Mark as Onsite Arranged" pair. A drill-down within the
+    // SAME menu element (swap its content, plus a "‹ Back" item), not a
+    // separate flyout submenu -- avoids a second round of viewport-edge
+    // positioning math for what's still just one small popup.
+    async function renderStatusSubmenu() {
+      if (!cachedServiceCallStatusOptions) {
+        menu.innerHTML = `<button type="button" class="entry-popup-menu-item" data-action="back">‹ Back</button><p class="entry-popup-menu-loading">Loading...</p>`;
+        positionMenu();
+        menu.querySelector('[data-action="back"]').addEventListener('click', renderMainMenu);
+        const statuses = await fetchServiceCallStatusOptions(true);
+        // The menu may have been closed, or Back already clicked, by the
+        // time this resolves -- bail rather than clobbering whatever's
+        // showing now (or nothing at all).
+        if (openEntryMenuEl !== menu || !menu.querySelector('[data-action="back"]')) return;
+        if (!statuses) {
+          menu.innerHTML = `<button type="button" class="entry-popup-menu-item" data-action="back">‹ Back</button><p class="entry-popup-menu-loading">Could not load statuses.</p>`;
+          positionMenu();
+          menu.querySelector('[data-action="back"]').addEventListener('click', renderMainMenu);
+          return;
+        }
+      }
+      const optionsHtml = cachedServiceCallStatusOptions.map((s) => `<button type="button" class="entry-popup-menu-item" data-status-value="${s.value}">${escapeHtml(s.label)}</button>`).join('');
+      menu.innerHTML = `<button type="button" class="entry-popup-menu-item" data-action="back">‹ Back</button>${optionsHtml}`;
+      positionMenu();
+      menu.querySelector('[data-action="back"]').addEventListener('click', renderMainMenu);
+      menu.querySelectorAll('[data-status-value]').forEach((btn) => {
+        btn.addEventListener('click', () => setServiceCallStatus(entry.id, Number(btn.dataset.statusValue)));
       });
     }
-    menu.querySelector('[data-action="change-datetime"]').addEventListener('click', () => openChangeDateTimeModal(entry));
-    menu.querySelector('[data-action="toggle-complete"]').addEventListener('click', () => toggleServiceCallComplete(entry.id, !entry.isComplete));
-    // 104/103 -- Autotask's own real ServiceCalls.status values for these
-    // two, confirmed against the live picklist -- see Service Calls' own
-    // README/server.js comment for why NOT to trust
-    // autotask_get_field_info's own (stale/cached) picklist for this field.
-    menu.querySelector('[data-action="onsite-tba"]').addEventListener('click', () => setServiceCallStatus(entry.id, 104));
-    menu.querySelector('[data-action="onsite-arranged"]').addEventListener('click', () => setServiceCallStatus(entry.id, 103));
+
+    renderMainMenu();
     setTimeout(() => document.addEventListener('click', onServiceCallMenuOutsideClick, true), 0);
     document.addEventListener('keydown', onServiceCallMenuKeydown);
   }
@@ -425,6 +510,29 @@ export function mount(container) {
     const endInput = overlay.querySelector('.sc-datetime-end-input');
     const errorEl = overlay.querySelector('.sc-datetime-modal-error');
     const saveButton = overlay.querySelector('.sc-datetime-save-button');
+
+    // Shifting Start also shifts End by the same amount, by request --
+    // preserves the call's own duration instead of leaving End behind (or
+    // ahead of) a moved Start. Deliberately one-directional -- changing
+    // End never touches Start. `change`, not `input` -- fires once a new
+    // value is actually committed (picker selection or losing focus), not
+    // on every sub-field keystroke a native datetime-local control's own
+    // year/month/day/hour/minute segments would otherwise each trigger
+    // their own `input` event for. Same duplicated-per-page-package copy
+    // as this whole modal already is (see this function's own comment).
+    let previousStartValue = startInput.value;
+    startInput.addEventListener('change', () => {
+      const newStart = fromDatetimeLocalValue(startInput.value);
+      const oldStart = fromDatetimeLocalValue(previousStartValue);
+      const currentEnd = fromDatetimeLocalValue(endInput.value);
+      if (newStart && oldStart && currentEnd) {
+        const deltaMs = new Date(newStart).getTime() - new Date(oldStart).getTime();
+        if (deltaMs !== 0) {
+          endInput.value = toDatetimeLocalValue(new Date(new Date(currentEnd).getTime() + deltaMs).toISOString());
+        }
+      }
+      previousStartValue = startInput.value;
+    });
 
     saveButton.addEventListener('click', async () => {
       errorEl.hidden = true;
