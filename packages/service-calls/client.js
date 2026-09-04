@@ -32,6 +32,30 @@ let showCompleted = false;
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+// The left-border accent, by request, is ONLY for the two "Onsite"
+// statuses -- gold for Onsite Arranged, red for Onsite TBA.
+const ONSITE_ACCENT_CLASSES = {
+  'Onsite Arranged': 'calendar-entry--onsite-arranged',
+  'Onsite TBA': 'calendar-entry--onsite-tba',
+};
+// Background SHADING, not a border accent, for the rest of the real
+// ServiceCalls.status picklist, by request ("I wanted background
+// shading please. The sidebar colours are only for the Onsite jobs") --
+// TAM/vCIO light grey (was white, changed by request -- true white was
+// barely visible against a light-mode page background), Complete/
+// Canceled/Canceled by Client green, Phone Call yellow. Takes priority
+// over the completion/allocation-based fill below when a call's status
+// matches one of these (see colorClass below) -- entries with a status
+// not in this map (currently just "New"/"To Do") fall back to that
+// completion/allocation shading as before.
+const STATUS_BACKGROUND_CLASSES = {
+  'TAM/vCIO': 'calendar-entry--status-bg-grey',
+  Complete: 'calendar-entry--status-bg-green',
+  Canceled: 'calendar-entry--status-bg-green',
+  'Canceled by Client': 'calendar-entry--status-bg-green',
+  'Phone Call': 'calendar-entry--status-bg-yellow',
+};
+
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
@@ -278,18 +302,21 @@ export function mount(container) {
     titleLines.push(`Service call status: ${e.serviceCallStatus}`);
     if (e.isMine) titleLines.push('You are an allocated resource on this call');
     const title = escapeHtml(titleLines.join('\n'));
-    // Priority order: complete wins regardless of allocation (green --
-    // nothing left to staff or review), then allocated-but-not-complete
-    // (blue -- staffed, still upcoming/in progress), then unallocated (red
-    // -- the staffing gap this page originally existed to surface).
-    const colorClass = e.isComplete ? ' calendar-entry--completed' : e.allocated ? ' calendar-entry--allocated' : ' calendar-entry--unallocated';
-    // A left-border accent, independent of the background fill above, for
-    // the two "Onsite" service call statuses specifically -- gold for
-    // Onsite Arranged, red for Onsite TBA (Autotask's own newer statuses,
-    // added after this page was first built; confirmed against real data
-    // via the live picklist, not any cached/stale copy of it).
-    const accentClass =
-      e.serviceCallStatus === 'Onsite Arranged' ? ' calendar-entry--onsite-arranged' : e.serviceCallStatus === 'Onsite TBA' ? ' calendar-entry--onsite-tba' : '';
+    // Priority order: a real ServiceCalls.status match (TAM/vCIO grey,
+    // Complete/Canceled/Canceled by Client green, Phone Call yellow, see
+    // STATUS_BACKGROUND_CLASSES above) wins outright over the completion/
+    // allocation-based shading below, by request. Otherwise: complete
+    // wins regardless of allocation (green -- nothing left to staff or
+    // review), then allocated-but-not-complete (blue -- staffed, still
+    // upcoming/in progress), then unallocated (red -- the staffing gap
+    // this page originally existed to surface).
+    const colorClass =
+      ' ' + (STATUS_BACKGROUND_CLASSES[e.serviceCallStatus] || (e.isComplete ? 'calendar-entry--completed' : e.allocated ? 'calendar-entry--allocated' : 'calendar-entry--unallocated'));
+    // A left-border accent, independent of the background fill above,
+    // ONLY for the two "Onsite" statuses (see ONSITE_ACCENT_CLASSES
+    // above) -- everything else gets background shading instead, not a
+    // border accent, by request.
+    const accentClass = ONSITE_ACCENT_CLASSES[e.serviceCallStatus] ? ' ' + ONSITE_ACCENT_CLASSES[e.serviceCallStatus] : '';
     // A full green outline, independent of both the fill and the left-
     // border accent above, when the signed-in user is one of the call's
     // allocated resources -- by request, so "mine" stands out regardless of
