@@ -1,6 +1,11 @@
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const { getClient, listAll, fetchByFieldIn, getTicketUrl, resolveCompanyName, getPicklistLabels, todayAestKey, isoDateAest } = require('@dashboard/autotask-client');
+// Only for the Usage Instructions/Extended Help editor below (isDashboardAdmin()) -- same
+// "everyone can read, only the dashboard admin can edit" gate Updates and every tabbed
+// page's own Help-tab notes already use.
+const { isDashboardAdmin } = require('@dashboard/shell/registry.js');
 const {
   listOpenJobs,
   listCompletedJobs,
@@ -1062,6 +1067,60 @@ router.put('/equipment-checklist/:equipmentId/checked', (req, res) => {
 // reachable signed out.
 router.get('/equipment-checklist/view', (req, res) => {
   res.sendFile(path.join(__dirname, 'equipment-checklist.html'));
+});
+
+// Usage Instructions box's own content, plus a second "Extended Help"
+// page reached via the small help button in its bottom corner -- both
+// admin-editable, by request ("have it be able to have 2 edit areas").
+// Same plain JSON-file "runtime-configured state" pattern
+// packages/shell/tab-page-server.js's own help-text.json already uses for
+// this identical kind of thing (a small shared, admin-editable text blob
+// every viewer sees the same version of) -- not the real SQLite database
+// db.js otherwise uses for actual job/equipment records, which this isn't.
+const HELP_CONTENT_PATH = path.join(__dirname, 'help-content.json');
+// Seeded as the exact HTML the Usage Instructions box always used to show
+// hardcoded in client.js -- so nothing looks any different for anyone
+// until an admin actually edits it via the new button.
+const DEFAULT_USAGE_INSTRUCTIONS_HTML = `<ul>
+<li>The Workshop Status is about what's happening in the room -- what's in progress, up next, not started, etc. Anything else can be entered with the Free Text option.</li>
+<li>The following Statuses can have free text added: Free Text, In Car, and Take Onsite.</li>
+<li>When a ticket number is entered, the ticket will be updated with all item updates and information to date.</li>
+<li>If a ticket number is changed, the old ticket will be noted with the new ticket number, and all historical info will be added to the new ticket.</li>
+<li>The only ticket information drawn from Autotask using the ticket number is the Ticket Status and the Due Date.</li>
+</ul>`;
+
+function readHelpContent() {
+  try {
+    const data = JSON.parse(fs.readFileSync(HELP_CONTENT_PATH, 'utf8'));
+    return {
+      usageInstructions: typeof data.usageInstructions === 'string' ? data.usageInstructions : DEFAULT_USAGE_INSTRUCTIONS_HTML,
+      extendedHelp: typeof data.extendedHelp === 'string' ? data.extendedHelp : '',
+    };
+  } catch {
+    // No file yet, or unreadable -- nobody's ever saved via the editor.
+    return { usageInstructions: DEFAULT_USAGE_INSTRUCTIONS_HTML, extendedHelp: '' };
+  }
+}
+
+function writeHelpContent(usageInstructions, extendedHelp) {
+  fs.writeFileSync(HELP_CONTENT_PATH, JSON.stringify({ usageInstructions, extendedHelp }, null, 2));
+}
+
+router.get('/help-content', (req, res) => {
+  res.json({ ...readHelpContent(), editable: isDashboardAdmin(req) });
+});
+
+router.put('/help-content', (req, res) => {
+  // Enforced here too, not just hidden in the UI -- same convention every
+  // other admin-only write on this dashboard follows.
+  if (!isDashboardAdmin(req)) {
+    return res.status(403).json({ error: 'Only the dashboard admin can edit this.' });
+  }
+  if (typeof req.body?.usageInstructions !== 'string' || typeof req.body?.extendedHelp !== 'string') {
+    return res.status(400).json({ error: 'Body must be { usageInstructions: string, extendedHelp: string }.' });
+  }
+  writeHelpContent(req.body.usageInstructions, req.body.extendedHelp);
+  res.json({ ok: true });
 });
 
 module.exports = router;

@@ -4659,6 +4659,45 @@ tr.row-text-highlight-blue td {
   font-size: 0.85rem;
   color: var(--muted);
 }
+/* Positioning context for the small help button in the bottom corner
+   (.wsp-help-btn below), by request -- own modifier class, not a change
+   to .wsp-usage-box itself, since that's shared with Tickets Dashboard's
+   own notes/Contract Checks/Goods Received's intro box, none of which
+   have a help button. Extra bottom padding keeps the button from
+   overlapping the last bullet in a short Usage Instructions list. */
+.wsp-usage-box--has-help {
+  position: relative;
+  padding-bottom: 2rem;
+}
+/* A blue pill labeled "More Help", by request (was a plain circular "?"
+   icon) -- same pill shape/background-tint convention as .tt-tag/
+   .wsp-delivery-tag elsewhere on this dashboard, just var(--accent) blue
+   (this dashboard's own established blue, not a new one-off shade) and
+   sized/weighted to read as a real clickable button label, not a small
+   status tag. */
+.wsp-help-btn {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.4rem;
+  border: none;
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.4;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.wsp-help-btn:hover {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+/* Hidden along with the rest of the box's own content while minimized
+   (.wsp-bottom-panels--collapsed #usage-instructions-content/
+   .wsp-deliveries-body, further down) -- a floating help button on an
+   otherwise-collapsed title bar would look orphaned. */
+.wsp-bottom-panels--collapsed .wsp-help-btn {
+  display: none;
+}
 
 /* Goods Received -- a goods-received register (a straightforward
    running log, deliberately simpler than Workshop Board: no priority/status
@@ -5090,7 +5129,11 @@ textarea.pgr-field {
 .wsp-bottom-panels--collapsed .wsp-usage-box-title {
   margin-bottom: 0;
 }
-.wsp-bottom-panels--collapsed .wsp-usage-box ul,
+/* #usage-instructions-content, not the `ul` it happens to hold by
+   default -- an admin-edited Usage Instructions (see .wsp-help-btn above)
+   isn't guaranteed to still be a bulleted list at all, and this needs to
+   keep hiding it regardless of what HTML ends up saved there. */
+.wsp-bottom-panels--collapsed #usage-instructions-content,
 .wsp-bottom-panels--collapsed .wsp-deliveries-body {
   display: none;
 }
@@ -5257,4 +5300,43 @@ textarea.wsp-field {
    uses at the bottom. */
 .wsp-equipment-modal-panel {
   max-width: 45rem;
+}
+
+/* Help modal, opened by .wsp-help-btn (bottom corner of the Usage
+   Instructions box) -- wider than the default .history-modal-panel
+   (30rem), room for two stacked rich-text editors in edit mode. Compound
+   selector (.history-modal-panel.wsp-help-modal-panel), not just the one
+   class -- same equal-specificity gotcha .cc-ticket-note-modal-panel's
+   own comment documents (a single-class rule here would tie with
+   .wsp-qa-modal-panel's own width rule, which sits LATER in this file and
+   would silently win regardless of what's set here). */
+.history-modal-panel.wsp-help-modal-panel {
+  max-width: min(42rem, 90vw);
+}
+.wsp-help-editor-block + .wsp-help-editor-block {
+  margin-top: 1rem;
+}
+.wsp-help-editor-block h3 {
+  font-size: 0.9rem;
+  margin: 0 0 0.3rem;
+}
+.wsp-help-toolbar {
+  margin-bottom: 0.4rem;
+}
+/* Same box shape as tab pages' own #help-text-input (inline-styled there,
+   a class here instead since there are two of these per modal). */
+.wsp-help-editor {
+  display: block;
+  width: 100%;
+  min-height: 6rem;
+  font: inherit;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+}
+.wsp-help-extended-content {
+  margin-bottom: 0.75rem;
+  line-height: 1.5;
 }
