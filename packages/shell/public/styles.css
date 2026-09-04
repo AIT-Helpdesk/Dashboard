@@ -2892,13 +2892,16 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
   color: var(--muted);
 }
 /* Same red/green/blue as .cell-flag-red/.cell-flag-green/.cell-flag-blue,
-   at low opacity as a background fill instead of text color. Three states,
-   checked in priority order (see entryHtml() in client.js): a COMPLETED
-   call is green regardless of allocation (nothing left to staff or
-   review); an allocated-but-not-yet-complete call is blue (staffed, still
-   upcoming/in progress); an unallocated call is red -- the staffing gap
-   this page originally existed to surface, flagged the same way other
-   pages flag "needs attention" rows. */
+   at low opacity as a background fill instead of text color. The
+   completion/allocation states below are the DEFAULT fill, checked in
+   priority order (see entryHtml() in client.js) only when a call's own
+   status doesn't already match one of the STATUS_BACKGROUND_CLASSES
+   further down (those win outright over this one): a COMPLETED call is
+   green regardless of allocation (nothing left to staff or review); an
+   allocated-but-not-yet-complete call is blue (staffed, still upcoming/
+   in progress); an unallocated call is red -- the staffing gap this page
+   originally existed to surface, flagged the same way other pages flag
+   "needs attention" rows. */
 .calendar-entry--unallocated {
   background: color-mix(in srgb, #dc2626 15%, transparent);
 }
@@ -2908,10 +2911,28 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
 .calendar-entry--completed {
   background: color-mix(in srgb, #16a34a 12%, transparent);
 }
-/* Independent of the background fill above -- a left-border accent for
-   Autotask's two "Onsite" service call statuses specifically, by request.
-   Layers on top of whichever fill color the entry already has (allocation/
-   completion state), rather than replacing it. */
+/* Background shading (not a border accent) for the rest of the real
+   ServiceCalls.status picklist, by request ("background shading please
+   -- sidebar colours are only for the Onsite jobs") -- TAM/vCIO light
+   grey (was white, changed by request -- true white read as barely-there
+   against a light-mode page background), Complete/Canceled/Canceled by
+   Client green, Phone Call yellow. Same color-mix-at-low-opacity
+   treatment as the completion/allocation fills above (which these
+   REPLACE, not layer on top of, when a call's status matches -- see
+   colorClass in client.js). */
+.calendar-entry--status-bg-grey {
+  background: color-mix(in srgb, #6b7280 22%, transparent); /* same neutral grey Workshop's own admin-authored help text uses */
+}
+.calendar-entry--status-bg-green {
+  background: color-mix(in srgb, #16a34a 12%, transparent); /* same green as .calendar-entry--completed */
+}
+.calendar-entry--status-bg-yellow {
+  background: color-mix(in srgb, #f39c12 18%, transparent); /* same amber/yellow as .tt-tag--tomorrow elsewhere on this dashboard */
+}
+/* Independent of the background fill above -- a left-border accent, ONLY
+   for the two "Onsite" service call statuses, by request. Layers on top
+   of whichever fill color the entry already has, rather than replacing
+   it. */
 .calendar-entry--onsite-arranged {
   border-left-color: #d4af37; /* gold */
 }
