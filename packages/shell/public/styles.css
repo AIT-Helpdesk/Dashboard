@@ -4174,18 +4174,11 @@ tr.row-text-highlight-blue td {
 .wsp-page.wsp-rotation-view #refresh-button {
   display: none;
 }
-/* Rotation View also drops the Location column down to just its own
-   equipment icon (.wsp-location-text hidden, icon left alone) and its
-   header down to blank (.wsp-location-header-text hidden) -- by request,
-   so the whole column can shrink to icon-width instead of the header
-   label's own width forcing it wide. No explicit width rule needed --
-   .wsp-table (via the base `table` rule) uses the browser's default
-   table-layout: auto, so an empty header + icon-only cells are all this
-   takes for the column to size itself down naturally. */
-.wsp-page.wsp-rotation-view .wsp-location-text,
-.wsp-page.wsp-rotation-view .wsp-location-header-text {
-  display: none;
-}
+/* Rotation View previously dropped the Location column down to just its
+   own equipment icon (.wsp-location-text/.wsp-location-header-text
+   hidden) -- reverted by request ("show all info in the column"). No
+   replacement rule needed; the column just renders exactly as it does
+   outside Rotation View now. */
 /* Rotation View also scales up EVERYTHING on the page, by request -- for
    an unattended wall/TV display, bigger is more readable from across a
    room than it is at a normal desk. `zoom`, not a font-size bump on this
