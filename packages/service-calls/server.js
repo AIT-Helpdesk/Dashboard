@@ -285,26 +285,61 @@ router.patch('/:id/complete', async (req, res) => {
   }
 });
 
-// "Mark as Onsite TBA"/"Mark as Onsite Arranged", by request -- sets
-// ServiceCalls.status directly to one of Autotask's own two real values
-// for those (103/104). NOT the same 4-value list `autotask_get_field_info`
-// itself returns for this field (1 New, 2 Complete, 101 Canceled, 102
-// Canceled by Client) -- that's the exact same stale/cached picklist
-// problem this page's own README already documents hitting once before
-// for this identical field (confirmed correct instead against the live
-// `ServiceCalls/entityInformation/fields` response directly). Restricted
-// to just these two values -- this isn't a general status editor, only
-// the two specific actions asked for.
-const ONSITE_STATUS_VALUES = { onsiteTba: 104, onsiteArranged: 103 };
+// The real ServiceCalls.status picklist, live from Autotask -- powers the
+// "Change Status" submenu on the Open ticket/Mark Complete popup
+// (client.js, and the same near-duplicate copies in What's On/Today
+// Things), by request ("get the possible Status Name values from
+// Autotask to formulate this list ... it will change automatically if we
+// add Statuses" -- but "definitely don't do that every time a user
+// clicks"). getPicklistLabels() (@dashboard/autotask-client) resolves
+// this the same live way this field's own two Onsite values were
+// originally confirmed against (`ServiceCalls/entityInformation/fields`
+// directly) -- NOT the stale/cached 4-value list (`New`/`Complete`/
+// `Canceled`/`Canceled by Client` only) `autotask_get_field_info` itself
+// serves for this exact field, a known trap this page's own README
+// already documents hitting once before. It's ALSO cached forever per
+// server process after its own first call (picklistLabelCache, module-
+// scope inside @dashboard/autotask-client, no TTL) -- so this route stays
+// fast regardless of how many times any of the three client copies below
+// call it, satisfying "don't do that every time a user clicks" without
+// this route needing its own separate cache on top.
+//
+// "New" is excluded -- the default/starting status every call already
+// has, not something meaningful to manually set a call TO via this menu
+// (it's also the one label conspicuously absent from the by-request list
+// this feature was built against).
+async function getChangeableServiceCallStatuses(client) {
+  const labels = await getPicklistLabels(client.serviceCalls, 'status');
+  return [...labels.entries()].filter(([, label]) => label !== 'New').map(([value, label]) => ({ value, label }));
+}
+
+router.get('/statuses', async (req, res) => {
+  try {
+    const client = await getClient();
+    const statuses = await getChangeableServiceCallStatuses(client);
+    res.json({ statuses });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Change Status", by request -- widened from just the two Onsite values
+// (104 Onsite TBA / 103 Onsite Arranged) to the full real
+// ServiceCalls.status picklist (minus "New", see GET /statuses above for
+// the full "why"). Validated the SAME live way the menu itself is built
+// from -- not a hardcoded id list -- so this route's own validation can
+// never silently drift out of sync with what the menu actually offers.
 router.patch('/:id/status', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid service call id.' });
   const status = Number(req.body?.status);
-  if (!Object.values(ONSITE_STATUS_VALUES).includes(status)) {
-    return res.status(400).json({ error: `status must be one of: ${Object.values(ONSITE_STATUS_VALUES).join(', ')}.` });
-  }
   try {
     const client = await getClient();
+    const validStatuses = await getChangeableServiceCallStatuses(client);
+    if (!validStatuses.some((s) => s.value === status)) {
+      return res.status(400).json({ error: `status must be one of the real ServiceCalls.status picklist values (excluding New): ${validStatuses.map((s) => s.value).join(', ')}.` });
+    }
     // Same PATCH-to-collection-endpoint shape as /complete above, and for
     // the exact same reason (both .patch(id, ...) and .update(id, ...)
     // 405 for this entity at the per-resource URL). status IS already a

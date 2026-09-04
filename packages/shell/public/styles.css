@@ -2963,9 +2963,10 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
   display: flex;
   flex-direction: column;
-  /* Narrower/tighter than the first version, by request -- now holding 4
-     items (Open ticket/Mark Complete/Mark as Onsite TBA/Mark as Onsite
-     Arranged) instead of 2, so a smaller footprint matters more. */
+  /* Narrower/tighter than the first version, by request -- holds several
+     items (Open ticket/Mark Complete/Change Status, and the latter's own
+     "‹ Back" + one item per real ServiceCalls.status value once drilled
+     into, see openServiceCallMenu()), so a smaller footprint matters. */
   min-width: 7rem;
   overflow: hidden;
 }
@@ -2987,6 +2988,17 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
 }
 .entry-popup-menu-item + .entry-popup-menu-item {
   border-top: 1px solid var(--border);
+}
+/* "Change Status" submenu's own loading/error state (openServiceCallMenu()'s
+   renderStatusSubmenu()) -- plain text, not a button, same padding/size as
+   a real .entry-popup-menu-item so it doesn't visually jump when the real
+   status options replace it a moment later. */
+.entry-popup-menu-loading {
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 /* What's On's "Team Shifts" excerpt -- a fixed key of button-sized colored
