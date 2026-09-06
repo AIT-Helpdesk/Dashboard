@@ -14,6 +14,47 @@ window.fetch = async (...args) => {
   return res;
 };
 
+// Same "teach it once here instead of every page" reasoning as the fetch
+// wrap above -- every page's own ticket/company/PO#/etc links open a
+// real separate window via a plain window.open(url, target, features)
+// call (mostly as an inline onclick="..." HTML attribute string, which
+// always runs in this global scope regardless of which page's own
+// client.js built it -- a page's own local closure function isn't
+// reachable from there, which is exactly why every one of these calls
+// window.open() directly rather than a shared helper). Almost none of
+// them specify left/top in their own features string, leaving the new
+// window's on-screen position entirely up to the browser's own default
+// placement -- confirmed a real problem on a multi-monitor setup, by
+// request: that default can land the new window on a DIFFERENT monitor
+// than the one this browser window is actually on. Wrapped once here
+// rather than touching every individual window.open() call site across
+// ~25 page packages (and every one written from now on, automatically) --
+// if a features string specifies a width/height but no left/top already
+// (Contract Checks'/Check Client's own openInNewWindow() helper already
+// computes its own, deliberately, and is left alone here via the
+// left-already-present check), inject a left/top computed from THIS
+// window's own on-screen position (screenX/screenY, outerWidth/
+// outerHeight), centering the new window within it -- same math those
+// two pages' own helper already uses. A features string with no width/
+// height at all (a plain new TAB, not a sized window, or no features
+// string at all) is left completely untouched -- there's no window
+// dimension to center against in that case.
+const nativeWindowOpen = window.open.bind(window);
+window.open = (url, target, features) => {
+  if (typeof features === 'string' && !/(?:^|,)\s*left\s*=/i.test(features)) {
+    const widthMatch = features.match(/(?:^|,)\s*width\s*=\s*(\d+)/i);
+    const heightMatch = features.match(/(?:^|,)\s*height\s*=\s*(\d+)/i);
+    if (widthMatch && heightMatch) {
+      const width = Number(widthMatch[1]);
+      const height = Number(heightMatch[1]);
+      const left = window.screenX + Math.round((window.outerWidth - width) / 2);
+      const top = window.screenY + Math.round((window.outerHeight - height) / 2);
+      features = `${features},left=${left},top=${top}`;
+    }
+  }
+  return nativeWindowOpen(url, target, features);
+};
+
 const navList = document.getElementById('nav-list');
 const content = document.getElementById('page-content');
 const userInfoEl = document.getElementById('user-info');
