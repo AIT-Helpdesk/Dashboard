@@ -2,7 +2,7 @@
 
 Sidebar label is **"Time Summaries"**, by request -- the package/directory name, `dashboardPage.id`, route (`/api/times`), and file layout all stayed `times`/`@dashboard/times` deliberately; only the user-visible label (`package.json`'s `dashboardPage.label`, `client.js`'s own `label` export and page `<h1>`) changed, same "rename the display, not the plumbing" convention `teams-shifts` already established. Lives in the **Ticket Info** category (`nav-layout.json`, hidden alongside its siblings) and is also one of the tabs on the **Ticket Info** tabbed page (`ticket-info-tabs`'s own `defaultTabs`), by request.
 
-Dashboard page: pick a From/To date range and (optionally) narrow the resource list, see an Hours Summary table (Normal Hours per day, Leave Hours, Public Holidays, Total Hours, Ticket Hours -- Resources across the top, one row per metric down the side) plus a second table breaking ticket time down by the internal "AITTIME" bucket tickets.
+Dashboard page: pick a From/To date range, see an Hours Summary table (Normal Hours per day, Leave Hours, Public Holidays, Total Hours, Ticket Hours -- Resources across the top, one row per metric down the side) plus a second table breaking ticket time down by the internal "AITTIME" bucket tickets. No resource picker -- every report's resource set is derived from who actually has real data in the chosen period, see "Resources" below.
 
 Column headers show each resource's first name only, by request (full name on hover), and every table uses tighter row padding than the dashboard's usual table default -- both by request, since this page's tables can run to many resource columns. The row-label column's own header cell is left blank (no "Resource" label) on every table except the Client Contract Breakdown table's own corner cell, which instead reads **"Total Client Hours Recorded"** in bold blue (`.tm-corner-label`), by request. The AITTIME and Hours-less-AITTIME tables have no heading of their own above them, by request -- they read as a continuation of the page, not separate titled sections.
 
@@ -17,7 +17,7 @@ Every table's header row carries a light green tint (`.tm-hours-table thead th`,
 
 1. **Normal Hours (per day)** -- flat `7.6` for every resource, by request ("for now"). Not yet per-person; there's no per-resource contracted-hours field wired up anywhere on this dashboard.
 2. **Leave Hours** -- hours of leave in the period. See "Leave, from Autotask" below for the real, confirmed data source.
-3. **Public Holidays** -- zeroed for every resource, by request ("We will add them later, just put zeros for now"). Still a real field in the response shape (`publicHolidayHours`), not omitted, so wiring in a real source later is a one-line change in `server.js`, not a shape change for the client or anyone else.
+3. **Public Holidays** -- real hours from Autotask's own Holiday Sets, per resource. See "Public Holidays" below for the real, confirmed data source and chain.
 4. **Total Hours** = `Normal Hours x number of Mon-Fri in the period - Leave - Public Holidays` (`countWeekdays()` in `server.js` -- inclusive of both the From and To date).
 5. **Ticket Hours** -- total hours actually recorded on tickets in the period, directly under Total Hours in the same table, by request. See "Hours recorded on tickets" below for the source.
 
@@ -38,19 +38,18 @@ Confirmed before writing any of this (by request: "You should be able to get the
 
 The `notExist` filters on `ticketID`/`taskID` in `fetchByFieldIn(... LEAVE_TIME_ENTRY_TYPES ...)` are a confirming double-check, not an assumption -- every real leave entry found already had both null.
 
-## Resources -- active, non-API only
+## Resources -- derived from who has real data, not from today's roster
 
-`Resources.licenseType` 7 is "API User" -- confirmed against real data: 25 of this tenant's 38 "active" resources are integration service accounts (Gluh API, Xero API, Cloud Olive API, etc.), not real people, and have nothing meaningful to report hours for. `fetchSelectableResources()` excludes them, leaving 13 resources for both the multiselect and the report itself.
+There is no resource picker, and the resource set is NOT "today's active roster" -- both by request. First cut used `Resources.isActive` (today's status) to build a fixed set for every report; real use surfaced the bug that shape has for a HISTORICAL report ("I ran this for 1/4/2026 to 30/4/2026 ... Resources who are not present in the data still appeared and resources who are in the data but are now disabled did not appear"): someone deactivated in Autotask sometime after a given period still has real history IN that period and belongs on a report about it, while someone who logged nothing at all in the period has nothing to show and shouldn't appear as a row of zeros.
 
-**Filtered client-side, not via a query filter** -- the first version of this filter used `{ op: 'ne', ... }`, which isn't a real Autotask filter operator at all (confirmed against real data: it silently matched everyone, 38 back instead of 13 -- `ne` was simply ignored rather than erroring). The real "not equal" operator is `noteq`, but this codebase already hit a genuine production bug from using `noteq` on a query filter (see `excludeMonitoringAlerts()`'s own comment in `@dashboard/autotask-client`): Autotask's REST API applies SQL three-valued NULL logic to `noteq`, so a record whose field came back `null` gets silently dropped rather than kept. `licenseType` isn't expected to be null here, but the fix follows that same established, already-proven-safe pattern anyway -- fetch every active resource unfiltered, then exclude `licenseType === 7` in plain JS, where `null !== 7` behaves the way anyone reading the code would expect.
+Fixed by inverting the whole derivation, in `resolveResourcesWithData()` (`server.js`): fetch every real leave/ticket `TimeEntries` row in the selected period FIRST (unfiltered by resource), collect the distinct `resourceID`s that actually appear in that real data, and build the resource list from exactly those ids. `Resources.isActive` is not checked anywhere in this path -- presence of a real TimeEntries row in the period is the only test. Confirmed against real data: for 1-30 Apr 2026, 6 real resources have data (vs. the old fixed roster's 8), and two of them -- Ben Kirkwood and Roman Rosson -- are resources deactivated in Autotask TODAY but with real April 2026 ticket time; both now correctly appear.
 
-**Known gap**: `licenseType` alone doesn't cleanly separate every non-person account -- `Resources` id 4, "Autotask Administrator", is a generic system account (not a real staff member) but carries `licenseType 1`, the same as real Administrator-licensed staff, so it still shows up in the multiselect. Left in rather than guessed at with a fragile name-pattern exclusion; easy to ignore in the picker, and easy to special-case by id later if it turns out to matter.
+`GET /api/times` and the on-demand `GET /api/times/work-type` both call `resolveResourcesWithData()` independently (each scoped to its own request's `from`/`to`), so the two routes can never disagree about who's in scope for the same period; the main route also reuses that call's own already-fetched leave/ticket entries rather than fetching them a second time.
 
-## Resource multiselect
+**Two standing exclusions still apply on top of "has real data"**, via the shared `mapAndFilterResources()` helper:
 
-A plain `<details>`/`<summary>` disclosure (`#resource-picker` in `client.js`) rather than a custom dropdown with its own open/close-on-outside-click JS -- no listener to leak or duplicate across this page's own mount/remount cycle, and native keyboard/click toggle behaviour for free. Populated from its own `GET /api/times/resources` endpoint (kept separate from the main report so the picker can render before a date range has even been chosen). All/None buttons inside the panel. No selection made == every resource, so the report is useful immediately without touching the picker at all.
-
-**Unticked by default**, by request: Damon Kirkpatrick, Melissa Tannock, Amber Worth, Matt Jeavons, "Autotask Administrator" -- matched by exact resolved name (`DEFAULT_UNCHECKED_NAMES` in `client.js`), not id. Everyone else starts ticked. Only applies to the true first render of the picker (no Load submitted yet this session) -- a remount after a real "every box checked" submission restores that "all" state instead of reverting to these defaults.
+- `Resources.licenseType` 7, "API User" -- confirmed against real data: many of this tenant's resources are integration service accounts (Gluh API, Xero API, Cloud Olive API, etc.), not real people. Filtered client-side, not via a query filter -- the first version of this filter used `{ op: 'ne', ... }`, which isn't a real Autotask filter operator at all (confirmed against real data: it silently matched everyone rather than excluding anyone -- `ne` was simply ignored rather than erroring). The real "not equal" operator is `noteq`, but this codebase already hit a genuine production bug from using `noteq` on a query filter (see `excludeMonitoringAlerts()`'s own comment in `@dashboard/autotask-client`): Autotask's REST API applies SQL three-valued NULL logic to `noteq`, so a record whose field came back `null` gets silently dropped rather than kept. `licenseType` isn't expected to be null here, but the fix follows that same established, already-proven-safe pattern anyway -- filter in plain JS, where `null !== 7` behaves the way anyone reading the code would expect.
+- Five named accounts, always excluded regardless of real data -- Amber Worth, Damon Kirkpatrick, Melissa Tannock, Matt Jeavons, and "Autotask Administrator" (`Resources` id 4, a generic system account -- carries `licenseType 1`, same as real Administrator-licensed staff, so `licenseType` alone can't catch it). `EXCLUDED_RESOURCE_NAMES` in `server.js`, matched by exact resolved name (same "First Last" shape used throughout this file) -- these are the same names the old resource-picker's own unticked-by-default list used, now a hard exclusion instead of a default.
 
 ## Hours recorded on tickets
 
@@ -108,16 +107,17 @@ That figure is compared against Non-Billable's own real grand total (worked); a 
 
 A small table at the very TOP of the page, in its own red box, by request -- **one value per row, not per resource** -- a plain label+value table (`.tm-overall-summary-table`, deliberately its own CSS class rather than reusing `.tm-hours-table` -- that class's column-position rules, e.g. blue shading on `:nth-last-child(2)`, all assume the Resources-across-the-top shape every other table on this page has; with only two columns that rule would land on the label column instead, exactly the kind of bug reusing it here would invite). Its own corner cell reads "Hours Summary" (`.tm-corner-label`, same bold-blue treatment as the Client Contract tables' own corner cells), by request.
 
-Every row shows **Hours** and that same figure as **HH:MM**; the percentage column (headed **"%\*\*"**, shortened by request from "% of Available Hours" -- a footnote reading "\*\* % of Available Hours" sits under the table, small text, explaining it; the percentage itself is rounded to 1 decimal place, by request -- `formatPct()` in `client.js`) is per-row, not uniform -- each row's own real-world meaning decides what it's a percentage OF:
+Every row shows **Hours** and that same figure as **HH:MM**; the percentage column (headed **"%\*\*"**, shortened by request from "% of Available Hours" -- a footnote sits under the table explaining it, small text, in red by request: *"\*\* Each % is a % of Total Available Hours not after AIT Time"* (`.tm-footnote-red`, same red as every other red footnote on this page -- wording changed from the original "% of Available Hours" by request, to make explicit that AITTIME is NOT subtracted out of the base each % is measured against; the percentage itself is rounded to 1 decimal place, by request -- `formatPct()` in `client.js`) is per-row, not uniform -- each row's own real-world meaning decides what it's a percentage OF:
 
 - **Total Tech Hours (at work)** -- Attendance: `sumOf('totalHours')`, the same figure Table 1's own Total Hours row shows. **No percentage** -- by request, since this row IS the baseline every other row measures against ("This is 100% of the hours a resource is at work"), so a number here would only ever read a redundant "100%".
 - **Tech Hours Available (After AITTime)** -- Total Tech Hours (at work) minus Table 2's own (AITTIME) grand total.
-- **Total Tech Client Hours** -- Total Client Hours Recorded's grand total.
-- **Total Tech Hours Billable** -- Total Client Hours Billable's own `worked` grand total.
+- **Total Tech Recorded Hours** -- `sumOf('ticketHours')`, ALL ticket time (client AND Ambient iT combined, unfiltered by company) -- the same figure Table 1's own Ticket Hours row and the Ambient iT Tickets reconciliation row's own "Total Recorded Hours" both already use. Added by request, directly above Total Tech Client Hours -- that row is CLIENT-only (Ambient iT excluded), so this is the broader figure it's a subset of.
+- **Total Tech Client Hours** -- Total Client Hours Recorded's grand total (Ambient iT excluded).
+- **Total Tech Hours Billable** -- Total Client Hours Billable's own `worked` grand total. **Its own % cell is shaded red** (`.tm-pct-shade-red`, whole-cell background -- not just a badge around the number like `.tm-mismatch` uses elsewhere on this page, since this isn't flagging a mismatch), by request -- called out visually as the headline "how much of everyone's time is actually billable" figure.
 
-**Every percentage is a % of Total Tech Hours (at work)**, by request -- Rows 2, 3, and 4 alike, not of Tech Hours Available even for the Client/Billable rows (that was tried first and, by report, "doesn't look right" -- fixed by switching the shared denominator).
+**Every percentage is a % of Total Tech Hours (at work)**, by request -- every row below it alike, not of Tech Hours Available even for the Client/Billable rows (that was tried first and, by report, "doesn't look right" -- fixed by switching the shared denominator).
 
-Confirmed against real data (31 Aug - 6 Sep 2026, default-ticked resources): Total Tech Hours (at work) 287.80 (no %); Tech Hours Available 202.18 (70.25%); Total Tech Client Hours 96.84 (33.65%); Total Tech Hours Billable 48.70 (16.92%).
+Confirmed against real data (31 Aug - 6 Sep 2026): Total Tech Hours (at work) 287.80 (no %); Tech Hours Available 202.18 (70.25%); Total Tech Recorded Hours 183.59 (63.8%); Total Tech Client Hours 96.84 (33.65%); Total Tech Hours Billable 48.70 (16.92%) -- Total Tech Client Hours sits below Total Tech Recorded Hours, as expected (client-only is a subset of all ticket time).
 
 ## Small caps -- built manually, not via CSS font-variant
 
@@ -129,7 +129,7 @@ Replaced outright with a manual approach (`smallCapsHtml()` in `client.js`): eve
 
 A new page section, marked by its own heading ("Data below this point is for Work-Type Reconciliation") next to a **Show** button, below the two red-bordered boxes -- not itself boxed, at least not yet (4 more tables are planned here).
 
-**Fetched on demand only, by request** ("we can not retrieve it by default so the page is faster") -- this section's own real data (a fresh `TimeEntries` fetch plus `BillingCodes`/`Tickets`/`Companies` lookups) is NOT part of the main `GET /api/times` load at all; clicking Show fires a separate request to its own `GET /api/times/work-type` route (same `from`/`to`/`resourceIds` params, reusing `data.resources`' own resolved id list rather than re-deriving them). A visit that never clicks Show never pays for this section's own extra Autotask calls. `validateDateRange()`/`resolveSelectedResources()` in `server.js` are shared between both routes.
+**Fetched on demand only, by request** ("we can not retrieve it by default so the page is faster") -- this section's own real data (a fresh `TimeEntries` fetch plus `BillingCodes`/`Tickets`/`Companies` lookups) is NOT part of the main `GET /api/times` load at all; clicking Show fires a separate request to its own `GET /api/times/work-type` route (same `from`/`to` params -- both routes resolve their own resource set independently via `resolveResourcesWithData()`, always agreeing since both derive it from the same real data for the same period). A visit that never clicks Show never pays for this section's own extra Autotask calls. `validateDateRange()`/`resolveResourcesWithData()` in `server.js` are shared between both routes.
 
 **"Work Type" is `TimeEntries.billingCodeID`**, confirmed against real data (one real week, 583 real ticket time entries): every single entry had one set (no nulls), 13 distinct real work types -- "Administration", "Maintenance", ".Standard Support", "Accrue--ING"/"Accrue--END"/"Accrue--END-No Bill", "Onsite  Support" (double space is real), "Quoted Labour Hours", "Travel - under 50Kms", "REWORK", "Tools, Products, & Rollouts", "Sales", "Emergency". This is a DIFFERENT field from `internalBillingCodeID` (used for non-ticket internal time -- AITTIME, leave) -- `billingCodeID` is specifically the "Work Type" selection Autotask's own UI shows on a ticket-linked time entry.
 
@@ -163,6 +163,56 @@ A last table in this section, by request: every real time entry whose OWN ticket
 
 **Its own "TOTAL (matches Total Recorded Hours)" reconciliation row** -- confirmed with the user "Total Recorded Hours" means Table 1's own Ticket Hours row (ALL ticket time for the selected resources, client AND Ambient iT combined, unfiltered by company). Caught and fixed a real bug here before shipping: the row's own SUM has to include the four client Work-Type tables too, not just this Ambient table alone -- Ambient's own total (123.93h in one real test) obviously can't equal ALL ticket time (225.54h) by itself; Ambient + Client together is what reconstructs it. Confirmed against real data at full floating-point precision (not just the 2-decimal display rounding) the two figures come out EXACTLY equal (both `225.5357`, difference `0`) once fixed. Same red-text-plus-red-shading mismatch treatment and red footnote as "Client Ticket Times" above.
 
+## Time entry drill-down (every non-zero hours cell)
+
+Click any non-zero hours value anywhere on the page and a real new browser window opens showing the individual `TimeEntries` that add up to it. Started scoped to just the **Total Client Hours Recorded** table ("lets start with something simple"), then generalized by request to "all time entries that aren't zero" -- every real-entry-sum cell on the page is now clickable. The only cells deliberately left non-clickable are ones that are computed/derived rather than a direct sum of entries: Normal Hours (a flat constant), Total Hours (a subtraction), Hours less AITTIME, Recorded less Billable, and the two reconciliation rows themselves.
+
+**A real standalone page, not a JS popup** -- `GET /api/times/entries-view` (`server.js`) returns a genuine, self-contained HTML document (its own `<style>`, no dependency on the dashboard shell's CSS/JS) rather than JSON rendered by `client.js`; `window.open()` on that URL gives a real window with its own URL, back/forward, and print. Both this popup's own ticket links and the main page's drill-down cells use the exact same `window.open(url, '_blank', 'noopener,noreferrer,width=1200,height=900')` features string as every other ticket link on the dashboard (Service Calls, What's On, Today Things, Ticket Times) -- confirmed by request ("what do other pages do when clicking on a ticket") and made consistent across both call sites.
+
+**Dispatches on a `kind` query param**, reusing the exact same categorization functions/constants each aggregate table already builds its own numbers from, so the drill-down can never disagree with the table it was clicked from:
+
+| `kind` | Row it's wired to | Matching logic |
+|---|---|---|
+| `leave` | Table 1 Leave Hours | `timeEntryType` in `LEAVE_TIME_ENTRY_TYPES`, no ticket/task |
+| `ticket-hours` | Table 1 Ticket Hours | all ticket time for the resource, any company, unfiltered |
+| `aittime-title` | AITTIME breakdown rows | ticket title matches the clicked AITTIME title exactly (`fetchAittimeTickets()`) |
+| `contract` | Total Client Hours Recorded / Billable / Non-Billable | `clientContractRowLabel()`'s row label, Ambient IT excluded, optional `billable` filter |
+| `work-type` | Work Type - Billable / Billable was Unticked | exact work type name from `WORK_TYPE_FIXED_LIST`, Ambient IT excluded, `billable` filter |
+| `work-type-other` | Work Type - Unbillable | exact work type name, Ambient IT excluded, no billable filter |
+| `accrue-status` | Accrue--ING by Status | work type `Accrue--ING`, Ambient IT excluded, bucketed Complete/Incomplete via `ACCRUE_ING_COMPLETE_STATUS_LABELS` |
+| `ambient-bucket` | Ambient iT Tickets | ticket must BE Ambient IT (opposite exclusion direction), bucketed AITTIME/other |
+
+Every `kind` was confirmed against the live dev server by summing the popup's own rendered rows for a real non-zero cell and comparing against that cell's own aggregate figure -- all eight matched (the `workedHours` column is stored rounded to 2dp per row in the popup, so a handful of rows can drift a cent or two from the exact float sum on the larger result sets; row counts, matched entries, and labels were all confirmed correct regardless).
+
+**Every column, confirmed against a real entry (Hamza Mahmood, "T&M Adhoc Client", one real week) before building**:
+
+| Column | Real source |
+|---|---|
+| Client | The ticket's own `companyID`, resolved to the real company name (`ctx.companyNameById`, already fetched for the Ambient IT exclusion) -- confirmed real value `"YA Designs"` for the sample entry. (An earlier version of this column showed `TimeEntries.timeEntryType` instead -- wrong column entirely, fixed.) |
+| Ticket | `Tickets.ticketNumber`, linked -- opens via an explicit `window.open()` click handler, not a plain `target="_blank"` anchor, which reportedly wasn't reliably opening a new window on its own |
+| Worked Date | `TimeEntries.dateWorked` |
+| Activity Title | `Tickets.title` |
+| Summary Note | `TimeEntries.summaryNotes` -- real notes are often multi-line (confirmed against real data); shown with real line breaks preserved (`white-space: pre-line`, `max-width: 60rem` -- widened by request, the original 28rem wrapped too eagerly) |
+| Estimate | `Tickets.estimatedHours` -- a real field, confirmed to exist and carry real values (not the same as the entry's own worked/billed hours) |
+| Task/Ticket Status | `Tickets.status`, resolved |
+| Work Type | `TimeEntries.billingCodeID`, resolved -- same field as the Work-Type Reconciliation section |
+| Contract | `Tickets.contractID` -> `Contracts.contractName` |
+| Resource | the one resource this whole view is scoped to |
+| Worked Hours | `TimeEntries.hoursWorked` |
+| Billable Hours / Non-Billable Hours | `TimeEntries.hoursToBill`, split by `isNonBillable` into whichever ONE of the two columns applies -- the other is left blank, not zero, so a real `0` billable amount isn't confused with "not applicable" |
+| Offset Hours | `TimeEntries.offsetHours` |
+| Start Time / End Time | `TimeEntries.startDateTime` / `endDateTime` -- distinct fields from `dateWorked`, a real time-of-day, not just the calendar date |
+
+**Per-column filtering, client-side, no framework**: a text input under each header cell; typing filters rows by a case-insensitive substring match against that column's own already-rendered cell text, every active filter ANDed together. Rows sorted newest-first by default.
+
+## % of Total Hours row
+
+Every per-resource table from **AIT Time Tickets** down has one more row, directly under its own Total row -- `pctOfTotalHoursRowHtml()` in `client.js` -- by request ("for every table from AIT TIME Tickets down, show another row below the totals with % of Total Hours"). Each resource's own cell reads that table's own total for that resource as a percentage of THAT SAME resource's own Total Hours (Table 1's own Total Hours row) -- not a shared page-wide base, so a full-time resource and a part-time one are each measured against their own real hours, same "per-resource, not per-page" reasoning the rest of this page already uses. The Total column reads the same ratio at the page level (sum of the table's own totals over `sumOf('totalHours')`). Muted + italic (`.tm-pct-row`), no blue Total-column shading of its own (`.tm-no-total-shading`, same treatment "Recorded less Billable" already gets) -- reads as a derived read-out of the row above, not another real hours figure.
+
+Covers: AIT Time Tickets, Hours less AITTIME (based on Recorded Hours less AITTIME, the activity-relevant of its two rows -- Total Hours less AITTIME would just re-read as "1 minus the AITTIME %" already visible one row up), Total Client Hours Recorded, Billable (based on the `worked` half of its `{worked, toBill}` pair, same convention its own HH:MM column already uses), Non-Billable, and every Work-Type Reconciliation table (Work Type - Billable, Billable was Unticked, Work Type - Unbillable, Accrue--ING by Status, Ambient iT Tickets). NOT added to Table 1 itself (Staff Hours -- it's the source of the denominator, a row here would just read 100%), the two reconciliation single-row totals (Client Ticket Times / Total (matches...) -- already a comparison-against-a-known-total by design, not a table with rows of its own to summarize), or "Recorded less Billable" (a delta between two other tables' own totals, not a fresh sum).
+
+Verified against real data (31 Aug - 6 Sep 2026): AIT Time Tickets' own grand % came out `29.7%` (85.62h of 287.80h Total Tech Hours), the exact complement of the Hours Summary box's own already-confirmed "Tech Hours Available (After AITTime)" figure (`70.25%` of the same base) -- the two numbers necessarily sum to 100%, and they do.
+
 ## Table grouping boxes
 
 Three separate red-bordered boxes (`.tm-table-group`, `styles.css`), by request, top to bottom: the Hours Summary table alone; the first three per-resource tables (the row-per-metric table, AITTIME, Hours less AITTIME); the second three (Recorded, Billable, Non-Billable). Each box has a 2px gap between the border and the tables/paragraphs inside on every side (the last table's own bottom margin is cancelled so the gap stays a real 2px rather than 2px plus a leftover 1.5rem). Purely visual grouping -- no behavior change.
@@ -179,7 +229,14 @@ Every total ROW (the bottom `Total` row on every table) and every **Total** colu
 
 `TimeEntries.dateWorked` is a date-only field, confirmed (see Ticket Times' own README) to always be stored as midnight UTC of the calendar date the technician logged against -- no AEST offset conversion needed for the range filter itself, only for what the From/To date pickers default to (`todayISO()`/`mondayOfWeek()`/`addDays()` in `client.js`, same AEST-anchored `+10 hours` trick Ticket Times' own `todayISO()` uses). Defaults to **last week, Mon-Sun** (the most recently completed week, not the current in-progress one) on first load; freely editable.
 
+## Public Holidays
+
+Wired to Autotask's real "Holiday Sets" feature, by request ("need to get the public holidays working ... They are called holiday sets in Autotask"). Confirmed against real data that Resources carry no holiday info directly -- the real chain is `Resources.locationID` -> `InternalLocations.holidaySetId` -> `Holidays.holidaySetID` (two genuinely different field-name capitalizations between those last two entities, confirmed real, not a typo here). This tenant's real InternalLocations: Geebung (`holidaySetId` 1, the "QLD" set, the default location, 36 of 38 real active resources), Grafton (`holidaySetId` 1, same QLD set, 1 resource), Perth (`holidaySetId` 2, "WA" set, 1 resource), Sri Lanka (`holidaySetId` 0 -- no set assigned, 0 real active resources there currently).
+
+Only real `Holidays` rows that fall on a real weekday count (same Mon-Fri definition `countWeekdays()` already uses) -- a holiday on a weekend was never in `weekdayCount`/Normal Hours to begin with, so it can't cost anyone an extra day. Each matching weekday holiday costs the resource one more `NORMAL_HOURS_PER_DAY` (7.6h), same as every other row subtracted from Total Hours.
+
+Confirmed end-to-end against real data: for 10-14 Aug 2026 (a real week containing Ekka, a real QLD public holiday on Wed 12 Aug), a real Geebung/QLD resource showed `publicHolidayHours: 7.6`, while a real Perth/WA resource in the same week showed `publicHolidayHours: 0` -- correct, since this tenant's WA holiday set (id 2) currently has zero real `Holidays` rows entered for 2026. That's a real, currently-empty calendar in Autotask, not a bug here; the day this dashboard first fetches WA holidays that have actually been entered, they'll show up with no code change.
+
 ## Not yet built
 
-- A real Public Holidays source (see above) -- currently zeroed everywhere, by request, pending a decision on where that data should come from.
 - Per-resource Normal Hours (currently flat `7.6` for everyone).

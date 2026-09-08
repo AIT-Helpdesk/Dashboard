@@ -2287,6 +2287,12 @@ td.ticket-number {
   color: var(--muted);
   font-size: 0.85em;
 }
+/* Time Summaries' own loaded-criteria line, under the date-range form's
+   Load button row rather than inline with it -- a gap above sets it apart
+   from the form controls, by request. */
+.tm-summary-line {
+  margin-top: 0.75rem;
+}
 /* What's On's "Autotask -> Strety sync last ran" line under the Helpdesk
    Scorecards heading, by request -- deliberately smaller than
    .inline-subtext above (a secondary, easy-to-ignore detail, not the main
@@ -5168,68 +5174,6 @@ textarea.pgr-field {
   display: none;
 }
 
-/* Times -- the resource multiselect is a plain <details>/<summary>
-   disclosure styled to look like a dropdown button + panel, rather than a
-   custom open/close-on-outside-click widget (no click-outside listener to
-   leak across this page's own mount/remount cycle, and it's free
-   keyboard/click toggle behaviour from the browser). */
-.tm-resource-picker {
-  position: relative;
-}
-#resource-picker-summary {
-  display: inline-block;
-  padding: 0.4rem 0.8rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--card);
-  color: var(--fg);
-  font-size: 0.9rem;
-  cursor: pointer;
-  list-style: none;
-}
-#resource-picker-summary::-webkit-details-marker {
-  display: none;
-}
-.tm-resource-picker-panel {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 0.3rem);
-  left: 0;
-  min-width: 14rem;
-  max-height: 16rem;
-  overflow-y: auto;
-  padding: 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--card);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
-}
-.tm-resource-picker-actions {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--border);
-}
-.tm-resource-picker-actions button {
-  padding: 0.2rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-.tm-resource-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.2rem 0;
-  font-size: 0.9rem;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
 .tm-table-scroll {
   overflow-x: auto;
   margin-bottom: 1.5rem;
@@ -5339,6 +5283,38 @@ textarea.pgr-field {
    "Recorded less Billable" row, computed independently) -- a real
    reconciliation mismatch, not styling for its own sake. Same red as
    .status.error elsewhere on this dashboard. */
+/* "% of Total Hours" row, under every table's own Total row from AIT Time
+   Tickets down, by request -- muted + italic so it reads as a derived
+   read-out of the row above rather than another real data row; no top
+   border of its own (the Total row directly above it already carries
+   one), and its own Total-column cell skips the blue Total-column shading
+   (.tm-no-total-shading, same as "Recorded less Billable" above) since
+   this isn't itself a totalled hours figure. */
+.tm-pct-row th,
+.tm-pct-row td {
+  font-style: italic;
+  color: var(--muted);
+  font-weight: normal;
+}
+/* Time entry drill-down cells (Total Client Hours Recorded, for now), by
+   request -- a <button> reset to look like the plain number it replaces,
+   underlined + accent-coloured only to signal "clickable", not a whole
+   new visual language for the table. */
+.tm-drill-cell {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  /* No underline/accent colour, by request -- reads as a plain number,
+     same as any other cell, cursor: pointer the only remaining hint. */
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.tm-drill-cell:hover {
+  opacity: 0.8;
+}
 .tm-mismatch {
   color: #dc2626;
   /* Shaded red as well as text red, by request -- a small highlighted
@@ -5347,6 +5323,14 @@ textarea.pgr-field {
   background: color-mix(in srgb, #dc2626 18%, transparent);
   padding: 0.05rem 0.35rem;
   border-radius: 4px;
+}
+/* Hours Summary box's own "Total Tech Hours Billable" %, by request --
+   the whole cell shaded red (not just a badge around the number, unlike
+   .tm-mismatch above -- this isn't flagging a mismatch, just calling the
+   figure out), same #dc2626 at low opacity as the rest of this page's red
+   convention. */
+.tm-pct-shade-red {
+  background: color-mix(in srgb, #dc2626 18%, transparent);
 }
 /* Reconciliation rows ("Client Ticket Times", "Ambient iT Tickets" own
    totals line) -- whole row shaded green (same #16a34a convention as

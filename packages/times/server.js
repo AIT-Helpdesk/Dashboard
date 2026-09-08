@@ -1,5 +1,5 @@
 const express = require('express');
-const { getClient, listAll, fetchByFieldIn, getPicklistLabels } = require('@dashboard/autotask-client');
+const { getClient, listAll, fetchByFieldIn, getPicklistLabels, getTicketUrl, resolveResourceName } = require('@dashboard/autotask-client');
 
 // A technician's normal working day, by request -- "7.6 for all (for now)".
 // Flat and global rather than per-resource: no per-person contracted-hours
@@ -23,20 +23,84 @@ const LEAVE_TIME_ENTRY_TYPES = [15, 16, 17, 18];
 // request ("active, non-API Autotask resources").
 const API_USER_LICENSE_TYPE = 7;
 
-async function fetchSelectableResources(client) {
-  // licenseType is excluded client-side, not via a `noteq` query filter --
-  // this codebase already hit a real bug from exactly that shape (see
-  // excludeMonitoringAlerts()'s own comment, above the import list, for
-  // the full story): Autotask's REST API applies SQL three-valued logic to
-  // `noteq`, so any resource whose licenseType somehow came back null
-  // would be silently dropped by the query rather than kept. Fetching
-  // everyone active and filtering in plain JS avoids that failure mode
-  // entirely, even though licenseType is not expected to be null here.
-  const resources = await listAll(client.resources, [{ op: 'eq', field: 'isActive', value: true }]);
+// Always excluded, by request -- "show any time against any resource that's
+// not an API user, not Amber Worth, Damon Kirkpatrick, Melissa Tannock, Matt
+// Jeavons or Autotask [Administrator]". A fixed rule now, not a picker
+// default -- matched by exact resolved name (same "First Last" shape used
+// throughout this file), same as the resource-picker's own former default.
+const EXCLUDED_RESOURCE_NAMES = new Set(['Amber Worth', 'Damon Kirkpatrick', 'Melissa Tannock', 'Matt Jeavons', 'Autotask Administrator']);
+
+// Shared by every path that turns a raw Resources record into this page's
+// own resource shape -- applies both standing exclusions (API User license
+// type, EXCLUDED_RESOURCE_NAMES) the same way regardless of how the
+// underlying Resources rows were found.
+function mapAndFilterResources(resources) {
   return resources
+    // licenseType is excluded client-side, not via a `noteq` query filter --
+    // this codebase already hit a real bug from exactly that shape (see
+    // excludeMonitoringAlerts()'s own comment, above the import list, for
+    // the full story): Autotask's REST API applies SQL three-valued logic
+    // to `noteq`, so any resource whose licenseType somehow came back null
+    // would be silently dropped by the query rather than kept. Filtering
+    // in plain JS avoids that failure mode entirely, even though
+    // licenseType is not expected to be null here.
     .filter((r) => r.licenseType !== API_USER_LICENSE_TYPE)
-    .map((r) => ({ id: r.id, name: [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || `Resource #${r.id}` }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .map((r) => ({
+      id: r.id,
+      name: [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || `Resource #${r.id}`,
+      // Carried through for Public Holidays below (Resources.locationID ->
+      // InternalLocations.holidaySetId).
+      locationID: r.locationID,
+    }))
+    .filter((r) => !EXCLUDED_RESOURCE_NAMES.has(r.name));
+}
+
+// The resource set for a report is driven by who actually HAS real
+// TimeEntries in the selected period -- NOT by today's Resources.isActive
+// flag. Confirmed a real bug the other way round, by request: "Resources
+// who are not present in the data still appeared and resources who are in
+// the data but are now disabled did not appear." A resource deactivated in
+// Autotask sometime AFTER the reported period still has real history in
+// that period and belongs on a report about it; a resource who logged
+// nothing at all in the period (on leave the whole tenure, joined
+// afterwards, whatever the reason) has nothing to show and shouldn't
+// appear as a row of zeros. isActive is not checked anywhere in this
+// function -- presence of a real TimeEntries row in the period is the only
+// test, same standing exclusions (API User, EXCLUDED_RESOURCE_NAMES)
+// still apply on top of that.
+//
+// Also returns the leave/ticket entries this already had to fetch to
+// determine who has data, narrowed down to the final resource set -- so
+// the main report route doesn't need a second TimeEntries fetch for the
+// exact same period.
+async function resolveResourcesWithData(client, fromIso, toIso) {
+  const [leaveEntries, ticketEntries] = await Promise.all([
+    listAll(client.timeEntries, [
+      { op: 'gte', field: 'dateWorked', value: fromIso },
+      { op: 'lte', field: 'dateWorked', value: toIso },
+      { op: 'in', field: 'timeEntryType', value: LEAVE_TIME_ENTRY_TYPES },
+      { op: 'notExist', field: 'ticketID' },
+      { op: 'notExist', field: 'taskID' },
+    ]),
+    listAll(client.timeEntries, [
+      { op: 'gte', field: 'dateWorked', value: fromIso },
+      { op: 'lte', field: 'dateWorked', value: toIso },
+      { op: 'exist', field: 'ticketID' },
+    ]),
+  ]);
+
+  const idsWithData = [...new Set([...leaveEntries.map((e) => e.resourceID), ...ticketEntries.map((e) => e.resourceID)])];
+  if (idsWithData.length === 0) return { selected: [], leaveEntries: [], ticketEntries: [] };
+
+  const resources = await fetchByFieldIn(client.resources, 'id', idsWithData);
+  const selected = mapAndFilterResources(resources).sort((a, b) => a.name.localeCompare(b.name));
+  const selectedIds = new Set(selected.map((r) => r.id));
+
+  return {
+    selected,
+    leaveEntries: leaveEntries.filter((e) => selectedIds.has(e.resourceID)),
+    ticketEntries: ticketEntries.filter((e) => selectedIds.has(e.resourceID)),
+  };
 }
 
 // Mon-Fri calendar dates in [fromKey, toKey], inclusive of both ends -- the
@@ -54,6 +118,61 @@ function countWeekdays(fromKey, toKey) {
     d.setUTCDate(d.getUTCDate() + 1);
   }
   return count;
+}
+
+// Same Mon-Fri definition countWeekdays() uses, applied to a single real
+// calendar-date key -- a real Holidays row that happens to fall on a
+// weekend doesn't cost anyone an extra day, since that date was never in
+// weekdayCount/Normal Hours to begin with.
+function isWeekdayDateKey(dateKey) {
+  const day = new Date(`${dateKey}T00:00:00Z`).getUTCDay();
+  return day >= 1 && day <= 5;
+}
+
+// Public Holidays -- "They are called holiday sets in Autotask". Confirmed
+// against real data: Resources carry no holiday info directly, only their
+// own `locationID` (InternalLocations); InternalLocations carries the real
+// link, `holidaySetId`; Holidays rows carry `holidaySetID` (different
+// capitalization -- confirmed as two genuinely distinct real field names,
+// not a typo here) plus a real `holidayDate`/`holidayName`. This tenant's
+// real InternalLocations: Geebung (holidaySetId 1, "QLD" set, the default
+// location, 36 of 38 real active resources), Grafton (holidaySetId 1, 1
+// resource), Perth (holidaySetId 2, "WA" set, 1 resource), Sri Lanka
+// (holidaySetId 0 -- no set assigned, 0 real active resources there
+// currently). Only the QLD set (id 1) has any real Holidays rows for 2026
+// in this tenant (7 real dates, confirmed) -- WA and Sri Lanka are real,
+// currently-empty calendars, not a bug here; a resource whose set has no
+// rows correctly gets 0 Public Holiday hours rather than an error.
+async function fetchPublicHolidayHoursByResource(client, selected, fromIso, toIso) {
+  const locations = await listAll(client.internalLocations, [{ op: 'gte', field: 'id', value: 0 }]);
+  const holidaySetByLocation = new Map(locations.map((l) => [l.id, l.holidaySetId]));
+
+  // 0/undefined means "no holiday set assigned" (confirmed real: Sri Lanka
+  // location) -- excluded from the fetch below rather than sent as a real
+  // Autotask filter value, same reasoning as every other "skip if empty"
+  // guard in this file.
+  const holidaySetIds = [...new Set(selected.map((r) => holidaySetByLocation.get(r.locationID)).filter((id) => id))];
+
+  const holidayCountBySet = new Map();
+  if (holidaySetIds.length > 0) {
+    const holidays = await fetchByFieldIn(client.holidays, 'holidaySetID', holidaySetIds, [
+      { op: 'gte', field: 'holidayDate', value: fromIso },
+      { op: 'lte', field: 'holidayDate', value: toIso },
+    ]);
+    for (const h of holidays) {
+      const dateKey = (h.holidayDate || '').slice(0, 10);
+      if (!isWeekdayDateKey(dateKey)) continue;
+      holidayCountBySet.set(h.holidaySetID, (holidayCountBySet.get(h.holidaySetID) || 0) + 1);
+    }
+  }
+
+  const hoursByResource = new Map();
+  for (const r of selected) {
+    const setId = holidaySetByLocation.get(r.locationID);
+    const count = (setId && holidayCountBySet.get(setId)) || 0;
+    hoursByResource.set(r.id, count * NORMAL_HOURS_PER_DAY);
+  }
+  return hoursByResource;
 }
 
 // Internal, recurring "bucket" tickets used to log non-client time (Service
@@ -370,24 +489,9 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const router = express.Router();
 
-// Populates the resource multiselect -- kept as its own endpoint (rather
-// than embedded in the main report response) so the picker can render
-// before a date range has even been chosen.
-router.get('/resources', async (req, res) => {
-  try {
-    const client = await getClient();
-    res.json({ resources: await fetchSelectableResources(client) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Shared by the main report and the on-demand Work-Type Reconciliation
-// route below -- validates from/to, resolves the selected resource list
-// (no resourceIds param = every selectable resource), and returns null
-// (after writing the 400) when validation fails, so callers can just
-// `if (!resolved) return;`.
+// route below -- validates from/to, and returns null (after writing the
+// 400) when validation fails, so callers can just `if (!resolved) return;`.
 function validateDateRange(req, res) {
   const { from, to } = req.query;
   if (!from || !DATE_RE.test(from)) {
@@ -404,55 +508,29 @@ function validateDateRange(req, res) {
   }
   return { from, to };
 }
-async function resolveSelectedResources(client, req) {
-  const allResources = await fetchSelectableResources(client);
-  const resourceIdsParam = (req.query.resourceIds || '').toString();
-  const requestedIds = resourceIdsParam
-    ? resourceIdsParam.split(',').map((s) => parseInt(s, 10)).filter((n) => Number.isInteger(n))
-    : null;
-  return requestedIds ? allResources.filter((r) => requestedIds.includes(r.id)) : allResources;
-}
-
 router.get('/', async (req, res) => {
   const range = validateDateRange(req, res);
   if (!range) return;
   const { from, to } = range;
   const weekdayCount = countWeekdays(from, to);
+  const fromIso = `${from}T00:00:00.000Z`;
+  const toIso = `${to}T00:00:00.000Z`;
 
   try {
     const client = await getClient();
-    const selected = await resolveSelectedResources(client, req);
+    const [{ selected, leaveEntries, ticketEntries }, aittimeTickets] = await Promise.all([
+      resolveResourcesWithData(client, fromIso, toIso),
+      fetchAittimeTickets(client),
+    ]);
 
     if (selected.length === 0) {
       return res.json({ from, to, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
     }
-    const selectedIds = selected.map((r) => r.id);
 
-    const fromIso = `${from}T00:00:00.000Z`;
-    const toIso = `${to}T00:00:00.000Z`;
-
-    const [leaveEntries, ticketEntries, aittimeTickets] = await Promise.all([
-      fetchByFieldIn(client.timeEntries, 'resourceID', selectedIds, [
-        { op: 'gte', field: 'dateWorked', value: fromIso },
-        { op: 'lte', field: 'dateWorked', value: toIso },
-        { op: 'in', field: 'timeEntryType', value: LEAVE_TIME_ENTRY_TYPES },
-        { op: 'notExist', field: 'ticketID' },
-        { op: 'notExist', field: 'taskID' },
-      ]),
-      // Total hours recorded on TICKETS for the period -- same convention
-      // as ticket-times/server.js's own fetchTimeEntriesOn (time logged
-      // against Tasks/project work, not tickets, is excluded), just scoped
-      // to the chosen date range and resource set instead of a single day.
-      // Reused below for the AITTIME breakdown too, rather than a second
-      // TimeEntries query -- it's already every ticket-time entry in this
-      // date range/resource set, AITTIME tickets included.
-      fetchByFieldIn(client.timeEntries, 'resourceID', selectedIds, [
-        { op: 'gte', field: 'dateWorked', value: fromIso },
-        { op: 'lte', field: 'dateWorked', value: toIso },
-        { op: 'exist', field: 'ticketID' },
-      ]),
-      fetchAittimeTickets(client),
-    ]);
+    // Depends on `selected` (each resource's own locationID), so this
+    // can't join the Promise.all above -- it has to wait for
+    // resolveResourcesWithData() to resolve first.
+    const publicHolidayHoursByResource = await fetchPublicHolidayHoursByResource(client, selected, fromIso, toIso);
 
     const leaveByResource = new Map();
     for (const e of leaveEntries) leaveByResource.set(e.resourceID, (leaveByResource.get(e.resourceID) || 0) + (e.hoursWorked || 0));
@@ -492,15 +570,9 @@ router.get('/', async (req, res) => {
     const clientContractsBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, true) : [];
     const clientContractsNonBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, false) : [];
 
-    // Public Holidays: not yet wired to a real source -- by request,
-    // zeroed for every resource for now ("We will add them later, just pot
-    // zeros for now"). Still a real per-resource field, not an omitted
-    // one, so plugging in a real source later is a one-line change here
-    // rather than a shape change on every consumer.
-    const publicHolidayHours = 0;
-
     const resources = selected.map((r) => {
       const leaveHours = leaveByResource.get(r.id) || 0;
+      const publicHolidayHours = publicHolidayHoursByResource.get(r.id) || 0;
       const totalHours = NORMAL_HOURS_PER_DAY * weekdayCount - leaveHours - publicHolidayHours;
       return {
         resourceId: r.id,
@@ -530,18 +602,16 @@ router.get('/work-type', async (req, res) => {
   const range = validateDateRange(req, res);
   if (!range) return;
   const { from, to } = range;
+  const fromIso = `${from}T00:00:00.000Z`;
+  const toIso = `${to}T00:00:00.000Z`;
 
   try {
     const client = await getClient();
-    const selected = await resolveSelectedResources(client, req);
+    // Same resource-set derivation the main report uses (whoever has real
+    // TimeEntries in the period), and its own already-fetched ticketEntries
+    // are reused directly here rather than fetched a second time.
+    const { selected, ticketEntries } = await resolveResourcesWithData(client, fromIso, toIso);
     if (selected.length === 0) return res.json({ workTypeFixedBillable: [], workTypeFixedUnticked: [], workTypeOther: [], workTypeAccrueIng: [], ambientItTickets: [] });
-    const selectedIds = selected.map((r) => r.id);
-
-    const ticketEntries = await fetchByFieldIn(client.timeEntries, 'resourceID', selectedIds, [
-      { op: 'gte', field: 'dateWorked', value: `${from}T00:00:00.000Z` },
-      { op: 'lte', field: 'dateWorked', value: `${to}T00:00:00.000Z` },
-      { op: 'exist', field: 'ticketID' },
-    ]);
 
     // Needed to exclude Ambient IT's own tickets and (for Table 3) to
     // resolve each Accrue--ING ticket's own status label.
@@ -555,6 +625,319 @@ router.get('/work-type', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Time entry drill-down -- click any non-zero hours value on the page to
+// see the REAL individual TimeEntries that add up to it. Started scoped to
+// just the Total Client Hours Recorded table ("let's start with something
+// simple"), then extended to every other real-entry-sum cell on the page,
+// by request. Opens as a real new browser window (client.js), not a
+// JS-rendered popup -- this route returns a genuine standalone HTML page
+// (its own <style>, no dependency on the dashboard shell's own CSS/JS), so
+// the window works like any other page: real URL, real back/forward, real
+// print.
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+const ENTRIES_VIEW_COLUMNS = [
+  { key: 'client', label: 'Client' },
+  { key: 'ticket', label: 'Ticket' },
+  { key: 'workedDate', label: 'Worked Date' },
+  { key: 'activityTitle', label: 'Activity Title' },
+  { key: 'summaryNote', label: 'Summary Note' },
+  { key: 'estimate', label: 'Estimate' },
+  { key: 'status', label: 'Task/Ticket Status' },
+  { key: 'workType', label: 'Work Type' },
+  { key: 'contract', label: 'Contract' },
+  { key: 'resource', label: 'Resource' },
+  { key: 'workedHours', label: 'Worked Hours' },
+  { key: 'billableHours', label: 'Billable Hours' },
+  { key: 'nonBillableHours', label: 'Non-Billable Hours' },
+  { key: 'offsetHours', label: 'Offset Hours' },
+  { key: 'startTime', label: 'Start Time' },
+  { key: 'endTime', label: 'End Time' },
+];
+
+// A small, dependency-free standalone page -- header cell filter inputs,
+// pure client-side substring matching (case-insensitive, every active
+// filter ANDed together) against each row's own already-rendered cell
+// text. No embedded JSON/framework needed for something this size.
+function renderEntriesPage(title, rows) {
+  const headHtml = ENTRIES_VIEW_COLUMNS.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('');
+  const filterHtml = ENTRIES_VIEW_COLUMNS.map((c, i) => `<th><input type="text" class="filter-input" data-col="${i}" placeholder="Filter..." /></th>`).join('');
+  const bodyHtml = rows
+    .map((r) => {
+      const cells = ENTRIES_VIEW_COLUMNS.map((c) => {
+        if (c.key === 'ticket') {
+          // A plain <a target="_blank"> reportedly wasn't actually opening
+          // a new window here -- switched to the same explicit
+          // window.open() pattern the rest of this dashboard's own ticket
+          // links already use (e.g. ticket-times' openTicketInNewWindow())
+          // rather than relying on native target="_blank" behaviour.
+          return `<td>${r.ticketUrl ? `<a href="${escapeHtml(r.ticketUrl)}" class="ticket-link" data-url="${escapeHtml(r.ticketUrl)}">${escapeHtml(r.ticketNumber)}</a>` : escapeHtml(r.ticketNumber)}</td>`;
+        }
+        return `<td>${escapeHtml(r[c.key])}</td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    })
+    .join('');
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>${escapeHtml(title)}</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 1.5rem; color: #1a1a1a; background: #fff; }
+  h1 { font-size: 1.1rem; margin: 0 0 1rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  th, td { padding: 0.35rem 0.6rem; border: 1px solid #e5e7eb; text-align: left; white-space: nowrap; }
+  /* Summary Note (5th column) -- real notes are often multi-line; keep the
+     real line breaks instead of collapsing them. Widened, by request --
+     28rem was wrapping too eagerly for a normal-length note. */
+  th:nth-child(5), td:nth-child(5) { white-space: pre-line; max-width: 60rem; min-width: 24rem; }
+  thead tr:first-child th { background: #f3f4f6; position: sticky; top: 0; }
+  thead tr:last-child th { background: #fff; position: sticky; top: 1.85rem; padding: 0.2rem 0.4rem; }
+  .filter-input { width: 100%; box-sizing: border-box; padding: 0.2rem 0.3rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.8rem; }
+  tbody tr:nth-child(even) { background: #fafafa; }
+  .row-count { color: #6b7280; font-size: 0.85rem; margin-bottom: 0.75rem; }
+  /* No underline/blue colour on the ticket link, by request -- reads as
+     plain text, cursor: pointer the only remaining hint it's clickable. */
+  .ticket-link { color: inherit; text-decoration: none; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>${escapeHtml(title)}</h1>
+<p class="row-count" id="row-count"></p>
+<table id="entries-table">
+  <thead>
+    <tr>${headHtml}</tr>
+    <tr>${filterHtml}</tr>
+  </thead>
+  <tbody>${bodyHtml}</tbody>
+</table>
+<script>
+(function () {
+  var table = document.getElementById('entries-table');
+  var rows = Array.prototype.slice.call(table.tBodies[0].rows);
+  var inputs = Array.prototype.slice.call(table.querySelectorAll('.filter-input'));
+  var rowCountEl = document.getElementById('row-count');
+
+  function applyFilters() {
+    var filters = inputs.map(function (inp) { return inp.value.trim().toLowerCase(); });
+    var visible = 0;
+    rows.forEach(function (row) {
+      var show = true;
+      for (var i = 0; i < filters.length; i++) {
+        if (!filters[i]) continue;
+        var cellText = (row.cells[i].textContent || '').toLowerCase();
+        if (cellText.indexOf(filters[i]) === -1) { show = false; break; }
+      }
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    rowCountEl.textContent = visible + ' of ' + rows.length + ' entries shown';
+  }
+
+  inputs.forEach(function (inp) { inp.addEventListener('input', applyFilters); });
+  applyFilters();
+
+  // Explicit window.open() for ticket links, by request -- plain
+  // target="_blank" reportedly wasn't reliably opening a new window here.
+  document.addEventListener('click', function (e) {
+    var link = e.target.closest('.ticket-link');
+    if (!link) return;
+    e.preventDefault();
+    // Same features string every other ticket link on this dashboard uses
+    // (Service Calls, What's On, Today Things, Ticket Times) -- for
+    // consistent sizing. This page is a standalone document, not part of
+    // the dashboard shell, so the shell's own window.open patch (same-
+    // monitor positioning for THAT app's own popups) doesn't apply here
+    // regardless -- this is a plain, unpatched browser window.open() call.
+    window.open(link.dataset.url, '_blank', 'noopener,noreferrer,width=1200,height=900');
+  });
+})();
+</script>
+</body>
+</html>`;
+}
+
+// One row per real TimeEntries record, same column shape regardless of
+// which "kind" of drill-down produced it -- `ticket` is null for leave
+// entries (no ticket at all), every field null-safe for that case. Work
+// Type resolves from whichever of billingCodeID (ticket entries) /
+// internalBillingCodeID (leave entries) is actually set -- the same two
+// distinct fields this whole page already treats separately elsewhere.
+async function buildEntryRow(e, ctx, workTypeNameById, resourceName) {
+  const ticket = ctx && e.ticketID ? ctx.ticketById.get(e.ticketID) : null;
+  const workTypeCodeId = e.billingCodeID !== null && e.billingCodeID !== undefined ? e.billingCodeID : e.internalBillingCodeID;
+  return {
+    client: ticket ? ctx.companyNameById.get(ticket.companyID) || '' : '',
+    ticketNumber: ticket ? ticket.ticketNumber : '',
+    ticketUrl: ticket ? await getTicketUrl(ticket.id) : null,
+    workedDate: e.dateWorked ? e.dateWorked.slice(0, 10) : '',
+    activityTitle: ticket ? ticket.title || '' : '',
+    summaryNote: e.summaryNotes || '',
+    estimate: ticket && ticket.estimatedHours !== null && ticket.estimatedHours !== undefined ? ticket.estimatedHours : '',
+    status: ticket ? ctx.statusLabels.get(ticket.status) || '' : '',
+    workType: workTypeCodeId !== null && workTypeCodeId !== undefined ? workTypeNameById.get(workTypeCodeId) || '' : '',
+    contract: ticket && ticket.contractID ? ctx.contractNameById.get(ticket.contractID) || '' : '',
+    resource: resourceName,
+    workedHours: (e.hoursWorked || 0).toFixed(2),
+    billableHours: e.isNonBillable === true ? '' : (e.hoursToBill || 0).toFixed(2),
+    nonBillableHours: e.isNonBillable === true ? (e.hoursToBill || 0).toFixed(2) : '',
+    offsetHours: e.offsetHours || 0,
+    startTime: e.startDateTime ? new Date(e.startDateTime).toLocaleString() : '',
+    endTime: e.endDateTime ? new Date(e.endDateTime).toLocaleString() : '',
+  };
+}
+
+// Time entry drill-down, generalized -- by request, extended from just the
+// Total Client Hours Recorded table to every non-zero real-entry-sum cell
+// on the page. `kind` selects which of this page's own already-existing
+// categorization rules (the exact same functions/constants the aggregate
+// tables above are built from -- clientContractRowLabel(),
+// isAmbientItCompany(), WORK_TYPE_FIXED_LIST, ACCRUE_ING_*,
+// fetchAittimeTickets(), AMBIENT_TICKETS_ROW_*) to re-apply when filtering
+// the raw entries down to just the one cell that was clicked, so "what you
+// see is what you get" -- there's no separate filtering logic that could
+// quietly disagree with the table the click came from.
+//
+// Rows that are a COMPUTED figure rather than a direct sum of real entries
+// (Normal Hours' own flat constant, Total Hours' own subtraction, Hours
+// less AITTIME, Recorded less Billable, the "Client Ticket Times"/"Total
+// (matches Total Recorded Hours)" reconciliation rows) are deliberately
+// NOT wired up to this at all, client-side -- there's no single coherent
+// entry list a subtraction/multi-table-sum could point at.
+router.get('/entries-view', async (req, res) => {
+  const range = validateDateRange(req, res);
+  if (!range) return;
+  const { from, to } = range;
+
+  const resourceId = parseInt(req.query.resourceId, 10);
+  const kind = (req.query.kind || '').toString();
+  const label = (req.query.label || '').toString();
+  const billable = (req.query.billable || 'all').toString(); // 'all' | 'true' | 'false'
+  if (!Number.isInteger(resourceId)) return res.status(400).send('Query param "resourceId" is required.');
+  if (!kind) return res.status(400).send('Query param "kind" is required.');
+
+  try {
+    const client = await getClient();
+    const fromIso = `${from}T00:00:00.000Z`;
+    const toIso = `${to}T00:00:00.000Z`;
+    const resourceName = await resolveResourceName(client, resourceId);
+
+    let matching;
+    let ctx = null;
+
+    if (kind === 'leave') {
+      // No ticket at all -- its own real TimeEntries fetch, same filter
+      // shape as Table 1's own Leave Hours row.
+      matching = await listAll(client.timeEntries, [
+        { op: 'eq', field: 'resourceID', value: resourceId },
+        { op: 'gte', field: 'dateWorked', value: fromIso },
+        { op: 'lte', field: 'dateWorked', value: toIso },
+        { op: 'in', field: 'timeEntryType', value: LEAVE_TIME_ENTRY_TYPES },
+        { op: 'notExist', field: 'ticketID' },
+        { op: 'notExist', field: 'taskID' },
+      ]);
+    } else {
+      const entries = await listAll(client.timeEntries, [
+        { op: 'eq', field: 'resourceID', value: resourceId },
+        { op: 'gte', field: 'dateWorked', value: fromIso },
+        { op: 'lte', field: 'dateWorked', value: toIso },
+        { op: 'exist', field: 'ticketID' },
+      ]);
+      const ticketIds = [...new Set(entries.map((e) => e.ticketID))];
+      ctx = await fetchClientTicketContext(client, ticketIds);
+
+      if (kind === 'ticket-hours') {
+        // ALL ticket time, any company -- Table 1's own Ticket Hours row.
+        matching = entries;
+      } else if (!ctx) {
+        matching = [];
+      } else if (kind === 'contract') {
+        matching = entries.filter((e) => {
+          const ticket = ctx.ticketById.get(e.ticketID);
+          if (!ticket || isAmbientItCompany(ctx.companyNameById, ticket.companyID)) return false;
+          if (clientContractRowLabel(ticket.contractID ? ctx.contractNameById.get(ticket.contractID) : null) !== label) return false;
+          if (billable === 'true' && e.isNonBillable === true) return false;
+          if (billable === 'false' && e.isNonBillable !== true) return false;
+          return true;
+        });
+      } else if (kind === 'work-type' || kind === 'work-type-other') {
+        const billingCodeIds = [...new Set(entries.map((e) => e.billingCodeID).filter((id) => id !== null && id !== undefined))];
+        const codes = billingCodeIds.length > 0 ? await fetchByFieldIn(client.billingCodes, 'id', billingCodeIds) : [];
+        const nameById = new Map(codes.map((c) => [c.id, c.name]));
+        matching = entries.filter((e) => {
+          const ticket = ctx.ticketById.get(e.ticketID);
+          if (!ticket || isAmbientItCompany(ctx.companyNameById, ticket.companyID)) return false;
+          const workType = e.billingCodeID !== null && e.billingCodeID !== undefined ? nameById.get(e.billingCodeID) || `Work Type #${e.billingCodeID}` : 'No Work Type';
+          if (workType !== label) return false;
+          if (kind === 'work-type') {
+            if (billable === 'true' && e.isNonBillable === true) return false;
+            if (billable === 'false' && e.isNonBillable !== true) return false;
+          }
+          return true;
+        });
+      } else if (kind === 'aittime-title') {
+        const aittimeTickets = await fetchAittimeTickets(client);
+        const titleByTicketId = new Map(aittimeTickets.map((t) => [t.id, t.title]));
+        matching = entries.filter((e) => titleByTicketId.get(e.ticketID) === label);
+      } else if (kind === 'accrue-status') {
+        const billingCodeIds = [...new Set(entries.map((e) => e.billingCodeID).filter((id) => id !== null && id !== undefined))];
+        const codes = billingCodeIds.length > 0 ? await fetchByFieldIn(client.billingCodes, 'id', billingCodeIds) : [];
+        const nameById = new Map(codes.map((c) => [c.id, c.name]));
+        matching = entries.filter((e) => {
+          const ticket = ctx.ticketById.get(e.ticketID);
+          if (!ticket || isAmbientItCompany(ctx.companyNameById, ticket.companyID)) return false;
+          const workType = e.billingCodeID !== null && e.billingCodeID !== undefined ? nameById.get(e.billingCodeID) || '' : '';
+          if (workType !== ACCRUE_ING_WORK_TYPE) return false;
+          const statusLabel = ctx.statusLabels.get(ticket.status);
+          const bucket = statusLabel && ACCRUE_ING_COMPLETE_STATUS_LABELS.has(statusLabel) ? ACCRUE_ING_ROW_COMPLETE : ACCRUE_ING_ROW_OTHER;
+          return bucket === label;
+        });
+      } else if (kind === 'ambient-bucket') {
+        const aittimeTickets = await fetchAittimeTickets(client);
+        const aittimeTicketIds = new Set(aittimeTickets.map((t) => t.id));
+        matching = entries.filter((e) => {
+          const ticket = ctx.ticketById.get(e.ticketID);
+          if (!ticket || !isAmbientItCompany(ctx.companyNameById, ticket.companyID)) return false;
+          const bucket = aittimeTicketIds.has(e.ticketID) ? AMBIENT_TICKETS_ROW_AITTIME : AMBIENT_TICKETS_ROW_OTHER;
+          return bucket === label;
+        });
+      } else {
+        return res.status(400).send(`Unknown "kind": ${escapeHtml(kind)}`);
+      }
+    }
+
+    const billingCodeIds = [...new Set(matching.flatMap((e) => [e.billingCodeID, e.internalBillingCodeID]).filter((id) => id !== null && id !== undefined))];
+    const workTypeCodes = billingCodeIds.length > 0 ? await fetchByFieldIn(client.billingCodes, 'id', billingCodeIds) : [];
+    const workTypeNameById = new Map(workTypeCodes.map((c) => [c.id, c.name]));
+
+    const rows = [];
+    for (const e of matching) {
+      rows.push(await buildEntryRow(e, ctx, workTypeNameById, resourceName));
+    }
+
+    // Newest first -- reading a list of "what made up this total" starts
+    // more usefully from the most recent entry, same reasoning every
+    // other list-of-real-records page on this dashboard defaults to.
+    rows.sort((a, b) => (a.workedDate < b.workedDate ? 1 : a.workedDate > b.workedDate ? -1 : 0));
+
+    const titleLabel = label || (kind === 'ticket-hours' ? 'Ticket Hours' : kind === 'leave' ? 'Leave Hours' : kind);
+    const title = `${titleLabel} – ${resourceName} (${from} to ${to})`;
+    res.type('html').send(renderEntriesPage(title, rows));
+  } catch (err) {
+    console.error(err);
+    res.status(500).send(`<pre>${escapeHtml(err.message)}</pre>`);
   }
 });
 

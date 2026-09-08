@@ -5,18 +5,10 @@ export const label = "Time Summaries";
 // re-mounts a page's DOM on every navigation away and back, but the
 // dynamically-imported module itself is cached by the browser and stays
 // alive for the session, so this survives across re-mounts and lets the
-// last result (and the user's own from/to/resource picks) restore
-// instantly instead of coming back blank. Same convention as every other
-// page here.
-let lastParams = null; // { from, to, resourceIds: number[] | null }
+// last result (and the user's own from/to picks) restore instantly instead
+// of coming back blank. Same convention as every other page here.
+let lastParams = null; // { from, to }
 let lastData = null;
-let allResources = null; // [{id, name}], fetched once, reused across remounts
-
-// Unticked by default, by request -- everyone else starts ticked. Matched
-// by exact resolved name (same "First Last" shape /api/times/resources
-// returns), not id, since this is a one-off request rather than a stable
-// id list someone's expected to maintain.
-const DEFAULT_UNCHECKED_NAMES = new Set(['Damon Kirkpatrick', 'Melissa Tannock', 'Amber Worth', 'Matt Jeavons', 'Autotask Administrator']);
 
 export function mount(container) {
   container.innerHTML = `
@@ -29,37 +21,40 @@ export function mount(container) {
         <input type="date" id="from-input" name="from" required />
         <label for="to-input">To</label>
         <input type="date" id="to-input" name="to" required />
+        <button type="button" id="quick-today-button">Today</button>
+        <button type="button" id="quick-last-week-button">Last Week</button>
+        <button type="button" id="quick-last-month-button">Last Month</button>
       </div>
       <div class="date-form-row">
-        <details id="resource-picker" class="tm-resource-picker">
-          <summary id="resource-picker-summary">All resources</summary>
-          <div class="tm-resource-picker-panel">
-            <div class="tm-resource-picker-actions">
-              <button type="button" id="resources-all">All</button>
-              <button type="button" id="resources-none">None</button>
-            </div>
-            <div id="resource-checkboxes" class="tm-resource-checkboxes">Loading resources...</div>
-          </div>
-        </details>
         <button type="submit">Load</button>
       </div>
     </form>
-    <p id="status" class="status">Pick a date range and (optionally) narrow the resources, then click Load.</p>
-    <div id="summary" class="summary" hidden></div>
+    <p id="summary" class="inline-subtext tm-summary-line" hidden></p>
+    <p id="status" class="status">Pick a date range, then click Load.</p>
     <div id="results"></div>
   `;
 
   const form = container.querySelector('#times-form');
   const fromInput = container.querySelector('#from-input');
   const toInput = container.querySelector('#to-input');
-  const resourcePicker = container.querySelector('#resource-picker');
-  const resourcePickerSummary = container.querySelector('#resource-picker-summary');
-  const resourceCheckboxesEl = container.querySelector('#resource-checkboxes');
-  const resourcesAllBtn = container.querySelector('#resources-all');
-  const resourcesNoneBtn = container.querySelector('#resources-none');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
+
+  // Time entry drill-down -- one delegated listener, attached once here
+  // rather than re-attached every render() call, since render() only ever
+  // replaces resultsEl's own innerHTML (never resultsEl itself). Any
+  // .tm-drill-cell button rendered inside it, now or in a future render,
+  // opens its own data-url in a real new window -- the shell's own
+  // window.open patch (packages/shell/public/app.js) already keeps it on
+  // the same monitor, same as every other popup on this dashboard.
+  resultsEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.tm-drill-cell');
+    if (!btn) return;
+    // Same features string every ticket link on this dashboard uses, by
+    // request -- noopener,noreferrer,width=1200,height=900.
+    window.open(btn.dataset.url, '_blank', 'noopener,noreferrer,width=1200,height=900');
+  });
 
   // AEST (UTC+10, no DST in Queensland) "today", not the browser's own
   // local timezone -- same helper/reasoning as Ticket Times' own todayISO().
@@ -78,6 +73,37 @@ export function mount(container) {
     d.setUTCDate(d.getUTCDate() + n);
     return d.toISOString().slice(0, 10);
   }
+  // First day of the month N months before iso's own month (n = -1 for
+  // last month), and that same month's own last day -- plain UTC
+  // calendar-month math, same "no real timezone conversion needed, these
+  // are calendar dates not instants" reasoning as addDays()/mondayOfWeek().
+  function startOfMonth(iso, n) {
+    const d = new Date(`${iso}T00:00:00Z`);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1)).toISOString().slice(0, 10);
+  }
+  function endOfMonth(iso, n) {
+    const d = new Date(`${iso}T00:00:00Z`);
+    // Day 0 of the FOLLOWING month is the last day of the target month.
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n + 1, 0)).toISOString().slice(0, 10);
+  }
+
+  // Quick-set date buttons, by request -- set the fields only, same as
+  // picking dates by hand; Load still needs its own click, same as ever.
+  container.querySelector('#quick-today-button').addEventListener('click', () => {
+    const today = todayISO();
+    fromInput.value = today;
+    toInput.value = today;
+  });
+  container.querySelector('#quick-last-week-button').addEventListener('click', () => {
+    const thisMonday = mondayOfWeek(todayISO());
+    fromInput.value = addDays(thisMonday, -7);
+    toInput.value = addDays(thisMonday, -1);
+  });
+  container.querySelector('#quick-last-month-button').addEventListener('click', () => {
+    const today = todayISO();
+    fromInput.value = startOfMonth(today, -1);
+    toInput.value = endOfMonth(today, -1);
+  });
 
   if (lastParams) {
     fromInput.value = lastParams.from;
@@ -90,76 +116,6 @@ export function mount(container) {
     fromInput.value = addDays(thisMonday, -7);
     toInput.value = addDays(thisMonday, -1);
   }
-
-  function selectedResourceIds() {
-    const boxes = [...resourceCheckboxesEl.querySelectorAll('input[type="checkbox"]')];
-    if (boxes.length === 0) return null;
-    const checked = boxes.filter((b) => b.checked).map((b) => Number(b.value));
-    return checked.length === boxes.length ? null : checked; // every box checked === "all", same as no filter
-  }
-
-  function updatePickerSummary() {
-    const boxes = [...resourceCheckboxesEl.querySelectorAll('input[type="checkbox"]')];
-    const checked = boxes.filter((b) => b.checked);
-    if (boxes.length === 0 || checked.length === boxes.length) resourcePickerSummary.textContent = 'All resources';
-    else if (checked.length === 0) resourcePickerSummary.textContent = 'No resources selected';
-    else resourcePickerSummary.textContent = `${checked.length} resource${checked.length === 1 ? '' : 's'} selected`;
-  }
-
-  async function loadResourceList() {
-    if (allResources) {
-      renderCheckboxes();
-      return;
-    }
-    try {
-      const res = await fetch('/api/times/resources');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      allResources = data.resources;
-      renderCheckboxes();
-    } catch (err) {
-      resourceCheckboxesEl.textContent = `Error loading resources: ${err.message}`;
-    }
-  }
-
-  function renderCheckboxes() {
-    // lastParams is only set once a Load has actually happened this
-    // session (module-scope, survives remount) -- distinct from
-    // lastParams.resourceIds itself being null, which means "every box
-    // was checked" on that submit. Only the true first-ever render (no
-    // Load yet) uses the unticked-by-default names; a remount after a
-    // real "all" submission stays "all", not back to the defaults.
-    const preselected = lastParams && lastParams.resourceIds ? new Set(lastParams.resourceIds) : null;
-    resourceCheckboxesEl.innerHTML = allResources
-      .map((r) => {
-        let checked;
-        if (lastParams) checked = preselected ? preselected.has(r.id) : true;
-        else checked = !DEFAULT_UNCHECKED_NAMES.has(r.name);
-        return `<label class="tm-resource-checkbox"><input type="checkbox" value="${r.id}" ${checked ? 'checked' : ''} /> ${escapeHtml(r.name)}</label>`;
-      })
-      .join('');
-    resourceCheckboxesEl.querySelectorAll('input[type="checkbox"]').forEach((b) => {
-      b.addEventListener('change', updatePickerSummary);
-    });
-    updatePickerSummary();
-  }
-
-  resourcesAllBtn.addEventListener('click', () => {
-    resourceCheckboxesEl.querySelectorAll('input[type="checkbox"]').forEach((b) => (b.checked = true));
-    updatePickerSummary();
-  });
-  resourcesNoneBtn.addEventListener('click', () => {
-    resourceCheckboxesEl.querySelectorAll('input[type="checkbox"]').forEach((b) => (b.checked = false));
-    updatePickerSummary();
-  });
-  // Picking a resource shouldn't also submit the form -- <details> inside a
-  // <form> is fine, but Enter-to-submit and the "click a label" flow are
-  // both left as native browser behaviour; only the panel's own click
-  // shouldn't bubble out and close it early, which <details>/<summary>
-  // already handles correctly with no extra JS needed.
-  void resourcePicker;
-
-  loadResourceList();
 
   if (lastData) render(lastData);
 
@@ -177,8 +133,7 @@ export function mount(container) {
       statusEl.textContent = 'Error: "To" must not be before "From".';
       return;
     }
-    const resourceIds = selectedResourceIds();
-    lastParams = { from, to, resourceIds };
+    lastParams = { from, to };
 
     const submitButton = form.querySelector('button[type="submit"]');
     submitButton.disabled = true;
@@ -189,7 +144,6 @@ export function mount(container) {
 
     try {
       const qs = new URLSearchParams({ from, to });
-      if (resourceIds) qs.set('resourceIds', resourceIds.join(','));
       const res = await fetch(`/api/times?${qs.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -207,17 +161,41 @@ export function mount(container) {
     statusEl.hidden = true;
     if (data.resources.length === 0) {
       summaryEl.hidden = true;
-      resultsEl.innerHTML = '<p class="status">No resources selected.</p>';
+      resultsEl.innerHTML = '<p class="status">No resources found.</p>';
       return;
     }
 
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `${data.from} to ${data.to} <span class="inline-subtext">(${data.weekdayCount} weekday${data.weekdayCount === 1 ? '' : 's'} in this period, ${data.normalHoursPerDay} normal hours/day)</span>`;
+    summaryEl.textContent = `${data.from} to ${data.to} (${data.weekdayCount} weekday${data.weekdayCount === 1 ? '' : 's'} in this period, ${data.normalHoursPerDay} normal hours/day)`;
 
     const sumOf = (key) => data.resources.reduce((s, r) => s + r[key], 0);
 
+    // Shared URL builder for every time-entry drill-down link on this
+    // page, by request -- extended from just the Total Client Hours
+    // Recorded table to every non-zero real-entry-sum cell. `kind`/`label`
+    // match server.js's own /entries-view dispatch exactly; `billable`
+    // ('true'/'false') is omitted for kinds that don't need it.
+    function drillDownUrl(kind, label, r, billable) {
+      const qs = new URLSearchParams({ from: data.from, to: data.to, resourceId: r.resourceId, kind });
+      if (label !== undefined && label !== null) qs.set('label', label);
+      if (billable !== undefined) qs.set('billable', billable);
+      return `/api/times/entries-view?${qs.toString()}`;
+    }
+
+    // `opts.drillDownKind`, when given, makes every non-zero cell in a
+    // summaryRow() (Table 1's own per-metric rows) clickable the same way
+    // namedRowsHtml() cells are, below.
     function summaryRow(label, key, opts = {}) {
-      const cells = data.resources.map((r) => `<td class="col-center">${formatHours(r[key])}</td>`).join('');
+      const cells = data.resources
+        .map((r) => {
+          const value = r[key];
+          if (opts.drillDownKind && value > 0) {
+            const url = drillDownUrl(opts.drillDownKind, null, r);
+            return `<td class="col-center"><button type="button" class="tm-drill-cell" data-url="${escapeHtml(url)}">${formatHours(value)}</button></td>`;
+          }
+          return `<td class="col-center">${formatHours(value)}</td>`;
+        })
+        .join('');
       const total = sumOf(key);
       const totalCell = opts.total !== false ? `<td class="col-center"><strong>${formatHours(total)}</strong></td>` : '<td></td>';
       const hmsCell = opts.total !== false ? `<td class="col-center">${formatHms(total)}</td>` : '<td></td>';
@@ -248,11 +226,25 @@ export function mount(container) {
       if (label.startsWith('T&M')) return `<span class="tm-caps-force">T&amp;M</span>${smallCapsHtml(label.slice(3))}`;
       return smallCapsHtml(label);
     }
-    function namedRowsHtml(rows, nameKey) {
+    // `opts.drillDownUrl(row, resource)`, when given, makes every non-zero
+    // cell in that table a clickable button opening a new window with the
+    // real individual TimeEntries behind that figure -- by request,
+    // starting with just the Total Client Hours Recorded table (see its
+    // own call below) rather than every table on the page.
+    function namedRowsHtml(rows, nameKey, opts = {}) {
       return rows
         .map((row) => {
           const rowTotal = data.resources.reduce((s, r) => s + (row.hours[r.resourceId] || 0), 0);
-          const cells = data.resources.map((r) => `<td class="col-center">${formatHours(row.hours[r.resourceId] || 0)}</td>`).join('');
+          const cells = data.resources
+            .map((r) => {
+              const value = row.hours[r.resourceId] || 0;
+              if (opts.drillDownUrl && value > 0) {
+                const url = opts.drillDownUrl(row, r);
+                return `<td class="col-center"><button type="button" class="tm-drill-cell" data-url="${escapeHtml(url)}">${formatHours(value)}</button></td>`;
+              }
+              return `<td class="col-center">${formatHours(value)}</td>`;
+            })
+            .join('');
           return `<tr><th>${rowLabelHtml(row[nameKey])}</th>${cells}<td class="col-center"><strong>${formatHours(rowTotal)}</strong></td><td class="col-center">${formatHms(rowTotal)}</td></tr>`;
         })
         .join('');
@@ -264,13 +256,48 @@ export function mount(container) {
         .join('')}<td class="col-center"><strong>${formatHours(grand)}</strong></td><td class="col-center">${formatHms(grand)}</td></tr>`;
     }
 
+    // New row, by request -- "for every table from AIT TIME Tickets down,
+    // show another row below the totals with % of Total Hours." Same
+    // "percentage of a resource's own Total Hours" (Table 1's own Total
+    // Hours row) reading the Hours Summary box already uses, just one
+    // figure per resource column here instead of one overall figure --
+    // these tables are one column per resource, not the Hours/HH:MM/%
+    // triad the Hours Summary table uses, so this is its own row rather
+    // than a third column. `worked` (true), when given, reads the .worked
+    // half of a {worked, toBill} pair (the Billable/Non-Billable tables'
+    // own cell shape) instead of a plain number -- same "worked, not
+    // toBill" convention their own HH:MM column already uses.
+    function pctOfTotalHoursRowHtml(totals, worked) {
+      const valueFor = (r) => {
+        const t = totals.get(r.resourceId);
+        if (t === undefined) return 0;
+        return worked ? t.worked : t;
+      };
+      const cells = data.resources
+        .map((r) => {
+          const base = r.totalHours;
+          return `<td class="col-center">${formatPct(base > 0 ? (valueFor(r) / base) * 100 : 0)}</td>`;
+        })
+        .join('');
+      const grandValue = data.resources.reduce((s, r) => s + valueFor(r), 0);
+      const grandBase = sumOf('totalHours');
+      const grandPct = formatPct(grandBase > 0 ? (grandValue / grandBase) * 100 : 0);
+      return `<tr class="tm-pct-row tm-no-total-shading"><th>${smallCapsHtml('% of Total Hours')}</th>${cells}<td class="col-center"><strong>${grandPct}</strong></td><td class="col-center"></td></tr>`;
+    }
+
     const aittimeTotalByResource = totalByResource(data.aittime);
-    const aittimeRowsHtml = namedRowsHtml(data.aittime, 'title');
+    const aittimeRowsHtml = namedRowsHtml(data.aittime, 'title', {
+      drillDownUrl: (row, r) => drillDownUrl('aittime-title', row.title, r),
+    });
     const aittimeTotalRow = totalRowHtml(aittimeTotalByResource);
+    const aittimePctRow = pctOfTotalHoursRowHtml(aittimeTotalByResource);
 
     const clientContractsTotals = totalByResource(data.clientContracts);
-    const clientContractsRowsHtml = namedRowsHtml(data.clientContracts, 'contractName');
+    const clientContractsRowsHtml = namedRowsHtml(data.clientContracts, 'contractName', {
+      drillDownUrl: (row, r) => drillDownUrl('contract', row.contractName, r),
+    });
     const clientContractsTotalRow = totalRowHtml(clientContractsTotals);
+    const clientContractsPctRow = pctOfTotalHoursRowHtml(clientContractsTotals);
 
     // Work-Type Reconciliation -- NOT fetched as part of the main load, by
     // request ("we can not retrieve it by default so the page is
@@ -279,8 +306,9 @@ export function mount(container) {
     // same namedRowsHtml/totalByResource/totalRowHtml helpers work
     // unmodified since they only need row.hours + data.resources, not
     // data.workTypeBillable itself.
-    function workTypeTableHtml(rows) {
-      return { rowsHtml: namedRowsHtml(rows, 'workType'), totalRow: totalRowHtml(totalByResource(rows)) };
+    function workTypeTableHtml(rows, drillDownOpts) {
+      const totals = totalByResource(rows);
+      return { rowsHtml: namedRowsHtml(rows, 'workType', drillDownOpts), totalRow: totalRowHtml(totals), pctRow: pctOfTotalHoursRowHtml(totals) };
     }
 
     // Total Client Hours Billable -- same rows as Total Client Hours
@@ -297,9 +325,11 @@ export function mount(container) {
     // already the table's own last-child (styles.css widens it and turns
     // off wrapping for exactly this pair), so no extra class is needed
     // here to keep it on one line.
-    function billableCellHtml(cell) {
+    function billableCellHtml(cell, url) {
       const c = cell || { worked: 0, toBill: 0 };
-      return `<td class="col-center" title="To bill: ${formatHours(c.toBill)}">${formatHours(c.worked)}</td>`;
+      const valueHtml =
+        url && c.worked > 0 ? `<button type="button" class="tm-drill-cell" data-url="${escapeHtml(url)}">${formatHours(c.worked)}</button>` : formatHours(c.worked);
+      return `<td class="col-center" title="To bill: ${formatHours(c.toBill)}">${valueHtml}</td>`;
     }
     function billableTotalCellHtml(cell, strong, mismatch) {
       const c = cell || { worked: 0, toBill: 0 };
@@ -339,11 +369,17 @@ export function mount(container) {
     // the row's own Total figure -- for this table that's the primary
     // (worked) half of the Total column's pair, not the bracketed toBill
     // figure.
-    function buildWorkedToBillTable(rows, grandTotalMismatch) {
+    // `billable` ('true'/'false'), when given, makes every non-zero cell
+    // clickable -- same drillDownUrl('contract', ..., billable) shape the
+    // plain Recorded table above uses, just with the extra billable-flag
+    // filter this table's own rows already imply.
+    function buildWorkedToBillTable(rows, grandTotalMismatch, billable) {
       const rowsHtml = rows
         .map((row) => {
           const rowTotal = sumCells(data.resources.map((r) => row.hours[r.resourceId]));
-          const cells = data.resources.map((r) => billableCellHtml(row.hours[r.resourceId])).join('');
+          const cells = data.resources
+            .map((r) => billableCellHtml(row.hours[r.resourceId], billable !== undefined ? drillDownUrl('contract', row.contractName, r, billable) : undefined))
+            .join('');
           return `<tr><th>${rowLabelHtml(row.contractName)}</th>${cells}${billableTotalCellHtml(rowTotal, true)}<td class="col-center">${formatHms(rowTotal.worked)}</td></tr>`;
         })
         .join('');
@@ -352,10 +388,11 @@ export function mount(container) {
       const totalRow = `<tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th>${data.resources
         .map((r) => billableCellHtml(totals.get(r.resourceId)))
         .join('')}${billableTotalCellHtml(grandTotal, true, grandTotalMismatch)}<td class="col-center">${formatHms(grandTotal.worked)}</td></tr>`;
-      return { rowsHtml, totalRow, totals, grandTotal };
+      const pctRow = pctOfTotalHoursRowHtml(totals, true);
+      return { rowsHtml, totalRow, pctRow, totals, grandTotal };
     }
 
-    const clientContractsBillableTable = buildWorkedToBillTable(data.clientContractsBillable);
+    const clientContractsBillableTable = buildWorkedToBillTable(data.clientContractsBillable, undefined, 'true');
 
     // Recorded less Billable -- a normal (non-blue) row under the Billable
     // table's own Total row, by request: each resource's Recorded total
@@ -381,18 +418,28 @@ export function mount(container) {
       [...billableTotalByResource(data.clientContractsNonBillable).values()]
     ).worked;
     const nonBillableMismatch = Math.abs(nonBillableGrandTotalWorked - recordedLessBillableGrandTotal) > 0.01;
-    const clientContractsNonBillableTable = buildWorkedToBillTable(data.clientContractsNonBillable, nonBillableMismatch);
+    const clientContractsNonBillableTable = buildWorkedToBillTable(data.clientContractsNonBillable, nonBillableMismatch, 'false');
 
     // "... less AITTIME" -- Total Hours and Ticket (Recorded) Hours with
     // each resource's own AITTIME total subtracted back out, so AITTIME's
     // internal, non-client time doesn't inflate either figure. Resource
     // names repeated across the top again (same headerCells), by request.
+    function lessAittimeTotals(key) {
+      const totals = new Map();
+      for (const r of data.resources) totals.set(r.resourceId, r[key] - (aittimeTotalByResource.get(r.resourceId) || 0));
+      return totals;
+    }
     function lessAittimeRow(label, key) {
       const valueFor = (r) => r[key] - (aittimeTotalByResource.get(r.resourceId) || 0);
       const cells = data.resources.map((r) => `<td class="col-center">${formatHours(valueFor(r))}</td>`).join('');
       const total = data.resources.reduce((s, r) => s + valueFor(r), 0);
       return `<tr><th>${smallCapsHtml(label)}</th>${cells}<td class="col-center"><strong>${formatHours(total)}</strong></td><td class="col-center">${formatHms(total)}</td></tr>`;
     }
+    // % row for the "... less AITTIME" table, by request -- based on
+    // Recorded Hours less AITTIME (the activity figure), not Total Hours
+    // less AITTIME (which would just re-read as "1 minus the AITTIME %"
+    // already visible per-resource one row up).
+    const hoursLessAittimePctRow = pctOfTotalHoursRowHtml(lessAittimeTotals('ticketHours'));
 
     // Overall summary -- one value per row, not per resource, by request.
     // Total Tech Hours: Table 1's own Total Hours row, Total column
@@ -410,6 +457,14 @@ export function mount(container) {
     // the Total AITTIME, shown as a percentage OF Total Tech Hours Worked
     // (not of itself) -- by request.
     const techHoursAvailable = totalTechHours - aittimeGrandTotal;
+    // Total Tech Recorded Hours -- ALL ticket time (client AND Ambient iT
+    // combined, unfiltered by company), same figure Table 1's own Ticket
+    // Hours row and the Ambient iT Tickets reconciliation row's own
+    // "Total Recorded Hours" both already use. By request, added as its
+    // own row directly above Total Tech Client Hours -- that row is
+    // CLIENT-only (Ambient iT excluded, see recordedGrandTotal below), so
+    // this row is the broader figure the client-only one is a subset of.
+    const totalRecordedHours = sumOf('ticketHours');
     const totalClientHours = recordedGrandTotal;
     const totalClientHoursBillable = clientContractsBillableTable.grandTotal.worked;
 
@@ -417,12 +472,15 @@ export function mount(container) {
     // percentage column at all for that row (Total Tech Hours (at work),
     // the baseline). Every other row (Available, Client, Billable) is a %
     // of Total Tech Hours (at work), by request -- not of Available, even
-    // for the Client/Billable rows.
-    function overallSummaryRow(label, hours, pctBase) {
+    // for the Client/Billable rows. `pctRedBackground`, when true, shades
+    // just that row's own % cell red -- Total Tech Hours Billable's own %,
+    // by request, to flag it as the "how much of everyone's time is
+    // actually billable" figure at a glance.
+    function overallSummaryRow(label, hours, pctBase, pctRedBackground) {
       const pctCell =
         pctBase === null
           ? '<td class="col-center"></td>'
-          : `<td class="col-center">${formatPct(pctBase > 0 ? (hours / pctBase) * 100 : 0)}</td>`;
+          : `<td class="col-center${pctRedBackground ? ' tm-pct-shade-red' : ''}">${formatPct(pctBase > 0 ? (hours / pctBase) * 100 : 0)}</td>`;
       return `<tr><th>${smallCapsHtml(label)}</th><td class="col-center">${formatHours(hours)}</td><td class="col-center">${formatHms(hours)}</td>${pctCell}</tr>`;
     }
     function formatPct(n) {
@@ -438,11 +496,12 @@ export function mount(container) {
         <tbody>
           ${overallSummaryRow('Total Tech Hours (at work)', totalTechHours, null)}
           ${overallSummaryRow('Tech Hours Available (After AITTime)', techHoursAvailable, totalTechHours)}
+          ${overallSummaryRow('Total Tech Recorded Hours', totalRecordedHours, totalTechHours)}
           ${overallSummaryRow('Total Tech Client Hours', totalClientHours, totalTechHours)}
-          ${overallSummaryRow('Total Tech Hours Billable', totalClientHoursBillable, totalTechHours)}
+          ${overallSummaryRow('Total Tech Hours Billable', totalClientHoursBillable, totalTechHours, true)}
         </tbody>
       </table>
-      <p class="tm-footnote">** % of Available Hours</p>
+      <p class="tm-footnote tm-footnote-red">** Each % is a % of Total Available Hours not after AIT Time</p>
       </div>
 
       <div class="tm-table-group">
@@ -453,10 +512,10 @@ export function mount(container) {
           </thead>
           <tbody>
             <tr><th>${smallCapsHtml('Normal Hours (per day)')}</th>${data.resources.map(() => `<td class="col-center">${formatHours(data.normalHoursPerDay)}</td>`).join('')}<td></td><td></td></tr>
-            ${summaryRow('Leave Hours', 'leaveHours')}
+            ${summaryRow('Leave Hours', 'leaveHours', { drillDownKind: 'leave' })}
             ${summaryRow('Public Holidays', 'publicHolidayHours')}
             ${summaryRow('Total Hours', 'totalHours', { strong: true })}
-            ${summaryRow('Ticket Hours', 'ticketHours')}
+            ${summaryRow('Ticket Hours', 'ticketHours', { drillDownKind: 'ticket-hours' })}
           </tbody>
         </table>
       </div>
@@ -473,6 +532,7 @@ export function mount(container) {
           <tbody>
             ${aittimeRowsHtml}
             ${aittimeTotalRow}
+            ${aittimePctRow}
           </tbody>
         </table>
       </div>`
@@ -486,6 +546,7 @@ export function mount(container) {
           <tbody>
             ${lessAittimeRow('Total Hours less AITTIME', 'totalHours')}
             ${lessAittimeRow('Recorded Hours less AITTIME', 'ticketHours')}
+            ${hoursLessAittimePctRow}
           </tbody>
         </table>
       </div>
@@ -504,6 +565,7 @@ export function mount(container) {
           <tbody>
             ${clientContractsRowsHtml}
             ${clientContractsTotalRow}
+            ${clientContractsPctRow}
           </tbody>
         </table>
       </div>`
@@ -521,6 +583,7 @@ export function mount(container) {
           <tbody>
             ${clientContractsBillableTable.rowsHtml}
             ${clientContractsBillableTable.totalRow}
+            ${clientContractsBillableTable.pctRow}
             ${recordedLessBillableRow}
           </tbody>
         </table>
@@ -539,6 +602,7 @@ export function mount(container) {
           <tbody>
             ${clientContractsNonBillableTable.rowsHtml}
             ${clientContractsNonBillableTable.totalRow}
+            ${clientContractsNonBillableTable.pctRow}
           </tbody>
         </table>
       </div>`
@@ -561,8 +625,7 @@ export function mount(container) {
       workTypeShowButton.disabled = true;
       workTypeShowButton.textContent = 'Loading...';
       try {
-        const resourceIds = data.resources.map((r) => r.resourceId);
-        const qs = new URLSearchParams({ from: data.from, to: data.to, resourceIds: resourceIds.join(',') });
+        const qs = new URLSearchParams({ from: data.from, to: data.to });
         const res = await fetch(`/api/times/work-type?${qs.toString()}`);
         const wt = await res.json();
         if (!res.ok) throw new Error(wt.error || `Request failed (${res.status})`);
@@ -575,10 +638,18 @@ export function mount(container) {
         // content unchanged, still every other work type regardless of
         // its own billable flag). Table 3: Accrue--ING by status,
         // unchanged.
-        const fixedBillable = workTypeTableHtml(wt.workTypeFixedBillable);
-        const fixedUnticked = workTypeTableHtml(wt.workTypeFixedUnticked);
-        const other = workTypeTableHtml(wt.workTypeOther);
-        const accrueIng = workTypeTableHtml(wt.workTypeAccrueIng);
+        const fixedBillable = workTypeTableHtml(wt.workTypeFixedBillable, {
+          drillDownUrl: (row, r) => drillDownUrl('work-type', row.workType, r, 'true'),
+        });
+        const fixedUnticked = workTypeTableHtml(wt.workTypeFixedUnticked, {
+          drillDownUrl: (row, r) => drillDownUrl('work-type', row.workType, r, 'false'),
+        });
+        const other = workTypeTableHtml(wt.workTypeOther, {
+          drillDownUrl: (row, r) => drillDownUrl('work-type-other', row.workType, r),
+        });
+        const accrueIng = workTypeTableHtml(wt.workTypeAccrueIng, {
+          drillDownUrl: (row, r) => drillDownUrl('accrue-status', row.workType, r),
+        });
 
         // Reconciliation row builder, shared by "Client Ticket Times" and
         // "Total (matches Total Recorded Hours)" below -- one row, no
@@ -630,8 +701,12 @@ export function mount(container) {
         // (already confirmed to equal Total Client Hours Recorded) --
         // Ambient + Client, together, is what should equal ALL ticket
         // time; the Ambient table alone would never match it.
-        const ambientItTickets = workTypeTableHtml(wt.ambientItTickets);
-        const totalRecordedHours = sumOf('ticketHours');
+        const ambientItTickets = workTypeTableHtml(wt.ambientItTickets, {
+          drillDownUrl: (row, r) => drillDownUrl('ambient-bucket', row.workType, r),
+        });
+        // totalRecordedHours -- the outer render() scope's own Hours
+        // Summary row (Total Tech Recorded Hours) already computed this
+        // exact figure; reused here via closure rather than recomputed.
         const ambientItTicketsTotal = reconciliationRow(
           'Total (matches Total Recorded Hours)',
           [wt.workTypeFixedBillable, wt.workTypeFixedUnticked, wt.workTypeOther, wt.workTypeAccrueIng, wt.ambientItTickets],
@@ -648,6 +723,7 @@ export function mount(container) {
               <tbody>
                 ${fixedBillable.rowsHtml}
                 ${fixedBillable.totalRow}
+                ${fixedBillable.pctRow}
               </tbody>
             </table>
           </div>
@@ -664,6 +740,7 @@ export function mount(container) {
               <tbody>
                 ${fixedUnticked.rowsHtml}
                 ${fixedUnticked.totalRow}
+                ${fixedUnticked.pctRow}
               </tbody>
             </table>
           </div>`
@@ -681,6 +758,7 @@ export function mount(container) {
               <tbody>
                 ${other.rowsHtml}
                 ${other.totalRow}
+                ${other.pctRow}
               </tbody>
             </table>
           </div>`
@@ -694,6 +772,7 @@ export function mount(container) {
               <tbody>
                 ${accrueIng.rowsHtml}
                 ${accrueIng.totalRow}
+                ${accrueIng.pctRow}
               </tbody>
             </table>
           </div>
@@ -715,6 +794,7 @@ export function mount(container) {
               <tbody>
                 ${ambientItTickets.rowsHtml}
                 ${ambientItTickets.totalRow}
+                ${ambientItTickets.pctRow}
               </tbody>
             </table>
           </div>
