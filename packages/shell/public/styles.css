@@ -2137,6 +2137,15 @@ th, td {
   border-top: 1px solid var(--border);
 }
 
+/* Shared centered-column utility -- TC Elite's client.js already referenced
+   this class name (a numeric Seats/Lines column reads better centered than
+   left-aligned) but nothing dashboard-wide ever defined it, so it rendered
+   unstyled; only a page-scoped .pgr-col-center (Packages Received) existed.
+   Defined here, generically, so any page's numeric column can use it. */
+.col-center {
+  text-align: center;
+}
+
 tbody tr:nth-child(even) {
   background: var(--row-alt-bg);
 }
@@ -5157,6 +5166,346 @@ textarea.pgr-field {
 .wsp-bottom-panels--collapsed #usage-instructions-content,
 .wsp-bottom-panels--collapsed .wsp-deliveries-body {
   display: none;
+}
+
+/* Times -- the resource multiselect is a plain <details>/<summary>
+   disclosure styled to look like a dropdown button + panel, rather than a
+   custom open/close-on-outside-click widget (no click-outside listener to
+   leak across this page's own mount/remount cycle, and it's free
+   keyboard/click toggle behaviour from the browser). */
+.tm-resource-picker {
+  position: relative;
+}
+#resource-picker-summary {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.9rem;
+  cursor: pointer;
+  list-style: none;
+}
+#resource-picker-summary::-webkit-details-marker {
+  display: none;
+}
+.tm-resource-picker-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  min-width: 14rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+}
+.tm-resource-picker-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.tm-resource-picker-actions button {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.tm-resource-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tm-table-scroll {
+  overflow-x: auto;
+  margin-bottom: 1.5rem;
+}
+/* Client Ticket Times' own wrapper, by request -- the red footnote right
+   after it needs to sit close up under the totals row, not 1.5rem below
+   it like every other table's own trailing gap. */
+.tm-table-scroll--tight {
+  margin-bottom: 0.15rem;
+}
+/* Three separate <table> elements (Hours Summary / AITTIME tickets / Hours
+   less AITTIME) share the same resource columns, but a plain auto-layout
+   table sizes each one's columns independently off its own content -- the
+   AITTIME table's "Ticket title" column and row labels like "Recorded
+   Hours less AITTIME" are much wider than a plain resource name, so the
+   resource columns drifted out of alignment between tables. Fixed layout +
+   explicit widths forces every .tm-hours-table to size its columns
+   identically regardless of content, so the resource columns line up
+   vertically across all three, by request. Long first-column labels wrap
+   instead of forcing the column wider (nowrap would defeat the fixed
+   width), and .tm-table-scroll's own overflow-x still kicks in if a
+   resource-heavy selection pushes the total width past the viewport. */
+.tm-hours-table {
+  /* width: auto overrides the dashboard-wide `table { width: 100% }` --
+     with table-layout: fixed, a 100%-wide table would scale each column's
+     explicit width as a PROPORTION of the container instead of using it as
+     a literal size, which stops working the moment .tm-table-scroll's own
+     overflow-x needs to kick in (many resources selected). auto lets the
+     table's real width be the literal sum of its column widths, so it
+     overflows its container -- and scrolls -- exactly like before. */
+  table-layout: fixed;
+  width: auto;
+}
+.tm-hours-table th:first-child,
+.tm-hours-table td:first-child {
+  /* No wrap, by request (including the blue "Total Client Hours Recorded"
+     corner cell) -- widened from 13rem so the longest real row label
+     (e.g. "T&M TC Elite Platinum [+TAM >5 Seats]", or an AITTIME title
+     like "AITTIME: Finance and Administration") still fits on one line
+     instead of just overflowing the fixed-width column. */
+  width: 19rem;
+  white-space: nowrap;
+}
+.tm-hours-table th:not(:first-child),
+.tm-hours-table td:not(:first-child) {
+  width: 4.5rem;
+}
+/* The Total column specifically (second-to-last now that HH:MM is the
+   table's real last column, see below) -- wider than a plain resource
+   column and never wrapping, so the Billable table's own "worked (toBill)"
+   pair (the only place that pair shows up visibly at all, by request)
+   reads on one line instead of stacking. Comes after the :not(:first-child)
+   rule above so it wins at equal specificity. Widening every table's own
+   Total column the same way keeps them lined up with each other, same
+   reasoning as the rest of this fixed-layout scheme. */
+.tm-hours-table th:nth-last-child(2),
+.tm-hours-table td:nth-last-child(2) {
+  width: 7rem;
+  white-space: nowrap;
+}
+/* HH:MM column, by request -- the actual last column now. Short, fixed-
+   width digits (e.g. "19:48"), so the default 4.5rem from the
+   :not(:first-child) rule above is already plenty; just keep it from
+   wrapping. */
+.tm-hours-table th:last-child,
+.tm-hours-table td:last-child {
+  white-space: nowrap;
+}
+.tm-total-row th,
+.tm-total-row td {
+  font-weight: 600;
+  border-top: 2px solid var(--border);
+}
+/* Blue shading on every total ROW and total COLUMN, by request -- the
+   bottom Total row's own cells (reusing the same .tm-total-row selector
+   already above), and the "Total" column's body cells on every OTHER row
+   (tbody only -- the header row keeps its own green shading, see
+   .tm-hours-table thead th below; this is about data cells). Same
+   --accent blue as the corner-label text elsewhere on this page. The
+   bottom-right cell (Total row x Total column) is covered by both
+   selectors -- same color either way, so no conflict. */
+.tm-total-row th,
+.tm-total-row td,
+.tm-hours-table tbody td:nth-last-child(2) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+/* "Recorded less Billable" row's own Total-column cell, by request --
+   excluded from the blue Total-column shading above (more specific
+   selector than the plain tbody td:nth-last-child(2) rule, so it wins). */
+.tm-hours-table tbody tr.tm-no-total-shading td:nth-last-child(2) {
+  background: none;
+}
+/* Billable table's own bracketed toBill figure in the Total column -- not
+   bold and smaller than the worked figure beside it, by request, even
+   inside a bold-total row (the second, more specific rule below overrides
+   .tm-total-row td's own font-weight: 600, which would otherwise win). */
+.tm-total-bracket {
+  font-weight: normal;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+.tm-total-row .tm-total-bracket {
+  font-weight: normal;
+}
+/* Non-Billable's own Total-column worked figure turns red, by request,
+   when it disagrees with Recorded-minus-Billable (client.js's own
+   "Recorded less Billable" row, computed independently) -- a real
+   reconciliation mismatch, not styling for its own sake. Same red as
+   .status.error elsewhere on this dashboard. */
+.tm-mismatch {
+  color: #dc2626;
+  /* Shaded red as well as text red, by request -- a small highlighted
+     "badge" around just the mismatched figure (this class wraps a number,
+     not a whole cell), same #dc2626 as the text itself at low opacity. */
+  background: color-mix(in srgb, #dc2626 18%, transparent);
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+}
+/* Reconciliation rows ("Client Ticket Times", "Ambient iT Tickets" own
+   totals line) -- whole row shaded green (same #16a34a convention as
+   every header row on this page), with heavier grey top/bottom borders
+   (same var(--muted) treatment header rows already use), by request. th
+   and td both, so the row label cell matches too. The fully-qualified
+   selector (not just .tm-reconciliation-row td) is needed to
+   out-specificity .tm-hours-table tbody td:nth-last-child(2) above --
+   without it, that rule's own blue background would win on just the
+   Total-column cell, leaving the rest of the row green. */
+.tm-hours-table tbody tr.tm-reconciliation-row th,
+.tm-hours-table tbody tr.tm-reconciliation-row td {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  border-top: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+}
+/* Visual grouping box around the 1st three tables (Hours Summary/AITTIME/
+   Hours less AITTIME) and, separately, the 2nd three (Recorded/Billable/
+   Non-Billable), by request -- a thin red border with only a 2px gap
+   between the border and the tables/paragraphs inside. The last child's
+   own bottom margin (every .tm-table-scroll already carries 1.5rem, same
+   as the "no data" <p class="status">) is cancelled so that gap is a real
+   2px on every side, not 2px + a leftover 1.5rem at the bottom. */
+.tm-table-group {
+  border: 2px solid #dc2626;
+  padding: 2px;
+  margin-bottom: 1.5rem;
+  /* Hug the widest table inside instead of stretching to the full page
+     width, by request -- a plain block div defaults to filling its
+     parent, which put the right edge of the border way past where the
+     (narrower, fixed-width) tables actually end. */
+  width: fit-content;
+  max-width: 100%;
+}
+/* Overall summary -- Total Tech Hours / Tech Hours Available / etc, by
+   request: one value per row, not per resource, so this is a plain
+   label+value table, deliberately its OWN class rather than reusing
+   .tm-hours-table -- that class's column-position rules (fixed-width
+   first column, blue Total-column shading on :nth-last-child(2), etc.)
+   all assume a Resources-across-the-top, multi-column shape this table
+   doesn't have; with only two columns, :nth-last-child(2) would actually
+   land on the label column instead, which is exactly the kind of bug
+   reusing that class here would invite. */
+.tm-overall-summary-table {
+  border-collapse: collapse;
+  width: fit-content;
+}
+.tm-overall-summary-table th,
+.tm-overall-summary-table td {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.85rem;
+  text-align: left;
+  border-top: 1px solid var(--border);
+}
+.tm-overall-summary-table th {
+  /* Same dashboard-wide th { text-transform: uppercase } override
+     .tm-hours-table th needs (see its own comment below) -- manual small
+     caps (smallCapsHtml() in client.js, .tm-smcp) replaced the old
+     font-variant: small-caps approach here too. */
+  text-transform: none;
+  white-space: nowrap;
+}
+.tm-overall-summary-table thead th {
+  /* Same heavier grey header-row line as .tm-hours-table thead th, by
+     request. */
+  border-top: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+}
+.tm-overall-summary-table td {
+  font-weight: 600;
+}
+/* "** % of Available Hours" footnote, by request -- close up under the
+   table (no default <p> top margin) and smaller than the dashboard's
+   usual .inline-subtext. */
+.tm-footnote {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+/* Red variant, by request -- same .tm-mismatch red, for the Client Ticket
+   Times footnote explaining what the red coloring on that row means. */
+.tm-footnote-red {
+  color: #dc2626;
+  /* Gap before whatever comes next (e.g. the Ambient iT Tickets table
+     right after "Client Ticket Times"' own footnote), by request -- the
+     base .tm-footnote has no bottom margin at all, so back-to-back
+     sections had nothing separating them. */
+  margin-bottom: 1rem;
+}
+.tm-table-group > *:last-child {
+  margin-bottom: 0;
+}
+/* Work-Type Reconciliation's own Show button, right next to its heading,
+   by request -- NOT .section-heading-row (that class's own
+   justify-content: space-between, used elsewhere on the dashboard for a
+   heading-plus-action pushed to the far right, is exactly what put the
+   button too far away here). Plain flex-start with a small gap instead. */
+.tm-heading-with-button {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+/* Row labels and column headers in small caps, by request -- manually
+   built in client.js (smallCapsHtml(): every run of lowercase letters
+   upper-cased and wrapped in .tm-smcp below), NOT CSS font-variant:
+   small-caps. That was tried first and technically worked per spec, but
+   in practice the browser/font's own synthesis still read as plain ALL
+   CAPS rather than visibly smaller, so it was replaced outright rather
+   than patched further. text-transform: none still matters here: the
+   dashboard-wide `th` rule (near the top of this file) forces
+   uppercase on every th, and without overriding it, the ALREADY-caps
+   portions client.js leaves un-wrapped would look identical to the
+   .tm-smcp spans instead of visibly bigger, defeating the whole effect
+   the same way it defeated the old font-variant approach. */
+.tm-hours-table th {
+  text-transform: none;
+}
+.tm-smcp {
+  font-size: 0.75em;
+}
+/* "T&M" forced to genuine, un-shrunk uppercase, by request -- wrapped in
+   client.js's own rowLabelHtml() around just that prefix (not the whole
+   label). Kept even though smallCapsHtml() already leaves real uppercase
+   letters alone by construction -- harmless belt-and-suspenders, and
+   documents the intent inline in the markup. */
+.tm-caps-force {
+  font-variant: normal;
+  text-transform: uppercase;
+}
+/* Green header row, by request -- same #16a34a green/opacity convention as
+   the dashboard's other tag/header shading (e.g. .tt-tag--today,
+   .wsp-delivery-tag--today). Set on the th cells themselves, not the <tr>,
+   so it paints reliably under border-collapse. */
+.tm-hours-table thead th {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  /* Heavier grey line top and bottom of the header row, by request. */
+  border-top: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+}
+/* The corner cell (row-label column, header row) never carries the green
+   shading, on every table, by request -- it's not a resource column. */
+.tm-hours-table thead th:first-child {
+  background: none;
+}
+/* Client contract breakdown table's own corner cell, by request -- bold
+   blue text instead of the (removed) green shading, same --accent blue
+   used elsewhere on this dashboard. */
+.tm-corner-label {
+  color: var(--accent);
+  font-weight: 700;
+}
+/* Narrower rows, by request -- this page's tables can run to many resource
+   columns, so the default th/td padding (0.5rem 1rem) reads baggy; tighter
+   padding and a smaller font fit more columns before the table needs to
+   scroll, without going so small it's hard to read. */
+.tm-hours-table th,
+.tm-hours-table td {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.85rem;
 }
 
 .wsp-icon-btn {

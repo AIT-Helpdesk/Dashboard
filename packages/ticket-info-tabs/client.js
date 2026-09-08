@@ -22,5 +22,6 @@ export const mount = createTabbedPageMount({
     { id: 'tickets-created-today', label: 'Tickets Created' },
     { id: 'completed-tickets', label: 'Completed Tickets' },
     { id: 'ticket-times', label: 'Ticket Times' },
+    { id: 'times', label: 'Time Summaries' },
   ],
 });

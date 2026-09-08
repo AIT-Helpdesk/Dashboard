@@ -114,6 +114,10 @@
       {
         "type": "page",
         "id": "asked-for-review"
+      },
+      {
+        "type": "page",
+        "id": "times"
       }
     ],
     "hidden": true
@@ -179,7 +183,7 @@
   {
     "type": "category",
     "id": "update-contracts",
-    "label": "Update Contracts",
+    "label": "Contract Mgmt",
     "children": [
       {
         "type": "page",
@@ -235,6 +239,10 @@
       {
         "type": "page",
         "id": "rewst-form-test"
+      },
+      {
+        "type": "page",
+        "id": "tc-elite"
       },
       {
         "type": "page",
