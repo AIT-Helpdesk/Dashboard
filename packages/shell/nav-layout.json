@@ -92,6 +92,10 @@
   },
   {
     "type": "page",
+    "id": "time-reporting-tabs"
+  },
+  {
+    "type": "page",
     "id": "ticket-info-tabs"
   },
   {
