@@ -95,6 +95,22 @@
     "id": "time-reporting-tabs"
   },
   {
+    "type": "category",
+    "id": "time-reporting",
+    "label": "Time Reporting",
+    "children": [
+      {
+        "type": "page",
+        "id": "times"
+      },
+      {
+        "type": "page",
+        "id": "accrued-time"
+      }
+    ],
+    "hidden": true
+  },
+  {
     "type": "page",
     "id": "ticket-info-tabs"
   },
@@ -259,14 +275,6 @@
       {
         "type": "page",
         "id": "external-page-builder"
-      },
-      {
-        "type": "page",
-        "id": "times"
-      },
-      {
-        "type": "page",
-        "id": "accrued-time"
       }
     ],
     "hidden": true

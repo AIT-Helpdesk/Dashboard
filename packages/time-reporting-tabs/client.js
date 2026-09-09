@@ -10,5 +10,5 @@ export const mount = createTabbedPageMount({
   id,
   label,
   apiBase: "/api/time-reporting-tabs",
-  defaultTabs: [{"id":"times","label":"Time Summaries"}],
+  defaultTabs: [{"id":"times","label":"Time Summaries"},{"id":"accrued-time","label":"Accrued Time"}],
 });
