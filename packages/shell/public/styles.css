@@ -5694,3 +5694,87 @@ textarea.wsp-field {
   margin-bottom: 0.75rem;
   line-height: 1.5;
 }
+
+/* Accrued Time -- own class rather than a bare <table>, by request: "use
+   only the required width, not forcing table width to 100%" -- overrides
+   the dashboard-wide `table { width: 100%; }` rule (styles.css, above);
+   a class selector on the element beats a bare-element selector at equal
+   specificity regardless of source order, so this wins without !important.
+   Also smaller text + narrower rows, by request -- same tighter-padding
+   reasoning @dashboard/times' own .tm-hours-table above uses, just a
+   little smaller again since this table has fewer, narrower columns. */
+.accrued-time-table {
+  width: auto;
+}
+/* "Not Complete" heading + its Show/Hide Incomplete Tickets button, by
+   request -- same flex-row-with-a-gap shape @dashboard/times' own
+   .tm-heading-with-button uses for its Work-Type Reconciliation Show
+   button, just this page's own class rather than reusing that one
+   (page-scoped naming, same convention every other class on this page
+   already follows). */
+.accrued-time-heading-with-button {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+/* "- N Mismatches" next to the Complete heading, by request -- red text,
+   same #dc2626 red already used dashboard-wide for a mismatch/warning
+   reading (.tm-mismatch, .accrued-time-red-row). Text colour only, no
+   background badge -- this sits inside a heading, not a table cell. Not
+   bold, by request -- overrides the bold weight inherited from the
+   surrounding <h2> (.section-heading), so it reads as a lighter aside
+   next to the bold "Complete (N)" rather than shouting equally loud. */
+.accrued-time-mismatch-count {
+  color: #dc2626;
+  font-weight: normal;
+}
+.accrued-time-table th,
+.accrued-time-table td {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.78rem;
+}
+/* Vertical dividers bracketing the END/NO Bill pair, by request -- a
+   line before END (5th column) and after NO Bill (6th column). Fixed
+   column positions (:nth-child), not a class on the cell, since the
+   green .accrued-time-end-col class below applies to BOTH columns and
+   can't tell "the left edge of the pair" from "the right edge" on its
+   own. Same border color/weight as every other cell border on this
+   table (th, td { border-top: 1px solid var(--border); }, above). */
+.accrued-time-table th:nth-child(5),
+.accrued-time-table td:nth-child(5) {
+  border-left: 1px solid var(--border);
+}
+.accrued-time-table th:nth-child(6),
+.accrued-time-table td:nth-child(6) {
+  border-right: 1px solid var(--border);
+}
+/* Accrue--END / Accrue--END-No Bill columns (headers shortened to "END"/
+   "NO Bill", by request) -- very lightly shaded green, both header and
+   body cells, to visually group the two related columns. Same #16a34a
+   green this dashboard already uses for header-row shading elsewhere, at
+   low opacity so it reads as a light tint, not a strong highlight. */
+.accrued-time-end-col {
+  background: color-mix(in srgb, #16a34a 8%, transparent);
+}
+/* Red/Yellow row shading, by request -- "If the sum of --END times is
+   less than --ING time - RED; If greater - Yellow" (exact comparison, no
+   tolerance -- client.js computes the check, this just paints it). More
+   specific than .accrued-time-end-col above (two classes can land on the
+   same cell), so whichever of these wins on the END/NO Bill cells too
+   rather than fighting with the light green shading. client.js only ever
+   applies one row class at a time (a row can't be both < and > at once),
+   so red and yellow never fight each other either. */
+tr.accrued-time-red-row td,
+tr.accrued-time-red-row th {
+  background: color-mix(in srgb, #dc2626 12%, transparent);
+}
+/* Yellow -- "a little bit lighter but more yellowy", by request: #facc15
+   (a purer, less amber/gold yellow than this dashboard's usual #eab308
+   warning colour -- .wsp-dot--coming/.text-highlight-yellow -- which
+   reads more orange next to it) at 9% opacity, down from the red row's
+   12%, so it's visibly lighter than red without going so faint it
+   disappears against the light green END/NO Bill columns underneath. */
+tr.accrued-time-yellow-row td,
+tr.accrued-time-yellow-row th {
+  background: color-mix(in srgb, #facc15 9%, transparent);
+}

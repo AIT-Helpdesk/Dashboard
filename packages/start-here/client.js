@@ -349,8 +349,10 @@ async function loadPageList(el) {
         // The whole Testing category (and everything in it) left off this
         // page's descriptions entirely, by request -- still marked `seen`
         // so none of its pages leak into the "Other" leftovers group
-        // below either.
-        if (node.id === 'testing') {
+        // below either. Same treatment for the new admin-only Builders
+        // category -- an internal workspace, not a page anyone should be
+        // browsing to from Start Here, admin included.
+        if (node.id === 'testing' || node.id === 'builders') {
           node.children.forEach((c) => seen.add(c.id));
           continue;
         }

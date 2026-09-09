@@ -487,6 +487,18 @@ export function mount(container) {
       return `${(Math.round((n + Number.EPSILON) * 10) / 10).toFixed(1)}%`;
     }
 
+    // Staff Hours' own "% of Total Hours" row, by request -- "add a % of
+    // Total Time row under the Staff Hours table like all the other
+    // tables have. So Ticket Hours / Total Hours". Reuses the same
+    // pctOfTotalHoursRowHtml() every other table's own row already uses
+    // (same per-resource "% of that resource's own Total Hours" base,
+    // same styling) -- this table's own "totals" map is just each
+    // resource's plain ticketHours figure (the same number Table 1's own
+    // Ticket Hours row already shows), not a sum across several named
+    // rows like the other tables build theirs from.
+    const staffHoursTicketHoursTotals = new Map(data.resources.map((r) => [r.resourceId, r.ticketHours]));
+    const staffHoursPctRow = pctOfTotalHoursRowHtml(staffHoursTicketHoursTotals);
+
     resultsEl.innerHTML = `
       <div class="tm-table-group">
       <table class="tm-overall-summary-table">
@@ -516,6 +528,7 @@ export function mount(container) {
             ${summaryRow('Public Holidays', 'publicHolidayHours')}
             ${summaryRow('Total Hours', 'totalHours', { strong: true })}
             ${summaryRow('Ticket Hours', 'ticketHours', { drillDownKind: 'ticket-hours' })}
+            ${staffHoursPctRow}
           </tbody>
         </table>
       </div>

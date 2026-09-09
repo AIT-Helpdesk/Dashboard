@@ -13,6 +13,14 @@ export const label = "Ticket Info";
 // Help tab) lives in @dashboard/shell's shared tab-page-client.js -- see
 // that file for the full implementation, now reused by every tabbed page
 // on this dashboard, not just this one.
+//
+// Time Summaries ('times') was a 5th default tab here; removed by request
+// when that page moved into the new admin-only "Builders" category and
+// picked up its own `restrictedTo`. createTabbedPageMount()'s own
+// DEFAULT_TABS are rendered unconditionally (unlike dragged-in/permanent
+// tabs, which are filtered against PAGES_BY_ID -- see tab-page-client.js),
+// so leaving a now-restricted page in this list would show every non-admin
+// a tab whose client.js/API 404s the moment they click it.
 export const mount = createTabbedPageMount({
   id,
   label,
@@ -22,6 +30,5 @@ export const mount = createTabbedPageMount({
     { id: 'tickets-created-today', label: 'Tickets Created' },
     { id: 'completed-tickets', label: 'Completed Tickets' },
     { id: 'ticket-times', label: 'Ticket Times' },
-    { id: 'times', label: 'Time Summaries' },
   ],
 });

@@ -114,10 +114,6 @@
       {
         "type": "page",
         "id": "asked-for-review"
-      },
-      {
-        "type": "page",
-        "id": "times"
       }
     ],
     "hidden": true
@@ -243,6 +239,18 @@
       {
         "type": "page",
         "id": "tc-elite"
+      }
+    ],
+    "hidden": true
+  },
+  {
+    "type": "category",
+    "id": "builders",
+    "label": "Builders",
+    "children": [
+      {
+        "type": "page",
+        "id": "tab-page-builder"
       },
       {
         "type": "page",
@@ -250,7 +258,11 @@
       },
       {
         "type": "page",
-        "id": "tab-page-builder"
+        "id": "times"
+      },
+      {
+        "type": "page",
+        "id": "accrued-time"
       }
     ],
     "hidden": true
