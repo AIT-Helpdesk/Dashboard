@@ -9,35 +9,53 @@ export const label = "Time Summaries";
 // of coming back blank. Same convention as every other page here.
 let lastParams = null; // { from, to, team }
 let lastData = null;
+// id of the quick-date button that currently matches From/To exactly, or
+// null once either field's been hand-edited -- see setActiveQuickButton()
+// in mount(). Module-scope like lastParams, so the highlight survives a
+// navigate-away-and-back the same way the date values themselves do.
+let lastActiveQuickButtonId = 'quick-today-button';
 
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
-      <h1>Time Summaries</h1>
+      <div class="tm-title-row">
+        <h1>Time Summaries</h1>
+        <div class="tm-team-select-row">
+          <label for="team-input">Team</label>
+          <select id="team-input" name="team">
+            <option value="service-desk">Support Desk</option>
+            <option value="professional-services">Professional Services</option>
+            <option value="both">Both</option>
+          </select>
+        </div>
+      </div>
     </header>
     <form id="times-form" class="date-form date-form--stacked">
-      <div class="date-form-row">
-        <label for="team-input">Team</label>
-        <select id="team-input" name="team">
-          <option value="service-desk">Support Desk</option>
-          <option value="professional-services">Professional Services</option>
-          <option value="both">Both</option>
-        </select>
-      </div>
       <div class="date-form-row">
         <label for="from-input">From</label>
         <input type="date" id="from-input" name="from" required />
         <label for="to-input">To</label>
         <input type="date" id="to-input" name="to" required />
-        <button type="button" id="quick-today-button">Today</button>
-        <button type="button" id="quick-last-week-button">Last Week</button>
-        <button type="button" id="quick-last-month-button">Last Month</button>
+        <div class="tm-quick-date-groups">
+          <div class="tm-quick-date-group">
+            <button type="button" class="button-link button-link--small" id="quick-today-button">Today</button>
+            <button type="button" class="button-link button-link--small" id="quick-yesterday-button">Yesterday</button>
+          </div>
+          <div class="tm-quick-date-group">
+            <button type="button" class="button-link button-link--small" id="quick-this-week-button">This Week</button>
+            <button type="button" class="button-link button-link--small" id="quick-last-week-button">Last Week</button>
+          </div>
+          <div class="tm-quick-date-group">
+            <button type="button" class="button-link button-link--small" id="quick-this-month-button">This Month</button>
+            <button type="button" class="button-link button-link--small" id="quick-last-month-button">Last Month</button>
+          </div>
+        </div>
       </div>
       <div class="date-form-row">
         <button type="submit">Load</button>
+        <p id="summary" class="inline-subtext tm-summary-line" hidden></p>
       </div>
     </form>
-    <p id="summary" class="inline-subtext tm-summary-line" hidden></p>
     <p id="status" class="status">Pick a date range, then click Load.</p>
     <div id="results"></div>
   `;
@@ -98,38 +116,90 @@ export function mount(container) {
 
   // Quick-set date buttons, by request -- set the fields only, same as
   // picking dates by hand; Load still needs its own click, same as ever.
+  // Paired, stacked pill buttons (Today/Yesterday, This Week/Last Week,
+  // This Month/Last Month) -- "This Week"/"This Month" deliberately run
+  // only up to TODAY, not the rest of the still-in-progress period, by
+  // request ("for this week and this month do only up to today in each
+  // case"); "Last Week"/"Last Month" are unchanged, full past periods.
+  const QUICK_DATE_BUTTON_IDS = [
+    'quick-today-button',
+    'quick-yesterday-button',
+    'quick-this-week-button',
+    'quick-last-week-button',
+    'quick-this-month-button',
+    'quick-last-month-button',
+  ];
+  // Highlights whichever quick-date button produced the CURRENT From/To
+  // values, by request ("highlight the chosen button until the dates are
+  // manually editted (both pages)") -- `id` null clears every button (the
+  // manual-edit case, wired below). Also remembered module-scope so the
+  // highlight survives a navigate-away-and-back the same way the date
+  // values themselves already do (see lastActiveQuickButtonId's own
+  // comment, top of file).
+  function setActiveQuickButton(id) {
+    lastActiveQuickButtonId = id;
+    for (const btnId of QUICK_DATE_BUTTON_IDS) {
+      container.querySelector(`#${btnId}`).classList.toggle('active', btnId === id);
+    }
+  }
+  // Editing either date field by hand means it may no longer match ANY
+  // quick-date button's own values -- rather than try to detect a
+  // coincidental match, the highlight is just cleared outright, by
+  // request ("until the dates are manually editted").
+  fromInput.addEventListener('input', () => setActiveQuickButton(null));
+  toInput.addEventListener('input', () => setActiveQuickButton(null));
+
   container.querySelector('#quick-today-button').addEventListener('click', () => {
     const today = todayISO();
     fromInput.value = today;
     toInput.value = today;
+    setActiveQuickButton('quick-today-button');
+  });
+  container.querySelector('#quick-yesterday-button').addEventListener('click', () => {
+    const yesterday = addDays(todayISO(), -1);
+    fromInput.value = yesterday;
+    toInput.value = yesterday;
+    setActiveQuickButton('quick-yesterday-button');
+  });
+  container.querySelector('#quick-this-week-button').addEventListener('click', () => {
+    fromInput.value = mondayOfWeek(todayISO());
+    toInput.value = todayISO();
+    setActiveQuickButton('quick-this-week-button');
   });
   container.querySelector('#quick-last-week-button').addEventListener('click', () => {
     const thisMonday = mondayOfWeek(todayISO());
     fromInput.value = addDays(thisMonday, -7);
     toInput.value = addDays(thisMonday, -1);
+    setActiveQuickButton('quick-last-week-button');
+  });
+  container.querySelector('#quick-this-month-button').addEventListener('click', () => {
+    fromInput.value = startOfMonth(todayISO(), 0);
+    toInput.value = todayISO();
+    setActiveQuickButton('quick-this-month-button');
   });
   container.querySelector('#quick-last-month-button').addEventListener('click', () => {
     const today = todayISO();
     fromInput.value = startOfMonth(today, -1);
     toInput.value = endOfMonth(today, -1);
+    setActiveQuickButton('quick-last-month-button');
   });
 
   if (lastParams) {
     teamInput.value = lastParams.team;
     fromInput.value = lastParams.from;
     toInput.value = lastParams.to;
+    setActiveQuickButton(lastActiveQuickButtonId);
   } else {
     // "Default to Support Desk please" -- teamInput's own first <option>
     // already is "service-desk", so this is just making that explicit
     // rather than relying on the browser's own default-selected-option
     // behaviour.
     teamInput.value = 'service-desk';
-    // Last week, Mon-Sun, by request -- not the current in-progress week.
-    // This week's Monday minus 7 days is last week's Monday; minus 1 day
-    // (i.e. the day before this week's Monday) is last week's Sunday.
-    const thisMonday = mondayOfWeek(todayISO());
-    fromInput.value = addDays(thisMonday, -7);
-    toInput.value = addDays(thisMonday, -1);
+    // Today, by request -- was "last week, Mon-Sun".
+    const today = todayISO();
+    fromInput.value = today;
+    toInput.value = today;
+    setActiveQuickButton('quick-today-button');
   }
 
   if (lastData) render(lastData);

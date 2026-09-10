@@ -13,6 +13,10 @@ let lastData = null; // { completeRows } from the main load -- the Not Complete 
 let lastIncompleteData = null; // { otherRows } from GET /api/accrued-time/incomplete, or null if never fetched for the current lastParams
 let incompleteVisible = false; // whether the Not Complete table is currently shown (independent of whether it's been fetched)
 let allResources = null; // [{id, name}], fetched once, reused across remounts
+// id of the quick-date button that currently matches From/To exactly, or
+// null once either field's been hand-edited -- see setActiveQuickButton()
+// in mount(), same convention @dashboard/times' own client.js uses.
+let lastActiveQuickButtonId = 'quick-today-button';
 
 export function mount(container) {
   container.innerHTML = `
@@ -25,9 +29,20 @@ export function mount(container) {
         <input type="date" id="from-input" name="from" required />
         <label for="to-input">To</label>
         <input type="date" id="to-input" name="to" required />
-        <button type="button" id="quick-today-button">Today</button>
-        <button type="button" id="quick-last-week-button">Last Week</button>
-        <button type="button" id="quick-last-month-button">Last Month</button>
+        <div class="tm-quick-date-groups">
+          <div class="tm-quick-date-group">
+            <button type="button" class="button-link button-link--small" id="quick-today-button">Today</button>
+            <button type="button" class="button-link button-link--small" id="quick-yesterday-button">Yesterday</button>
+          </div>
+          <div class="tm-quick-date-group">
+            <button type="button" class="button-link button-link--small" id="quick-this-week-button">This Week</button>
+            <button type="button" class="button-link button-link--small" id="quick-last-week-button">Last Week</button>
+          </div>
+          <div class="tm-quick-date-group">
+            <button type="button" class="button-link button-link--small" id="quick-this-month-button">This Month</button>
+            <button type="button" class="button-link button-link--small" id="quick-last-month-button">Last Month</button>
+          </div>
+        </div>
       </div>
       <div class="date-form-row">
         <label for="resource-input">Resource</label>
@@ -101,32 +116,79 @@ export function mount(container) {
     return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n + 1, 0)).toISOString().slice(0, 10);
   }
 
+  // Same paired, stacked quick-date buttons as @dashboard/times, by
+  // request ("change the buttons on the Accrued Time page to be like the
+  // Time Summaries buttons") -- "This Week"/"This Month" run only up to
+  // TODAY, not the rest of the still-in-progress period; "Last Week"/
+  // "Last Month" are unchanged, full past periods.
+  const QUICK_DATE_BUTTON_IDS = [
+    'quick-today-button',
+    'quick-yesterday-button',
+    'quick-this-week-button',
+    'quick-last-week-button',
+    'quick-this-month-button',
+    'quick-last-month-button',
+  ];
+  // Highlights whichever quick-date button produced the CURRENT From/To
+  // values, by request ("highlight the chosen button until the dates are
+  // manually editted (both pages)") -- same convention @dashboard/times'
+  // own client.js uses, see its comment for the fuller write-up.
+  function setActiveQuickButton(id) {
+    lastActiveQuickButtonId = id;
+    for (const btnId of QUICK_DATE_BUTTON_IDS) {
+      container.querySelector(`#${btnId}`).classList.toggle('active', btnId === id);
+    }
+  }
+  fromInput.addEventListener('input', () => setActiveQuickButton(null));
+  toInput.addEventListener('input', () => setActiveQuickButton(null));
+
   container.querySelector('#quick-today-button').addEventListener('click', () => {
     const today = todayISO();
     fromInput.value = today;
     toInput.value = today;
+    setActiveQuickButton('quick-today-button');
+  });
+  container.querySelector('#quick-yesterday-button').addEventListener('click', () => {
+    const yesterday = addDays(todayISO(), -1);
+    fromInput.value = yesterday;
+    toInput.value = yesterday;
+    setActiveQuickButton('quick-yesterday-button');
+  });
+  container.querySelector('#quick-this-week-button').addEventListener('click', () => {
+    fromInput.value = mondayOfWeek(todayISO());
+    toInput.value = todayISO();
+    setActiveQuickButton('quick-this-week-button');
   });
   container.querySelector('#quick-last-week-button').addEventListener('click', () => {
     const thisMonday = mondayOfWeek(todayISO());
     fromInput.value = addDays(thisMonday, -7);
     toInput.value = addDays(thisMonday, -1);
+    setActiveQuickButton('quick-last-week-button');
+  });
+  container.querySelector('#quick-this-month-button').addEventListener('click', () => {
+    fromInput.value = startOfMonth(todayISO(), 0);
+    toInput.value = todayISO();
+    setActiveQuickButton('quick-this-month-button');
   });
   container.querySelector('#quick-last-month-button').addEventListener('click', () => {
     const today = todayISO();
     fromInput.value = startOfMonth(today, -1);
     toInput.value = endOfMonth(today, -1);
+    setActiveQuickButton('quick-last-month-button');
   });
 
   if (lastParams) {
     fromInput.value = lastParams.from;
     toInput.value = lastParams.to;
     ticketInput.value = lastParams.ticketNumber || '';
+    setActiveQuickButton(lastActiveQuickButtonId);
   } else {
-    // Last week, Mon-Sun, by request precedent (@dashboard/times' own
-    // default) -- not the current in-progress week.
-    const thisMonday = mondayOfWeek(todayISO());
-    fromInput.value = addDays(thisMonday, -7);
-    toInput.value = addDays(thisMonday, -1);
+    // Today, by request -- was "last week, Mon-Sun"; changed to match
+    // Times' own new default.
+    const today = todayISO();
+    fromInput.value = today;
+    toInput.value = today;
+    setActiveQuickButton('quick-today-button');
   }
 
   async function loadResourceList() {

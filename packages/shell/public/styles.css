@@ -775,6 +775,30 @@ h1 {
   margin: 0;
 }
 
+/* Times' own Team selector, moved into .page-header next to the <h1>, by
+   request ("place the Team selector next to the page title") -- was its
+   own row inside the date-range form below. Wrapped together with the
+   <h1> in .tm-title-row (below) rather than left as a second direct
+   child of .page-header -- .page-header's own `justify-content: space-
+   between` would otherwise push it all the way to the header's far right
+   edge, which a follow-up request explicitly asked NOT to happen ("not
+   right justified"); as ONE flex item together with the title, the pair
+   just sits at the header's start, side by side. */
+.tm-title-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.tm-team-select-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tm-team-select-row label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .date-form {
   display: flex;
   align-items: center;
@@ -2146,6 +2170,22 @@ th, td {
   text-align: center;
 }
 
+/* Shared "ticket number as a link" utility -- Accrued Time, Ticket Times,
+   and @dashboard/times' own standalone entries-view popup (which already
+   had this exact rule inline in its own <style>, see times/server.js's
+   renderEntriesPage()) all render a ticket number as `<a class="ticket-
+   link">`, but nothing dashboard-wide ever defined the class, so it fell
+   back to the browser's own default blue/underlined link look on every
+   page except the one that happened to style it inline. No underline or
+   accent colour, by request ("remove the link underline and colur on the
+   ticket numbers please") -- reads as plain text, cursor: pointer the
+   only remaining hint it's clickable, same as the popup's own convention. */
+.ticket-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
 tbody tr:nth-child(even) {
   background: var(--row-alt-bg);
 }
@@ -2287,11 +2327,60 @@ td.ticket-number {
   color: var(--muted);
   font-size: 0.85em;
 }
-/* Time Summaries' own loaded-criteria line, under the date-range form's
-   Load button row rather than inline with it -- a gap above sets it apart
-   from the form controls, by request. */
+/* Time Summaries' own loaded-criteria line -- inline with the Load button,
+   same row, by request ("put this ... up next to the LOAD button please").
+   A bare <p> inside a flex .date-form-row picks up the browser's own
+   default block margin, which would push the row taller/misaligned next
+   to the button beside it -- zeroed out here. */
 .tm-summary-line {
-  margin-top: 0.75rem;
+  margin: 0;
+}
+
+/* Times' own quick-date buttons -- three paired, stacked groups (Today/
+   Yesterday, This Week/Last Week, This Month/Last Month), by request:
+   "make them smaller with the pill style blue buttons like on the Service
+   Calls section of the What's On page, then have today with yesterday
+   below that...". Reuses .button-link.button-link--small directly (the
+   same light-accent-tint pill What's On's own Service Calls filter buttons
+   use, .tt-filter-btn) rather than a new button style -- just laid out in
+   stacked pairs instead of that page's single row. */
+.tm-quick-date-groups {
+  display: flex;
+  gap: 0.6rem;
+}
+.tm-quick-date-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+/* .button-link--small's own light-pill look (same as What's On's inactive
+   "Just Mine" Service Calls filter button, .tt-filter-btn with no
+   --active) was silently losing to `.date-form button` -- both set
+   padding/background/color/font-size, but `.date-form button`'s selector
+   (class + element type) outranks `.button-link--small` alone (class
+   only), so these buttons were rendering as the full-size solid blue
+   `.date-form button` look the whole time despite carrying the
+   button-link--small class. Re-declared here, scoped to this group, with
+   enough specificity (two classes + element type) to actually win --
+   same exact values `.button-link--small` already sets, just applied
+   where they're not overridden. */
+.date-form .tm-quick-date-group button {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+/* Highlights whichever quick-date button produced the CURRENT From/To
+   values, by request ("highlight the chosen button until the dates are
+   manually editted (both pages)") -- client.js clears this the moment
+   either date input is edited directly, so it only ever means "this is
+   exactly what's in the fields right now", never a stale claim. Solid
+   accent fill, distinct from every quick-date button's own light-pill
+   default (same specificity trick as the plain rule above -- two classes
+   + element type, needed to outrank `.date-form button`). */
+.date-form .tm-quick-date-group button.active {
+  background: var(--accent);
+  color: #fff;
 }
 /* What's On's "Autotask -> Strety sync last ran" line under the Helpdesk
    Scorecards heading, by request -- deliberately smaller than
@@ -5245,20 +5334,79 @@ textarea.pgr-field {
 .tm-total-row th,
 .tm-total-row td {
   font-weight: 600;
-  border-top: 2px solid var(--border);
+  /* Light-mode border, pinned -- the background these cells sit on is
+     pinned below too, so a dark-mode var(--border) line across a
+     light-tinted cell looked wrong on its own, by report ("the whole
+     rows, columns, cells with coloured backgrounds need to be in their
+     light mode form"). */
+  border-top: 2px solid #e5e7eb;
 }
 /* Blue shading on every total ROW and total COLUMN, by request -- the
    bottom Total row's own cells (reusing the same .tm-total-row selector
    already above), and the "Total" column's body cells on every OTHER row
    (tbody only -- the header row keeps its own green shading, see
-   .tm-hours-table thead th below; this is about data cells). Same
-   --accent blue as the corner-label text elsewhere on this page. The
+   .tm-hours-table thead th below; this is about data cells). The
    bottom-right cell (Total row x Total column) is covered by both
-   selectors -- same color either way, so no conflict. */
+   selectors -- same color either way, so no conflict.
+   Pinned to the LIGHT-mode accent hex (#2563eb, not var(--accent)) mixed
+   against opaque white (not `transparent`), by request -- "make the
+   content inside each table show green red and blue cells always in
+   their light mode version regardless of the whole page['s theme]".
+   var(--accent) itself repaints for dark mode (#5b8def), and mixing
+   against `transparent` lets whatever's underneath (the page/row
+   background, also dark-mode-dependent) show through -- either one alone
+   made this cell's blue look different in dark mode. Baking in both the
+   literal light-mode hex AND an opaque white backdrop makes the computed
+   colour identical under any theme, same fix applied to every other
+   red/green/blue table-cell rule on this page and Accrued Time's own.
+   `color` is pinned here too, by report -- the background alone wasn't
+   enough: in dark mode the TEXT sitting on top of this now-light
+   background was still var(--fg)'s dark-mode value (pale/white), reading
+   as barely-there text on a near-white cell. Pinned to the light-mode
+   --fg value (#1a1a1a) so the whole cell -- fill and text together --
+   renders exactly as it does in light mode, regardless of theme.
+   8% (the original value) turned out to be an almost-imperceptible tint
+   once actually mixed against opaque white -- "no tint at all, flat
+   white/grey", by report. It read as visibly blue before only by
+   accident: in dark mode this 8% was mixing against the page's own DARK
+   background (via var(--accent) + transparent), and 8% blue over a dark
+   surface contrasts far more than 8% blue over white does. Bumped to 18%,
+   matching the visibility of every other prominent shaded element on this
+   page (the green header/reconciliation rows, the red mismatch cells). */
 .tm-total-row th,
 .tm-total-row td,
 .tm-hours-table tbody td:nth-last-child(2) {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: color-mix(in srgb, #2563eb 18%, white);
+  color: #1a1a1a;
+}
+/* Dark mode ONLY, by request -- "in dark mode, make the blue total rows
+   and columns grey with say about 75%" (bumped to 85%, then 95%, by two
+   later requests): an explicit exception to the "always light mode" rule
+   everywhere else on this page, for this one element specifically. Grey
+   (the dashboard's own --muted tone, #6b7280) mixed 95% against this
+   theme's own dark surface (#14161a, the real --bg value dark mode uses)
+   rather than white -- a light blue band would
+   still have looked like a stray light-mode patch dropped into an
+   otherwise dark table; a grey band reads as a deliberate "this is the
+   summary row" highlight instead, the way a dark-themed spreadsheet
+   shades its own Grand Total row. Higher specificity than the plain
+   (light-mode-pinned) rule above via :root:not([data-theme="light"]) /
+   :root[data-theme="dark"] -- same theme-guard pattern this file's own
+   :root variable blocks already use, so this wins under the OS dark
+   preference AND the explicit in-app dark toggle, whichever applies. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tm-total-row th,
+  :root:not([data-theme="light"]) .tm-total-row td,
+  :root:not([data-theme="light"]) .tm-hours-table tbody td:nth-last-child(2) {
+    background: color-mix(in srgb, #6b7280 95%, #14161a);
+    color: #eef0f3;
+  }
+}
+:root[data-theme="dark"] .tm-total-row th,
+:root[data-theme="dark"] .tm-total-row td,
+:root[data-theme="dark"] .tm-hours-table tbody td:nth-last-child(2) {
+  background: color-mix(in srgb, #6b7280 75%, #14161a);
+  color: #eef0f3;
 }
 /* "Recorded less Billable" row's own Total-column cell, by request --
    excluded from the blue Total-column shading above (more specific
@@ -5273,10 +5421,28 @@ textarea.pgr-field {
 .tm-total-bracket {
   font-weight: normal;
   font-size: 0.8em;
-  color: var(--muted);
+  /* Light-mode muted grey, pinned -- this text always sits inside the
+     Total column's own pinned-blue cell (above), so it needs the same
+     always-light treatment rather than var(--muted)'s dark-mode value. */
+  color: #6b7280;
 }
 .tm-total-row .tm-total-bracket {
   font-weight: normal;
+}
+/* Dark mode ONLY, by request -- "make the numbers in brackets in some of
+   the total column cells white as well": the Total column's own dark-mode
+   grey background (above) needs light text, but .tm-total-bracket's own
+   muted grey (#6b7280) was pinned for the light-mode-blue cell and never
+   updated for the dark-mode-grey one -- #6b7280 text on a #6b7280-mixed
+   background is effectively invisible. Same theme-guard pattern as the
+   Total column's own dark-mode override above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tm-total-bracket {
+    color: #eef0f3;
+  }
+}
+:root[data-theme="dark"] .tm-total-bracket {
+  color: #eef0f3;
 }
 /* Non-Billable's own Total-column worked figure turns red, by request,
    when it disagrees with Recorded-minus-Billable (client.js's own
@@ -5319,8 +5485,11 @@ textarea.pgr-field {
   color: #dc2626;
   /* Shaded red as well as text red, by request -- a small highlighted
      "badge" around just the mismatched figure (this class wraps a number,
-     not a whole cell), same #dc2626 as the text itself at low opacity. */
-  background: color-mix(in srgb, #dc2626 18%, transparent);
+     not a whole cell), same #dc2626 as the text itself at low opacity.
+     Mixed against opaque white, not `transparent` -- pins this to its
+     light-mode look regardless of theme, same reasoning as the blue
+     Total-column shading above. */
+  background: color-mix(in srgb, #dc2626 18%, white);
   padding: 0.05rem 0.35rem;
   border-radius: 4px;
 }
@@ -5330,7 +5499,13 @@ textarea.pgr-field {
    figure out), same #dc2626 at low opacity as the rest of this page's red
    convention. */
 .tm-pct-shade-red {
-  background: color-mix(in srgb, #dc2626 18%, transparent);
+  /* Opaque white, not `transparent` -- always the light-mode look, same
+     reasoning as .tm-mismatch above. color pinned too, by report -- the
+     cell's own text (this table's plain `td { font-weight: 600 }`, no
+     color of its own) otherwise still rendered in var(--fg)'s dark-mode
+     value on top of this now-light background. */
+  background: color-mix(in srgb, #dc2626 18%, white);
+  color: #1a1a1a;
 }
 /* Reconciliation rows ("Client Ticket Times", "Ambient iT Tickets" own
    totals line) -- whole row shaded green (same #16a34a convention as
@@ -5343,9 +5518,16 @@ textarea.pgr-field {
    Total-column cell, leaving the rest of the row green. */
 .tm-hours-table tbody tr.tm-reconciliation-row th,
 .tm-hours-table tbody tr.tm-reconciliation-row td {
-  background: color-mix(in srgb, #16a34a 18%, transparent);
-  border-top: 2px solid var(--muted);
-  border-bottom: 2px solid var(--muted);
+  /* Opaque white, not `transparent` -- always the light-mode look, same
+     reasoning as .tm-mismatch above. color and the border colour are
+     pinned too, by report ("the whole rows, columns, cells with coloured
+     backgrounds need to be in their light mode form") -- var(--fg) text
+     and var(--muted) borders both still repainted for dark mode on top of
+     this now-light-pinned background otherwise. */
+  background: color-mix(in srgb, #16a34a 18%, white);
+  color: #1a1a1a;
+  border-top: 2px solid #6b7280;
+  border-bottom: 2px solid #6b7280;
 }
 /* Visual grouping box around the 1st three tables (Hours Summary/AITTIME/
    Hours less AITTIME) and, separately, the 2nd three (Recorded/Billable/
@@ -5465,10 +5647,26 @@ textarea.pgr-field {
    .wsp-delivery-tag--today). Set on the th cells themselves, not the <tr>,
    so it paints reliably under border-collapse. */
 .tm-hours-table thead th {
-  background: color-mix(in srgb, #16a34a 18%, transparent);
-  /* Heavier grey line top and bottom of the header row, by request. */
-  border-top: 2px solid var(--muted);
-  border-bottom: 2px solid var(--muted);
+  /* Opaque white, not `transparent` -- always the light-mode look, same
+     reasoning as .tm-mismatch above. */
+  background: color-mix(in srgb, #16a34a 18%, white);
+  /* Heavier grey line top and bottom of the header row, by request --
+     pinned to its light-mode value, same reasoning as the background. */
+  border-top: 2px solid #6b7280;
+  border-bottom: 2px solid #6b7280;
+}
+/* Header text, pinned dark -- by report ("the whole rows, columns, cells
+   with coloured backgrounds need to be in their light mode form"): the
+   background above is pinned light, but plain header text (column names
+   etc, no color of its own) still rendered in var(--fg)'s dark-mode
+   value on top of it. Excludes .tm-corner-label -- that cell already
+   pins its OWN blue text below, and .tm-hours-table thead th's higher
+   specificity (class + two element types) would otherwise silently win
+   over .tm-corner-label's single-class rule and override it back to
+   this dark colour; :not() here means this rule simply never matches
+   those cells at all, rather than trying to out-specificity them. */
+.tm-hours-table thead th:not(.tm-corner-label) {
+  color: #1a1a1a;
 }
 /* The corner cell (row-label column, header row) never carries the green
    shading, on every table, by request -- it's not a resource column. */
@@ -5479,7 +5677,10 @@ textarea.pgr-field {
    blue text instead of the (removed) green shading, same --accent blue
    used elsewhere on this dashboard. */
 .tm-corner-label {
-  color: var(--accent);
+  /* Pinned to the light-mode accent hex, not var(--accent) -- always the
+     light-mode blue regardless of theme, same reasoning as the Total
+     column's own blue shading above. */
+  color: #2563eb;
   font-weight: 700;
 }
 /* Narrower rows, by request -- this page's tables can run to many resource
@@ -5742,11 +5943,15 @@ textarea.wsp-field {
    table (th, td { border-top: 1px solid var(--border); }, above). */
 .accrued-time-table th:nth-child(5),
 .accrued-time-table td:nth-child(5) {
-  border-left: 1px solid var(--border);
+  /* Light-mode border, pinned -- these dividers bracket the two colored
+     (green/red/yellow) END/NO Bill columns specifically, same "whole
+     columns with coloured backgrounds" reasoning as the cells themselves
+     below, by report. */
+  border-left: 1px solid #e5e7eb;
 }
 .accrued-time-table th:nth-child(6),
 .accrued-time-table td:nth-child(6) {
-  border-right: 1px solid var(--border);
+  border-right: 1px solid #e5e7eb;
 }
 /* Accrue--END / Accrue--END-No Bill columns (headers shortened to "END"/
    "NO Bill", by request) -- very lightly shaded green, both header and
@@ -5754,7 +5959,14 @@ textarea.wsp-field {
    green this dashboard already uses for header-row shading elsewhere, at
    low opacity so it reads as a light tint, not a strong highlight. */
 .accrued-time-end-col {
-  background: color-mix(in srgb, #16a34a 8%, transparent);
+  /* Opaque white, not `transparent` -- always the light-mode look
+     regardless of theme, by request ("make the content inside each table
+     show green red and blue cells always in their light mode version
+     regardless of the whole page"), same fix as Times' own colored table
+     cells above. color pinned too, by report -- var(--fg)'s dark-mode
+     text colour on top of this now-light background otherwise. */
+  background: color-mix(in srgb, #16a34a 8%, white);
+  color: #1a1a1a;
 }
 /* Red/Yellow row shading, by request -- "If the sum of --END times is
    less than --ING time - RED; If greater - Yellow" (exact comparison, no
@@ -5766,7 +5978,12 @@ textarea.wsp-field {
    so red and yellow never fight each other either. */
 tr.accrued-time-red-row td,
 tr.accrued-time-red-row th {
-  background: color-mix(in srgb, #dc2626 12%, transparent);
+  /* Opaque white, not `transparent` -- always the light-mode look, same
+     reasoning as .accrued-time-end-col above. color pinned too, by
+     report -- var(--fg)'s dark-mode text colour on top of this now-light
+     background otherwise. */
+  background: color-mix(in srgb, #dc2626 12%, white);
+  color: #1a1a1a;
 }
 /* Yellow -- "a little bit lighter but more yellowy", by request: #facc15
    (a purer, less amber/gold yellow than this dashboard's usual #eab308
@@ -5776,5 +5993,12 @@ tr.accrued-time-red-row th {
    disappears against the light green END/NO Bill columns underneath. */
 tr.accrued-time-yellow-row td,
 tr.accrued-time-yellow-row th {
-  background: color-mix(in srgb, #facc15 9%, transparent);
+  /* Opaque white, not `transparent` -- not literally named in "green red
+     and blue", but left theme-dependent this would be the one shaded row
+     that still shifted color in dark mode while its sibling red row (and
+     every other colored cell on these two pages) didn't -- pinned for the
+     same reason and consistency. color pinned too, by report -- var(--fg)'s
+     dark-mode text colour on top of this now-light background otherwise. */
+  background: color-mix(in srgb, #facc15 9%, white);
+  color: #1a1a1a;
 }
