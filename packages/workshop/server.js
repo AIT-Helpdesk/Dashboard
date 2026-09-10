@@ -343,14 +343,15 @@ function noteHistoryLine(entry) {
   return `${new Date(entry.changedAt).toLocaleString()} -- ${entry.changedByName}: ${label}: ${from} -> ${to}`;
 }
 
-// Same job-identifying label used dashboard-wide (client.js's own print-
-// card docTitle: "Workshop Job -- <ticket number, else client, else Job
-// #id>") -- there's no literal "job name" field on a Workshop job, so
-// this is what "Workshop Job Name" (the request's own wording) resolves
-// to: whatever a human would already recognise this job by elsewhere on
-// this dashboard.
+// What "Workshop Job Name" (the request's own wording) resolves to --
+// Job Description, by request: the ticket number was the first attempt
+// (matching client.js's own print-card docTitle convention), but showing
+// a ticket its own number back to itself on its own note read as
+// pointless, so this reads the job's own description instead. Falls back
+// to Client, then a bare Job #id, only for the rare case a job has no
+// description typed at all yet.
 function noteJobIdentifier(job) {
-  return job.ticketNumber || job.customer || `Job #${job.id}`;
+  return job.jobDescription || job.customer || `Job #${job.id}`;
 }
 
 // Fields that never reach a real ticket note, in either the minimal
