@@ -7,7 +7,7 @@ export const label = "Time Summaries";
 // alive for the session, so this survives across re-mounts and lets the
 // last result (and the user's own from/to picks) restore instantly instead
 // of coming back blank. Same convention as every other page here.
-let lastParams = null; // { from, to }
+let lastParams = null; // { from, to, team }
 let lastData = null;
 
 export function mount(container) {
@@ -16,6 +16,14 @@ export function mount(container) {
       <h1>Time Summaries</h1>
     </header>
     <form id="times-form" class="date-form date-form--stacked">
+      <div class="date-form-row">
+        <label for="team-input">Team</label>
+        <select id="team-input" name="team">
+          <option value="service-desk">Support Desk</option>
+          <option value="professional-services">Professional Services</option>
+          <option value="both">Both</option>
+        </select>
+      </div>
       <div class="date-form-row">
         <label for="from-input">From</label>
         <input type="date" id="from-input" name="from" required />
@@ -35,6 +43,7 @@ export function mount(container) {
   `;
 
   const form = container.querySelector('#times-form');
+  const teamInput = container.querySelector('#team-input');
   const fromInput = container.querySelector('#from-input');
   const toInput = container.querySelector('#to-input');
   const statusEl = container.querySelector('#status');
@@ -106,9 +115,15 @@ export function mount(container) {
   });
 
   if (lastParams) {
+    teamInput.value = lastParams.team;
     fromInput.value = lastParams.from;
     toInput.value = lastParams.to;
   } else {
+    // "Default to Support Desk please" -- teamInput's own first <option>
+    // already is "service-desk", so this is just making that explicit
+    // rather than relying on the browser's own default-selected-option
+    // behaviour.
+    teamInput.value = 'service-desk';
     // Last week, Mon-Sun, by request -- not the current in-progress week.
     // This week's Monday minus 7 days is last week's Monday; minus 1 day
     // (i.e. the day before this week's Monday) is last week's Sunday.
@@ -125,6 +140,7 @@ export function mount(container) {
   });
 
   async function load() {
+    const team = teamInput.value;
     const from = fromInput.value;
     const to = toInput.value;
     if (!from || !to) return;
@@ -133,7 +149,7 @@ export function mount(container) {
       statusEl.textContent = 'Error: "To" must not be before "From".';
       return;
     }
-    lastParams = { from, to };
+    lastParams = { from, to, team };
 
     const submitButton = form.querySelector('button[type="submit"]');
     submitButton.disabled = true;
@@ -143,7 +159,7 @@ export function mount(container) {
     resultsEl.innerHTML = '';
 
     try {
-      const qs = new URLSearchParams({ from, to });
+      const qs = new URLSearchParams({ from, to, team });
       const res = await fetch(`/api/times?${qs.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -165,8 +181,9 @@ export function mount(container) {
       return;
     }
 
+    const teamLabels = { 'service-desk': 'Support Desk', 'professional-services': 'Professional Services', both: 'Both' };
     summaryEl.hidden = false;
-    summaryEl.textContent = `${data.from} to ${data.to} (${data.weekdayCount} weekday${data.weekdayCount === 1 ? '' : 's'} in this period, ${data.normalHoursPerDay} normal hours/day)`;
+    summaryEl.textContent = `${teamLabels[data.team] || data.team} — ${data.from} to ${data.to} (${data.weekdayCount} weekday${data.weekdayCount === 1 ? '' : 's'} in this period, ${data.normalHoursPerDay} normal hours/day)`;
 
     const sumOf = (key) => data.resources.reduce((s, r) => s + r[key], 0);
 
@@ -523,7 +540,7 @@ export function mount(container) {
             <tr><th class="tm-corner-label">${smallCapsHtml('Staff Hours')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
           </thead>
           <tbody>
-            <tr><th>${smallCapsHtml('Normal Hours (per day)')}</th>${data.resources.map(() => `<td class="col-center">${formatHours(data.normalHoursPerDay)}</td>`).join('')}<td></td><td></td></tr>
+            <tr><th>${smallCapsHtml('Normal Hours (per day)')}</th>${data.resources.map((r) => `<td class="col-center">${formatHours(r.normalHoursPerDay)}</td>`).join('')}<td></td><td></td></tr>
             ${summaryRow('Leave Hours', 'leaveHours', { drillDownKind: 'leave' })}
             ${summaryRow('Public Holidays', 'publicHolidayHours')}
             ${summaryRow('Total Hours', 'totalHours', { strong: true })}
@@ -638,7 +655,7 @@ export function mount(container) {
       workTypeShowButton.disabled = true;
       workTypeShowButton.textContent = 'Loading...';
       try {
-        const qs = new URLSearchParams({ from: data.from, to: data.to });
+        const qs = new URLSearchParams({ from: data.from, to: data.to, team: data.team });
         const res = await fetch(`/api/times/work-type?${qs.toString()}`);
         const wt = await res.json();
         if (!res.ok) throw new Error(wt.error || `Request failed (${res.status})`);

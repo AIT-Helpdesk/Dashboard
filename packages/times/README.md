@@ -15,13 +15,25 @@ Every table's header row carries a light green tint (`.tm-hours-table thead th`,
 
 ## The four Hours Summary rows, exactly as requested
 
-1. **Normal Hours (per day)** -- flat `7.6` for every resource, by request ("for now"). Not yet per-person; there's no per-resource contracted-hours field wired up anywhere on this dashboard.
+1. **Normal Hours (per day)** -- flat `7.6` for every resource EXCEPT a real per-resource override list, added by request ("I need to vary the hours for some staff ... it's Jett Filmer 29 hours per week"). See "Per-resource Normal Hours" below.
 2. **Leave Hours** -- hours of leave in the period. See "Leave, from Autotask" below for the real, confirmed data source.
 3. **Public Holidays** -- real hours from Autotask's own Holiday Sets, per resource. See "Public Holidays" below for the real, confirmed data source and chain.
 4. **Total Hours** = `Normal Hours x number of Mon-Fri in the period - Leave - Public Holidays` (`countWeekdays()` in `server.js` -- inclusive of both the From and To date).
 5. **Ticket Hours** -- total hours actually recorded on tickets in the period, directly under Total Hours in the same table, by request. See "Hours recorded on tickets" below for the source.
 
 A Total column sums each row across every selected resource -- not explicitly asked for, added since it's a natural at-a-glance read on a wide table; easy to remove if unwanted.
+
+## Per-resource Normal Hours
+
+By request: "I need to vary the hours for some staff ... well just one really ... can we perhaps put just in the .env file a weekly total hours value that applies to a specific user. it's Jett Filmer 29 hours per week." Offered a flat weekly figure first; asked whether real per-day-of-week hours would be more accurate instead, and the user supplied a real breakdown that sums to the same 29: Monday 7.5, Tuesday 5.5, Wednesday 4, Thursday 6.5, Friday 5.5.
+
+**`TIMES_NORMAL_HOURS_OVERRIDES` in `.env`** -- a JSON object, `{ "<exact resolved resource name>": { "mon": <hours>, "tue": <hours>, "wed": <hours>, "thu": <hours>, "fri": <hours> } }`, e.g. `{"Jett Filmer":{"mon":7.5,"tue":5.5,"wed":4,"thu":6.5,"fri":5.5}}`. Not hardcoded in `server.js` -- kept in `.env` (gitignored) both because it's a real per-person figure that didn't belong committed to source, and because it's a genuine map from the start, not a single-person special case -- more staff can get their own real schedule later just by adding another entry, no code change needed. Parsed once at module load (`NORMAL_HOURS_OVERRIDES`); a missing or malformed value just means nobody has an override (falls back to the flat `NORMAL_HOURS_PER_DAY` for everyone, the same behaviour as before this existed) rather than crashing the page -- confirmed by the same try/catch this file already uses for anything env-configured.
+
+**Day-of-week aware, not a flat weekly-total/5 average** -- `normalHoursForDateKey(resourceName, dateKey)` resolves ONE real calendar date to that resource's own real hours for whatever weekday it actually is (falling back to the flat rate for any weekday not named in their override, so a partial schedule doesn't silently zero out the rest of the week); `sumNormalHoursForRange()` walks every real weekday in the selected range and sums it, replacing the old flat `NORMAL_HOURS_PER_DAY * weekdayCount` calculation for Total Hours. For a resource with no override this reduces to exactly the same figure the flat calculation always produced -- confirmed against real data, every other resource's own numbers were unchanged (`7.6`/day) after this shipped.
+
+**"Normal Hours (per day)" shows each resource's own AVERAGE for the selected range** (`totalNormalHours / weekdayCount`), not a single shared figure across every column anymore -- a resource with a real per-day schedule doesn't work a flat number of hours every day, so there's no single "true" per-day figure to show, but this average is constructed so that multiplying it back out by `weekdayCount` reproduces the exact same Total Hours figure -- the two rows can never visibly disagree. Confirmed against real data (a clean Mon-Fri week): Jett Filmer's own row read `5.8` (`29 / 5`) with Total Hours `29`, while every other resource still read `7.6` with the unchanged flat total.
+
+**Public Holidays use the same real per-day lookup**, not a flat multiply -- `fetchPublicHolidayHoursByResource()` now tracks each real Holidays row's own date (not just a count) per holiday set, then sums `normalHoursForDateKey(resourceName, dateKey)` per resource across their own set's real holiday dates in range. A public holiday landing on, say, Jett's Wednesday costs her real Wednesday hours (`4`), not a flat `7.6` -- same function `sumNormalHoursForRange()` already uses, so the two can never disagree on what a given resource's given weekday is worth.
 
 ## Leave, from Autotask -- confirmed against real data
 
@@ -45,6 +57,30 @@ There is no resource picker, and the resource set is NOT "today's active roster"
 Fixed by inverting the whole derivation, in `resolveResourcesWithData()` (`server.js`): fetch every real leave/ticket `TimeEntries` row in the selected period FIRST (unfiltered by resource), collect the distinct `resourceID`s that actually appear in that real data, and build the resource list from exactly those ids. `Resources.isActive` is not checked anywhere in this path -- presence of a real TimeEntries row in the period is the only test. Confirmed against real data: for 1-30 Apr 2026, 6 real resources have data (vs. the old fixed roster's 8), and two of them -- Ben Kirkwood and Roman Rosson -- are resources deactivated in Autotask TODAY but with real April 2026 ticket time; both now correctly appear.
 
 `GET /api/times` and the on-demand `GET /api/times/work-type` both call `resolveResourcesWithData()` independently (each scoped to its own request's `from`/`to`), so the two routes can never disagree about who's in scope for the same period; the main route also reuses that call's own already-fetched leave/ticket entries rather than fetching them a second time.
+
+## Team selector
+
+By request: "add a selector at the top for Team: with Support Desk, Proffessional Services, Both as the options. Default to Support Desk please. Get this from Workgroups and their members in Autotask."
+
+No Autotask entity is literally called "Workgroups" -- confirmed against both the `autotask-node` SDK's own entity files and Autotask's official REST API documentation before building anything. The closest real entity is `Departments`; this tenant didn't have anything named "Support Desk"/"Professional Services" at first, so rather than guess a mapping, Amber created the real Department records herself in Autotask ("ok I've entered them in Departments"). Confirmed live against the real API afterwards:
+
+| Department | id |
+|---|---|
+| Service Desk | 29683489 |
+| Professional Services | 29683490 |
+| Leadership Team | 29683488 (pre-existing -- also why Damon Kirkpatrick/Melissa Tannock/Amber Worth, already in `EXCLUDED_RESOURCE_NAMES`, are its real membership) |
+
+Membership comes from `ResourceRoleDepartments` (`fetchTeamMembership()` in `server.js`) -- a resource can hold more than one row (a role per department), so membership means ANY real active row for that department, not just their `isDefault`/primary one. Confirmed against real data: Service Desk 5 active members (Dechen Choden, Hamza Mahmood, Jett Filmer, Thishan Rasangika, Romulo Roquim Jr), Professional Services 3 (Grant Armstrong, Peter Kiem, Jackson Worth), Leadership Team 3.
+
+The three real rules, by request (`filterResourcesByTeam()`):
+
+- **Support Desk** (default) -- everyone with real data in the period EXCEPT anyone in Professional Services or Leadership Team. Service Desk's own department membership is never checked -- this reads as "not one of the other two", so a resource with real data who was never explicitly added to the Service Desk department in Autotask still shows up under the default.
+- **Professional Services** -- ONLY resources in the Professional Services department.
+- **Both** -- everyone with real data in the period EXCEPT Leadership Team.
+
+Confirmed live for one real week: Support Desk returned exactly the 5 real Service Desk members present in that week's data, Professional Services returned exactly its 3 real members, and Both returned the union of both minus Leadership Team -- all three matched the real `ResourceRoleDepartments` membership exactly.
+
+Applied inside `resolveResourcesWithData()`, on top of (not instead of) the existing data-driven derivation and standing exclusions (API User license type, `EXCLUDED_RESOURCE_NAMES`) -- a resource still needs real `TimeEntries` in the period AND to pass the standing exclusions AND to pass the Team filter to appear. `team` is a query param (`service-desk` default / `professional-services` / `both`) on both `GET /api/times` and `GET /api/times/work-type`, validated against a fixed set server-side (an unrecognised value silently falls back to the default rather than erroring). `client.js` carries a `<select id="team-input">` at the top of the form (persisted in `lastParams` like `from`/`to`, so it survives navigating away and back) and includes it on both fetches; the summary line under the Load button names the selected team.
 
 **Two standing exclusions still apply on top of "has real data"**, via the shared `mapAndFilterResources()` helper:
 

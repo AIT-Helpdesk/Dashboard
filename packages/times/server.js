@@ -2,9 +2,73 @@ const express = require('express');
 const { getClient, listAll, fetchByFieldIn, getPicklistLabels, getTicketUrl, resolveResourceName } = require('@dashboard/autotask-client');
 
 // A technician's normal working day, by request -- "7.6 for all (for now)".
-// Flat and global rather than per-resource: no per-person contracted-hours
-// field has been wired up yet, this is a deliberate first pass.
+// Flat and global for everyone EXCEPT the real per-resource overrides
+// below.
 const NORMAL_HOURS_PER_DAY = 7.6;
+
+// Per-resource weekly hours, by request -- "I need to vary the hours for
+// some staff ... it's Jett Filmer 29 hours per week", broken down by real
+// day-of-week rather than a flat weekly-total/5 average once offered
+// ("Monday 7.5, Tuesday 5.5, Wednesday 4, Thursday 6.5, Friday 5.5" --
+// confirmed sums to the real 29). Kept in .env (TIMES_NORMAL_HOURS_
+// OVERRIDES, a JSON object of `{ "<exact resolved resource name>": {
+// mon/tue/wed/thu/fri: <hours> } }`), not hardcoded here, by request --
+// deliberately a map (not a single-person special case) so more staff can
+// get their own real schedule later just by adding another entry, no code
+// change needed. Matched by exact resolved "First Last" name, same
+// convention EXCLUDED_RESOURCE_NAMES above already uses. Parsed once at
+// module load; a missing/malformed env var just means nobody has an
+// override (falls back to the flat NORMAL_HOURS_PER_DAY for everyone,
+// same as before this existed) rather than crashing the whole page.
+let NORMAL_HOURS_OVERRIDES = new Map();
+try {
+  if (process.env.TIMES_NORMAL_HOURS_OVERRIDES) {
+    const parsed = JSON.parse(process.env.TIMES_NORMAL_HOURS_OVERRIDES);
+    NORMAL_HOURS_OVERRIDES = new Map(Object.entries(parsed));
+  }
+} catch (err) {
+  console.error('Times: failed to parse TIMES_NORMAL_HOURS_OVERRIDES -- ignoring, everyone falls back to the flat rate:', err.message);
+}
+
+// Real Autotask Date.getUTCDay() values (0 Sun .. 6 Sat) for the 5
+// weekdays an override can name -- Sat/Sun are never looked up here,
+// same "weekends never cost/earn Normal Hours" rule every other
+// weekday-only calculation in this file already follows.
+const OVERRIDE_DOW_KEYS = { 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri' };
+
+// This resource's own real Normal Hours for one specific real calendar
+// date -- the flat NORMAL_HOURS_PER_DAY for everyone without an override,
+// or that day-of-week's own figure from NORMAL_HOURS_OVERRIDES for a
+// resource who has one (falling back to the flat rate for any weekday NOT
+// named in their override, so a partial schedule doesn't silently zero
+// out the rest of the week). 0 for a real weekend date -- callers already
+// only ever pass a weekday key in practice (countWeekdays()/
+// isWeekdayDateKey()'s own convention), but this stays correct even if
+// one didn't.
+function normalHoursForDateKey(resourceName, dateKey) {
+  const dowKey = OVERRIDE_DOW_KEYS[new Date(`${dateKey}T00:00:00Z`).getUTCDay()];
+  if (!dowKey) return 0;
+  const override = NORMAL_HOURS_OVERRIDES.get(resourceName);
+  return override && override[dowKey] !== undefined ? override[dowKey] : NORMAL_HOURS_PER_DAY;
+}
+
+// Sums a resource's own real Normal Hours across every real weekday in
+// [fromKey, toKey] -- day-of-week aware, not a flat rate times
+// countWeekdays(), so a resource with a real per-day schedule (see above)
+// gets their own real total for whatever date range is selected, not an
+// average. For a resource with no override this reduces to exactly
+// NORMAL_HOURS_PER_DAY * countWeekdays(fromKey, toKey), same figure the
+// flat calculation always produced.
+function sumNormalHoursForRange(resourceName, fromKey, toKey) {
+  let total = 0;
+  const d = new Date(`${fromKey}T00:00:00Z`);
+  const end = new Date(`${toKey}T00:00:00Z`);
+  while (d <= end) {
+    total += normalHoursForDateKey(resourceName, d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return total;
+}
 
 // TimeEntries.timeEntryType picklist values that mean "this hour was leave,
 // not work" -- confirmed against real data (see the package README's own
@@ -29,6 +93,70 @@ const API_USER_LICENSE_TYPE = 7;
 // default -- matched by exact resolved name (same "First Last" shape used
 // throughout this file), same as the resource-picker's own former default.
 const EXCLUDED_RESOURCE_NAMES = new Set(['Amber Worth', 'Damon Kirkpatrick', 'Melissa Tannock', 'Matt Jeavons', 'Autotask Administrator']);
+
+// Team selector -- "add a selector at the top for Team: with Support Desk,
+// Proffessional Services, Both". No Autotask entity is literally called
+// "Workgroups" (confirmed against both the SDK's own entity files and
+// Autotask's official REST API docs); Amber created real Departments in
+// Autotask instead ("ok I've entered them in Departments"), confirmed live
+// against the real API: "Service Desk" (id 29683489), "Professional
+// Services" (id 29683490), plus the pre-existing "Leadership Team" (id
+// 29683488, already used for the AMBER/DAMON/MELISSA exclusion above --
+// confirmed those same three names ARE this department's real membership).
+// Membership comes from ResourceRoleDepartments (a resource can hold more
+// than one row -- a role per department -- so membership here means ANY
+// active row for that department, not just their isDefault/primary one).
+const DEPARTMENT_LEADERSHIP_TEAM_ID = 29683488;
+const DEPARTMENT_SERVICE_DESK_ID = 29683489;
+const DEPARTMENT_PROFESSIONAL_SERVICES_ID = 29683490;
+
+const TEAM_SERVICE_DESK = 'service-desk';
+const TEAM_PROFESSIONAL_SERVICES = 'professional-services';
+const TEAM_BOTH = 'both';
+const VALID_TEAMS = new Set([TEAM_SERVICE_DESK, TEAM_PROFESSIONAL_SERVICES, TEAM_BOTH]);
+const DEFAULT_TEAM = TEAM_SERVICE_DESK; // "Default to Support Desk please."
+
+function resolveTeam(rawTeam) {
+  return VALID_TEAMS.has(rawTeam) ? rawTeam : DEFAULT_TEAM;
+}
+
+// Real active ResourceRoleDepartments rows for just these 3 departments --
+// confirmed against real data: Leadership Team 3 (Damon Kirkpatrick, Melissa
+// Tannock, Amber Worth -- all 3 already excluded above regardless), Service
+// Desk 5, Professional Services 3.
+async function fetchTeamMembership(client) {
+  const rows = await listAll(client.resourceRoleDepartments, [
+    { op: 'in', field: 'departmentID', value: [DEPARTMENT_LEADERSHIP_TEAM_ID, DEPARTMENT_SERVICE_DESK_ID, DEPARTMENT_PROFESSIONAL_SERVICES_ID] },
+    { op: 'eq', field: 'isActive', value: true },
+  ]);
+  const leadership = new Set();
+  const professionalServices = new Set();
+  for (const row of rows) {
+    if (row.departmentID === DEPARTMENT_LEADERSHIP_TEAM_ID) leadership.add(row.resourceID);
+    if (row.departmentID === DEPARTMENT_PROFESSIONAL_SERVICES_ID) professionalServices.add(row.resourceID);
+  }
+  return { leadership, professionalServices };
+}
+
+// The three real rules, by request:
+// - Service Desk (default): everyone EXCEPT Professional Services or
+//   Leadership Team.
+// - Professional Services: ONLY resources in the Professional Services team.
+// - Both: everyone EXCEPT Leadership Team.
+// Service Desk membership itself is never checked here -- "Service Desk"
+// reads as "not one of the other two", not "must appear in the Service Desk
+// department's own rows", so a resource who has real data but was never
+// explicitly added to the Service Desk department in Autotask still shows
+// up under the default, same as before this selector existed.
+function filterResourcesByTeam(resources, team, membership) {
+  if (team === TEAM_PROFESSIONAL_SERVICES) {
+    return resources.filter((r) => membership.professionalServices.has(r.id));
+  }
+  if (team === TEAM_BOTH) {
+    return resources.filter((r) => !membership.leadership.has(r.id));
+  }
+  return resources.filter((r) => !membership.professionalServices.has(r.id) && !membership.leadership.has(r.id));
+}
 
 // Shared by every path that turns a raw Resources record into this page's
 // own resource shape -- applies both standing exclusions (API User license
@@ -73,8 +201,8 @@ function mapAndFilterResources(resources) {
 // determine who has data, narrowed down to the final resource set -- so
 // the main report route doesn't need a second TimeEntries fetch for the
 // exact same period.
-async function resolveResourcesWithData(client, fromIso, toIso) {
-  const [leaveEntries, ticketEntries] = await Promise.all([
+async function resolveResourcesWithData(client, fromIso, toIso, team) {
+  const [leaveEntries, ticketEntries, membership] = await Promise.all([
     listAll(client.timeEntries, [
       { op: 'gte', field: 'dateWorked', value: fromIso },
       { op: 'lte', field: 'dateWorked', value: toIso },
@@ -87,13 +215,15 @@ async function resolveResourcesWithData(client, fromIso, toIso) {
       { op: 'lte', field: 'dateWorked', value: toIso },
       { op: 'exist', field: 'ticketID' },
     ]),
+    fetchTeamMembership(client),
   ]);
 
   const idsWithData = [...new Set([...leaveEntries.map((e) => e.resourceID), ...ticketEntries.map((e) => e.resourceID)])];
   if (idsWithData.length === 0) return { selected: [], leaveEntries: [], ticketEntries: [] };
 
   const resources = await fetchByFieldIn(client.resources, 'id', idsWithData);
-  const selected = mapAndFilterResources(resources).sort((a, b) => a.name.localeCompare(b.name));
+  const withData = mapAndFilterResources(resources).sort((a, b) => a.name.localeCompare(b.name));
+  const selected = filterResourcesByTeam(withData, team, membership);
   const selectedIds = new Set(selected.map((r) => r.id));
 
   return {
@@ -153,7 +283,12 @@ async function fetchPublicHolidayHoursByResource(client, selected, fromIso, toIs
   // guard in this file.
   const holidaySetIds = [...new Set(selected.map((r) => holidaySetByLocation.get(r.locationID)).filter((id) => id))];
 
-  const holidayCountBySet = new Map();
+  // Real date KEYS per set, not just a count -- a resource with their own
+  // per-day-of-week schedule (NORMAL_HOURS_OVERRIDES above) loses THAT
+  // day's own real hours to a public holiday landing on it, not a flat
+  // NORMAL_HOURS_PER_DAY, so this needs to know WHICH real weekday each
+  // holiday fell on, not just how many there were.
+  const holidayDateKeysBySet = new Map();
   if (holidaySetIds.length > 0) {
     const holidays = await fetchByFieldIn(client.holidays, 'holidaySetID', holidaySetIds, [
       { op: 'gte', field: 'holidayDate', value: fromIso },
@@ -162,15 +297,17 @@ async function fetchPublicHolidayHoursByResource(client, selected, fromIso, toIs
     for (const h of holidays) {
       const dateKey = (h.holidayDate || '').slice(0, 10);
       if (!isWeekdayDateKey(dateKey)) continue;
-      holidayCountBySet.set(h.holidaySetID, (holidayCountBySet.get(h.holidaySetID) || 0) + 1);
+      if (!holidayDateKeysBySet.has(h.holidaySetID)) holidayDateKeysBySet.set(h.holidaySetID, []);
+      holidayDateKeysBySet.get(h.holidaySetID).push(dateKey);
     }
   }
 
   const hoursByResource = new Map();
   for (const r of selected) {
     const setId = holidaySetByLocation.get(r.locationID);
-    const count = (setId && holidayCountBySet.get(setId)) || 0;
-    hoursByResource.set(r.id, count * NORMAL_HOURS_PER_DAY);
+    const dateKeys = (setId && holidayDateKeysBySet.get(setId)) || [];
+    const hours = dateKeys.reduce((sum, dateKey) => sum + normalHoursForDateKey(r.name, dateKey), 0);
+    hoursByResource.set(r.id, hours);
   }
   return hoursByResource;
 }
@@ -512,6 +649,7 @@ router.get('/', async (req, res) => {
   const range = validateDateRange(req, res);
   if (!range) return;
   const { from, to } = range;
+  const team = resolveTeam((req.query.team || '').toString());
   const weekdayCount = countWeekdays(from, to);
   const fromIso = `${from}T00:00:00.000Z`;
   const toIso = `${to}T00:00:00.000Z`;
@@ -519,12 +657,12 @@ router.get('/', async (req, res) => {
   try {
     const client = await getClient();
     const [{ selected, leaveEntries, ticketEntries }, aittimeTickets] = await Promise.all([
-      resolveResourcesWithData(client, fromIso, toIso),
+      resolveResourcesWithData(client, fromIso, toIso, team),
       fetchAittimeTickets(client),
     ]);
 
     if (selected.length === 0) {
-      return res.json({ from, to, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
+      return res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
     }
 
     // Depends on `selected` (each resource's own locationID), so this
@@ -573,10 +711,23 @@ router.get('/', async (req, res) => {
     const resources = selected.map((r) => {
       const leaveHours = leaveByResource.get(r.id) || 0;
       const publicHolidayHours = publicHolidayHoursByResource.get(r.id) || 0;
-      const totalHours = NORMAL_HOURS_PER_DAY * weekdayCount - leaveHours - publicHolidayHours;
+      // Day-of-week aware, by request (NORMAL_HOURS_OVERRIDES, see its own
+      // comment) -- reduces to exactly NORMAL_HOURS_PER_DAY * weekdayCount
+      // for anyone without an override, same figure as before this
+      // existed. normalHoursPerDay is this resource's own AVERAGE across
+      // the real weekdays in this range (their own total / weekdayCount),
+      // shown in the "Normal Hours (per day)" row -- by construction that
+      // average times weekdayCount reproduces the same total, so that row
+      // and the Total Hours row can never visibly disagree even though a
+      // resource with a real per-day schedule doesn't actually work a flat
+      // number of hours every day.
+      const totalNormalHours = sumNormalHoursForRange(r.name, from, to);
+      const normalHoursPerDay = weekdayCount > 0 ? totalNormalHours / weekdayCount : NORMAL_HOURS_PER_DAY;
+      const totalHours = totalNormalHours - leaveHours - publicHolidayHours;
       return {
         resourceId: r.id,
         resourceName: r.name,
+        normalHoursPerDay,
         leaveHours,
         publicHolidayHours,
         totalHours,
@@ -584,7 +735,7 @@ router.get('/', async (req, res) => {
       };
     });
 
-    res.json({ from, to, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
+    res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -602,15 +753,17 @@ router.get('/work-type', async (req, res) => {
   const range = validateDateRange(req, res);
   if (!range) return;
   const { from, to } = range;
+  const team = resolveTeam((req.query.team || '').toString());
   const fromIso = `${from}T00:00:00.000Z`;
   const toIso = `${to}T00:00:00.000Z`;
 
   try {
     const client = await getClient();
     // Same resource-set derivation the main report uses (whoever has real
-    // TimeEntries in the period), and its own already-fetched ticketEntries
-    // are reused directly here rather than fetched a second time.
-    const { selected, ticketEntries } = await resolveResourcesWithData(client, fromIso, toIso);
+    // TimeEntries in the period, filtered by the same Team selection), and
+    // its own already-fetched ticketEntries are reused directly here rather
+    // than fetched a second time.
+    const { selected, ticketEntries } = await resolveResourcesWithData(client, fromIso, toIso, team);
     if (selected.length === 0) return res.json({ workTypeFixedBillable: [], workTypeFixedUnticked: [], workTypeOther: [], workTypeAccrueIng: [], ambientItTickets: [] });
 
     // Needed to exclude Ambient IT's own tickets and (for Table 3) to
