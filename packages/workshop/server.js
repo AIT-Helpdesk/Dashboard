@@ -309,6 +309,28 @@ function noteFieldSnapshot(job) {
   ].join('\n');
 }
 
+// Shared by noteHistoryLine() (History modal / full-history append) and
+// the minimal per-change ticket note (postWorkshopUpdateNote() below) --
+// one place that knows how to turn a raw audit_log field/oldValue/
+// newValue into a human label + readable From/To text, so both call
+// sites can never drift out of sync on what a given field/value actually
+// means.
+function formatFieldChange(field, oldValue, newValue) {
+  const label = NOTE_FIELD_LABELS[field] || field;
+  const labelMap =
+    field === 'priority'
+      ? NOTE_PRIORITY_LABELS
+      : field === 'action_color'
+        ? NOTE_ACTION_COLOR_LABELS
+        : field === 'workflow_stage'
+          ? NOTE_WORKFLOW_STAGE_LABELS
+          : field === 'skip_ticket_updates'
+            ? NOTE_YES_NO_LABELS
+            : null;
+  const fmt = (v) => (v ? labelMap?.[v] || v : '(blank)');
+  return { label, from: fmt(oldValue), to: fmt(newValue) };
+}
+
 // One line per audit_log entry, plain-text equivalent of client.js's own
 // historyEntryHtml()/valueChangeHtml() -- most recent first, matching
 // the History modal's own convention.
@@ -317,19 +339,28 @@ function noteHistoryLine(entry) {
     const label = entry.field === 'created' ? 'Created' : entry.field === 'completed' ? 'Completed' : 'Reopened';
     return `${new Date(entry.changedAt).toLocaleString()} -- ${entry.changedByName}: ${label}`;
   }
-  const label = NOTE_FIELD_LABELS[entry.field] || entry.field;
-  const labelMap =
-    entry.field === 'priority'
-      ? NOTE_PRIORITY_LABELS
-      : entry.field === 'action_color'
-        ? NOTE_ACTION_COLOR_LABELS
-        : entry.field === 'workflow_stage'
-          ? NOTE_WORKFLOW_STAGE_LABELS
-          : entry.field === 'skip_ticket_updates'
-            ? NOTE_YES_NO_LABELS
-            : null;
-  const fmt = (v) => (v ? labelMap?.[v] || v : '(blank)');
-  return `${new Date(entry.changedAt).toLocaleString()} -- ${entry.changedByName}: ${label}: ${fmt(entry.oldValue)} -> ${fmt(entry.newValue)}`;
+  const { label, from, to } = formatFieldChange(entry.field, entry.oldValue, entry.newValue);
+  return `${new Date(entry.changedAt).toLocaleString()} -- ${entry.changedByName}: ${label}: ${from} -> ${to}`;
+}
+
+// Same job-identifying label used dashboard-wide (client.js's own print-
+// card docTitle: "Workshop Job -- <ticket number, else client, else Job
+// #id>") -- there's no literal "job name" field on a Workshop job, so
+// this is what "Workshop Job Name" (the request's own wording) resolves
+// to: whatever a human would already recognise this job by elsewhere on
+// this dashboard.
+function noteJobIdentifier(job) {
+  return job.ticketNumber || job.customer || `Job #${job.id}`;
+}
+
+// Fields that never reach a real ticket note, in either the minimal
+// per-change format below or the full-history append -- the Q&A stamp
+// stays entirely local (History modal / print card still show it), and
+// the created/completed/reopened lifecycle markers aren't a "data
+// field" change at all (they're posted with their own literal wording
+// via postWorkshopActionNote() instead).
+function isNoteworthyHistoryField(field) {
+  return field !== 'flag_note' && field !== 'flag_answer' && field !== 'created' && field !== 'completed' && field !== 'reopened';
 }
 
 // Posts the actual note. Best-effort and never blocking: any failure
@@ -340,7 +371,22 @@ function noteHistoryLine(entry) {
 // never adds latency to the job save's own response. `req` is only ever
 // used for isLocalDevRequest() below -- every caller already has it in
 // scope from its own route handler.
-async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = false } = {}, req) {
+//
+// `includeFullHistory: true` (job created, or a ticket seeing Workshop
+// Board data for the very first time via a new/transferred link) keeps
+// the original full-snapshot-plus-full-history note -- deliberately
+// rich, since that ticket has no other record of this job's own state.
+// Every OTHER update (the regular case, by request: "when changes are
+// made and tickets are updated ... show only the Workshop Job Name, and
+// the data that's changing") gets a minimal note instead: just the job's
+// own identifying label, then one Data Field/From/To block per field
+// that actually changed in THIS save. `sinceHistoryId` is the caller's
+// own audit_log id cursor from just before its mutating call (every
+// caller already computes this for its own "did anything change" check)
+// -- the exact same "which rows did THIS call just write" scoping the
+// PATCH route's own changedFieldsThisCall already uses, reused here
+// rather than re-derived.
+async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = false, sinceHistoryId = 0 } = {}, req) {
   try {
     if (isLocalDevRequest(req)) return; // never write to a real ticket from a dev/localhost session -- see isLocalDevRequest()'s own comment
     const row = getJob(jobId);
@@ -354,18 +400,28 @@ async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = fa
     if (row.skip_ticket_updates) return;
     const [job] = attachEquipment(await withTicketDetails([shapeJob(row)]));
     const lines = [];
-    if (headline) lines.push(headline, '');
-    lines.push(noteFieldSnapshot(job));
     if (includeFullHistory) {
+      if (headline) lines.push(headline, '');
+      lines.push(noteFieldSnapshot(job));
       // flag_note/flag_answer (the Q&A stamp) excluded here too, by
       // request -- same "never sent to the ticket" exclusion
       // noteFieldSnapshot() applies above, just on the audit-log side of
       // things. The local History modal (client.js) still shows every
       // entry, including these -- only the ticket-bound copy is filtered.
-      const history = getJobHistory(jobId)
-        .map(shapeHistoryRow)
-        .filter((h) => h.field !== 'flag_note' && h.field !== 'flag_answer');
+      const history = getJobHistory(jobId).map(shapeHistoryRow).filter((h) => isNoteworthyHistoryField(h.field));
       if (history.length > 0) lines.push('', '-- Full history --', ...history.map(noteHistoryLine));
+    } else {
+      const changes = getJobHistory(jobId)
+        .filter((h) => h.id > sinceHistoryId && isNoteworthyHistoryField(h.field))
+        .map(shapeHistoryRow)
+        .reverse(); // getJobHistory() is newest-first; the note should read oldest-first, the order the changes actually happened in this save
+      if (changes.length === 0) return; // nothing worth telling the ticket about
+      if (headline) lines.push(headline, '');
+      lines.push(`Workshop Job Name: ${noteJobIdentifier(job)}`);
+      for (const c of changes) {
+        const { label, from, to } = formatFieldChange(c.field, c.oldValue, c.newValue);
+        lines.push('', `Data Field: ${label}`, `From: ${from}`, `To: ${to}`);
+      }
     }
     const client = await getClient();
     await client.ticketNotes.create(job.ticketAutotaskId, {
@@ -386,20 +442,30 @@ async function postWorkshopUpdateNote(jobId, { headline, includeFullHistory = fa
 // is the raw typed/stored value (not resolved) -- when it's blank, the
 // link was simply removed rather than moved. Same best-effort,
 // never-blocking, not-awaited approach as postWorkshopUpdateNote() above.
-// The note headline for a PATCH that changed the ticket link -- a
-// genuine transfer (had a different real ticket before) names the old
-// ticket by number; a first-time link uses the generic wording;
-// anything else (no ticket-link change at all) is a plain update.
-function noteHeadlineFor(transferredFromTicket, ticketLinkChanged) {
-  if (transferredFromTicket) return `Workshop Job transferred from Ticket ${transferredFromTicket}.`;
+// The note headline for a PATCH that changed the ticket link -- by
+// request: a genuine transfer (had a different real ticket before)
+// reads "Workshop Job: <Name> Moved FROM Ticket #<old> TO Ticket
+// #<new>" on the NEW ticket's own note (which still gets the full
+// history underneath, same as any first-time link); a first-time link
+// (no old ticket) keeps the plain "Ticket linked..." wording, since
+// there's nothing to reference a move FROM; anything else (no
+// ticket-link change at all) is a plain update.
+function noteHeadlineFor(jobIdentifier, transferredFromTicket, newTicketNumber, ticketLinkChanged) {
+  if (transferredFromTicket) return `Workshop Job: ${jobIdentifier} Moved FROM Ticket #${transferredFromTicket} TO Ticket #${newTicketNumber}`;
   if (ticketLinkChanged) return 'Ticket linked to this Workshop job.';
   return 'Workshop job updated.';
 }
 
-function ticketMovedDescription(newTicketNumber) {
+// The OLD ticket's own note, by request: a genuine transfer gets the
+// SAME "Moved FROM ... TO ..." wording noteHeadlineFor() puts on the
+// new ticket (so either ticket tells the full story on its own,
+// without needing to cross-reference the other one); a real removal
+// (no new ticket at all) reads "Ticket removed from Workshop Job:
+// <Name>" instead.
+function ticketMovedDescription(jobIdentifier, oldTicketNumber, newTicketNumber) {
   return newTicketNumber
-    ? `Workshop Board moved this job from this ticket to ${newTicketNumber}.`
-    : `Workshop Board removed this job's link to this ticket.`;
+    ? `Workshop Job: ${jobIdentifier} Moved FROM Ticket #${oldTicketNumber} TO Ticket #${newTicketNumber}`
+    : `Ticket removed from Workshop Job: ${jobIdentifier}`;
 }
 
 // A short, single-line note (not the full field snapshot) -- used for
@@ -430,8 +496,8 @@ async function postWorkshopActionNote(ticketAutotaskId, message, skip = false, r
   }
 }
 
-async function postTicketMovedNote(oldTicketAutotaskId, newTicketNumber, skip = false, req) {
-  await postWorkshopActionNote(oldTicketAutotaskId, ticketMovedDescription(newTicketNumber), skip, req);
+async function postTicketMovedNote(oldTicketAutotaskId, jobIdentifier, oldTicketNumber, newTicketNumber, skip = false, req) {
+  await postWorkshopActionNote(oldTicketAutotaskId, ticketMovedDescription(jobIdentifier, oldTicketNumber, newTicketNumber), skip, req);
 }
 
 const router = express.Router();
@@ -703,12 +769,17 @@ router.patch('/jobs/:id', async (req, res) => {
       // new ticket's note -- existing.ticket_number is the OLD job row's
       // own stored value, already on hand, no extra lookup needed.
       const transferredFromTicket = ticketLinkChanged && existing.ticket_autotask_id ? existing.ticket_number : null;
+      // Same identifying label every note in this file uses ("Workshop
+      // Job Name" on the regular-update note above) -- post-update state,
+      // so a transfer's own new ticket number (if that's what it
+      // resolves to) is what shows up here too.
+      const jobIdentifier = noteJobIdentifier(shaped);
       // The OLD ticket, if it had one, gets told where the job went (or
       // that the link was simply removed) -- by request, so a tech
       // watching that ticket isn't left wondering why Workshop Board
       // notes suddenly stopped.
       if (ticketLinkChanged && existing.ticket_autotask_id) {
-        postTicketMovedNote(existing.ticket_autotask_id, updated.ticket_number, !!updated.skip_ticket_updates, req);
+        postTicketMovedNote(existing.ticket_autotask_id, jobIdentifier, existing.ticket_number, updated.ticket_number, !!updated.skip_ticket_updates, req);
       }
       if (shaped.ticketAutotaskId) {
         // Covers both "was unlinked, now linked" and "linked to a
@@ -717,8 +788,9 @@ router.patch('/jobs/:id', async (req, res) => {
         postWorkshopUpdateNote(
           jobId,
           {
-            headline: noteHeadlineFor(transferredFromTicket, ticketLinkChanged),
+            headline: noteHeadlineFor(jobIdentifier, transferredFromTicket, updated.ticket_number, ticketLinkChanged),
             includeFullHistory: ticketLinkChanged,
+            sinceHistoryId: beforeMaxId,
           },
           req
         );
@@ -742,11 +814,16 @@ router.put('/jobs/:id/equipment', (req, res) => {
     const existing = getJob(jobId);
     if (!existing) return res.status(404).json({ error: 'Job not found.' });
     const actor = actorFrom(req);
+    // Same beforeMaxId cursor the PATCH route above captures, for the
+    // same reason -- postWorkshopUpdateNote()'s own minimal note format
+    // needs to know exactly which audit_log row(s) THIS call just wrote.
+    const beforeHistory = getJobHistory(jobId);
+    const beforeMaxId = beforeHistory.length ? beforeHistory[0].id : 0;
     const changed = saveEquipmentIfProvided(jobId, req.body || {}, actor);
     const equipment = listEquipmentForJob(jobId).map(shapeEquipmentRow);
     res.json({ equipment });
     if (changed && existing.ticket_autotask_id) {
-      postWorkshopUpdateNote(jobId, { headline: 'Equipment list updated.' }, req);
+      postWorkshopUpdateNote(jobId, { headline: 'Equipment list updated.', sinceHistoryId: beforeMaxId }, req);
     }
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
