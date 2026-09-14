@@ -333,6 +333,28 @@ async function fetchAittimeTickets(client) {
   return listAll(client.tickets, [{ op: 'beginsWith', field: 'title', value: AITTIME_TITLE_PREFIX }]);
 }
 
+// Billable-hours-to-dollars box, by request -- "the dollar value of the
+// hours from the tickets for Total Tech Hours Billable ... Lets use the
+// the Labour Rate associated with the Helpdesk role in the price list in
+// Autotask". Confirmed against real data: the real Roles entity carries
+// an `hourlyRate` field directly (this tenant's real "Helpdesk Service"
+// role, id 29683464, has `hourlyRate: 190`) -- this IS the role's own
+// price-list rate, no separate PriceListRoles fetch needed (that entity
+// exists too, but Roles.hourlyRate already has what was asked for).
+// Resolved by NAME every request (not hardcoded to 190) so this stays
+// correct if the real rate is ever changed in Autotask, same "don't bake
+// in a number that lives in Autotask" reasoning every other named-lookup
+// on this page (BillingCodes, Departments, Holiday Sets) already follows.
+const HELPDESK_ROLE_NAME = 'Helpdesk Service';
+async function fetchHelpdeskHourlyRate(client) {
+  const roles = await listAll(client.roles, [{ op: 'eq', field: 'name', value: HELPDESK_ROLE_NAME }]);
+  // 0 if the role is ever renamed/removed -- the dollar box then just
+  // reads $0 everywhere rather than the request failing outright; not
+  // expected in practice, but a missing role shouldn't take down the
+  // whole page.
+  return roles.length > 0 ? roles[0].hourlyRate || 0 : 0;
+}
+
 // "Client" ticket time -- every ticket-time entry whose ticket's company is
 // NOT Ambient IT, matched by NAME prefix rather than a single id, by
 // request ("All clients whose name starts with Ambient iT should be
@@ -656,13 +678,14 @@ router.get('/', async (req, res) => {
 
   try {
     const client = await getClient();
-    const [{ selected, leaveEntries, ticketEntries }, aittimeTickets] = await Promise.all([
+    const [{ selected, leaveEntries, ticketEntries }, aittimeTickets, helpdeskHourlyRate] = await Promise.all([
       resolveResourcesWithData(client, fromIso, toIso, team),
       fetchAittimeTickets(client),
+      fetchHelpdeskHourlyRate(client),
     ]);
 
     if (selected.length === 0) {
-      return res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
+      return res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, helpdeskHourlyRate, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
     }
 
     // Depends on `selected` (each resource's own locationID), so this
@@ -735,7 +758,7 @@ router.get('/', async (req, res) => {
       };
     });
 
-    res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
+    res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, helpdeskHourlyRate, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

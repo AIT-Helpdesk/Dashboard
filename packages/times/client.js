@@ -586,7 +586,79 @@ export function mount(container) {
     const staffHoursTicketHoursTotals = new Map(data.resources.map((r) => [r.resourceId, r.ticketHours]));
     const staffHoursPctRow = pctOfTotalHoursRowHtml(staffHoursTicketHoursTotals);
 
+    // Billable $ by classification, by request -- "add another red box
+    // beside the Hours Summary box that shows the dollar value of the
+    // hours from the tickets for Total Tech Hours Billable split by the 3
+    // T&M classifications and then the Other or Blank ones". Same rows,
+    // same order data.clientContractsBillable already has (server.js's
+    // own sortClientContractRows() -- T&M rows alphabetical, Other/Blank
+    // last; confirmed against real data this tenant's own real rows are
+    // exactly "T&M Adhoc Client"/"T&M TC Elite*"/"T&M TC Essentials"/
+    // "Other or Blank (?)" -- the 3 T&M classifications the request
+    // itself named, dynamic rather than hardcoded so a new/renamed T&M
+    // contract type shows up here automatically). Each row's own WORKED
+    // hours (summed across every resource, same sumCells() the Billable
+    // table itself already uses) times the real Autotask "Helpdesk
+    // Service" role rate (data.helpdeskHourlyRate, resolved live by
+    // server.js from Roles.hourlyRate -- not hardcoded here, by request:
+    // "Lets use the the Labour Rate associated with the Helpdesk role in
+    // the price list in Autotask").
+    const billableDollarRows = data.clientContractsBillable.map((row) => {
+      const hours = sumCells(data.resources.map((r) => row.hours[r.resourceId])).worked;
+      return { label: row.contractName, hours, dollars: hours * data.helpdeskHourlyRate };
+    });
+    const billableDollarByLabel = new Map(billableDollarRows.map((r) => [r.label, r]));
+
+    // Every row always shows, even at a real $0.00, by request ("include
+    // the row even when there's no value to show or it's $0" -- follow-up
+    // to "The 'OTHER OR BLANK (?)' doesn't show ... I want all rows to
+    // show even when there are $0"). data.clientContractsBillable only
+    // ever carries a row for a classification with at least one real
+    // BILLABLE hour in the period at all (server.js's own
+    // sortClientContractRows()), so a classification with zero billable
+    // hours this period -- whether it had some non-billable/Recorded time
+    // (still present in the broader data.clientContracts) or genuinely
+    // none at all (Other or Blank (?), a fixed catch-all label rather
+    // than a real discovered contract name) -- would otherwise vanish
+    // from this box entirely instead of showing a real $0.00.
+    //
+    // The full row-label universe for this box is the union of: every
+    // label data.clientContracts has for this period (broader than
+    // Billable-only, so a recorded-but-not-billable classification still
+    // counts), every label data.clientContractsBillable itself already
+    // has, and the fixed OTHER_OR_BLANK_LABEL literal (guaranteed present
+    // regardless of whether either real dataset happens to have it this
+    // period). No extra fetch needed -- both source arrays are already
+    // part of this same response.
+    const TC_ELITE_ROW_LABEL = 'T&M TC Elite*';
+    const OTHER_OR_BLANK_LABEL = 'Other or Blank (?)';
+    const allBillableLabels = new Set([...data.clientContracts.map((r) => r.contractName), ...billableDollarByLabel.keys(), OTHER_OR_BLANK_LABEL]);
+    // Other or Blank (?) is pinned LAST (same convention server.js's own
+    // sortClientContractRows() already uses -- a plain alphabetical sort
+    // would otherwise land it in the middle, since "Other..." sorts
+    // before most real "T&M ..." names); T&M TC Elite* is excluded here
+    // entirely -- it's handled separately below, shown on its own row
+    // under the Total rather than among these.
+    const sortedOtherLabels = [...allBillableLabels]
+      .filter((l) => l !== OTHER_OR_BLANK_LABEL && l !== TC_ELITE_ROW_LABEL)
+      .sort((a, b) => a.localeCompare(b));
+    sortedOtherLabels.push(OTHER_OR_BLANK_LABEL);
+
+    // T&M TC Elite* pulled out, by request ("place TC Elite below the
+    // total and don't include it in the total calc") -- shown as its own
+    // row underneath the Total row instead of among the other
+    // classifications, and excluded from both the hours and dollar
+    // totals. Matched by the exact same real row label server.js's own
+    // TM_TC_ELITE_ROW_LABEL constant produces (client.js has no import
+    // path to that constant, so the literal string is repeated here --
+    // same value, not a coincidence).
+    const tcEliteRow = billableDollarByLabel.get(TC_ELITE_ROW_LABEL) || { label: TC_ELITE_ROW_LABEL, hours: 0, dollars: 0 };
+    const otherBillableDollarRows = sortedOtherLabels.map((label) => billableDollarByLabel.get(label) || { label, hours: 0, dollars: 0 });
+    const billableDollarHoursTotal = otherBillableDollarRows.reduce((s, r) => s + r.hours, 0);
+    const billableDollarTotal = otherBillableDollarRows.reduce((s, r) => s + r.dollars, 0);
+
     resultsEl.innerHTML = `
+      <div class="tm-summary-boxes-row">
       <div class="tm-table-group">
       <table class="tm-overall-summary-table">
         <thead>
@@ -601,6 +673,23 @@ export function mount(container) {
         </tbody>
       </table>
       <p class="tm-footnote tm-footnote-red">** Each % is a % of Total Available Hours not after AIT Time</p>
+      </div>
+
+      <div class="tm-table-group">
+      <table class="tm-overall-summary-table">
+        <thead>
+          <tr><th class="tm-corner-label">${smallCapsHtml('Billable $ (Helpdesk Rate)')}</th><th class="col-center">${smallCapsHtml('Hours')}</th><th class="col-center">$</th></tr>
+        </thead>
+        <tbody>
+          ${otherBillableDollarRows
+            .map((r) => `<tr><th>${rowLabelHtml(r.label)}</th><td class="col-center">${formatHours(r.hours)}</td><td class="col-center">${formatCurrency(r.dollars)}</td></tr>`)
+            .join('')}
+          <tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th><td class="col-center"><strong>${formatHours(billableDollarHoursTotal)}</strong></td><td class="col-center"><strong>${formatCurrency(billableDollarTotal)}</strong></td></tr>
+          <tr><th>${rowLabelHtml(tcEliteRow.label)}</th><td class="col-center">${formatHours(tcEliteRow.hours)}</td><td class="col-center">${formatCurrency(tcEliteRow.dollars)}</td></tr>
+        </tbody>
+      </table>
+      <p class="tm-footnote">Rate: ${formatCurrency(data.helpdeskHourlyRate)}/hr -- Autotask's "Helpdesk Service" role rate (price list)</p>
+      </div>
       </div>
 
       <div class="tm-table-group">
@@ -921,6 +1010,11 @@ export function mount(container) {
   function formatHours(n) {
     const rounded = Math.round((n + Number.EPSILON) * 100) / 100;
     return rounded.toFixed(2);
+  }
+
+  // For the Billable $ box -- AUD, 2 decimal places, thousands separator.
+  function formatCurrency(n) {
+    return `$${(n || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
 
   // h:mm, same rounding/rollover convention Ticket Times' own formatHours()

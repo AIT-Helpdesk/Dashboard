@@ -5547,6 +5547,26 @@ textarea.pgr-field {
   width: fit-content;
   max-width: 100%;
 }
+/* Hours Summary + the new Billable $ box side by side, by request ("add
+   another red box beside the Hours Summary box") -- both are plain
+   .tm-table-group boxes (same red border, same width: fit-content), just
+   wrapped in this flex row instead of stacking as separate top-level
+   blocks. flex-wrap so a narrow window drops the second box underneath
+   rather than overflowing; align-items: flex-start so the shorter box
+   doesn't stretch to match the taller one's height. Each box's own
+   margin-bottom is cancelled (the row itself carries that spacing before
+   the next section instead) so two side-by-side boxes don't leave a
+   double gap underneath. */
+.tm-summary-boxes-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.tm-summary-boxes-row .tm-table-group {
+  margin-bottom: 0;
+}
 /* Overall summary -- Total Tech Hours / Tech Hours Available / etc, by
    request: one value per row, not per resource, so this is a plain
    label+value table, deliberately its OWN class rather than reusing
