@@ -5929,6 +5929,17 @@ textarea.wsp-field {
   color: #dc2626;
   font-weight: normal;
 }
+/* "Net Diff (ING - END*)" next to the Complete heading, by request -- a
+   net TOTAL, not a count, so plain muted text rather than the mismatch
+   count's own alarm red: this figure is meaningful (and often non-zero)
+   even when nothing's actually wrong -- positive and negative per-ticket
+   differences routinely offset each other in a real net total, so a
+   non-zero reading here isn't itself a problem signal the way the red
+   count is. Not bold, same reasoning as .accrued-time-mismatch-count. */
+.accrued-time-diff-sum {
+  color: var(--muted);
+  font-weight: normal;
+}
 .accrued-time-table th,
 .accrued-time-table td {
   padding: 0.2rem 0.6rem;

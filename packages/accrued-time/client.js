@@ -324,7 +324,10 @@ export function mount(container) {
     // Complete (including Billing - Contract) tickets, by request --
     // fetched as part of the main load, always shown. showMismatchCount:
     // by request, only this heading gets the "- N Mismatches" reading.
-    const completeHtml = listHtml('Complete', applyIssuesOnly(data.completeRows), { showMismatchCount: true });
+    // showDiffSum: by request ("add at the top next to complete and
+    // mismatch the actual sum of time of the difference between --ING
+    // and (--END*)"), same "Complete heading only" scope.
+    const completeHtml = listHtml('Complete', applyIssuesOnly(data.completeRows), { showMismatchCount: true, showDiffSum: true });
 
     // Not Complete -- by request ("for the second table, don't retrieve
     // the data initially ... add a button for Show Incomplete Tickets"),
@@ -398,11 +401,41 @@ export function mount(container) {
     return ` <span class="accrued-time-mismatch-count">- ${count} Mismatch${count === 1 ? '' : 'es'}</span>`;
   }
 
+  // "The actual sum of time of the difference between --ING and (--END*)",
+  // by request. Originally a net total across every row; narrowed by a
+  // follow-up request to only the END* > ING (yellow) rows; corrected by
+  // a further follow-up ("I only want the difference of the sums of the
+  // mismatch lines where the ENDs are smaller than the --INGs") to the
+  // OPPOSITE rows instead -- exactly isRed(r), the same variance-aware
+  // definition both the row shading AND the "- N Mismatches" count above
+  // already use, reused here rather than a second, possibly-inconsistent
+  // check. "The mismatch lines" confirms this -- isRed(r) is also
+  // literally what mismatchCountHtml() above counts, so this figure now
+  // scopes to the SAME rows that count reports on, just summed instead of
+  // counted. Rows where END* is bigger (yellow) or within the variance
+  // (uncoloured) don't contribute to this sum at all -- not summed as a
+  // negative, not summed as zero, excluded outright. Every qualifying
+  // row's own accrueIng - endTotal(r) is positive by construction (END*
+  // smaller than ING), so the total is always >= 0.
+  // No descriptive label, by request ("remove all the descriptive text
+  // for that calculation and just show the hours as HH:MM after
+  // MISMATCHES") -- just the figure itself, HH:MM (formatHms(), same
+  // rounding/rollover convention @dashboard/times' own formatHms() uses),
+  // right after the mismatch count's own span.
+  function diffSumHtml(rows) {
+    const total = rows.filter(isRed).reduce((sum, r) => sum + (r.accrueIng - endTotal(r)), 0);
+    // "- " prefix kept (not itself descriptive text) -- same separator
+    // convention the mismatch count's own span already uses right before
+    // this one in the heading.
+    return ` <span class="accrued-time-diff-sum">- ${formatHms(total)}</span>`;
+  }
+
   function listHtml(title, rows, opts = {}) {
     if (rows.length === 0) return `<h2 class="section-heading">${escapeHtml(title)}</h2><p class="status">None.</p>`;
     const mismatchHtml = opts.showMismatchCount ? mismatchCountHtml(rows) : '';
+    const diffSumHtmlStr = opts.showDiffSum ? diffSumHtml(rows) : '';
     return `
-      <h2 class="section-heading">${escapeHtml(title)} (${rows.length})${mismatchHtml}</h2>
+      <h2 class="section-heading">${escapeHtml(title)} (${rows.length})${mismatchHtml}${diffSumHtmlStr}</h2>
       <table class="accrued-time-table">
         <thead>
           <tr>
@@ -448,6 +481,17 @@ export function mount(container) {
 
   function formatHours(n) {
     return (n || 0).toFixed(2);
+  }
+
+  // h:mm, for the "Diff" figure next to Mismatches -- same rounding/
+  // rollover convention @dashboard/times' own formatHms() uses (round to
+  // the nearest minute, roll over into the next hour rather than ever
+  // showing :60).
+  function formatHms(hours) {
+    const totalMinutes = Math.round((hours || 0) * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
   function escapeHtml(str) {
