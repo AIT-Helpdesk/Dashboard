@@ -1,5 +1,13 @@
 const express = require('express');
 const { getClient, listAll, fetchByFieldIn, getPicklistLabels, getTicketUrl, resolveResourceName } = require('@dashboard/autotask-client');
+// For the Billable $ box's own admin-only visibility, by request ("make
+// that Billable $ table only visible to admins") -- same "everyone can
+// read the page, only the admin sees/does the extra bit" precedent
+// @dashboard/updates and @dashboard/workshop already established (an
+// `isAdmin`-style flag in the JSON response, client.js renders around
+// it), not a route-level restrictedTo -- the rest of this page stays
+// open to everyone, only this one box is admin-only.
+const { isDashboardAdmin } = require('@dashboard/shell/registry.js');
 
 // A technician's normal working day, by request -- "7.6 for all (for now)".
 // Flat and global for everyone EXCEPT the real per-resource overrides
@@ -675,17 +683,23 @@ router.get('/', async (req, res) => {
   const weekdayCount = countWeekdays(from, to);
   const fromIso = `${from}T00:00:00.000Z`;
   const toIso = `${to}T00:00:00.000Z`;
+  // Billable $ box is admin-only, by request -- everyone else's response
+  // just carries isAdmin: false and helpdeskHourlyRate: 0 (client.js
+  // never renders the box at all when isAdmin is false, so the 0 is never
+  // actually shown to anyone -- this only skips the extra Roles fetch for
+  // a non-admin viewer who couldn't see the result anyway).
+  const isAdmin = isDashboardAdmin(req);
 
   try {
     const client = await getClient();
     const [{ selected, leaveEntries, ticketEntries }, aittimeTickets, helpdeskHourlyRate] = await Promise.all([
       resolveResourcesWithData(client, fromIso, toIso, team),
       fetchAittimeTickets(client),
-      fetchHelpdeskHourlyRate(client),
+      isAdmin ? fetchHelpdeskHourlyRate(client) : Promise.resolve(0),
     ]);
 
     if (selected.length === 0) {
-      return res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, helpdeskHourlyRate, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
+      return res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, isAdmin, helpdeskHourlyRate, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
     }
 
     // Depends on `selected` (each resource's own locationID), so this
@@ -758,7 +772,7 @@ router.get('/', async (req, res) => {
       };
     });
 
-    res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, helpdeskHourlyRate, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
+    res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, isAdmin, helpdeskHourlyRate, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

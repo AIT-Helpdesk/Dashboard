@@ -657,6 +657,32 @@ export function mount(container) {
     const billableDollarHoursTotal = otherBillableDollarRows.reduce((s, r) => s + r.hours, 0);
     const billableDollarTotal = otherBillableDollarRows.reduce((s, r) => s + r.dollars, 0);
 
+    // Admin-only, by request ("make that Billable $ table only visible to
+    // admins") -- data.isAdmin is server-authoritative (isDashboardAdmin(),
+    // same one-account check every other admin-only feature on this
+    // dashboard uses), not just a client-side hide; a non-admin's own
+    // response also carries helpdeskHourlyRate: 0 (server.js skips that
+    // fetch for them entirely), so there's no real rate data to leak
+    // through the network tab either.
+    const billableDollarBoxHtml = data.isAdmin
+      ? `
+      <div class="tm-table-group">
+      <table class="tm-overall-summary-table">
+        <thead>
+          <tr><th class="tm-corner-label">${smallCapsHtml('Billable $ (Helpdesk Rate)')}</th><th class="col-center">${smallCapsHtml('Hours')}</th><th class="col-center">$</th></tr>
+        </thead>
+        <tbody>
+          ${otherBillableDollarRows
+            .map((r) => `<tr><th>${rowLabelHtml(r.label)}</th><td class="col-center">${formatHours(r.hours)}</td><td class="col-center">${formatCurrency(r.dollars)}</td></tr>`)
+            .join('')}
+          <tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th><td class="col-center"><strong>${formatHours(billableDollarHoursTotal)}</strong></td><td class="col-center"><strong>${formatCurrency(billableDollarTotal)}</strong></td></tr>
+          <tr><th>${rowLabelHtml(tcEliteRow.label)}</th><td class="col-center">${formatHours(tcEliteRow.hours)}</td><td class="col-center">${formatCurrency(tcEliteRow.dollars)}</td></tr>
+        </tbody>
+      </table>
+      <p class="tm-footnote">Rate: ${formatCurrency(data.helpdeskHourlyRate)}/hr -- Autotask's "Helpdesk Service" role rate (price list)</p>
+      </div>`
+      : '';
+
     resultsEl.innerHTML = `
       <div class="tm-summary-boxes-row">
       <div class="tm-table-group">
@@ -674,22 +700,7 @@ export function mount(container) {
       </table>
       <p class="tm-footnote tm-footnote-red">** Each % is a % of Total Available Hours not after AIT Time</p>
       </div>
-
-      <div class="tm-table-group">
-      <table class="tm-overall-summary-table">
-        <thead>
-          <tr><th class="tm-corner-label">${smallCapsHtml('Billable $ (Helpdesk Rate)')}</th><th class="col-center">${smallCapsHtml('Hours')}</th><th class="col-center">$</th></tr>
-        </thead>
-        <tbody>
-          ${otherBillableDollarRows
-            .map((r) => `<tr><th>${rowLabelHtml(r.label)}</th><td class="col-center">${formatHours(r.hours)}</td><td class="col-center">${formatCurrency(r.dollars)}</td></tr>`)
-            .join('')}
-          <tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th><td class="col-center"><strong>${formatHours(billableDollarHoursTotal)}</strong></td><td class="col-center"><strong>${formatCurrency(billableDollarTotal)}</strong></td></tr>
-          <tr><th>${rowLabelHtml(tcEliteRow.label)}</th><td class="col-center">${formatHours(tcEliteRow.hours)}</td><td class="col-center">${formatCurrency(tcEliteRow.dollars)}</td></tr>
-        </tbody>
-      </table>
-      <p class="tm-footnote">Rate: ${formatCurrency(data.helpdeskHourlyRate)}/hr -- Autotask's "Helpdesk Service" role rate (price list)</p>
-      </div>
+      ${billableDollarBoxHtml}
       </div>
 
       <div class="tm-table-group">
