@@ -1,0 +1,18 @@
+{
+  "name": "@dashboard/about-me",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "about-me",
+    "label": "About Me",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/strety-client": "*",
+    "@dashboard/teams-shifts": "*",
+    "express": "^4.19.2"
+  }
+}

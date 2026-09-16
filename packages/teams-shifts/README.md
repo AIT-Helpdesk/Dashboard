@@ -24,6 +24,65 @@ Found via a real user report: a real, booked Vacation entry wasn't showing anywh
 
 **KNOWN GAP, not fixable from this side:** because Graph only accepts a contained-window filter (see above), a multi-day time-off entry that starts before *or* ends after whichever window is queried (a calendar month here, or What's On's 2-week slice) is invisible in that fetch -- there is no filter shape the API accepts that would catch a boundary-straddling entry. Narrow in practice (it only affects an entry that happens to cross a month/fortnight boundary), but real and unavoidable given the API's own restriction.
 
+## Colouring switched from raw Teams theme to the same real legend What's On uses
+
+Originally coloured by Microsoft Teams Shifts' own raw `theme` enum (`THEME_COLORS`, a plain enum-name-to-hex map with no real-world meaning attached to each colour). Switched, by request ("Apply this colouring also to the 'Shifts and Schedules' page and add the colour legend from the Team Shifts to Shifts and Schedules also"), to the exact same `SHIFT_CATEGORIES` list `@dashboard/whats-on`'s own Team Shifts excerpt already uses -- matched against each entry's own `displayName` (a shift's own label, or a time-off entry's resolved reason name), not `theme`. A visible legend (`#shifts-legend`, the same `.shifts-legend`/`.shifts-legend-item`/`.shifts-legend-swatch` classes What's On's own excerpt uses) now sits under the calendar too -- What's On's own excerpt has one; this page didn't, by request now it does. `THEME_COLORS` itself was removed -- duplicated, not imported, same "separate page package" convention every other small shared UI piece on this dashboard follows; see `@dashboard/whats-on`'s own client.js/README for the real-data confirmation story behind every category/colour/match pattern (7 categories: On Call yellow, Helpdesk Handler blue, Vacation green, Unpaid leave red, Sick/Other Leave purple, RDO/Time in Lieu grey, Public Holiday white-with-border).
+
+## Leave, from Autotask -- merged into the same month calendar
+
+By request ("can you get Leave from Autotask and add it to the Shifts
+data and calendars where it appears having it look just like the Shifts
+entries and using that same colour scheme"). Real Autotask
+`TimeEntries` rows tagged with the same `timeEntryType` picklist
+`@dashboard/times`' own README documents as Leave (15 PersonalTime, 16
+VacationTime, 17 SickTime, 18 PaidTimeOff; `LEAVE_TIME_ENTRY_TYPES` in
+`server.js`), no `ticketID`/`taskID`, `dateWorked` inside the queried
+month -- merged straight into the same `byDay` rows real Graph
+shifts/timesOff already fill (`kind: 'leave'`, alongside `'shift'` and
+`'timeOff'`), rendered through the exact same `entryHtml()`/
+`categorizeShift()`/legend path, so a real leave day looks like any
+other calendar entry, by request.
+
+**Unscoped by Teams team** -- a deliberate choice, not an oversight.
+Autotask resources aren't organised into a "General" Teams-Shifts
+roster the way real shifts are, and this tenant's whole staff is small
+enough that showing every real leave entry in the queried month
+(`fetchLeaveEntries()`, no resourceID filter) is the honest default
+rather than guessing which Autotask resources "belong" to whichever
+Teams team is selected.
+
+**No real start/end clock time** -- a leave entry is a whole
+`dateWorked` day with an `hoursWorked` total (confirmed against real
+data: every real entry seen is exactly `7.6`, same full-day figure
+`@dashboard/times`' own Normal Hours uses), not a Graph shift with real
+`startDateTime`/`endDateTime`. `entryHtml()`/`dayPopupEntryHtml()` both
+special-case `kind === 'leave'` to show that hours total instead of the
+blank `formatTime(null)` pair a real shift's own fields would otherwise
+produce.
+
+**Colour mapping**: real confirmed billing code names in this tenant are
+"Vacation", "Sick Time", and "Floating Holiday" (`billingCodeID`
+resolved via the real `BillingCodes` entity, same reason
+`@dashboard/accrued-time`'s own `resolveBillingCodeNames()` gives --
+`billingCodeID` is a record reference, not a small-int picklist).
+"Vacation" and "Sick Time" match the shared `SHIFT_CATEGORIES` legend's
+own `vacation`/`sickOther` regexes directly, no extra mapping needed.
+"Floating Holiday" doesn't literally say "public" so `publicHoliday`'s
+own regex wouldn't catch it -- folded into `rdoTil` instead (a
+floating/discretionary day off reads closer to an individually-earned
+RDO/Time in Lieu than to an actual gazetted, company-wide Public
+Holiday), by widening that category's own regex rather than guessing it
+into the wrong bucket. Same widened regex duplicated into
+`@dashboard/about-me`'s and `@dashboard/whats-on`'s own `client.js`
+copies of this legend, for the same reason.
+
+**Same real person can appear twice for the same day** -- confirmed
+against real data (Hamza Mahmood, 28 Sep 2026): a real Autotask Leave
+entry AND a real Teams Shifts time-off request for the same real
+Vacation day, both genuine records in two separate systems. Not
+deduplicated -- see `@dashboard/about-me`'s own README for the full
+reasoning (same real example, same choice).
+
 ## Confirmed against the real account (Ambient IT's own tenant, `General` team)
 
 - Token, group listing, scheduling-group listing, and shift fetching all round-trip successfully with `Group.Read.All` + `Schedule.Read.All` + `User.Read.All` app-only permissions -- no extra/narrower permission needed.
@@ -32,7 +91,7 @@ Found via a real user report: a real, booked Vacation entry wasn't showing anywh
 - **`userId` is genuinely `null` on real shifts** -- confirmed against real data: on one unfiltered page, 78 of 200 shifts had `userId: null` and a `schedulingGroupId` instead. These are real open/unassigned shift slots (the Shifts UI's "Open shift" concept), not broken records -- surfaced as `userName: null` server-side and rendered as "(Open shift)" client-side, never fired at `/users/null`.
 - **`schedulingGroupId` resolves via `/teams/{id}/schedule/schedulingGroups`** -- confirmed against real data: 10 groups, e.g. "On Call" and "On Call Roster", several with a blank `displayName` (shown as no group label rather than an empty string).
 - **`notes` is real, meaningful data** -- confirmed against real data, e.g. a shift's notes field holding `"Bris PUB HOL"` (a public-holiday flag on that shift). Shown in the day popup.
-- Four real theme values seen in real data: `yellow`, `purple`, `darkPink`, `pink`. The other values in this file's `THEME_COLORS` map (`blue`/`green`/`gray`/`darkBlue`/`darkGreen`/`darkPurple`/`darkYellow`/`darkGray`, plus `white`'s no-color fallback) are per Microsoft's documented Shifts theme enum, not yet individually confirmed against this tenant's data.
+- Four real theme values seen in real data: `yellow`, `purple`, `darkPink`, `pink` -- no longer used for colouring (see "Colouring switched..." above), kept here only as the historical record of what was actually observed while this page still read `theme` directly.
 
 ## Data source: Microsoft Graph `/teams/{id}/schedule/shifts`, `/schedulingGroups`, `/users/{id}`
 
@@ -77,5 +136,4 @@ The team list is cached in-process for 20 minutes (`TEAMS_CACHE_TTL_MS`), same c
 - Whether `Group.Read.All` is really required just to list Teams, or whether a narrower permission (`Team.ReadBasic.All`) also works app-only for this filter shape -- not tried, since `Group.Read.All` already works.
 - The 404-on-unprovisioned-schedule handling is unexercised -- every team tried so far has a real schedule.
 - Draft-shift/draft-time-off visibility, and real shift `activities` data (see above).
-- The other 8 theme colors in `THEME_COLORS` (see above) -- only 4 of 12 documented Shifts themes have been seen in this tenant's real `/shifts` data so far (real `/timesOff` data added `gray` as a 5th).
 - The boundary-straddling multi-day time-off gap noted above -- real but narrow; not fixed since the API itself doesn't allow it.

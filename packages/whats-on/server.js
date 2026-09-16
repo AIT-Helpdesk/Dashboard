@@ -160,7 +160,7 @@ const AUTO_MANAGED_METRIC_TITLES = new Set(
 // metrics on this account), deliberately left out here. Order here is the
 // order groups render in.
 const FREQUENCIES = ['daily', 'weekly', 'monthly'];
-const HISTORY_LIMIT = 8;
+const HISTORY_LIMIT = 7; // was 8, then 3 ("show only the last 3 entries"), then back up to 7 ("add back in 4 more scorecard entries to make it 7"), by request
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // Same email-match convention as My Strety Tasks -- see that package's
@@ -489,6 +489,57 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics, client) {
   return byFrequency;
 }
 
+// TimeEntries.timeEntryType picklist values that mean "this hour was
+// leave, not work" -- same 4 real confirmed values @dashboard/times' own
+// README documents (15 PersonalTime, 16 VacationTime, 17 SickTime, 18
+// PaidTimeOff), duplicated here rather than imported, same "separate page
+// package" convention every other small shared piece on this dashboard
+// already follows. By request ("can you get Leave from Autotask and add
+// it to the Shifts data and calendars where it appears").
+const LEAVE_TIME_ENTRY_TYPES = [15, 16, 17, 18];
+const LEAVE_TYPE_FALLBACK_LABEL = { 15: 'Personal Time', 16: 'Vacation', 17: 'Sick Time', 18: 'Paid Time Off' };
+
+// Every real Autotask resource's Leave in the given range, unscoped by
+// Teams team -- same deliberate scoping choice @dashboard/teams-shifts'
+// own fetchLeaveEntries() makes (see that package's README): Autotask
+// resources aren't organised into a "General" Teams-Shifts roster, so
+// this shows every real leave entry in the window rather than guessing
+// who "belongs" to this excerpt's team. Shaped to merge straight into the
+// same byDay rows real shifts/timesOff already use.
+async function fetchLeaveEntries(client, startISO, endISO) {
+  const entries = await listAll(client.timeEntries, [
+    { op: 'gte', field: 'dateWorked', value: startISO },
+    { op: 'lt', field: 'dateWorked', value: endISO },
+    { op: 'in', field: 'timeEntryType', value: LEAVE_TIME_ENTRY_TYPES },
+    { op: 'notExist', field: 'ticketID' },
+    { op: 'notExist', field: 'taskID' },
+  ]);
+  if (entries.length === 0) return [];
+  const [billingCodes, resources] = await Promise.all([
+    fetchByFieldIn(client.billingCodes, 'id', [...new Set(entries.map((e) => e.billingCodeID).filter((id) => id !== null && id !== undefined))]),
+    fetchByFieldIn(client.resources, 'id', [...new Set(entries.map((e) => e.resourceID).filter((id) => id !== null && id !== undefined))]),
+  ]);
+  const billingCodeNameById = new Map(billingCodes.map((c) => [c.id, c.name]));
+  const resourceNameById = new Map(resources.map((r) => [r.id, [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || `Resource #${r.id}`]));
+  return entries.map((e) => ({
+    id: `leave-${e.id}`,
+    kind: 'leave',
+    userId: null,
+    userName: resourceNameById.get(e.resourceID) || null,
+    published: true,
+    startDateTime: null,
+    endDateTime: null,
+    dayKey: (e.dateWorked || '').slice(0, 10),
+    displayName: billingCodeNameById.get(e.billingCodeID) || LEAVE_TYPE_FALLBACK_LABEL[e.timeEntryType] || 'Leave',
+    hoursWorked: e.hoursWorked,
+    theme: null,
+    notes: null,
+    activities: [],
+    schedulingGroupId: null,
+    schedulingGroupName: null,
+  }));
+}
+
 // A rolling TWO-WEEK window (14 real calendar days, Monday-start), not a
 // paginated fortnight -- by request, "forward"/"back" move exactly one week
 // at a time (the window becomes [week+1, week+2] or [week-1, week]), not
@@ -508,14 +559,35 @@ async function buildShiftsWeek(mondayWeekKey) {
   const team = teams.find((t) => t.name === SHIFTS_TEAM_NAME) || null;
   const todayKey = todayAestKey();
 
+  // Real Autotask Leave (see fetchLeaveEntries() above) is independent of
+  // the Graph Shifts schedule, so it's fetched -- and merged in below --
+  // even in the `!team` case rather than only when the Teams side of this
+  // succeeds; by request ("get Leave from Autotask and add it to the
+  // Shifts data and calendars where it appears"). Bare dateWorked-shaped
+  // ISO strings, NOT aestToUtcIso() -- TimeEntries.dateWorked is a
+  // date-only field that needs no real AEST offset conversion, same
+  // established convention @dashboard/times' own Leave query follows.
+  const leaveEntriesPromise = getClient().then((client) => fetchLeaveEntries(client, `${mondayWeekKey}T00:00:00.000Z`, `${endKeyExclusive}T00:00:00.000Z`));
+
   if (!team) {
     // Surfaced rather than silently dropped -- same convention as
     // HELPDESK_TEAM_NAME's own notFound handling below.
-    return { weekStart: mondayWeekKey, days, todayKey, totalCount: 0, byDay: {}, teamName: SHIFTS_TEAM_NAME, notFound: true };
+    const byDay = {};
+    const leaveEntries = await leaveEntriesPromise;
+    for (const row of leaveEntries) (byDay[row.dayKey] = byDay[row.dayKey] || []).push(row);
+    return { weekStart: mondayWeekKey, days, todayKey, totalCount: leaveEntries.length, byDay, teamName: SHIFTS_TEAM_NAME, notFound: leaveEntries.length === 0 };
   }
 
-  const { byDay, totalCount } = await getShiftsByDay(team.id, mondayWeekKey, endKeyExclusive);
-  return { weekStart: mondayWeekKey, days, todayKey, totalCount, byDay, teamName: team.name, notFound: false };
+  const [{ byDay, totalCount }, leaveEntries] = await Promise.all([getShiftsByDay(team.id, mondayWeekKey, endKeyExclusive), leaveEntriesPromise]);
+  let leaveCount = 0;
+  for (const row of leaveEntries) {
+    (byDay[row.dayKey] = byDay[row.dayKey] || []).push(row);
+    leaveCount++;
+  }
+  for (const day of Object.values(byDay)) {
+    day.sort((a, b) => (a.startDateTime || '').localeCompare(b.startDateTime || ''));
+  }
+  return { weekStart: mondayWeekKey, days, todayKey, totalCount: totalCount + leaveCount, byDay, teamName: team.name, notFound: false };
 }
 
 // Same reasoning as service-calls'/teams-shifts' own report caches -- a
@@ -727,12 +799,16 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket, c
 // Service Calls due today or tomorrow (AEST), plus -- by request -- still-
 // incomplete calls scheduled in the past 2 weeks whose linked ticket is
 // still open (the "fell through the cracks" case: an appointment that was
-// never marked complete and the work item behind it is still live). Both
-// groups exclude completed calls entirely (isComplete=false in both
-// queries below), by request -- an already-finished call isn't useful in
-// this compact summary the way it still is on Service Calls' own full
+// never marked complete and the work item behind it is still live), plus --
+// by request ("After Overdues put anything in the next 7 working days") --
+// upcoming calls in the next 7 real working days (Mon-Fri, no public-
+// holiday calendar tracked anywhere in this codebase, so "working day"
+// here means plain weekday) counting forward from the day AFTER tomorrow.
+// All three groups exclude completed calls entirely (isComplete=false in
+// every query below), by request -- an already-finished call isn't useful
+// in this compact summary the way it still is on Service Calls' own full
 // calendar page.
-// Confirmed against real data before picking the 2-week window: an
+// Confirmed against real data before picking the 2-week PAST window: an
 // unbounded "isComplete = false, any date" query returned 1574 rows going
 // back to 2007 (old calls simply never marked complete on tickets that
 // closed ages ago -- noise, not anything actionable), while requiring the
@@ -740,27 +816,57 @@ async function buildServiceCallRows(client, serviceCalls, { requireOpenTicket, c
 // handful. 2 weeks keeps that "actionable, not noise" property without
 // hardcoding a totally arbitrary cutoff.
 //
-// Placed AFTER the today/tomorrow rows in the returned list, latest first
-// within that trailing group (by request) -- same ordering My Strety
-// Tasks' own overdue rows use below. client.js's ttDayTag() already
-// renders any dayKey that isn't today/tomorrow as an overdue tag with no
-// further server-side flag needed -- a past dayKey naturally falls into
-// that branch.
+// Sorted into 4 groups in this fixed order, by request ("keep as Today,
+// then Tomorrow, then Overdues. After Overdues put anything in the next 7
+// working days"): today/tomorrow (chronological), overdue (latest first,
+// oldest last -- same ordering My Strety Tasks' own overdue rows use
+// below), next-7-working-days (chronological, soonest first). ttDayTag()
+// (client.js) derives each row's own tag purely from dayKey vs today/
+// tomorrow -- dayKey < today is overdue (red), dayKey > tomorrow is
+// upcoming (neutral blue, NOT the alarming overdue red), no extra
+// server-side flag needed for either.
 // `email` resolves the signed-in user's own Autotask resource id (for the
 // "Just Mine" filter's isMine flag, see buildServiceCallRows()'s own
 // comment) -- resolved ONCE here rather than per-row, cached across the
 // life of the server process either way (resolveResourceIdByEmail()'s own
 // cache in @dashboard/autotask-client).
+function isWeekendKey(dateKey) {
+  const dow = new Date(`${dateKey}T00:00:00Z`).getUTCDay(); // 0=Sun, 6=Sat
+  return dow === 0 || dow === 6;
+}
+// The Nth real working day AFTER dateKey (dateKey itself excluded) --
+// e.g. nthWorkingDayKeyAfter(tomorrow, 7) is the 7th weekday counting
+// forward from (not including) tomorrow, which is what bounds the "next 7
+// working days" window above.
+function nthWorkingDayKeyAfter(dateKey, n) {
+  let key = dateKey;
+  let count = 0;
+  while (count < n) {
+    key = addDaysToKey(key, 1);
+    if (!isWeekendKey(key)) count++;
+  }
+  return key;
+}
+function isoForKey(dateKey) {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  return aestToUtcIso(y, m, d);
+}
 async function fetchServiceCallsTodayTomorrow(email) {
   const client = await getClient();
   const currentUserResourceId = await resolveResourceIdByEmail(client, email);
   const today = todayAestKey();
+  const tomorrow = addDaysToKey(today, 1);
   const [ty, tm, td] = today.split('-').map(Number);
   const startISO = aestToUtcIso(ty, tm, td);
   const endISO = aestToUtcIso(ty, tm, td + 2); // exclusive -- covers today + tomorrow, day-after-tomorrow excluded
   const pastStartISO = aestToUtcIso(ty, tm, td - 14);
+  // Day-after-tomorrow through the 7th working day after tomorrow,
+  // inclusive -- futureEndISO is the exclusive upper bound (start of the
+  // day right after that 7th working day).
+  const futureStartISO = endISO; // same instant endISO already is -- reused, not recomputed
+  const futureEndISO = isoForKey(addDaysToKey(nthWorkingDayKeyAfter(tomorrow, 7), 1));
 
-  const [todayTomorrowCalls, pastIncompleteCalls] = await Promise.all([
+  const [todayTomorrowCalls, pastIncompleteCalls, futureCalls] = await Promise.all([
     // isComplete=false, by request -- an already-finished call isn't
     // useful in a compact "what's happening today/tomorrow" summary the
     // way it still is on Service Calls' own full calendar (which shows
@@ -778,23 +884,37 @@ async function fetchServiceCallsTodayTomorrow(email) {
       { op: 'lt', field: 'startDateTime', value: startISO },
       { op: 'eq', field: 'isComplete', value: false },
     ]),
+    listAll(client.serviceCalls, [
+      { op: 'gte', field: 'startDateTime', value: futureStartISO },
+      { op: 'lt', field: 'startDateTime', value: futureEndISO },
+      { op: 'eq', field: 'isComplete', value: false },
+    ]),
   ]);
 
-  const [todayTomorrowRows, pastIncompleteRows] = await Promise.all([
+  const [todayTomorrowRows, pastIncompleteRows, futureRows] = await Promise.all([
     buildServiceCallRows(client, todayTomorrowCalls, { currentUserResourceId }),
     buildServiceCallRows(client, pastIncompleteCalls, { requireOpenTicket: true, currentUserResourceId }),
+    buildServiceCallRows(client, futureCalls, { currentUserResourceId }),
   ]);
 
-  const rows = [...todayTomorrowRows, ...pastIncompleteRows];
+  const rows = [...todayTomorrowRows, ...pastIncompleteRows, ...futureRows];
+  // 0 = today/tomorrow, 1 = overdue (past), 2 = upcoming (next 7 working
+  // days) -- a plain dayKey comparison against today/tomorrow is enough
+  // to place every row into its group; no per-query flag needed.
+  function groupRank(row) {
+    if (row.dayKey < today) return 1;
+    if (row.dayKey > tomorrow) return 2;
+    return 0;
+  }
   rows.sort((a, b) => {
-    const aOverdue = a.dayKey < today;
-    const bOverdue = b.dayKey < today;
-    if (aOverdue !== bOverdue) return aOverdue ? 1 : -1; // today/tomorrow group first, overdue group after
+    const ra = groupRank(a);
+    const rb = groupRank(b);
+    if (ra !== rb) return ra - rb;
     // Within the overdue group: latest first, oldest last, by request --
-    // reversed from the today/tomorrow group's own ascending order (kept
-    // as-is below), which stays chronological since those are naturally
-    // read "today, then tomorrow."
-    if (aOverdue) return new Date(b.startDateTime) - new Date(a.startDateTime);
+    // reversed from the other two groups' own ascending order, which stay
+    // chronological (today/tomorrow reads "today, then tomorrow"; upcoming
+    // reads soonest-first, the natural way to plan ahead).
+    if (ra === 1) return new Date(b.startDateTime) - new Date(a.startDateTime);
     return new Date(a.startDateTime) - new Date(b.startDateTime);
   });
   return rows;
