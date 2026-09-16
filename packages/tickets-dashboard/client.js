@@ -163,7 +163,7 @@ export function mount(container) {
               (t) => `
             <tr>
               <td>${statusCellHtml(t.status, statusColored)}</td>
-              <td class="ticket-number">${ticketLink(t)}</td>
+              <td class="ticket-number">${ticketLink(t)}<br><span class="inline-subtext">${formatCreateDate(t.createDate)}</span></td>
               <td>${escapeHtml(t.clientName)}</td>
               <td>${escapeHtml(t.title)}</td>
               <td>${resourceCellHtml(t.resourceName)}</td>
@@ -221,6 +221,19 @@ export function mount(container) {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  // Small grey text under the Ticket # (.inline-subtext), by request --
+  // "put the time of creation of the ticket in small grey text under the
+  // Ticket number". Same real Tickets.createDate field and same plain
+  // browser-local toLocaleTimeString() formatting Tickets Created Today's
+  // own formatTime() already uses for this exact field -- unlike this
+  // page's Autotask date-only fields elsewhere, createDate is a genuine
+  // timestamp, so no AEST-anchored date-string handling applies here.
+  function formatCreateDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
   // A single-arc donut ring (count/total as one colored sweep over a plain

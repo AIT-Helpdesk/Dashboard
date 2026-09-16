@@ -78,6 +78,10 @@ async function shapeTicketRows(client, tickets, statusLabels) {
       id: t.id,
       status: statusLabels.get(t.status) || `#${t.status}`,
       ticketNumber: t.ticketNumber,
+      // Shown under the Ticket # in small grey text, by request -- real
+      // Autotask field, same one Tickets Created Today already uses for
+      // its own time-of-creation column.
+      createDate: t.createDate,
       title: t.title,
       clientName: await resolveCompanyName(client, t.companyID),
       // "Unassigned", not blank -- same convention Completed Tickets'
