@@ -194,6 +194,42 @@ async function resolveResourceIdByEmail(client, email) {
   return id;
 }
 
+// Real department ids for this tenant, confirmed live against the API --
+// see @dashboard/times' own README "Team selector" section for the full
+// investigation (no Autotask entity is literally called "Workgroups";
+// Departments was the closest real fit, and Service Desk/Professional
+// Services were created specifically for that page's own Team selector,
+// Leadership Team pre-existed). Shared here, not duplicated per-package,
+// since @dashboard/about-me now needs the exact same real membership to
+// scope its own resource picker -- one place to fix if these ids are ever
+// wrong, rather than two.
+const DEPARTMENT_SERVICE_DESK_ID = 29683489;
+const DEPARTMENT_PROFESSIONAL_SERVICES_ID = 29683490;
+const DEPARTMENT_LEADERSHIP_TEAM_ID = 29683488;
+
+// Real active ResourceRoleDepartments rows for just these 3 departments --
+// confirmed against real data (see @dashboard/times' own README): Service
+// Desk 5 members, Professional Services 3, Leadership Team 3 (Damon
+// Kirkpatrick, Melissa Tannock, Amber Worth). A resource can hold more
+// than one active row (a role per department), so membership here means
+// ANY active row for that department, not just their isDefault/primary
+// one.
+async function fetchServiceDeskAndProfessionalServicesMembership(client) {
+  const rows = await listAll(client.resourceRoleDepartments, [
+    { op: 'in', field: 'departmentID', value: [DEPARTMENT_LEADERSHIP_TEAM_ID, DEPARTMENT_SERVICE_DESK_ID, DEPARTMENT_PROFESSIONAL_SERVICES_ID] },
+    { op: 'eq', field: 'isActive', value: true },
+  ]);
+  const serviceDesk = new Set();
+  const professionalServices = new Set();
+  const leadership = new Set();
+  for (const row of rows) {
+    if (row.departmentID === DEPARTMENT_SERVICE_DESK_ID) serviceDesk.add(row.resourceID);
+    if (row.departmentID === DEPARTMENT_PROFESSIONAL_SERVICES_ID) professionalServices.add(row.resourceID);
+    if (row.departmentID === DEPARTMENT_LEADERSHIP_TEAM_ID) leadership.add(row.resourceID);
+  }
+  return { serviceDesk, professionalServices, leadership };
+}
+
 const companyNameCache = new Map();
 async function resolveCompanyName(client, id) {
   if (id === null || id === undefined) return 'Unknown';
@@ -527,6 +563,7 @@ module.exports = {
   resolveResourceName,
   resolveCompanyName,
   resolveResourceIdByEmail,
+  fetchServiceDeskAndProfessionalServicesMembership,
   listAll,
   getTicketUrl,
   getContractUrl,

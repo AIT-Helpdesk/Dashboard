@@ -1,5 +1,13 @@
 const express = require('express');
-const { getClient, listAll, fetchByFieldIn, getPicklistLabels, getTicketUrl, resolveResourceName } = require('@dashboard/autotask-client');
+const {
+  getClient,
+  listAll,
+  fetchByFieldIn,
+  getPicklistLabels,
+  getTicketUrl,
+  resolveResourceName,
+  fetchServiceDeskAndProfessionalServicesMembership,
+} = require('@dashboard/autotask-client');
 // For the Billable $ box's own admin-only visibility, by request ("make
 // that Billable $ table only visible to admins") -- same "everyone can
 // read the page, only the admin sees/does the extra bit" precedent
@@ -114,9 +122,8 @@ const EXCLUDED_RESOURCE_NAMES = new Set(['Amber Worth', 'Damon Kirkpatrick', 'Me
 // Membership comes from ResourceRoleDepartments (a resource can hold more
 // than one row -- a role per department -- so membership here means ANY
 // active row for that department, not just their isDefault/primary one).
-const DEPARTMENT_LEADERSHIP_TEAM_ID = 29683488;
-const DEPARTMENT_SERVICE_DESK_ID = 29683489;
-const DEPARTMENT_PROFESSIONAL_SERVICES_ID = 29683490;
+// Department ids themselves now live in @dashboard/autotask-client (shared
+// with @dashboard/about-me) -- see fetchTeamMembership() below.
 
 const TEAM_SERVICE_DESK = 'service-desk';
 const TEAM_PROFESSIONAL_SERVICES = 'professional-services';
@@ -131,19 +138,12 @@ function resolveTeam(rawTeam) {
 // Real active ResourceRoleDepartments rows for just these 3 departments --
 // confirmed against real data: Leadership Team 3 (Damon Kirkpatrick, Melissa
 // Tannock, Amber Worth -- all 3 already excluded above regardless), Service
-// Desk 5, Professional Services 3.
+// Desk 5, Professional Services 3. Shared with @dashboard/about-me now
+// (@dashboard/autotask-client's own fetchServiceDeskAndProfessionalServicesMembership()),
+// not duplicated here anymore -- this local wrapper just keeps this file's
+// own `fetchTeamMembership()` call sites and return shape unchanged.
 async function fetchTeamMembership(client) {
-  const rows = await listAll(client.resourceRoleDepartments, [
-    { op: 'in', field: 'departmentID', value: [DEPARTMENT_LEADERSHIP_TEAM_ID, DEPARTMENT_SERVICE_DESK_ID, DEPARTMENT_PROFESSIONAL_SERVICES_ID] },
-    { op: 'eq', field: 'isActive', value: true },
-  ]);
-  const leadership = new Set();
-  const professionalServices = new Set();
-  for (const row of rows) {
-    if (row.departmentID === DEPARTMENT_LEADERSHIP_TEAM_ID) leadership.add(row.resourceID);
-    if (row.departmentID === DEPARTMENT_PROFESSIONAL_SERVICES_ID) professionalServices.add(row.resourceID);
-  }
-  return { leadership, professionalServices };
+  return fetchServiceDeskAndProfessionalServicesMembership(client);
 }
 
 // The three real rules, by request:

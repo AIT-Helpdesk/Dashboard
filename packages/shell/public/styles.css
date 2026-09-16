@@ -848,6 +848,36 @@ h1 {
 .date-form button:hover { opacity: 0.9; }
 .date-form button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Fixes a real, recurring specificity bug: `.date-form button` (1 class +
+   1 element = higher specificity than a single plain class) always beats
+   a lone `.button-link`/`.button-link--small` class on any <button>
+   living inside a .date-form, so a button meant to carry the small pill
+   look instead silently kept rendering as this rule's own solid-blue
+   default -- confirmed the hard way in two separate places now (first
+   Times' own quick-date buttons, patched at the time with a page-scoped
+   `.date-form .tm-quick-date-group button` override; then What's On's
+   own Refresh/Prev/Next/This Week buttons hit the exact same thing when
+   given the pill classes -- "none of those buttons on the What's on page
+   changed"). Fixed here ONCE, generically, with enough specificity
+   (class + element + class) to actually win no matter which page or
+   container the button lives in, rather than requiring a fresh one-off
+   override every time a future page adds a pill button inside a
+   .date-form. Same real values `.button-link`/`.button-link--small`
+   already set elsewhere -- just restated here where they're not
+   overridden. */
+.date-form button.button-link {
+  padding: 0.45rem 1rem;
+  background: var(--accent);
+  color: white;
+  font-size: 0.95rem;
+}
+.date-form button.button-link--small {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
 /* Same look as .date-form button, for an <a> that needs button styling
    (e.g. an external "Open in new tab" link) rather than an actual <button>. */
 .button-link {
@@ -1841,13 +1871,15 @@ h1 {
   letter-spacing: normal;
 }
 
-/* What's On's "Today & Tomorrow" section -- three columns (Service Calls,
-   Subscriptions Expiring, My Strety Tasks), each its own .resource-group
-   card, stacking to one column on narrow viewports same as this dashboard's
-   other multi-column layouts. */
+/* What's On's "Today & Tomorrow" section -- Subscriptions Expiring and My
+   Strety Tasks, each its own .resource-group card, stacking to one column
+   on narrow viewports same as this dashboard's other multi-column
+   layouts. Two columns, not three -- Service Calls moved out to its own
+   top-level section above (.wo-top-row, by request), so this class'
+   own grid only ever needs to fit the two remaining columns now. */
 .tt-columns {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 1rem;
 }
 @media (max-width: 900px) {
@@ -1855,11 +1887,103 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+/* Service Calls (left, 1/3) + Scorecards (right, 2/3), by request
+   ("please move the Service Calls section out of the Today and Tomorrow
+   ... up to the top. Put the Score cards to the right of the Service
+   Calls" -- width ratio a later request, "use only 1/3 of the available
+   width and use the 2/3 for the scorecards"). Both panels share the same
+   green-bordered card look .tt-section's own panel already uses, for
+   visual parity as a paired top row. Collapses to one column on a narrow
+   window, same breakpoint as every other multi-column layout on this
+   dashboard -- the JS-driven height match between the two (see
+   client.js's own syncServiceCallsHeight()) is deliberately turned off
+   below that width too, since a forced height would fight the natural
+   stacked layout instead of matching it. */
+.wo-top-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 1rem;
+  align-items: start;
+  margin: 1.5rem 0;
+}
+@media (max-width: 900px) {
+  .wo-top-row {
+    grid-template-columns: 1fr;
+  }
+}
+.wo-sc-section,
+.wo-scorecards-section {
+  background: var(--card);
+  border: 1px solid #16a34a;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem 0.5rem;
+  /* Lets each grid child shrink below its own content's natural min
+     width instead of overflowing the row -- a real CSS Grid default
+     (min-width: auto on grid items) that otherwise fights a narrow
+     column's own long ticket titles/scorecard rows. */
+  min-width: 0;
+}
+/* Horizontal scroll on each scorecard table's own card, by request ("add
+   back in 4 more scorecard entries to make it 7. and a horizontal scroll
+   for that section if required") -- Scorecards now sits in the narrower
+   2/3-width side of .wo-top-row (was a full-width section before Service
+   Calls moved in beside it), so a real 7-period-wide table (Metric +
+   Target + 7 date columns, each with its own un-wrapped metric name --
+   see .scorecard-table td:first-child above) can genuinely be wider than
+   that column provides. Scoped to just the scorecard cards inside this
+   section (not a dashboard-wide .resource-group change) -- every other
+   page's own .resource-group tables stay exactly as they were. */
+.wo-scorecards-section .resource-group {
+  overflow-x: auto;
+}
+/* #sc-section (client.js) is the exact element syncServiceCallsHeight()
+   sets an explicit height on, kept in lock-step with the Scorecards
+   column's own total height ("not over, not under", by request) -- flex
+   column so its own heading/status text keeps its natural height and
+   #sc-column-wrap (below) fills whatever room is left under that,
+   scrolling internally rather than pushing the box taller. */
+.wo-sc-section {
+  display: flex;
+  flex-direction: column;
+}
+/* flex: 1 fills the remaining height inside the now-fixed-height
+   #sc-section above; min-height: 0 is what actually lets a flex child
+   shrink below its own content's natural height at all (the real CSS
+   Grid/Flexbox default is min-height: auto, which would otherwise force
+   this to grow to fit its content and defeat the height cap entirely);
+   overflow-y: auto is the ONE scrollbar that shows up once the real
+   content doesn't fit the room left after the heading/status above it --
+   .tt-list's own 15rem cap is overridden away just below, by request
+   ("have the service calls list use the available space instead of
+   having an unnecessary scrollbar when there's room to use") -- without
+   that override, the inner list capped itself at 15rem and grew its OWN
+   separate scrollbar there regardless of how much real room this outer
+   wrap actually had above/below it. */
+.wo-sc-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Overrides .tt-list's own 15rem max-height/overflow-y (styles.css,
+   below) -- scoped to Service Calls' own context specifically (My
+   Strety Tasks, the one other column that can legitimately run long,
+   keeps its original per-list cap; it isn't inside a height-matched box
+   the way Service Calls is now). max-height: none plus overflow-y:
+   visible hands scrolling entirely to .wo-sc-wrap above, the one real
+   scroll boundary that actually matches the height Service Calls is
+   meant to reach. */
+.wo-sc-wrap .tt-list {
+  max-height: none;
+  overflow-y: visible;
+}
 /* Flex column, by request -- so .tt-column-body (below) can grow to fill
-   whatever height the grid's own default row-stretch already gives this
-   card (matching the tallest of the three columns), pushing
-   .tt-column-footer down to the same fixed spot at the bottom of every
-   column regardless of how much content is above it. */
+   whatever height it's given (the grid's own default row-stretch inside
+   .tt-columns, or the fixed pixel height client.js's own
+   syncServiceCallsHeight() sets on #sc-section for the Service Calls
+   card specifically), pushing .tt-column-footer down to the same fixed
+   spot at the bottom of every card regardless of how much content is
+   above it. */
 .tt-column {
   display: flex;
   flex-direction: column;
@@ -1984,6 +2108,14 @@ h1 {
 .tt-tag--overdue {
   background: color-mix(in srgb, #dc2626 18%, transparent);
   color: #dc2626;
+}
+/* Service Calls' own "next 7 working days" rows, by request -- plain
+   informational blue (var(--accent), not a new one-off colour), NOT the
+   overdue red: a future call isn't overdue, so reusing that same
+   alarming colour for it would be actively misleading. */
+.tt-tag--upcoming {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
 }
 /* Tag is a plain <span> for the today/tomorrow/no-link cases, but an <a>
    when a service call has a resolved ticket URL -- strip the link's default
@@ -2138,6 +2270,16 @@ table {
 }
 .scorecard-table th {
   font-size: 0.75rem;
+}
+/* Metric name column (the row label, first cell in every row), by request
+   ("don't wrap the metric name") -- a long real title (e.g. a full
+   Helpdesk Task Tracker metric name) otherwise wraps onto 2-3 lines,
+   which both looks messy and makes every OTHER row in the same table
+   taller than it needs to be (a table's own row height is shared by
+   every cell in that row). Left un-shrunk rather than truncated with an
+   ellipsis -- the real title is what a reader is actually here to read. */
+.scorecard-table td:first-child {
+  white-space: nowrap;
 }
 
 /* M365 Environment's Overview/Domains tables -- short, narrow content (a
@@ -6035,4 +6177,234 @@ tr.accrued-time-yellow-row th {
      dark-mode text colour on top of this now-light background otherwise. */
   background: color-mix(in srgb, #facc15 9%, white);
   color: #1a1a1a;
+}
+
+/* About Me -- one card per section, by request ("finds all the various
+   parts for a Resource"). Two explicit columns -- left is the date-
+   range-scoped activity (Completed Tickets, Accrued Time, Ticket Times,
+   Asked for Review), right is Shifts (moved to the top, by request)
+   followed by the four sections the date range doesn't touch (Service
+   Calls, Deadlines, Strety Tasks) -- swapped from the original left/
+   right assignment, by request ("Put all the sections currently on the
+   right on the left and all the left items onto the right"). 2/3 left,
+   1/3 right, by request ("use 2/3 of the page for the left side and the
+   remaining 1/3 for the right side"). No column heading on either side
+   -- the original "Upcoming" label was removed earlier, by request. Each
+   column is a plain vertical stack, not a wrapping grid -- card order
+   within a column is meaningful (client.js's own render() comment has
+   the full placement reasoning), unlike the original single auto-fill
+   grid this replaced. Collapses to one column on a narrow window rather
+   than squeezing two columns of already-wide tables (see
+   .about-me-table--wide below) into too little room each. Tickets
+   Dashboard and Subscriptions Expiring were both removed from this page
+   entirely, by request ("Leave off 'Tickets Dashboard' section and
+   'Subscriptions Expiring'"). */
+.about-me-columns {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .about-me-columns {
+    grid-template-columns: 1fr;
+  }
+}
+.about-me-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+/* Green outline, by request ("put green outlines on all tables on the
+   'About Me' page like the What's On page has") -- same #16a34a
+   green-bordered panel look What's On's own top-level sections
+   (.tt-section, .wo-sc-section, .wo-scorecards-section) already use, not
+   a new one-off colour. Applied to every card uniformly (Shifts' own
+   card included, even though it's a plain list rather than a table) for
+   visual consistency across the column, rather than leaving one card
+   looking different from the other seven. */
+.about-me-card {
+  border: 1px solid #16a34a;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  background: var(--card);
+}
+/* Card titles blue, by request ("make all table titles blue like most
+   other pages in the dashboard") -- same --accent blue Today & Tomorrow's
+   own Service Calls/Subscriptions Expiring/My Strety Tasks column
+   headings already use (.tt-column .section-heading), reused here rather
+   than a new one-off colour. The tag selector (h2, not the bare class)
+   is what keeps this OFF the group-level .section-heading divs below a
+   title (Allocated/Unallocated, Critical (P1)/Triage Now, Expiring/Annual
+   Renewals) -- those stay their own red/green, only the card's own <h2>
+   title matches h2.section-heading. */
+.about-me-card h2.section-heading {
+  color: var(--accent);
+}
+/* "Show All ..." button, by request ("add a button at the [end] of the
+   title row which jumps to the page that contains the full version of
+   that data") -- same .button-link.button-link--small pill look/
+   colouring What's On's own "Show All Service Calls" (etc.) footer links
+   already use. Rendered as a plain <a> right inside the card's own <h2>,
+   immediately after the subtitle text (client.js) -- NOT a flex sibling
+   of the heading: a flex row split the button onto its own visual line
+   whenever the title+subtitle text wrapped to two lines on a narrower
+   card, by request ("put those buttons on the same line as the
+   description instead of below it"). float: right (further request,
+   "right justified on that line") pins it to the heading's own right
+   edge while letting the title/subtitle text wrap AROUND it on the left
+   if it's ever long enough to need to -- the one CSS technique that
+   keeps the button on the heading's own line AND at its right end at
+   the same time, which plain inline flow (the previous fix) or a
+   space-between flex row (the one before that) each only achieved one
+   half of. */
+.about-me-card-full-link {
+  float: right;
+  margin-left: 0.5rem;
+}
+/* Shifts card's own per-entry colour pill, by request ("Colour the
+   Shifts Items in a style similar to the buttons on this page but using
+   the colour schemes for Shifts items from the Team Shifts section of
+   the What's On page") -- shape/size come from the shared
+   .button-link.button-link--small classes already on the element
+   (client.js), this just gives it a little breathing room from the date
+   label right before it and keeps it vertically centred against that
+   text instead of sitting low on its baseline (a pill's own padded box
+   reads low against plain text otherwise). */
+.about-me-shift-pill {
+  margin-left: 0.3rem;
+  vertical-align: middle;
+}
+/* Every table's own header row shaded blue too, by request ("all table
+   heading shaded blue please except where the colour of the heading has
+   been deliberately set to green or red") -- .shaded-row (added to every
+   <thead><tr> in client.js) is the same reusable class @dashboard/my-
+   strety-tasks' own table already uses for this exact look, just always
+   pinned to its LIGHT value here (same "tables stay light regardless of
+   theme" policy this page already applies) rather than the plain
+   `var(--section-header-bg)` .shaded-row itself resolves to (which would
+   otherwise go dark in dark mode). Deliberately does NOT touch the
+   group-level .section-heading--red/--green divs (Allocated/Unallocated,
+   Critical (P1)/Triage Now, Expiring/Annual Renewals) -- those keep their
+   own real red/green exactly as the request's own exception says. Higher
+   specificity than plain .shaded-row (tag + 2 classes vs. 1 class) is
+   what lets this win over it even though both carry !important. */
+.about-me-table thead tr.shaded-row {
+  background: #eff6ff !important;
+}
+.about-me-card ul {
+  margin: 0.3rem 0 0.75rem;
+  padding-left: 1.2rem;
+}
+.about-me-card ul:last-child {
+  margin-bottom: 0;
+}
+.about-me-card li {
+  font-size: 0.85rem;
+  margin-bottom: 0.2rem;
+}
+.about-me-table {
+  width: 100%;
+  font-size: 0.85rem;
+}
+/* 50% wider than the card would otherwise make it, by request ("Make all
+   of thise tables 50% wider so there's less wrapping") -- applied to
+   every table on this page except Completed Tickets (not named in
+   either the left or right list). min-width beats the plain width: 100%
+   above once it's the larger of the two, so this reliably overflows the
+   card by exactly half regardless of the column's own width; .about-me-
+   table-wrap's overflow-x: auto (below) is what lets that overflow
+   scroll WITHIN the card instead of breaking the two-column layout. */
+.about-me-table--wide {
+  min-width: 150%;
+}
+/* Accrued Time's own table opts OUT of the widening above, by request --
+   its other 3 columns are short, centered numbers with nothing to
+   stretch into, so forcing width dumped all the extra room as blank
+   padding in the Ticket column instead ("massive white space"). width:
+   auto overrides the plain .about-me-table's own width: 100% so the
+   table only ever takes the room its real content needs -- same fix
+   @dashboard/accrued-time's own `.accrued-time-table { width: auto; }`
+   already applies to this identical shape of table. */
+.about-me-table--auto {
+  width: auto;
+}
+/* A card's own .section-heading (Allocated/Unallocated, Critical (P1)/
+   Triage Now, Expiring/Annual Renewals) sits directly under the card's
+   own title heading or a previous group's table -- a little breathing
+   room above each one after the first, same idea as .resource-group's own
+   spacing between stacked sections elsewhere on this dashboard. */
+.about-me-card .section-heading {
+  margin: 0.5rem -1rem 0;
+}
+.about-me-card .section-heading:first-of-type {
+  margin-top: 0.3rem;
+}
+/* However many columns a table needs (Subscriptions Expiring's own 7), or
+   however much .about-me-table--wide above stretches it, this scrolls
+   WITHIN the card rather than ever forcing the whole page to scroll
+   sideways or squashing text unreadably -- same safety net a couple of
+   other wide tables on this dashboard already rely on. */
+.about-me-table-wrap {
+  overflow-x: auto;
+}
+/* Every table on this page stays in its LIGHT-mode colours always, even
+   when the browser/page itself is in dark mode, by request. Scoped to
+   just the table itself (background/text/borders/header/alternating
+   rows) plus the group-heading strips immediately above one (Allocated/
+   Unallocated, Critical (P1)/Triage Now, Expiring/Annual Renewals --
+   .about-me-card .section-heading--red/--green, both real backgrounds
+   that would otherwise clash with a now-white table right underneath),
+   NOT the whole card around them -- same "colored bits stay pinned to
+   their light-mode look regardless of theme" precedent Times/Accrued
+   Time's own tables already established this session, just covering the
+   WHOLE table here instead of only specific coloured cells. Every other
+   already-light-pinned class on this page (.cell-flag-*, .accrued-time-
+   end-col, .accrued-time-red-row/--yellow-row, .tt-tag--*) needs no
+   separate override -- those already mix against white/transparent
+   explicitly, so they render correctly the moment the cell they sit in
+   is pinned light too. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .about-me-table {
+    background: #ffffff;
+    color: #1a1a1a;
+  }
+  :root:not([data-theme="light"]) .about-me-table th,
+  :root:not([data-theme="light"]) .about-me-table td {
+    color: #1a1a1a;
+    border-top-color: #e5e7eb;
+  }
+  :root:not([data-theme="light"]) .about-me-table th {
+    color: #6b7280;
+  }
+  :root:not([data-theme="light"]) .about-me-table tbody tr:nth-child(even) {
+    background: #fafafb;
+  }
+  :root:not([data-theme="light"]) .about-me-card .section-heading--green {
+    background: #f2faf3;
+  }
+  :root:not([data-theme="light"]) .about-me-card .section-heading--red {
+    background: #fef2f3;
+  }
+}
+:root[data-theme="dark"] .about-me-table {
+  background: #ffffff;
+  color: #1a1a1a;
+}
+:root[data-theme="dark"] .about-me-table th,
+:root[data-theme="dark"] .about-me-table td {
+  color: #1a1a1a;
+  border-top-color: #e5e7eb;
+}
+:root[data-theme="dark"] .about-me-table th {
+  color: #6b7280;
+}
+:root[data-theme="dark"] .about-me-table tbody tr:nth-child(even) {
+  background: #fafafb;
+}
+:root[data-theme="dark"] .about-me-card .section-heading--green {
+  background: #f2faf3;
+}
+:root[data-theme="dark"] .about-me-card .section-heading--red {
+  background: #fef2f3;
 }

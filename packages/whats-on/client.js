@@ -193,7 +193,15 @@ const SHIFT_CATEGORIES = [
   // that field name in the resolved row shape).
   { key: 'unpaidLeave', label: 'Unpaid leave', color: '#dc2626', match: (dn) => /unpaid/i.test(dn) },
   { key: 'sickOther', label: 'Sick/Other Leave', color: '#8b5cf6', match: (dn) => /\bsick\b|other\s*leave/i.test(dn) },
-  { key: 'rdoTil', label: 'RDO/Time in Lieu', color: '#9ca3af', match: (dn) => /\brdo\b|time\s*in\s*lieu/i.test(dn) },
+  // "floating holiday" folded in here, not into publicHoliday below --
+  // confirmed against real data this tenant's real Autotask Leave billing
+  // code is spelled literally "Floating Holiday" (see fetchLeaveEntries()
+  // in server.js), and it doesn't say "public" so publicHoliday's own
+  // regex wouldn't have caught it anyway; a floating/discretionary day
+  // off is conceptually closer to RDO/Time in Lieu (an individually-
+  // earned day off) than to an actual gazetted, company-wide Public
+  // Holiday, so it's bucketed here rather than guessed into that one.
+  { key: 'rdoTil', label: 'RDO/Time in Lieu', color: '#9ca3af', match: (dn) => /\brdo\b|time\s*in\s*lieu|floating\s*holiday/i.test(dn) },
   {
     key: 'publicHoliday',
     label: 'Public Holiday',
@@ -213,20 +221,35 @@ export function mount(container) {
     <header class="page-header">
       <h1>What's On</h1>
     </header>
-    <p id="status" class="status">Helpdesk Task Tracker's scorecards, followed by your own personal scorecards -- up to the last 8 real check-in periods, most recent first. Hover a value for its check-in note.</p>
-    <div id="summary" class="section-heading section-heading--nav section-heading-row" hidden>
-      <span id="summary-text"></span>
-      <div class="date-form">
-        <button type="button" id="refresh-button">Refresh Scorecards</button>
+
+    <div class="wo-top-row" id="wo-top-row">
+      <div class="wo-sc-section" id="sc-section">
+        <div class="section-heading section-heading--nav section-heading-row">
+          <span>Service Calls</span>
+          <div class="date-form">
+            <button type="button" id="sc-refresh-button" class="button-link button-link--small">Refresh</button>
+          </div>
+        </div>
+        <p id="sc-status" class="status">Loading...</p>
+        <div id="sc-column-wrap" class="wo-sc-wrap"></div>
+      </div>
+      <div class="wo-scorecards-section" id="scorecards-wrap">
+        <p id="status" class="status">Helpdesk Task Tracker's scorecards, followed by your own personal scorecards -- up to the last 7 real check-in periods, most recent first. Hover a value for its check-in note.</p>
+        <div id="summary" class="section-heading section-heading--nav section-heading-row" hidden>
+          <span id="summary-text"></span>
+          <div class="date-form">
+            <button type="button" id="refresh-button" class="button-link button-link--small">Refresh Scorecards</button>
+          </div>
+        </div>
+        <div id="results" class="results"></div>
       </div>
     </div>
-    <div id="results" class="results"></div>
 
     <div class="tt-section">
       <div class="section-heading section-heading--nav section-heading-row">
         <span>Today &amp; Tomorrow</span>
         <div class="date-form">
-          <button type="button" id="tt-refresh-button">Refresh</button>
+          <button type="button" id="tt-refresh-button" class="button-link button-link--small">Refresh</button>
         </div>
       </div>
       <p id="tt-status" class="status">Loading...</p>
@@ -237,11 +260,11 @@ export function mount(container) {
       <div class="section-heading section-heading--nav section-heading-row">
         <span>Team Shifts -- General</span>
         <div class="date-form calendar-nav">
-          <button type="button" id="shifts-prev-button" aria-label="Previous week">&lsaquo;</button>
+          <button type="button" id="shifts-prev-button" class="button-link button-link--small" aria-label="Previous week">&lsaquo;</button>
           <span id="shifts-week-label" class="calendar-month-label"></span>
-          <button type="button" id="shifts-next-button" aria-label="Next week">&rsaquo;</button>
-          <button type="button" id="shifts-today-button">This Week</button>
-          <button type="button" id="shifts-refresh-button">Refresh</button>
+          <button type="button" id="shifts-next-button" class="button-link button-link--small" aria-label="Next week">&rsaquo;</button>
+          <button type="button" id="shifts-today-button" class="button-link button-link--small">This Week</button>
+          <button type="button" id="shifts-refresh-button" class="button-link button-link--small">Refresh</button>
         </div>
       </div>
       <p id="shifts-status" class="status">Loading...</p>
@@ -255,6 +278,12 @@ export function mount(container) {
   const summaryEl = container.querySelector('#summary');
   const summaryTextEl = container.querySelector('#summary-text');
   const resultsEl = container.querySelector('#results');
+  const scorecardsWrapEl = container.querySelector('#scorecards-wrap');
+
+  const scSectionEl = container.querySelector('#sc-section');
+  const scRefreshButton = container.querySelector('#sc-refresh-button');
+  const scStatusEl = container.querySelector('#sc-status');
+  const scColumnWrapEl = container.querySelector('#sc-column-wrap');
 
   const ttRefreshButton = container.querySelector('#tt-refresh-button');
   const ttStatusEl = container.querySelector('#tt-status');
@@ -274,7 +303,7 @@ export function mount(container) {
   // Delegated once on the stable #results container, not re-wired per
   // render -- scorecardTable() rebuilds this element's content on every
   // load, same "listener on the ancestor keeps working regardless"
-  // convention #tt-columns' own delegated listener below already uses.
+  // convention #sc-column-wrap's own delegated listener below already uses.
   resultsEl.addEventListener('click', (e) => {
     const updateCell = e.target.closest('.wo-update-cell');
     if (!updateCell) return;
@@ -298,12 +327,24 @@ export function mount(container) {
   }
 
   ttRefreshButton.addEventListener('click', () => loadTodayTomorrow(true));
-  // Delegated once on the stable #tt-columns container, not re-wired per
-  // render -- renderTodayTomorrow() below replaces its innerHTML on every
-  // load, but a listener on the ancestor itself keeps working regardless
-  // (event delegation), same convention as elsewhere on this dashboard
-  // where content re-renders more often than its container does.
-  ttColumnsEl.addEventListener('click', (e) => {
+  // Same handler, same refresh -- Service Calls moved out of #tt-columns
+  // into its own top-level section (#sc-column-wrap), by request, but its
+  // data still comes from the SAME combined /today-tomorrow fetch as
+  // Subscriptions Expiring/My Strety Tasks, so its own "Refresh" button
+  // just triggers the identical reload.
+  scRefreshButton.addEventListener('click', () => loadTodayTomorrow(true));
+  // Delegated once on each of the two stable containers Service Calls/
+  // Subscriptions Expiring/My Strety Tasks rows can land in, not re-wired
+  // per render -- renderTodayTomorrow() below replaces their innerHTML on
+  // every load, but a listener on the ancestor itself keeps working
+  // regardless (event delegation), same convention as elsewhere on this
+  // dashboard where content re-renders more often than its container
+  // does. Wired on #sc-column-wrap only -- Service Calls is the only one
+  // of the three columns whose rows/filter buttons carry the
+  // [data-sc-id]/[data-sc-filter] attributes this handler looks for, and
+  // it's the only content #sc-column-wrap ever holds now that it moved
+  // out of #tt-columns.
+  function onServiceCallsContainerClick(e) {
     // The Service Calls filter buttons (All/Just Mine/Unallocated), by
     // request -- checked first, before the [data-sc-id] row-click handling
     // below, since a filter button also lives inside the same delegated
@@ -326,7 +367,42 @@ export function mount(container) {
       startDateTime: row.dataset.scStart || null,
       endDateTime: row.dataset.scEnd || null,
     });
-  });
+  }
+  scColumnWrapEl.addEventListener('click', onServiceCallsContainerClick);
+
+  // Service Calls' own box height is kept in lock-step with the
+  // Scorecards column's total rendered height, by request ("have the
+  // Service Calls box reach the same depth as the Scorecards total
+  // length, not over, not under") -- a ResizeObserver on the scorecards
+  // wrapper (rather than calling this only right after each known
+  // render) means ANY future height change (scorecard data loading,
+  // admin metric edits, a browser font/zoom change) keeps both boxes in
+  // sync automatically, without hunting down every place scorecards
+  // content can change. Cleared (not applied) below 900px -- the two
+  // columns stack to one on a narrow window (.wo-top-row's own media
+  // query, styles.css), where a forced height would fight the natural
+  // stacked layout instead of matching it.
+  // Sets the height on the OUTER Service Calls box (#sc-section), not
+  // just its inner list wrapper -- #sc-section's own heading/status text
+  // sits above #sc-column-wrap (same shape .wo-scorecards-section's own
+  // status text sits above #results), so matching #sc-column-wrap alone
+  // to scorecardsWrapEl's FULL height would make the outer box taller
+  // than Scorecards' own box by exactly that heading's height. #sc-
+  // section is a flex column (styles.css) with #sc-column-wrap as its
+  // flex: 1, min-height: 0, overflow-y: auto child, so fixing the OUTER
+  // height here correctly lets the inner wrap fill (and scroll within)
+  // whatever room is left after the heading/status above it.
+  const NARROW_LAYOUT_QUERY = '(max-width: 900px)';
+  function syncServiceCallsHeight() {
+    if (window.matchMedia(NARROW_LAYOUT_QUERY).matches) {
+      scSectionEl.style.height = '';
+      return;
+    }
+    scSectionEl.style.height = `${scorecardsWrapEl.offsetHeight}px`;
+  }
+  new ResizeObserver(syncServiceCallsHeight).observe(scorecardsWrapEl);
+  window.addEventListener('resize', syncServiceCallsHeight);
+
   if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
   else loadTodayTomorrow(justConnectedStrety);
   // Fire-and-forget, not awaited -- primes cachedServiceCallStatusOptions
@@ -341,10 +417,15 @@ export function mount(container) {
     // serviceCallFilter's own comment at the top of this file.
     serviceCallFilter = 'all';
     ttRefreshButton.disabled = true;
+    scRefreshButton.disabled = true;
     ttStatusEl.hidden = false;
     ttStatusEl.className = 'status';
     ttStatusEl.textContent = 'Loading...';
     ttColumnsEl.innerHTML = '';
+    scStatusEl.hidden = false;
+    scStatusEl.className = 'status';
+    scStatusEl.textContent = 'Loading...';
+    scColumnWrapEl.innerHTML = '';
 
     try {
       const res = await fetch(`/api/whats-on/today-tomorrow${force ? '?force=true' : ''}`);
@@ -356,8 +437,12 @@ export function mount(container) {
       ttStatusEl.hidden = false;
       ttStatusEl.className = 'status error';
       ttStatusEl.textContent = `Error: ${err.message}`;
+      scStatusEl.hidden = false;
+      scStatusEl.className = 'status error';
+      scStatusEl.textContent = `Error: ${err.message}`;
     } finally {
       ttRefreshButton.disabled = false;
+      scRefreshButton.disabled = false;
     }
   }
 
@@ -367,11 +452,17 @@ export function mount(container) {
       ttStatusEl.className = 'status error';
       ttStatusEl.textContent = 'Could not determine your signed-in email.';
       ttColumnsEl.innerHTML = '';
+      scStatusEl.hidden = false;
+      scStatusEl.className = 'status error';
+      scStatusEl.textContent = 'Could not determine your signed-in email.';
+      scColumnWrapEl.innerHTML = '';
       return;
     }
 
     ttStatusEl.hidden = true;
     ttColumnsEl.innerHTML = '';
+    scStatusEl.hidden = true;
+    scColumnWrapEl.innerHTML = '';
 
     // All/Just Mine/Unallocated, by request -- a pure client-side filter
     // over the already-fetched rows (see serviceCallFilter's own comment
@@ -384,16 +475,23 @@ export function mount(container) {
       scColumn.ok && serviceCallFilter !== 'all'
         ? scColumn.rows.filter((r) => (serviceCallFilter === 'mine' ? r.isMine : !r.allocated))
         : scColumn.rows;
-    // Distinguishes "no calls today/tomorrow at all" (ttColumn()'s own
-    // default empty message already covers that) from "there ARE calls,
-    // the current filter just hides all of them" -- the generic message
-    // would otherwise misleadingly imply nothing's scheduled at all.
+    // Distinguishes "no calls today/tomorrow/overdue/upcoming at all"
+    // (its own real message now, not ttColumn()'s generic "Nothing today
+    // or tomorrow" default -- this column's own window is much wider now,
+    // by request) from "there ARE calls, the current filter just hides
+    // all of them" -- each gets its own real wording rather than either
+    // misleadingly implying the other.
     const scEmptyMessage =
       scColumn.ok && scColumn.rows.length > 0 && scVisibleRows.length === 0
         ? `No service calls match "${SERVICE_CALL_FILTERS.find((f) => f.value === serviceCallFilter)?.label}".`
-        : null;
+        : scColumn.ok && scColumn.rows.length === 0
+          ? 'Nothing today, tomorrow, overdue, or in the next 7 working days.'
+          : null;
 
-    ttColumnsEl.appendChild(
+    // Appended to #sc-column-wrap now, not #tt-columns -- moved to its
+    // own top-level section, by request ("please move the Service Calls
+    // section out of the Today and Tomorrow ... up to the top").
+    scColumnWrapEl.appendChild(
       ttColumn(
         'Service Calls',
         scColumn.ok ? { ...scColumn, rows: scVisibleRows } : scColumn,
@@ -404,6 +502,12 @@ export function mount(container) {
         { totalCount: scColumn.ok ? scColumn.rows.length : undefined, headingExtraHtml: scColumn.ok ? serviceCallFilterButtonsHtml() : '' }
       )
     );
+    // Height sync is normally driven by the ResizeObserver on the
+    // scorecards column (see mount()'s own comment), but that only fires
+    // when SCORECARDS' own size changes -- calling it here too covers the
+    // very first paint, where Service Calls renders its real content
+    // before any scorecards resize event has necessarily fired yet.
+    syncServiceCallsHeight();
     ttColumnsEl.appendChild(
       ttColumn(
         'Subscriptions Expiring',
@@ -499,9 +603,10 @@ export function mount(container) {
   // The Service Calls column's own All/Just Mine/Unallocated buttons, by
   // request -- the currently-showing one highlighted green
   // (.tt-filter-btn--active). Delegated click handling lives on
-  // #tt-columns itself (see mount()'s own listener above), not wired here
-  // per-render -- these buttons get torn down and rebuilt on every
-  // renderTodayTomorrow() call same as everything else in this column.
+  // #sc-column-wrap (see mount()'s own onServiceCallsContainerClick),
+  // not wired here per-render -- these buttons get torn down and rebuilt
+  // on every renderTodayTomorrow() call same as everything else in this
+  // column.
   function serviceCallFilterButtonsHtml() {
     return `<span class="tt-filter-buttons">${SERVICE_CALL_FILTERS.map(
       (f) =>
@@ -509,22 +614,29 @@ export function mount(container) {
     ).join('')}</span>`;
   }
 
-  // "Today"/"Tomorrow"/"Overdue" tag shared by all three row renderers --
-  // green for today (most immediate), amber for tomorrow, same status-color
-  // convention (not a new one) used elsewhere on this dashboard. Anything
-  // that's neither today nor tomorrow (Strety's own overdue to-dos, and
-  // Service Calls' past-scheduled-and-still-incomplete rows) is the overdue
-  // case -- shown red with just its actual date (no "Overdue" text label,
-  // by request -- the red already says that on its own). `href`, when given,
-  // renders the tag itself as a link (service call -> its ticket) instead of
-  // a plain span -- opened as a real popup window, same explicit
-  // window.open(..., 'width=1200,height=900') convention every other ticket
-  // link on this dashboard uses (see e.g. service-calls/client.js), not just
-  // target="_blank" (which only opens a new tab). `tooltip`, when given, is
-  // a plain native title="" tooltip -- by request, Service Calls' own tags
-  // show their linked ticket's number/title on hover this way (the other
-  // two columns don't pass one -- neither subscriptions nor Strety tasks
-  // have a "ticket" for this to mean anything).
+  // "Today"/"Tomorrow"/"Overdue"/"Upcoming" tag shared by all three row
+  // renderers -- green for today (most immediate), amber for tomorrow,
+  // same status-color convention (not a new one) used elsewhere on this
+  // dashboard. A dateKey BEFORE today (Strety's own overdue to-dos, and
+  // Service Calls' past-scheduled-and-still-incomplete rows) is the
+  // overdue case -- shown red with just its actual date (no "Overdue"
+  // text label, by request -- the red already says that on its own). A
+  // dateKey AFTER tomorrow (Service Calls' own "next 7 working days"
+  // rows, by request -- the only column whose window extends that far
+  // forward) is the new "upcoming" case -- shown in the dashboard's
+  // plain informational blue, NOT the overdue red (a future call isn't
+  // overdue, so reusing that same alarming colour for it would be
+  // actively misleading), with the same bare-date label. `href`, when
+  // given, renders the tag itself as a link (service call -> its ticket)
+  // instead of a plain span -- opened as a real popup window, same
+  // explicit window.open(..., 'width=1200,height=900') convention every
+  // other ticket link on this dashboard uses (see e.g. service-calls/
+  // client.js), not just target="_blank" (which only opens a new tab).
+  // `tooltip`, when given, is a plain native title="" tooltip -- by
+  // request, Service Calls' own tags show their linked ticket's number/
+  // title on hover this way (the other two columns don't pass one --
+  // neither subscriptions nor Strety tasks have a "ticket" for this to
+  // mean anything).
   function ttDayTag(dateKey, today, tomorrow, href, tooltip) {
     let cls;
     let label;
@@ -534,10 +646,14 @@ export function mount(container) {
     } else if (dateKey === tomorrow) {
       cls = 'tt-tag--tomorrow';
       label = 'Tomorrow';
-    } else {
+    } else if (dateKey < today) {
       cls = 'tt-tag--overdue';
       // By request: just the date, no "Overdue" prefix -- the red
       // .tt-tag--overdue color already says that on its own.
+      label = formatShortDate(dateKey);
+    } else {
+      // dateKey > tomorrow -- upcoming, not overdue.
+      cls = 'tt-tag--upcoming';
       label = formatShortDate(dateKey);
     }
     const titleAttr = tooltip ? ` title="${escapeHtml(tooltip)}"` : '';
@@ -546,10 +662,10 @@ export function mount(container) {
       // plain left-click anywhere on the Service Calls ROW (not just this
       // tag -- see the <li data-sc-id> wrapper in serviceCallRowHtml()
       // below) is intercepted client-side to open the Open ticket/Mark
-      // Complete popup instead (wireServiceCallMenu(), delegated on
-      // #tt-columns). A middle-click or right-click -> "open in new tab"
-      // on the tag itself never fires that JS at all, so those still go
-      // straight to the ticket natively.
+      // Complete popup instead (onServiceCallsContainerClick(), delegated
+      // on #sc-column-wrap). A middle-click or right-click -> "open in
+      // new tab" on the tag itself never fires that JS at all, so those
+      // still go straight to the ticket natively.
       return `<a class="tt-tag ${cls}"${titleAttr} href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
     }
     return `<span class="tt-tag ${cls}"${titleAttr}>${label}</span>`;
@@ -1061,7 +1177,12 @@ export function mount(container) {
 
   function shiftEntryHtml(e) {
     const cat = categorizeShift(e);
-    const line1 = `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
+    // Real Autotask Leave (kind: 'leave', see fetchLeaveEntries() in
+    // server.js) has no real start/end time -- it's a whole
+    // TimeEntries.dateWorked day with an hoursWorked total, not a Graph
+    // shift with real clock times -- so line1 shows that hours total
+    // instead of a blank "-" a real formatTime(null) pair would produce.
+    const line1 = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
     const line2 = e.userName || '(Open shift)';
     // Type -- the matched legend category's own clean label when there is
     // one (e.g. "Vacation", not the raw underlying reason text "Vacation
@@ -1081,7 +1202,7 @@ export function mount(container) {
     const line2Style = cat ? ' style="color: #6b7280;"' : '';
     const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line2)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line3)}</span>`;
     const titleLines = [
-      `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
+      e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
       `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
       `Type: ${e.displayName || '(unlabeled)'}${cat ? ` -- ${cat.label}` : ''}`,
     ];
@@ -1376,10 +1497,10 @@ export function mount(container) {
     }
 
     // Columns are real shared periods (the most recent ones ANY metric in
-    // this cadence actually has a check-in for, see server.js) -- every row
-    // lines up against the exact same dates, not its own independent
-    // "last 8" -- so the header can show a real date per column instead of
-    // a generic "last 8" label.
+    // this cadence actually has a check-in for, see server.js's own
+    // HISTORY_LIMIT) -- every row lines up against the exact same dates,
+    // not its own independent "last N" -- so the header can show a real
+    // date per column instead of a generic "last N" label.
     const table = document.createElement('table');
     table.className = 'scorecard-table';
     table.innerHTML = `
@@ -1806,6 +1927,16 @@ export function mount(container) {
   function formatTime(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  // For a real Leave entry's hoursWorked total (e.g. the confirmed real
+  // 7.6 full day) -- trims a whole number's trailing ".0" but keeps one
+  // decimal place otherwise, same "don't over-precision a round number"
+  // reasoning small hour displays elsewhere on this dashboard already use.
+  function formatHours(hours) {
+    if (hours === null || hours === undefined) return '0';
+    const rounded = Math.round(hours * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
   }
 
   function escapeHtml(str) {

@@ -23,26 +23,43 @@ const TEAM_NAME = 'General';
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-// Microsoft Teams Shifts' own fixed theme enum (confirmed against real data:
-// yellow/purple/darkPink/pink all seen on one team's real August shifts) --
-// mapped to concrete colors here since Graph only ever returns the theme
-// NAME, never a hex value. "White"/no theme falls back to the shared
-// calendar-entry--allocated look (a plain accent tint) rather than
-// rendering literally white-on-white.
-const THEME_COLORS = {
-  blue: '#3b82f6',
-  green: '#22c55e',
-  purple: '#8b5cf6',
-  pink: '#ec4899',
-  yellow: '#eab308',
-  gray: '#9ca3af',
-  darkBlue: '#1e3a8a',
-  darkGreen: '#166534',
-  darkPurple: '#5b21b6',
-  darkPink: '#9d174d',
-  darkYellow: '#854d0e',
-  darkGray: '#4b5563',
-};
+// Same fixed legend/category list @dashboard/whats-on's own client.js
+// defines for its Team Shifts excerpt (see that file's own long comment
+// for the full real-data confirmation story behind every pattern here) --
+// duplicated, not imported, same "separate page package" convention every
+// other small shared UI piece on this dashboard already follows. Replaces
+// this page's own previous THEME_COLORS (Microsoft Teams' raw theme enum
+// mapped to hex, with no real-world meaning attached), by request ("Apply
+// this colouring also to the 'Shifts and Schedules' page") -- the same
+// meaningful On Call/Helpdesk Handler/Vacation/etc. categories now colour
+// entries here too, not just What's On's own excerpt.
+const SHIFT_CATEGORIES = [
+  { key: 'onCall', label: 'On Call', color: '#eab308', match: (dn) => /^on\s*call/i.test(dn) },
+  { key: 'helpdesk', label: 'Helpdesk Handler', color: '#3b82f6', match: (dn) => /helpdesk\s*handler/i.test(dn) },
+  { key: 'vacation', label: 'Vacation', color: '#22c55e', match: (dn) => /vacation/i.test(dn) },
+  { key: 'unpaidLeave', label: 'Unpaid leave', color: '#dc2626', match: (dn) => /unpaid/i.test(dn) },
+  { key: 'sickOther', label: 'Sick/Other Leave', color: '#8b5cf6', match: (dn) => /\bsick\b|other\s*leave/i.test(dn) },
+  // "floating holiday" folded in here, not into publicHoliday below --
+  // confirmed against real data this tenant's real Autotask Leave billing
+  // code is spelled literally "Floating Holiday" (see fetchLeaveEntries()
+  // in server.js), and it doesn't say "public" so publicHoliday's own
+  // regex wouldn't have caught it anyway; a floating/discretionary day
+  // off is conceptually closer to RDO/Time in Lieu (an individually-
+  // earned day off) than to an actual gazetted, company-wide Public
+  // Holiday, so it's bucketed here rather than guessed into that one.
+  { key: 'rdoTil', label: 'RDO/Time in Lieu', color: '#9ca3af', match: (dn) => /\brdo\b|time\s*in\s*lieu|floating\s*holiday/i.test(dn) },
+  {
+    key: 'publicHoliday',
+    label: 'Public Holiday',
+    color: '#ffffff',
+    match: (dn) => /pub(lic)?\s*hol|australia\s*day|good\s*friday|easter\s*monday|labour\s*day|christmas|boxing\s*day|anzac\s*day|new\s*year/i.test(dn),
+  },
+];
+function categorizeShift(entry) {
+  const dn = (entry.displayName || '').trim();
+  if (!dn) return null;
+  return SHIFT_CATEGORIES.find((cat) => cat.match(dn)) || null;
+}
 
 export function mount(container) {
   container.innerHTML = `
@@ -59,6 +76,7 @@ export function mount(container) {
     <p id="status" class="status">Loading...</p>
     <div id="summary" class="summary" hidden></div>
     <div id="calendar" class="results"></div>
+    <div id="shifts-legend" class="shifts-legend"></div>
   `;
 
   const prevButton = container.querySelector('#prev-button');
@@ -69,6 +87,21 @@ export function mount(container) {
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const calendarEl = container.querySelector('#calendar');
+  const shiftsLegendEl = container.querySelector('#shifts-legend');
+
+  // Static (doesn't depend on loaded data), so rendered once here rather
+  // than re-rendered on every load() -- same convention What's On's own
+  // Team Shifts excerpt uses for its identical legend.
+  renderShiftsLegend();
+  function renderShiftsLegend() {
+    shiftsLegendEl.innerHTML = SHIFT_CATEGORIES.map((cat) => {
+      const swatchStyle =
+        cat.key === 'publicHoliday'
+          ? `background: #ffffff; border: 1px solid var(--border);`
+          : `background: ${cat.color}; border: 1px solid color-mix(in srgb, ${cat.color} 60%, black);`;
+      return `<span class="shifts-legend-item"><span class="shifts-legend-swatch" style="${swatchStyle}"></span>${escapeHtml(cat.label)}</span>`;
+    }).join('');
+  }
 
   function defaultMonthKey() {
     const now = new Date();
@@ -199,24 +232,55 @@ export function mount(container) {
   }
 
   function entryHtml(e) {
-    const line1 = `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
+    const cat = categorizeShift(e);
+    // Real Autotask Leave (kind: 'leave', see fetchLeaveEntries() in
+    // server.js) has no real start/end time -- it's a whole
+    // TimeEntries.dateWorked day with an hoursWorked total, not a Graph
+    // shift with real clock times -- so line1 shows that hours total
+    // instead of a blank "-" a real formatTime(null) pair would produce.
+    const line1 = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
     const line2 = e.userName || '(Open shift)';
-    const line3 = e.displayName || e.schedulingGroupName || '';
-    const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2">${escapeHtml(line2)}</span>${
-      line3 ? `<span class="calendar-entry-line2">${escapeHtml(line3)}</span>` : ''
+    // The matched legend category's own clean label when there is one
+    // (e.g. "Vacation", not the raw underlying reason text "Vacation
+    // (green)"), otherwise the raw displayName/schedulingGroupName this
+    // page already fell back to -- same real convention What's On's own
+    // shiftEntryHtml() uses for this identical field, by request ("Apply
+    // this colouring also to the 'Shifts and Schedules' page").
+    const line3 = cat ? cat.label : e.displayName || e.schedulingGroupName || '';
+    // line2's own colour is pinned literal light --muted (not
+    // var(--muted), which would follow the page's real theme) only once
+    // a matched category has ALSO pinned this entry's own background to
+    // its light-mode look below -- same reasoning What's On's own
+    // shiftEntryHtml() uses: a dark-theme muted grey would otherwise sit
+    // illegibly on top of the now-always-light pastel tint.
+    const line2Style = cat ? ' style="color: #6b7280;"' : '';
+    const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line2)}</span>${
+      line3 ? `<span class="calendar-entry-line2"${line2Style}>${escapeHtml(line3)}</span>` : ''
     }`;
     const titleLines = [
-      `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
+      e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
       `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
     ];
-    if (e.displayName) titleLines.push(`Label: ${e.displayName}`);
+    if (e.displayName) titleLines.push(`Label: ${e.displayName}${cat ? ` -- ${cat.label}` : ''}`);
     if (e.schedulingGroupName) titleLines.push(`Group: ${e.schedulingGroupName}`);
     if (e.notes) titleLines.push(`Notes: ${e.notes}`);
     if (!e.published) titleLines.push('Not yet published (draft)');
     const title = escapeHtml(titleLines.join('\n'));
 
-    const color = e.theme && THEME_COLORS[e.theme];
-    const style = color ? `style="background: color-mix(in srgb, ${color} 22%, transparent); border-left-color: ${color};"` : '';
+    // Public Holiday's box is white -- a translucent tint would be
+    // indistinguishable from an empty cell on a light background, so it
+    // gets a solid fill plus a visible border instead, same special case
+    // the legend swatch above and What's On's own shiftEntryHtml() both
+    // use. Every matched-category entry is pinned to its light-mode look
+    // always (mixing toward opaque white, not transparent), same reason
+    // as that page's own version -- an unmatched entry (no cat at all)
+    // is untouched and just follows the page's real theme normally, same
+    // as this page's own previous THEME_COLORS behaviour did.
+    const style = !cat
+      ? ''
+      : cat.key === 'publicHoliday'
+        ? `style="background: #ffffff; color: #1a1a1a; border: 1px solid #e5e7eb; border-left: 4.5px solid #9ca3af;"`
+        : `style="background: color-mix(in srgb, ${cat.color} 22%, white); color: #1a1a1a; border-left-color: ${cat.color};"`;
     const draftClass = e.published ? '' : ' calendar-entry--onsite-tba'; // reuse the existing dashed/red-accent look for "needs attention" -- draft shifts aren't final yet
     return `<div class="calendar-entry calendar-entry--allocated${draftClass}" ${style} title="${title}">${inner}</div>`;
   }
@@ -271,7 +335,7 @@ ${cardsHtml || '<p class="empty">No shifts.</p>'}
   }
 
   function dayPopupEntryHtml(e, colors) {
-    const time = `${formatTime(e.startDateTime)} - ${formatTime(e.endDateTime)}`;
+    const time = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatTime(e.startDateTime)} - ${formatTime(e.endDateTime)}`;
     const activitiesHtml = e.activities.length
       ? `<dt>Activities</dt><dd>${e.activities
           .map((a) => `${escapeHtml(a.code || '')} (${formatTime(a.startDateTime)} - ${formatTime(a.endDateTime)})`)
@@ -297,6 +361,16 @@ ${cardsHtml || '<p class="empty">No shifts.</p>'}
   function formatTime(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  // For a real Leave entry's hoursWorked total (e.g. the confirmed real
+  // 7.6 full day) -- trims a whole number's trailing ".0" but keeps one
+  // decimal place otherwise, same "don't over-precision a round number"
+  // reasoning small hour displays elsewhere on this dashboard already use.
+  function formatHours(hours) {
+    if (hours === null || hours === undefined) return '0';
+    const rounded = Math.round(hours * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
   }
 
   function formatDateTime(iso) {

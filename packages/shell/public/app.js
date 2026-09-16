@@ -688,6 +688,61 @@ let pendingPrewarmedPage = null;
 // page configured for 20s is actually on screen for roughly 20s + this.
 const ROTATE_PRELOAD_BUFFER_MS = 1500;
 
+// ---- Watchdog -- by request ("the rotate of the dashboards stops
+// sometimes ... can we check for that and force a refresh and auto-restart
+// the rotate"). Nothing conclusive was found to reproduce/pin down as THE
+// one root cause -- this is a general safety net, not a fix for one
+// specific bug: rotation only ever advances again once loadPage() (fired
+// by the hashchange preloadAndAdvance() itself triggers) gets far enough
+// to call scheduleNextRotation() -- if that chain is ever interrupted for
+// ANY reason (an uncaught exception, a hashchange that doesn't fire, a
+// throttled/suspended background timer, ...), rotationActive stays true
+// forever with no timer ever re-armed, and nothing else here would ever
+// notice. The watchdog below is an independent, periodic check for
+// exactly that: has too long passed since the current page's own
+// countdown was last (re)armed, given how long IT was configured to show
+// for? If so, treat it as stalled and self-heal with a real page reload
+// rather than trying to detect/repair whatever the specific stuck state
+// is from the inside.
+let lastRotationAdvanceAt = 0;
+const ROTATE_WATCHDOG_INTERVAL_MS = 15000;
+// Generous on top of the current page's own configured duration (+ the
+// preload buffer already baked into every real advance) -- this needs to
+// comfortably tolerate a normal slow page mount/fetch, not fire on
+// anything short of a genuine stall.
+const ROTATE_WATCHDOG_GRACE_MS = 30000;
+// sessionStorage, deliberately NOT localStorage -- survives exactly the
+// one reload this watchdog itself triggers (sessionStorage persists
+// across a reload of the SAME tab), but is gone for a genuinely new
+// session (new tab/window, browser restart). Rotation itself is still
+// deliberately "not a lasting preference" (see the engine's own top
+// comment, above) -- this is narrowly just "resume what a stall
+// interrupted", not a general remember-rotation-across-visits feature; a
+// plain manual refresh for any other reason never sets this, so it never
+// force-restarts a rotation someone had genuinely stopped.
+const ROTATE_RESUME_AFTER_RELOAD_KEY = 'dashboard.rotateResumeAfterReload';
+
+function checkRotationWatchdog() {
+  if (!rotationActive || rotationPaused) return;
+  const expectedMs = getRotateSeconds(currentPageId()) * 1000 + ROTATE_PRELOAD_BUFFER_MS;
+  const elapsed = Date.now() - lastRotationAdvanceAt;
+  if (elapsed <= expectedMs + ROTATE_WATCHDOG_GRACE_MS) return;
+  console.error(
+    `Rotate: watchdog detected a stall (${Math.round(elapsed / 1000)}s since the last advance, expected ~${Math.round(
+      expectedMs / 1000
+    )}s) -- forcing a refresh and resuming rotation after it.`
+  );
+  try {
+    sessionStorage.setItem(ROTATE_RESUME_AFTER_RELOAD_KEY, '1');
+  } catch {
+    // sessionStorage unavailable -- the reload below still happens
+    // (unsticking a genuinely stalled rotation matters even if it can't
+    // auto-resume afterward), it just won't self-resume.
+  }
+  window.location.reload();
+}
+setInterval(checkRotationWatchdog, ROTATE_WATCHDOG_INTERVAL_MS);
+
 function scheduleNextRotation() {
   clearTimeout(rotationTimer);
   rotationTimer = null;
@@ -697,6 +752,10 @@ function scheduleNextRotation() {
   // silently un-pausing.
   if (!rotationActive || rotationPaused) return;
   rotationTimer = setTimeout(advanceRotation, getRotateSeconds(currentPageId()) * 1000);
+  // Marks "the current page's own countdown just (re)armed successfully" --
+  // read by checkRotationWatchdog() above to notice when this DIDN'T
+  // happen again for far longer than it should have.
+  lastRotationAdvanceAt = Date.now();
 }
 
 // Pause only stops the auto-advance timer -- rotation stays fully "on"
@@ -892,10 +951,27 @@ function renderRotateControls() {
 }
 
 function startRotation() {
+  // Already running -- a no-op, not a restart. Matters now that two
+  // independent things can both try to start rotation on the same page
+  // load (a "?rotate=on" kiosk URL AND checkRotationWatchdog()'s own
+  // resume-after-reload both firing, e.g. if a kiosk's saved URL happens
+  // to already be "?rotate=on" -- location.reload() preserves it, so a
+  // watchdog-triggered reload lands right back on the same URL) -- without
+  // this, the second call would redundantly re-run the whole start
+  // sequence (re-request fullscreen, re-unpin the sidebar, and either
+  // re-click refresh on the current page or kick off a second, overlapping
+  // preloadAndAdvance()) on top of the first.
+  if (rotationActive) return;
   const list = orderedRotatePageIds();
   if (list.length === 0) return;
   rotationActive = true;
   rotationPaused = false;
+  // Marks "rotation activity just began" BEFORE any real timer is armed --
+  // gives the very first page's own preload/mount a fair grace window
+  // (checkRotationWatchdog(), above) rather than measuring from whatever
+  // stale value this held from before rotation started (possibly 0, on a
+  // fresh page load).
+  lastRotationAdvanceAt = Date.now();
   renderRotateControls();
   // By request -- gets the sidebar fully out of the way for the duration:
   // unpinned (so it can't stay open) AND full screen (hides it outright,
@@ -1658,6 +1734,22 @@ function maybeAutoStartRotation() {
   if (['on', 'true', '1', 'yes'].includes(value)) startRotation();
 }
 
+// The other half of checkRotationWatchdog() above -- picks up the flag it
+// set right before its own self-healing reload, and resumes rotation.
+// Cleared immediately either way, so this only ever fires for the ONE
+// reload the watchdog itself triggered, never for a normal manual refresh
+// afterward.
+function maybeResumeRotationAfterWatchdogReload() {
+  let shouldResume = false;
+  try {
+    shouldResume = sessionStorage.getItem(ROTATE_RESUME_AFTER_RELOAD_KEY) === '1';
+    sessionStorage.removeItem(ROTATE_RESUME_AFTER_RELOAD_KEY);
+  } catch {
+    // sessionStorage unavailable -- nothing to resume from either way.
+  }
+  if (shouldResume) startRotation();
+}
+
 async function init() {
   tree = await loadTree();
   // Only actually reveal the preview-user button once loadTree() has come
@@ -1669,5 +1761,6 @@ async function init() {
   await loadPage(currentPageId());
   renderUserInfo();
   maybeAutoStartRotation();
+  maybeResumeRotationAfterWatchdogReload();
 }
 init();
