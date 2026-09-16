@@ -1,5 +1,5 @@
 const express = require('express');
-const { getClient, listAll, fetchByFieldIn, getPicklistLabels, getTicketUrl, mapWithConcurrency } = require('@dashboard/autotask-client');
+const { getClient, listAll, fetchByFieldIn, getPicklistLabels, getTicketUrl, mapWithConcurrency, resolveCompanyName } = require('@dashboard/autotask-client');
 
 // Resources.licenseType 7 is "API User" -- same real fact confirmed
 // against real data in @dashboard/times' own README, reused here rather
@@ -196,16 +196,21 @@ async function buildRows(client, ticketIds, ticketById, statusLabelById) {
     // "closing click") -- the real accrued time sits in offsetHours, not
     // hoursWorked, for these two work types specifically. Accrue--ING
     // never does this (confirmed: 0 of 49 real ING entries the same week
-    // had any offsetHours at all), so this is scoped to just END/No-Bill,
-    // not applied to every bucket.
-    const endHours = hours + (e.offsetHours || 0);
+    // had any offsetHours at all), so ING is deliberately left out of this
+    // adjustment. Widened to .STD and Other too, by request ("adjust up
+    // or down by any offset entered for .STD and OTHER as well") -- same
+    // adjustedHours figure, just applied to two more buckets; offsetHours
+    // can be negative as well as positive (an "adjust down" is a real,
+    // legitimate case, not just the "closing click" pattern END/No-Bill
+    // usually shows), so this is a plain add, not a max(0, ...) floor.
+    const adjustedHours = hours + (e.offsetHours || 0);
     const workType = resolveWorkType(e.billingCodeID, billingCodeNameById);
     if (workType === WORK_TYPE_ACCRUE_ING) bucket.accrueIng += hours;
-    else if (workType === WORK_TYPE_ACCRUE_END) bucket.accrueEnd += endHours;
-    else if (workType === WORK_TYPE_ACCRUE_END_NO_BILL) bucket.accrueEndNoBill += endHours;
-    else if (workType === WORK_TYPE_STANDARD_SUPPORT) bucket.standardSupport += hours;
+    else if (workType === WORK_TYPE_ACCRUE_END) bucket.accrueEnd += adjustedHours;
+    else if (workType === WORK_TYPE_ACCRUE_END_NO_BILL) bucket.accrueEndNoBill += adjustedHours;
+    else if (workType === WORK_TYPE_STANDARD_SUPPORT) bucket.standardSupport += adjustedHours;
     else {
-      bucket.other += hours;
+      bucket.other += adjustedHours;
       bucket.otherWorkTypes.add(workType);
     }
   }
@@ -217,6 +222,11 @@ async function buildRows(client, ticketIds, ticketById, statusLabelById) {
     return {
       ticketId,
       ticketNumber: ticket?.ticketNumber || `#${ticketId}`,
+      // Between Ticket # and Ticket Title, by request -- resolveCompanyName()
+      // caches internally (same convention every other page's own company-
+      // name lookup already relies on), so a client with several qualifying
+      // tickets is still only ever resolved once.
+      clientName: ticket ? await resolveCompanyName(client, ticket.companyID) : '',
       ticketTitle: ticket?.title || '',
       ticketUrl: await getTicketUrl(ticketId),
       status,

@@ -440,6 +440,7 @@ export function mount(container) {
         <thead>
           <tr>
             <th>Ticket #</th>
+            <th>Client</th>
             <th>Ticket Title</th>
             <th>Ticket Status</th>
             <th class="col-center">Accrue--ING</th>
@@ -462,6 +463,7 @@ export function mount(container) {
     return `
       <tr${rowClass}>
         <td>${ticketLink(r)}</td>
+        <td>${escapeHtml(r.clientName)}</td>
         <td>${escapeHtml(r.ticketTitle)}</td>
         <td>${escapeHtml(r.status)}</td>
         <td class="col-center">${formatHours(r.accrueIng)}</td>

@@ -5966,22 +5966,25 @@ textarea.wsp-field {
   font-size: 0.78rem;
 }
 /* Vertical dividers bracketing the END/NO Bill pair, by request -- a
-   line before END (5th column) and after NO Bill (6th column). Fixed
-   column positions (:nth-child), not a class on the cell, since the
-   green .accrued-time-end-col class below applies to BOTH columns and
-   can't tell "the left edge of the pair" from "the right edge" on its
-   own. Same border color/weight as every other cell border on this
-   table (th, td { border-top: 1px solid var(--border); }, above). */
-.accrued-time-table th:nth-child(5),
-.accrued-time-table td:nth-child(5) {
+   line before END (6th column) and after NO Bill (7th column) -- bumped
+   from 5th/6th when the new Client column (by request, "add the client
+   name between Ticket # and Ticket Title") shifted every column after it
+   over by one. Fixed column positions (:nth-child), not a class on the
+   cell, since the green .accrued-time-end-col class below applies to
+   BOTH columns and can't tell "the left edge of the pair" from "the
+   right edge" on its own. Same border color/weight as every other cell
+   border on this table (th, td { border-top: 1px solid var(--border); },
+   above). */
+.accrued-time-table th:nth-child(6),
+.accrued-time-table td:nth-child(6) {
   /* Light-mode border, pinned -- these dividers bracket the two colored
      (green/red/yellow) END/NO Bill columns specifically, same "whole
      columns with coloured backgrounds" reasoning as the cells themselves
      below, by report. */
   border-left: 1px solid #e5e7eb;
 }
-.accrued-time-table th:nth-child(6),
-.accrued-time-table td:nth-child(6) {
+.accrued-time-table th:nth-child(7),
+.accrued-time-table td:nth-child(7) {
   border-right: 1px solid #e5e7eb;
 }
 /* Accrue--END / Accrue--END-No Bill columns (headers shortened to "END"/
