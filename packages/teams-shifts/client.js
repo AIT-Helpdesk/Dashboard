@@ -238,7 +238,11 @@ export function mount(container) {
     // TimeEntries.dateWorked day with an hoursWorked total, not a Graph
     // shift with real clock times -- so line1 shows that hours total
     // instead of a blank "-" a real formatTime(null) pair would produce.
-    const line1 = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
+    // Real Autotask Public Holidays (kind: 'publicHoliday', see
+    // fetchPublicHolidayEntries()) have no clock time OR hours figure at
+    // all -- line1 shows the real holiday's own short name instead
+    // (e.userName/line2 already carries which Holiday Set it's from).
+    const line1 = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : e.kind === 'publicHoliday' ? e.holidayName : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
     const line2 = e.userName || '(Open shift)';
     // The matched legend category's own clean label when there is one
     // (e.g. "Vacation", not the raw underlying reason text "Vacation
@@ -257,11 +261,14 @@ export function mount(container) {
     const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line2)}</span>${
       line3 ? `<span class="calendar-entry-line2"${line2Style}>${escapeHtml(line3)}</span>` : ''
     }`;
-    const titleLines = [
-      e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
-      `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
-    ];
-    if (e.displayName) titleLines.push(`Label: ${e.displayName}${cat ? ` -- ${cat.label}` : ''}`);
+    const titleLines =
+      e.kind === 'publicHoliday'
+        ? [`Public Holiday: ${e.holidayName}`, `${e.holidaySetName && e.holidaySetName.includes(',') ? 'Holiday Sets' : 'Holiday Set'}: ${e.holidaySetName}`]
+        : [
+            e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
+            `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
+          ];
+    if (e.kind !== 'publicHoliday' && e.displayName) titleLines.push(`Label: ${e.displayName}${cat ? ` -- ${cat.label}` : ''}`);
     if (e.schedulingGroupName) titleLines.push(`Group: ${e.schedulingGroupName}`);
     if (e.notes) titleLines.push(`Notes: ${e.notes}`);
     if (!e.published) titleLines.push('Not yet published (draft)');
@@ -335,7 +342,7 @@ ${cardsHtml || '<p class="empty">No shifts.</p>'}
   }
 
   function dayPopupEntryHtml(e, colors) {
-    const time = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatTime(e.startDateTime)} - ${formatTime(e.endDateTime)}`;
+    const time = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : e.kind === 'publicHoliday' ? e.holidayName : `${formatTime(e.startDateTime)} - ${formatTime(e.endDateTime)}`;
     const activitiesHtml = e.activities.length
       ? `<dt>Activities</dt><dd>${e.activities
           .map((a) => `${escapeHtml(a.code || '')} (${formatTime(a.startDateTime)} - ${formatTime(a.endDateTime)})`)

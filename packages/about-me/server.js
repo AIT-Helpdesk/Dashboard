@@ -65,7 +65,16 @@ async function fetchPickerResources(client) {
   const resources = await fetchByFieldIn(client.resources, 'id', ids);
   return resources
     .filter((r) => r.licenseType !== API_USER_LICENSE_TYPE)
-    .map((r) => ({ id: r.id, name: [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || `Resource #${r.id}`, email: r.email || null }))
+    .map((r) => ({
+      id: r.id,
+      name: [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || `Resource #${r.id}`,
+      email: r.email || null,
+      // Carried through for the Shifts card's own Public Holiday filter
+      // (Resources.locationID -> InternalLocations.holidaySetId) -- by
+      // request ("On the About Me page, show only Public Holidays that
+      // apply to the selected person"), see fetchPublicHolidayEntriesForResource().
+      locationID: r.locationID,
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -528,6 +537,42 @@ async function fetchLeaveEntries(client, resourceId, startISO, endISO) {
   }));
 }
 
+// Real Autotask Public Holidays for just THIS resource's own location, by
+// request ("can you get the Public Holidays? Show on the Public Holiday
+// which Holiday Set it's From. On the About Me page, show only Public
+// Holidays that apply to the selected person"). Same real chain
+// @dashboard/teams-shifts' own fetchPublicHolidayEntries() uses (see that
+// package's own comment for the full real-data-confirmed entity chain),
+// but scoped to just this ONE resource's own real locationID ->
+// InternalLocations.holidaySetId -- unlike Teams Shifts/What's On (not
+// scoped to a person, so they show every real set at once), this page IS
+// already scoped to one person, so only THEIR own applicable set's real
+// holidays show, not everyone else's location's holidays too.
+async function fetchPublicHolidayEntriesForResource(client, locationID, startISO, endISO) {
+  if (!locationID) return [];
+  const [locations, holidaySets] = await Promise.all([
+    listAll(client.internalLocations, [{ op: 'eq', field: 'id', value: locationID }]),
+    listAll(client.holidaySets, [{ op: 'gte', field: 'id', value: 0 }]),
+  ]);
+  const holidaySetId = locations[0]?.holidaySetId;
+  if (!holidaySetId) return []; // real case: a location with no holiday set assigned at all
+  const holidaySetName = (holidaySets.find((s) => s.id === holidaySetId) || {}).holidaySetName || `Holiday Set #${holidaySetId}`;
+  const holidays = await listAll(client.holidays, [
+    { op: 'eq', field: 'holidaySetID', value: holidaySetId },
+    { op: 'gte', field: 'holidayDate', value: startISO },
+    { op: 'lt', field: 'holidayDate', value: endISO },
+  ]);
+  return holidays.map((h) => ({
+    dayKey: (h.holidayDate || '').slice(0, 10),
+    kind: 'publicHoliday',
+    displayName: `Public Holiday - ${h.holidayName}`,
+    holidayName: h.holidayName,
+    holidaySetName,
+    startDateTime: null,
+    endDateTime: null,
+  }));
+}
+
 // ---- Shifts Entries -- this resource's own, next 30 real AEST days (by
 // request -- originally 7, widened to 30). Same real "General" team +
 // combined shifts/timesOff data @dashboard/teams-shifts' own lib.js
@@ -546,26 +591,27 @@ async function fetchLeaveEntries(client, resourceId, startISO, endISO) {
 // this page). ----
 const SHIFTS_TEAM_NAME = 'General'; // same real team @dashboard/teams-shifts is locked to, by request
 const SHIFTS_WINDOW_DAYS = 30;
-async function fetchShiftsSection(client, resourceId, resourceName) {
+async function fetchShiftsSection(client, resourceId, resourceName, locationID) {
   const teams = await getTeams();
   const team = teams.find((t) => t.name === SHIFTS_TEAM_NAME);
   const today = todayAestKey();
   const [ty, tm, td] = today.split('-').map(Number);
   const endKey = new Date(Date.UTC(ty, tm - 1, td + SHIFTS_WINDOW_DAYS)).toISOString().slice(0, 10);
-  // Bare dateWorked-shaped ISO strings, NOT isoForKey()/aestToUtcIso() --
-  // TimeEntries.dateWorked is a date-only field that needs no real AEST
+  // Bare dateWorked/holidayDate-shaped ISO strings, NOT isoForKey()/
+  // aestToUtcIso() -- both are date-only fields that need no real AEST
   // offset conversion, same established convention this page's own
   // date-range sections above already follow (see the file's own README
   // note on this).
   const startISO = `${today}T00:00:00.000Z`;
   const endISO = `${endKey}T00:00:00.000Z`;
 
-  const [shiftsResult, leaveRows] = await Promise.all([
+  const [shiftsResult, leaveRows, publicHolidayRows] = await Promise.all([
     team ? getShiftsByDay(team.id, today, endKey) : Promise.resolve({ byDay: {} }),
     fetchLeaveEntries(client, resourceId, startISO, endISO),
+    fetchPublicHolidayEntriesForResource(client, locationID, startISO, endISO),
   ]);
 
-  const rows = [...leaveRows];
+  const rows = [...leaveRows, ...publicHolidayRows];
   for (const [dayKey, entries] of Object.entries(shiftsResult.byDay)) {
     for (const e of entries) {
       if ((e.userName || '').toLowerCase() !== resourceName.toLowerCase()) continue;
@@ -667,7 +713,7 @@ router.get('/', async (req, res) => {
       settle(() => fetchAskedForReviewSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchAccruedTimeSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchStretyTasksSection(viewerEmail, resource.email)),
-      settle(() => fetchShiftsSection(client, resourceId, resource.name)),
+      settle(() => fetchShiftsSection(client, resourceId, resource.name, resource.locationID)),
     ]);
 
     res.json({

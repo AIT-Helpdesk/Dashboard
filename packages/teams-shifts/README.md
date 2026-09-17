@@ -83,6 +83,64 @@ Vacation day, both genuine records in two separate systems. Not
 deduplicated -- see `@dashboard/about-me`'s own README for the full
 reasoning (same real example, same choice).
 
+## Public Holidays, from Autotask -- merged into the same month calendar
+
+By request ("can you get the Public Holidays? Show on the Public Holiday
+which Holiday Set it's From"). Real Autotask **Holiday Sets**, not a
+hardcoded Australian public-holiday list -- the real chain, confirmed
+against real data (`fetchPublicHolidayEntries()` in `server.js`):
+
+- `InternalLocations` (`client.internalLocations`) carries `holidaySetId`,
+  linking a real office location to one Holiday Set. Confirmed real
+  locations: Geebung (QLD, 35 resources), Sri Lanka, Perth (WA), Grafton
+  (NSW).
+- `HolidaySets` (`client.holidaySets`) carries the real set's own name
+  (`holidaySetName` -- confirmed real: "QLD", "WA", "NSW", "Sri Lanka").
+- `Holidays` (`client.holidays`) carries the real `holidayDate`/
+  `holidayName`, linked back via `holidaySetID` -- **capitalised
+  differently from `InternalLocations.holidaySetId`, confirmed as two
+  genuinely distinct real field names, not a typo.**
+
+**One calendar entry per (holiday set, date), NOT per resource.** A public
+holiday applies to everyone sharing that location/set at once; one entry
+per resource would pile up as many identical "Christmas Day" entries as
+there are staff at that location, on the same real day -- real noise, not
+real information. `userName` is set to the real Holiday Set name (not a
+person) so it renders on the same line real shift/leave entries already
+use for "who this is" -- doubling as the answer to "which Holiday Set
+it's from" with no new field needed.
+
+`displayName` is prefixed `"Public Holiday - "` so every Autotask-sourced
+holiday matches `SHIFT_CATEGORIES`' own `publicHoliday` regex (see
+"Colouring switched..." above) even for a real holiday name that regex
+wouldn't otherwise catch on its own -- confirmed real: "Ekka" (QLD-only),
+"WA Day", "Bank Holiday" (NSW-only), "Tamil Thai Pongal" (Sri Lanka) --
+none of which mention "public holiday" or any of the specific day names
+the regex already knows. Means every real Holiday Set's own holidays
+reach the same white/bordered Public Holiday look with zero changes
+needed to `categorizeShift()` itself.
+
+**Unscoped by Teams team**, same deliberate reasoning as Leave above --
+shows every real Holiday Set actually in use at once, not just whichever
+team happens to be selected. (`@dashboard/about-me`'s own Shifts section
+is the one place this IS scoped, to just the selected person's own
+location -- see that package's README.)
+
+**Further merged when the SAME real holiday name falls on the SAME real
+day across multiple Holiday Sets**, by request ("where a specifically
+named public holiday applies to multiple Holiday Sets, Show the Public
+holiday once with all of the Set Names in the one calendar item").
+Grouped by `(dayKey, holidayName)` -- confirmed real data, December 2026:
+Christmas Day (25 Dec) merges into ONE entry with `holidaySetName: "NSW,
+QLD, Sri Lanka, WA"`; Boxing Day (26 Dec) merges into `"NSW, QLD, WA"`
+(correctly excluding Sri Lanka, which has no real Boxing Day holiday);
+Sri Lanka's own unique 23 Dec "Unduvap Full Moon Poya Day" stays its own
+single-set entry. Grouping by NAME too (not day alone) means a same-day
+coincidence between two differently-named holidays would still show as
+two entries, and the earlier "King's Birthday" example (5 Oct for QLD vs.
+28 Sep for WA -- same name, genuinely different real date) still shows as
+two separate entries, one per its own real date.
+
 ## Confirmed against the real account (Ambient IT's own tenant, `General` team)
 
 - Token, group listing, scheduling-group listing, and shift fetching all round-trip successfully with `Group.Read.All` + `Schedule.Read.All` + `User.Read.All` app-only permissions -- no extra/narrower permission needed.
