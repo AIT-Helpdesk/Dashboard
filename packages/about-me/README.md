@@ -334,6 +334,53 @@ across two unrelated systems' own primary keys risks hiding a real case
 where they genuinely differ, e.g. a half-day logged one way and a
 full-day booked the other). Not deduplicated, by design.
 
+## Public Holidays, from Autotask -- scoped to just this ONE resource
+
+By request ("can you get the Public Holidays? ... On the About Me page,
+show only Public Holidays that apply to the selected person"). Same real
+Autotask Holiday Set chain `@dashboard/teams-shifts`'s own README
+documents in full (`InternalLocations.holidaySetId` -> `HolidaySets` ->
+`Holidays.holidaySetID`), but resolved to just ONE Holiday Set here --
+this resource's own `locationID` (now carried through
+`fetchPickerResources()`) -> that one location's own `holidaySetId` ->
+that one set's own real holidays in the next-30-days window
+(`fetchPublicHolidayEntriesForResource()`, `server.js`). Unlike Shifts
+and Schedules / What's On's own Team Shifts excerpt -- neither scoped to
+a person, so both show every real Holiday Set at once -- this page IS
+already scoped to one person, so only THEIR own applicable set's real
+holidays are fetched, not every other location's too.
+
+Confirmed against real data: resources at Geebung (QLD) and most other
+Australian offices see `2026-10-05 King's Birthday | set: QLD`, while a
+Perth-based (WA) resource sees the same real holiday NAME on a genuinely
+different real DATE, `2026-09-28 King's Birthday | set: WA` -- proof the
+per-resource scoping resolves to the right set, not just the right
+holiday name.
+
+Merged into the exact same `fetchShiftsSection()` rows Leave (above) and
+real Teams shifts already share, `kind: 'publicHoliday'`. A resource with
+no `locationID`, or a location with no Holiday Set assigned, simply shows
+none (real, confirmed case -- not an error).
+
+**Pill label reads "Public Holiday, {Holiday Set}, {Holiday Name}"**, by
+request ("On About Me, show the Public Holiday as Public Holiday,
+Holiday Set/s, Holiday Name") -- e.g. "Public Holiday, QLD, Christmas
+Day". Unlike Teams Shifts/What's On's own calendar cells (which have a
+separate line2/tooltip slot for "which Holiday Set it's from"), this
+page's Shifts card is a single-line pill, so `shiftsGroupConsecutiveDays()`
+composes the full three-part string itself for `kind === 'publicHoliday'`
+rows rather than relying on the generic `"Public Holiday - " +
+holidayName` prefix trick the other two pages use. It still starts with
+the literal words "Public Holiday" so `categorizeShift()`'s own regex
+still matches it for the white/bordered styling; `shiftPillHtml()` was
+adjusted to show this composed string verbatim for the `publicHoliday`
+category specifically, instead of collapsing to the category's own plain
+"Public Holiday" label the way every other category still does. Since
+About Me scopes fetching to just the one selected resource's own Holiday
+Set (see above), `holidaySetName` here is always a single real set name,
+never the comma-joined multi-set list `@dashboard/teams-shifts`'s own
+same-day/same-name merge can produce.
+
 ## Strety Tasks -- cross-person lookup technique
 
 Strety tasks are fetched using the *viewer's own* OAuth connection

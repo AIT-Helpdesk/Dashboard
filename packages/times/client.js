@@ -447,7 +447,11 @@ export function mount(container) {
       return totals;
     }
     function sumCells(cells) {
-      return cells.reduce((acc, c) => (c ? { worked: acc.worked + c.worked, toBill: acc.toBill + c.toBill } : acc), { worked: 0, toBill: 0 });
+      // `dollars` is optional on a cell (only present on the Billable/
+      // Non-Billable split's own cells, see server.js's own
+      // buildClientContractSplitHours()) -- defaults to 0 so summing plain
+      // {worked, toBill} cells elsewhere on this page is unaffected.
+      return cells.reduce((acc, c) => (c ? { worked: acc.worked + c.worked, toBill: acc.toBill + c.toBill, dollars: acc.dollars + (c.dollars || 0) } : acc), { worked: 0, toBill: 0, dollars: 0 });
     }
     // Shared by Billable and Non-Billable -- same {worked, toBill}-per-cell
     // shape either way (see server.js's own buildClientContractSplitHours()
@@ -586,26 +590,28 @@ export function mount(container) {
     const staffHoursTicketHoursTotals = new Map(data.resources.map((r) => [r.resourceId, r.ticketHours]));
     const staffHoursPctRow = pctOfTotalHoursRowHtml(staffHoursTicketHoursTotals);
 
-    // Billable $ by classification, by request -- "add another red box
-    // beside the Hours Summary box that shows the dollar value of the
-    // hours from the tickets for Total Tech Hours Billable split by the 3
-    // T&M classifications and then the Other or Blank ones". Same rows,
-    // same order data.clientContractsBillable already has (server.js's
-    // own sortClientContractRows() -- T&M rows alphabetical, Other/Blank
-    // last; confirmed against real data this tenant's own real rows are
-    // exactly "T&M Adhoc Client"/"T&M TC Elite*"/"T&M TC Essentials"/
-    // "Other or Blank (?)" -- the 3 T&M classifications the request
-    // itself named, dynamic rather than hardcoded so a new/renamed T&M
-    // contract type shows up here automatically). Each row's own WORKED
-    // hours (summed across every resource, same sumCells() the Billable
-    // table itself already uses) times the real Autotask "Helpdesk
-    // Service" role rate (data.helpdeskHourlyRate, resolved live by
-    // server.js from Roles.hourlyRate -- not hardcoded here, by request:
-    // "Lets use the the Labour Rate associated with the Helpdesk role in
-    // the price list in Autotask").
+    // Billable $ by classification, by request -- originally "add another
+    // red box beside the Hours Summary box that shows the dollar value of
+    // the hours from the tickets for Total Tech Hours Billable split by
+    // the 3 T&M classifications and then the Other or Blank ones". Same
+    // rows, same order data.clientContractsBillable already has
+    // (server.js's own sortClientContractRows() -- T&M rows alphabetical,
+    // Other/Blank last; confirmed against real data this tenant's own real
+    // rows are exactly "T&M Adhoc Client"/"T&M TC Elite*"/"T&M TC
+    // Essentials"/"Other or Blank (?)" -- the 3 T&M classifications the
+    // request itself named, dynamic rather than hardcoded so a new/renamed
+    // T&M contract type shows up here automatically).
+    //
+    // Each row's own $ is now the REAL summed resolveChargeableValue()
+    // figure (server.js's own row.hours[resourceId].dollars, per real
+    // entry/real resource) rather than a flat Helpdesk Service rate times
+    // a summed hours total -- by request ("use these data sources and
+    // formulas for 'awaiting approve and post', posted and invoiced to
+    // show the dollar value of the times shown (only for the specific
+    // person, not the whole ticket)").
     const billableDollarRows = data.clientContractsBillable.map((row) => {
-      const hours = sumCells(data.resources.map((r) => row.hours[r.resourceId])).worked;
-      return { label: row.contractName, hours, dollars: hours * data.helpdeskHourlyRate };
+      const totals = sumCells(data.resources.map((r) => row.hours[r.resourceId]));
+      return { label: row.contractName, hours: totals.worked, dollars: totals.dollars };
     });
     const billableDollarByLabel = new Map(billableDollarRows.map((r) => [r.label, r]));
 
@@ -661,15 +667,15 @@ export function mount(container) {
     // admins") -- data.isAdmin is server-authoritative (isDashboardAdmin(),
     // same one-account check every other admin-only feature on this
     // dashboard uses), not just a client-side hide; a non-admin's own
-    // response also carries helpdeskHourlyRate: 0 (server.js skips that
-    // fetch for them entirely), so there's no real rate data to leak
-    // through the network tab either.
+    // response also carries empty rate/billing-item maps (server.js skips
+    // those fetches for them entirely), so there's no real rate data to
+    // leak through the network tab either.
     const billableDollarBoxHtml = data.isAdmin
       ? `
       <div class="tm-table-group">
       <table class="tm-overall-summary-table">
         <thead>
-          <tr><th class="tm-corner-label">${smallCapsHtml('Billable $ (Helpdesk Rate)')}</th><th class="col-center">${smallCapsHtml('Hours')}</th><th class="col-center">$</th></tr>
+          <tr><th class="tm-corner-label">${smallCapsHtml('Billable $')}</th><th class="col-center">${smallCapsHtml('Hours')}</th><th class="col-center">$</th></tr>
         </thead>
         <tbody>
           ${otherBillableDollarRows
@@ -679,7 +685,7 @@ export function mount(container) {
           <tr><th>${rowLabelHtml(tcEliteRow.label)}</th><td class="col-center">${formatHours(tcEliteRow.hours)}</td><td class="col-center">${formatCurrency(tcEliteRow.dollars)}</td></tr>
         </tbody>
       </table>
-      <p class="tm-footnote">Rate: ${formatCurrency(data.helpdeskHourlyRate)}/hr -- Autotask's "Helpdesk Service" role rate (price list)</p>
+      <p class="tm-footnote">Each entry's own real rate (posted/invoiced $, or an estimate from its role + work type for time still awaiting Approve and Post) -- not one flat rate.</p>
       </div>`
       : '';
 

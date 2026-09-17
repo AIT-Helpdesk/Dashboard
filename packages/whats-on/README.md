@@ -210,6 +210,25 @@ time-off request for the same day) are documented in full in
 `@dashboard/teams-shifts`'s own README -- same shared `SHIFT_CATEGORIES`
 legend, same real data, not repeated here.
 
+### Public Holidays, from Autotask -- merged into the same excerpt
+
+By request ("can you get the Public Holidays? Show on the Public Holiday
+which Holiday Set it's From"). Real Autotask Holiday Sets
+(`fetchPublicHolidayEntries()`, `server.js` -- a near-identical copy of
+`@dashboard/teams-shifts`'s own function of the same name, duplicated
+rather than imported per this dashboard's usual "separate page package"
+convention), scoped to the excerpt's own 2-week window instead of a
+month. One real calendar entry per (Holiday Set, date), `displayName`
+prefixed `"Public Holiday - "` so it reaches `categorizeShift()`'s
+existing `publicHoliday` category automatically, `userName` set to the
+real Holiday Set's own name. Unscoped by Teams team, same reasoning as
+Leave above. **Further merged when the same real holiday name falls on
+the same real day across multiple Holiday Sets** (e.g. real Christmas
+Day merges into one entry naming every set it applies to), by request --
+see `@dashboard/teams-shifts`'s own README for the full real-data
+confirmation. Full real-data-confirmed entity chain (`InternalLocations`
+-> `HolidaySets` -> `Holidays`) also documented there, not repeated here.
+
 ### Post-mortem: a real Vacation entry was invisible -- root cause was `/shifts` vs. `/timesOff`, not the legend matching
 
 Shipped, then a real user report: Grant's real, correctly-booked Vacation on a specific day wasn't showing at all -- the day cell showed an unrelated real On Call shift for someone else instead, which looked like a miscategorization but wasn't one. The real cause: Microsoft Teams Shifts keeps regular shifts (On Call, Helpdesk Handler) and time-off bookings (Vacation, Sick/Other Leave, Unpaid, RDO/Time in Lieu) in **two separate Graph resources**, `/shifts` and `/timesOff`, and `@dashboard/teams-shifts/lib.js` originally only queried the first -- the Vacation entry was real and correctly entered, just never fetched. Fixed in `lib.js` (`getResolvedShifts()` now fetches and merges both) -- see that package's README, "Shifts vs. time off," for the full story including a real, confirmed Graph API restriction (no "overlaps the window" filter is possible, only "contained in the window") and the multi-day-entry day-expansion this required.

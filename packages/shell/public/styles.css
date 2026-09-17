@@ -1151,6 +1151,23 @@ h1 {
   color: #dc2626;
 }
 
+/* Rewst Webhook Test's own raw-JSON fallback -- shown when a selected
+   webhook's real response doesn't have an obvious row list to build a
+   table from (see that page's own renderGeneric()). Just a readable
+   monospace block, not a syntax-highlighted viewer -- this is a "here's
+   exactly what came back" test page, not a JSON editor. */
+.rewst-raw-json {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  overflow-x: auto;
+}
+
 /* What's On's scorecard-group messages ("No scorecards for Personal --
    ...", etc.) -- indented under the group heading above it, by request,
    matching .section-heading's own 1rem left padding so the text lines up
@@ -1162,6 +1179,26 @@ h1 {
 .summary {
   margin-bottom: 1.5rem;
   font-size: 1.1rem;
+}
+
+/* Ticket Times/Completed Tickets' own summary line, by request ("Make the
+   text of the whole line smaller so that it's not so long") -- now
+   carries Date/Count/Hours plus 4 separate $ figures (Invoiced/Posted/
+   Pending/TC Elite), long enough that the default .summary size (1.1rem)
+   wraps awkwardly. Scoped to a class, not the bare .summary/#summary
+   selector, since #summary is reused (at 1.1rem) by several other
+   date-picker pages that don't carry this extra length. */
+.summary-line-compact {
+  font-size: 0.85rem;
+}
+
+/* Completed Tickets' own small-print note, nested inside #summary right
+   under its main date/count/hours/$ line (see that page's client.js for
+   why it's nested rather than a sibling) -- a plain .inline-subtext <p>
+   would otherwise carry the browser's own default ~1em top margin, by
+   request pulled in much tighter against the line above it. */
+#hours-dollars-note {
+  margin: 0.2rem 0 0;
 }
 
 .summary strong {
@@ -1206,6 +1243,31 @@ h1 {
   font-size: 0.9rem;
 }
 
+/* A .section-heading (green/red/etc.) that also shows a right-aligned
+   count/totals span, same left-label/right-figures layout
+   .resource-group-header already uses -- by request, Ticket Times' own
+   category headers show their totals here now instead of a separate
+   totals row at the end of the table. Opt-in modifier, not a change to
+   plain .section-heading's own many other consumers (About Me cards,
+   What's On scorecards, etc.), which just set text content directly with
+   no nested spans to space apart. */
+.section-heading--split {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+/* .section-heading itself sets text-transform: uppercase/letter-spacing
+   (inherited properties) -- reset on the count span so a $ figure's
+   digits/symbols don't pick up the extra letter-spacing a plain heading
+   word wants. */
+.section-heading--split .count {
+  color: inherit;
+  font-weight: 400;
+  font-size: 0.85rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 /* Completed Tickets: each technician's tickets render as their own separate
    <table>, sized independently by the browser based only on that table's own
    content -- without fixed widths, "Company"/"Hours"/etc. drift out of
@@ -1234,8 +1296,16 @@ h1 {
   width: 8%;
 }
 
+/* $ column, added by request ("use these data sources and formulas ...
+   to show the dollar value of the times shown"). Pushed the pre-existing
+   "Ask for Review" column (was nth-child(5)) to nth-child(6). */
 .completed-tickets-table th:nth-child(5),
 .completed-tickets-table td:nth-child(5) {
+  width: 10%;
+}
+
+.completed-tickets-table th:nth-child(6),
+.completed-tickets-table td:nth-child(6) {
   width: 10%;
 }
 
@@ -1324,6 +1394,14 @@ h1 {
 .tickets-created-table th:nth-child(3),
 .tickets-created-table td:nth-child(3) {
   width: 10%;
+}
+/* Status column, added by request ("show Ticket Status between Created
+   Time and Title") -- Title (nth-child(5) now) stays unset, absorbing
+   whatever space the others don't claim, same as before this column
+   existed. */
+.tickets-created-table th:nth-child(4),
+.tickets-created-table td:nth-child(4) {
+  width: 12%;
 }
 
 /* Column order (both this page and Check Client's own Subscriptions
@@ -1738,6 +1816,13 @@ h1 {
 .ticket-times-table td:nth-child(5) {
   width: 10%;
 }
+/* $ column, added by request ("use these data sources and formulas ...
+   to show the dollar value of the times shown"). Same width as Time
+   (column 5) -- both are short, right-ish-aligned figures. */
+.ticket-times-table th:nth-child(6),
+.ticket-times-table td:nth-child(6) {
+  width: 10%;
+}
 
 /* Ticket Times: the signed-in user's own group is pinned to the top of the
    page (see server.js) -- this gives it a subtle visual marker too, the same
@@ -1829,6 +1914,17 @@ h1 {
 .text-highlight-yellow {
   font-weight: 700;
   color: #eab308;
+}
+/* Ticket Times/Completed Tickets' own "Posted" figure (Invoiced=green,
+   Posted=orange, Pending=red, TC Elite=blue -- by request, "Colour the 4
+   types, Green, Orange, Red, and Blue"). Same bold weight as
+   .text-highlight-green/-red/-yellow above. #f59e0b (amber), not the
+   original #ea580c -- by request ("The Orange is too similar to the red
+   ... make it more of a yellowy orange shade"), a more yellow-leaning
+   shade that reads clearly distinct from #dc2626 red at a glance. */
+.text-highlight-orange {
+  font-weight: 700;
+  color: #f59e0b;
 }
 
 /* A plain full-width rule between two otherwise-unrelated page sections

@@ -819,7 +819,12 @@ export function mount(container) {
       : cat.key === 'publicHoliday'
         ? ' style="background: #ffffff; color: #1a1a1a; border: 1px solid #e5e7eb;"'
         : ` style="background: color-mix(in srgb, ${cat.color} 22%, white); color: #1a1a1a;"`;
-    return `<span class="button-link button-link--small about-me-shift-pill"${style}>${escapeHtml(cat ? cat.label : label)}</span>`;
+    // Public Holiday keeps its own already-composed "Public Holiday,
+    // {Set(s)}, {Name}" text (see shiftsGroupConsecutiveDays()) rather
+    // than collapsing to the category's plain "Public Holiday" label --
+    // every other category still shows its own clean cat.label as before.
+    const text = cat && cat.key === 'publicHoliday' ? label : cat ? cat.label : label;
+    return `<span class="button-link button-link--small about-me-shift-pill"${style}>${escapeHtml(text)}</span>`;
   }
   // Entries arrive one-per-day (server.js) -- sorted by day, then merged
   // whenever the SAME label (displayName, or the same Shift/Time off
@@ -828,7 +833,18 @@ export function mount(container) {
   // string comparison, since "next day" isn't just "+1" on the day digit.
   function shiftsGroupConsecutiveDays(entries) {
     const labeled = entries
-      .map((e) => ({ dayKey: e.dayKey, label: e.displayName || (e.kind === 'timeOff' ? 'Time off' : 'Shift') }))
+      .map((e) => ({
+        dayKey: e.dayKey,
+        // Public Holiday entries show as "Public Holiday, {Holiday
+        // Set(s)}, {Holiday Name}", by request -- richer than the generic
+        // Public Holiday category label shiftPillHtml() would otherwise
+        // fall back to, since About Me has no separate line2/tooltip slot
+        // the way Teams Shifts/What's On's own calendar cells do for
+        // "which Holiday Set it's from". Still starts with "Public
+        // Holiday" so categorizeShift()'s own regex still matches it for
+        // the white/bordered styling.
+        label: e.kind === 'publicHoliday' ? `Public Holiday, ${e.holidaySetName}, ${e.holidayName}` : e.displayName || (e.kind === 'timeOff' ? 'Time off' : 'Shift'),
+      }))
       .sort((a, b) => a.dayKey.localeCompare(b.dayKey) || a.label.localeCompare(b.label));
     const groups = [];
     for (const e of labeled) {

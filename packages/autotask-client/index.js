@@ -230,6 +230,104 @@ async function fetchServiceDeskAndProfessionalServicesMembership(client) {
   return { serviceDesk, professionalServices, leadership };
 }
 
+// ---- Chargeable $ value of a TimeEntries row -- shared across About Me
+// (previously)/Times/Ticket Times/Completed Tickets, since every page
+// asking "what's this time worth" needs the exact same real formula, by
+// request ("use these data sources and formulas for 'awaiting approve and
+// post', posted and invoiced to show the dollar value of the times
+// shown").
+//
+// Confirmed against real data (100% match, ZERO mismatches, across 1,863
+// real posted labour BillingItems in this tenant): a posted/invoiced
+// entry's real dollar amount always traces back to exactly
+//   rate = Roles.hourlyRate[entry.roleID], adjusted by
+//          WorkTypeModifiers[entry.billingCodeID] (a real entity keyed
+//          1:1 with BillingCodes.id, NOT the multi-currency-only
+//          PriceListWorkTypeModifiers, which this tenant can't even query
+//          -- confirmed live, "This entity is only available if
+//          Multi-Currency functionality is enabled"):
+//            modifierType 0 (or no row at all) -> rate unchanged
+//            modifierType 1 -> rate = base + modifierValue (flat add-on;
+//              confirmed real: "Onsite Support" is +$40 on every role)
+//            modifierType 3 -> rate = modifierValue OUTRIGHT, base
+//              ignored (confirmed real: "Emergency" bills flat $270
+//              regardless of the resource's own role)
+//   value = rate * hoursToBill (confirmed real BillingItems.quantity
+//           always matches TimeEntries.hoursToBill, NOT hoursWorked --
+//           these can genuinely differ, e.g. 0.15h worked billed as
+//           0.25h).
+// This tenant has ZERO ContractRoleCosts rows -- no per-contract rate
+// overrides exist here, which is exactly why the formula above matched
+// every single real case with nothing left unexplained.
+async function fetchRoleHourlyRates(client) {
+  const roles = await listAll(client.roles, [{ op: 'gt', field: 'id', value: 0 }]);
+  return new Map(roles.map((r) => [r.id, r.hourlyRate || 0]));
+}
+
+async function fetchWorkTypeModifiers(client, billingCodeIds) {
+  const ids = [...new Set(billingCodeIds.filter((id) => id !== null && id !== undefined))];
+  if (ids.length === 0) return new Map();
+  const mods = await fetchByFieldIn(client.workTypeModifiers, 'id', ids);
+  return new Map(mods.map((m) => [m.id, m]));
+}
+
+function resolveChargeableRate(roleID, billingCodeID, roleRatesById, workTypeModifiersById) {
+  const base = roleRatesById.get(roleID);
+  if (base === undefined || base === null) return null; // unknown/deleted role -- no rate to derive from, not a real $0
+  const mod = workTypeModifiersById.get(billingCodeID);
+  if (!mod || mod.modifierType === 0 || mod.modifierValue === null || mod.modifierValue === undefined) return base;
+  if (mod.modifierType === 1) return base + mod.modifierValue;
+  if (mod.modifierType === 3) return mod.modifierValue;
+  return base; // an unrecognized modifierType has never been seen in real data -- fall back to the base rate rather than silently guess at a new one
+}
+
+// Real BillingItems rows keyed by their own source TimeEntry id -- the
+// only reliable way to tell "already posted" (a row exists here) from
+// "still awaiting Approve and Post" (none does), confirmed necessary the
+// hard way: TimeEntries.billingApprovalDateTime does NOT track this in
+// this tenant (a real, fully-invoiced time entry's own
+// billingApprovalDateTime was still null).
+async function fetchBillingItemsByTimeEntryId(client, timeEntryIds) {
+  const ids = [...new Set(timeEntryIds.filter(Boolean))];
+  if (ids.length === 0) return new Map();
+  const items = await fetchByFieldIn(client.billingItems, 'timeEntryID', ids);
+  return new Map(items.map((i) => [i.timeEntryID, i]));
+}
+
+// The one real chargeable-$ figure for a single TimeEntries row, sourced
+// correctly for whichever of the three real states it's actually in: a
+// REAL posted/invoiced dollar amount (BillingItems.extendedPrice) when a
+// BillingItems row already exists for it, or a computed T&M list-price
+// ESTIMATE (resolveChargeableRate() * hoursToBill) for one still awaiting
+// Approve and Post.
+//
+// A BillingItems row flagged `nonBillable: 1` resolves to $0 regardless of
+// its own extendedPrice -- found the hard way against a real user report
+// (a real ticket showing $142.50 when only $95 had actually been
+// invoiced): Autotask DOES populate a real, non-zero extendedPrice on a
+// nonBillable-flagged item (confirmed real: $47.50, `invoiceID: 0`,
+// created from a TimeEntries row itself flagged isNonBillable -- an
+// internal cost-tracking figure Autotask keeps for its own reporting, not
+// something that will ever reach a real invoice) -- trusting that number
+// as "chargeable" overstated what the client was actually being charged
+// by exactly the missing amount. The nonBillable flag is Autotask's own
+// explicit "this will not be billed" signal; that's authoritative over
+// its own extendedPrice for this figure's whole purpose. An awaiting
+// (not-yet-posted) entry is likewise forced to $0 when isNonBillable,
+// same reasoning -- an estimate for time that's flagged non-billable and
+// has no real posted value yet would be equally misleading.
+function resolveChargeableValue(entry, billingItemByTimeEntryId, roleRatesById, workTypeModifiersById) {
+  const billingItem = billingItemByTimeEntryId.get(entry.id);
+  if (billingItem) {
+    if (billingItem.nonBillable === 1) return { state: 'posted-non-billable', value: 0 };
+    return { state: billingItem.invoiceID > 0 ? 'invoiced' : 'posted', value: billingItem.extendedPrice || 0 };
+  }
+  if (entry.isNonBillable) return { state: 'awaiting', value: 0 };
+  const rate = resolveChargeableRate(entry.roleID, entry.billingCodeID, roleRatesById, workTypeModifiersById);
+  const hours = entry.hoursToBill ?? entry.hoursWorked ?? 0;
+  return { state: 'awaiting', value: rate !== null ? rate * hours : null };
+}
+
 const companyNameCache = new Map();
 async function resolveCompanyName(client, id) {
   if (id === null || id === undefined) return 'Unknown';
@@ -564,6 +662,11 @@ module.exports = {
   resolveCompanyName,
   resolveResourceIdByEmail,
   fetchServiceDeskAndProfessionalServicesMembership,
+  fetchRoleHourlyRates,
+  fetchWorkTypeModifiers,
+  resolveChargeableRate,
+  fetchBillingItemsByTimeEntryId,
+  resolveChargeableValue,
   listAll,
   getTicketUrl,
   getContractUrl,

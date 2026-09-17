@@ -7,6 +7,10 @@ const {
   getTicketUrl,
   resolveResourceName,
   fetchServiceDeskAndProfessionalServicesMembership,
+  fetchRoleHourlyRates,
+  fetchWorkTypeModifiers,
+  fetchBillingItemsByTimeEntryId,
+  resolveChargeableValue,
 } = require('@dashboard/autotask-client');
 // For the Billable $ box's own admin-only visibility, by request ("make
 // that Billable $ table only visible to admins") -- same "everyone can
@@ -341,27 +345,19 @@ async function fetchAittimeTickets(client) {
   return listAll(client.tickets, [{ op: 'beginsWith', field: 'title', value: AITTIME_TITLE_PREFIX }]);
 }
 
-// Billable-hours-to-dollars box, by request -- "the dollar value of the
-// hours from the tickets for Total Tech Hours Billable ... Lets use the
-// the Labour Rate associated with the Helpdesk role in the price list in
-// Autotask". Confirmed against real data: the real Roles entity carries
-// an `hourlyRate` field directly (this tenant's real "Helpdesk Service"
-// role, id 29683464, has `hourlyRate: 190`) -- this IS the role's own
-// price-list rate, no separate PriceListRoles fetch needed (that entity
-// exists too, but Roles.hourlyRate already has what was asked for).
-// Resolved by NAME every request (not hardcoded to 190) so this stays
-// correct if the real rate is ever changed in Autotask, same "don't bake
-// in a number that lives in Autotask" reasoning every other named-lookup
-// on this page (BillingCodes, Departments, Holiday Sets) already follows.
-const HELPDESK_ROLE_NAME = 'Helpdesk Service';
-async function fetchHelpdeskHourlyRate(client) {
-  const roles = await listAll(client.roles, [{ op: 'eq', field: 'name', value: HELPDESK_ROLE_NAME }]);
-  // 0 if the role is ever renamed/removed -- the dollar box then just
-  // reads $0 everywhere rather than the request failing outright; not
-  // expected in practice, but a missing role shouldn't take down the
-  // whole page.
-  return roles.length > 0 ? roles[0].hourlyRate || 0 : 0;
-}
+// Billable-hours-to-dollars box, by request -- originally "the dollar
+// value of the hours from the tickets for Total Tech Hours Billable ...
+// Lets use the the Labour Rate associated with the Helpdesk role in the
+// price list in Autotask" (a single flat rate applied to every hour
+// regardless of who worked it or what it was billed under). Superseded by
+// request ("use these data sources and formulas for 'awaiting approve and
+// post', posted and invoiced to show the dollar value of the times shown
+// (only for the specific person, not the whole ticket)") -- each entry
+// now resolves its OWN real rate/value via
+// @dashboard/autotask-client's resolveChargeableValue() (real
+// posted/invoiced $ when available, else a computed per-role/per-
+// work-type T&M estimate), summed per row in buildClientContractSplitHours()
+// below, instead of one flat Helpdesk Service rate applied uniformly.
 
 // "Client" ticket time -- every ticket-time entry whose ticket's company is
 // NOT Ambient IT, matched by NAME prefix rather than a single id, by
@@ -483,19 +479,26 @@ function buildClientContractHours(ctx, ticketEntries) {
 // Non-Billable passes `false` (keep only entries where isNonBillable ===
 // true) -- same grouping/shape either way, just a different half of the
 // same split.
-function buildClientContractSplitHours(ctx, ticketEntries, wantBillable) {
+// `roleRatesById`/`workTypeModifiersById`/`billingItemByTeId` are optional
+// (empty maps for a non-admin viewer, see this function's own callers) --
+// each cell's `dollars` is the SAME real resolveChargeableValue() figure
+// Ticket Times/Completed Tickets use, per-entry, per-resource ("only for
+// the specific person") -- never a flat rate multiplied onto a summed
+// hours total.
+function buildClientContractSplitHours(ctx, ticketEntries, wantBillable, roleRatesById = new Map(), workTypeModifiersById = new Map(), billingItemByTeId = new Map()) {
   const filtered = ticketEntries.filter((e) => (e.isNonBillable !== true) === wantBillable);
-  const byRow = new Map(); // row label -> Map(resourceID -> {worked, toBill})
+  const byRow = new Map(); // row label -> Map(resourceID -> {worked, toBill, dollars})
   for (const e of filtered) {
     const ticket = ctx.ticketById.get(e.ticketID);
     if (!ticket || isAmbientItCompany(ctx.companyNameById, ticket.companyID)) continue;
     const rowLabel = clientContractRowLabel(ticket.contractID ? ctx.contractNameById.get(ticket.contractID) : null);
     if (!byRow.has(rowLabel)) byRow.set(rowLabel, new Map());
     const byResource = byRow.get(rowLabel);
-    if (!byResource.has(e.resourceID)) byResource.set(e.resourceID, { worked: 0, toBill: 0 });
+    if (!byResource.has(e.resourceID)) byResource.set(e.resourceID, { worked: 0, toBill: 0, dollars: 0 });
     const cell = byResource.get(e.resourceID);
     cell.worked += e.hoursWorked || 0;
     cell.toBill += e.hoursToBill || 0;
+    cell.dollars += resolveChargeableValue(e, billingItemByTeId, roleRatesById, workTypeModifiersById).value || 0;
   }
   return sortClientContractRows(byRow, (byResource) => Object.fromEntries([...byResource.entries()].map(([id, v]) => [String(id), v])));
 }
@@ -684,22 +687,22 @@ router.get('/', async (req, res) => {
   const fromIso = `${from}T00:00:00.000Z`;
   const toIso = `${to}T00:00:00.000Z`;
   // Billable $ box is admin-only, by request -- everyone else's response
-  // just carries isAdmin: false and helpdeskHourlyRate: 0 (client.js
-  // never renders the box at all when isAdmin is false, so the 0 is never
-  // actually shown to anyone -- this only skips the extra Roles fetch for
-  // a non-admin viewer who couldn't see the result anyway).
+  // just carries isAdmin: false and empty maps below (client.js never
+  // renders the box at all when isAdmin is false, so nothing is actually
+  // shown to anyone -- this only skips the extra Roles/BillingItems/
+  // WorkTypeModifiers fetches for a non-admin viewer who couldn't see the
+  // result anyway).
   const isAdmin = isDashboardAdmin(req);
 
   try {
     const client = await getClient();
-    const [{ selected, leaveEntries, ticketEntries }, aittimeTickets, helpdeskHourlyRate] = await Promise.all([
+    const [{ selected, leaveEntries, ticketEntries }, aittimeTickets] = await Promise.all([
       resolveResourcesWithData(client, fromIso, toIso, team),
       fetchAittimeTickets(client),
-      isAdmin ? fetchHelpdeskHourlyRate(client) : Promise.resolve(0),
     ]);
 
     if (selected.length === 0) {
-      return res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, isAdmin, helpdeskHourlyRate, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
+      return res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, isAdmin, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
     }
 
     // Depends on `selected` (each resource's own locationID), so this
@@ -739,11 +742,24 @@ router.get('/', async (req, res) => {
     // don't carry, so this is the one extra real fetch this endpoint makes
     // (Tickets by id, then Contracts/Companies by id) -- shared by both
     // tables via fetchClientTicketContext() rather than fetched twice.
-    const clientTicketIds = [...new Set(ticketEntries.map((e) => e.ticketID))];
-    const clientCtx = await fetchClientTicketContext(client, clientTicketIds);
+    //
+    // Real chargeable $ per entry (Billable table only consumes this, but
+    // computed for both calls below since they share one function), by
+    // request ("use these data sources and formulas for 'awaiting approve
+    // and post', posted and invoiced to show the dollar value of the times
+    // shown"). Admin-only, same gating as the Billable $ box itself always
+    // had -- a non-admin's response carries empty maps, so
+    // buildClientContractSplitHours() below just produces real $0 rows
+    // rather than skipping the shape entirely.
+    const [clientCtx, roleRatesById, billingItemByTeId] = await Promise.all([
+      fetchClientTicketContext(client, [...new Set(ticketEntries.map((e) => e.ticketID))]),
+      isAdmin ? fetchRoleHourlyRates(client) : Promise.resolve(new Map()),
+      isAdmin ? fetchBillingItemsByTimeEntryId(client, ticketEntries.map((e) => e.id)) : Promise.resolve(new Map()),
+    ]);
+    const workTypeModifiersById = isAdmin ? await fetchWorkTypeModifiers(client, ticketEntries.map((e) => e.billingCodeID)) : new Map();
     const clientContracts = clientCtx ? buildClientContractHours(clientCtx, ticketEntries) : [];
-    const clientContractsBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, true) : [];
-    const clientContractsNonBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, false) : [];
+    const clientContractsBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, true, roleRatesById, workTypeModifiersById, billingItemByTeId) : [];
+    const clientContractsNonBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, false, roleRatesById, workTypeModifiersById, billingItemByTeId) : [];
 
     const resources = selected.map((r) => {
       const leaveHours = leaveByResource.get(r.id) || 0;
@@ -772,7 +788,7 @@ router.get('/', async (req, res) => {
       };
     });
 
-    res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, isAdmin, helpdeskHourlyRate, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
+    res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, isAdmin, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

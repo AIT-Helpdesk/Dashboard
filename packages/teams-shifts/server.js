@@ -57,6 +57,104 @@ async function fetchLeaveEntries(client, startISO, endISO) {
   }));
 }
 
+// Real Autotask Public Holidays, by request ("can you get the Public
+// Holidays? Show on the Public Holiday which Holiday Set it's From").
+// "They are called holiday sets in Autotask" (confirmed, same real chain
+// @dashboard/times' own fetchPublicHolidayHoursByResource() already uses
+// for a different purpose): Resources carry no holiday info directly,
+// only their own `locationID` (InternalLocations); InternalLocations
+// carries the real link, `holidaySetId`; HolidaySets carries the real
+// set NAME (`holidaySetName` -- confirmed real names in this tenant:
+// "QLD", "WA", "NSW", "Sri Lanka"); Holidays rows carry `holidaySetID`
+// (different capitalization -- confirmed as two genuinely distinct real
+// field names, not a typo) plus a real `holidayDate`/`holidayName`.
+// Unscoped by Teams team, same deliberate reasoning fetchLeaveEntries()
+// above already gives for its own identical merge -- shows every real
+// public holiday across every set actually in use, not just whichever
+// team happens to be selected.
+//
+// One real calendar entry per (holiday set, date) -- NOT per resource.
+// A public holiday applies to everyone sharing that location/set at
+// once; creating one entry per resource would pile up as many identical
+// "Christmas Day" entries as there are staff at that location, on the
+// same day, which is real noise not real information. `userName` is set
+// to the real Holiday Set name (not a person) so it shows on the same
+// line real shift/leave entries already use for "who this is" -- doubling
+// as the answer to "which Holiday Set it's from" without a new field.
+//
+// Further merged when the SAME real holiday name falls on the SAME real
+// day across multiple Holiday Sets -- by request ("where a specifically
+// named public holiday applies to multiple Holiday Sets, Show the Public
+// holiday once with all of the Set Names in the one calendar item").
+// Confirmed real case: Christmas Day/Boxing Day land on the same date for
+// every set. `userName`/`holidaySetName` becomes a comma-joined list of
+// every real set the holiday applies to on that day (e.g. "NSW, QLD, Sri
+// Lanka, WA"). Grouped by (day, holiday NAME), not day alone, so a
+// same-day-but-different-name coincidence stays two entries, and a
+// same-name holiday that falls on a genuinely different real date per
+// set (confirmed real: "King's Birthday" is 5 Oct for QLD but 28 Sep for
+// WA) still shows as two separate entries, one per its own real date.
+// `displayName` is prefixed "Public Holiday - " so it matches
+// SHIFT_CATEGORIES' own publicHoliday regex (below) even for a real
+// holiday name that regex wouldn't otherwise catch on its own (confirmed
+// real: "Ekka", "WA Day", "Bank Holiday", "Tamil Thai Pongal" -- none of
+// which mention "public holiday" or any of the specific day names that
+// regex already knows) -- means every Autotask-sourced holiday reaches
+// the same white/bordered Public Holiday look with zero changes needed to
+// categorizeShift() itself.
+async function fetchPublicHolidayEntries(client, startISO, endISO) {
+  const [locations, holidaySets] = await Promise.all([
+    listAll(client.internalLocations, [{ op: 'gte', field: 'id', value: 0 }]),
+    listAll(client.holidaySets, [{ op: 'gte', field: 'id', value: 0 }]),
+  ]);
+  const holidaySetIds = [...new Set(locations.map((l) => l.holidaySetId).filter(Boolean))];
+  if (holidaySetIds.length === 0) return [];
+  const holidaySetNameById = new Map(holidaySets.map((s) => [s.id, s.holidaySetName]));
+  const holidays = await fetchByFieldIn(client.holidays, 'holidaySetID', holidaySetIds, [
+    { op: 'gte', field: 'holidayDate', value: startISO },
+    { op: 'lt', field: 'holidayDate', value: endISO },
+  ]);
+  // Group same-named holidays that fall on the same real day across
+  // multiple Holiday Sets into ONE calendar entry, by request ("where a
+  // specifically named public holiday applies to multiple Holiday Sets,
+  // Show the Public holiday once with all of the Set Names in the one
+  // calendar item"). Keyed by (dayKey, holidayName) -- NOT dayKey alone --
+  // so two real, differently-named holidays landing on the same day stay
+  // separate entries, and the SAME-named holiday that falls on a
+  // genuinely different real date per set (confirmed real: "King's
+  // Birthday" is 5 Oct for QLD but 28 Sep for WA) still shows as two
+  // distinct entries, one per its own real date.
+  const grouped = new Map();
+  for (const h of holidays) {
+    const dayKey = (h.holidayDate || '').slice(0, 10);
+    const holidaySetName = holidaySetNameById.get(h.holidaySetID) || `Holiday Set #${h.holidaySetID}`;
+    const key = `${dayKey}|${h.holidayName}`;
+    if (!grouped.has(key)) grouped.set(key, { dayKey, holidayName: h.holidayName, holidaySetNames: [] });
+    grouped.get(key).holidaySetNames.push(holidaySetName);
+  }
+  return [...grouped.values()].map((g) => {
+    const holidaySetName = [...new Set(g.holidaySetNames)].sort().join(', ');
+    return {
+      id: `publicholiday-${g.dayKey}-${g.holidayName}`,
+      kind: 'publicHoliday',
+      userId: null,
+      userName: holidaySetName,
+      published: true,
+      startDateTime: null,
+      endDateTime: null,
+      dayKey: g.dayKey,
+      displayName: `Public Holiday - ${g.holidayName}`,
+      holidayName: g.holidayName,
+      holidaySetName,
+      theme: null,
+      notes: null,
+      activities: [],
+      schedulingGroupId: null,
+      schedulingGroupName: null,
+    };
+  });
+}
+
 // Microsoft Teams' Shifts app -- a schedule (shifts, open shifts, time-off
 // requests) that lives per-Team under Graph's /teams/{id}/schedule surface.
 // The actual Graph client (token, fetch, resolve) lives in ./lib.js, shared
@@ -94,22 +192,23 @@ async function buildMonthReport(teamId, monthKey) {
   // dateWorked is a date-only field that needs no real AEST offset
   // conversion, same established convention @dashboard/times' own Leave
   // query already follows.
-  const [{ byDay, totalCount }, leaveEntries] = await Promise.all([
+  const [{ byDay, totalCount }, leaveEntries, publicHolidayEntries] = await Promise.all([
     getShiftsByDay(teamId, monthStartKey, monthEndKeyExclusive),
     getClient().then((client) => fetchLeaveEntries(client, `${monthStartKey}T00:00:00.000Z`, `${monthEndKeyExclusive}T00:00:00.000Z`)),
+    getClient().then((client) => fetchPublicHolidayEntries(client, `${monthStartKey}T00:00:00.000Z`, `${monthEndKeyExclusive}T00:00:00.000Z`)),
   ]);
 
-  let leaveCount = 0;
-  for (const row of leaveEntries) {
+  let extraCount = 0;
+  for (const row of [...leaveEntries, ...publicHolidayEntries]) {
     if (!byDay[row.dayKey]) byDay[row.dayKey] = [];
     byDay[row.dayKey].push(row);
-    leaveCount++;
+    extraCount++;
   }
   for (const day of Object.values(byDay)) {
     day.sort((a, b) => (a.startDateTime || '').localeCompare(b.startDateTime || ''));
   }
 
-  return { month: monthKey, todayKey, gridDates, totalCount: totalCount + leaveCount, byDay };
+  return { month: monthKey, todayKey, gridDates, totalCount: totalCount + extraCount, byDay };
 }
 
 const REPORT_CACHE_TTL_MS = 10 * 60 * 1000; // same as service-calls -- a roster fix should show up within the hour, not stay stale for the CSP-Customers-style 20 min

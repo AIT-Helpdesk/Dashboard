@@ -38,3 +38,19 @@ Completed Tickets has a Review? column (the "Ask For Review" UDF) since that pag
 ## Resource and company name resolution
 
 Resolved via `@dashboard/autotask-client` (`resolveResourceName`, `resolveCompanyName`) and cached in memory for the life of the server process, same as every other page.
+
+## Leadership Team omitted entirely
+
+By request. `fetchServiceDeskAndProfessionalServicesMembership(client)`'s own `leadership` set (`@dashboard/autotask-client`, shared with About Me/Times) is fetched alongside the day's raw `TimeEntries`, and any entry whose `resourceID` is a Leadership Team member is filtered out before anything else builds off it -- not just hidden client-side, so a Leadership member's own time never shows as their own group, never contributes to another technician's totals, and never counts toward the page's own grand total. A ticket that also has a real entry from a non-Leadership technician still shows that technician's own entry normally -- this excludes the PERSON, not the ticket.
+
+## Collapsible per-technician sections, starting minimized
+
+By request. Each technician's own group (`.resource-group-header--toggle`/`.toggle-arrow`, the same reusable convention Security Alerts' own "All Alerts" list already established) starts collapsed the moment data loads -- click a name to expand/collapse their own tickets. Category sub-groupings inside stay visible once a technician's own section is expanded.
+
+## No column headers
+
+By request ("we don't need the column headers. The content is intuitively known."). Company/Status/Ticket #/Title/Time/$ read as obvious from the data itself once you've seen one row. The shared `.ticket-times-table` column-width CSS targets `td:nth-child`, not just `th:nth-child`, so dropping `<thead>` doesn't touch column alignment.
+
+## Chargeable $ value, per row/table/technician/page total
+
+By request ("use these data sources and formulas for 'awaiting approve and post', posted and invoiced to show the dollar value of the times shown (only for the specific person, not the whole ticket)"). Every row, each category table's own totals row, each technician's own group header, and the page-level summary line all carry a real $ figure now, computed per `TimeEntries` row via `@dashboard/autotask-client`'s shared `resolveChargeableValue()` -- see that function's own comment for the full real-data-confirmed formula (Roles.hourlyRate + WorkTypeModifiers, or the real posted/invoiced `BillingItems.extendedPrice` once one exists). Summed per technician+ticket pair the same way hours already were (`rowsByKey`, `hoursWorked` alongside `dollars`) -- "only for the specific person, not the whole ticket" was already true structurally for hours here, the $ figure just follows the identical per-person scoping.

@@ -94,7 +94,7 @@ export function mount(container) {
       table.className = 'tickets-created-table';
       table.innerHTML = `
         <thead>
-          <tr><th>Client</th><th>Ticket #</th><th>Created</th><th>Title</th></tr>
+          <tr><th>Client</th><th>Ticket #</th><th>Created</th><th>Status</th><th>Title</th></tr>
         </thead>
         <tbody>
           ${group.tickets
@@ -104,6 +104,7 @@ export function mount(container) {
               <td>${escapeHtml(group.companyName)}</td>
               <td class="ticket-number">${ticketLink(t)}</td>
               <td class="ticket-number">${formatTime(t.createDate)}</td>
+              <td>${escapeHtml(t.status)}</td>
               <td>${escapeHtml(t.title)}</td>
             </tr>`
             )

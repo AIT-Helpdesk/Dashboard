@@ -540,6 +540,70 @@ async function fetchLeaveEntries(client, startISO, endISO) {
   }));
 }
 
+// Real Autotask Public Holidays, by request ("can you get the Public
+// Holidays? Show on the Public Holiday which Holiday Set it's From") --
+// same real chain @dashboard/times' own fetchPublicHolidayHoursByResource()
+// and @dashboard/teams-shifts' own fetchPublicHolidayEntries() already
+// use (see that package's own comment for the full real-data-confirmed
+// entity chain: Resources.locationID -> InternalLocations.holidaySetId ->
+// HolidaySets.holidaySetName, Holidays.holidaySetID/holidayDate/
+// holidayName). Unscoped by Teams team, same reasoning fetchLeaveEntries()
+// above already gives. One real entry per (holiday set, date), not per
+// resource -- see teams-shifts' own comment for why a per-resource entry
+// would just be noisy duplication of the same real holiday.
+async function fetchPublicHolidayEntries(client, startISO, endISO) {
+  const [locations, holidaySets] = await Promise.all([
+    listAll(client.internalLocations, [{ op: 'gte', field: 'id', value: 0 }]),
+    listAll(client.holidaySets, [{ op: 'gte', field: 'id', value: 0 }]),
+  ]);
+  const holidaySetIds = [...new Set(locations.map((l) => l.holidaySetId).filter(Boolean))];
+  if (holidaySetIds.length === 0) return [];
+  const holidaySetNameById = new Map(holidaySets.map((s) => [s.id, s.holidaySetName]));
+  const holidays = await fetchByFieldIn(client.holidays, 'holidaySetID', holidaySetIds, [
+    { op: 'gte', field: 'holidayDate', value: startISO },
+    { op: 'lt', field: 'holidayDate', value: endISO },
+  ]);
+  // Group same-named holidays that fall on the same real day across
+  // multiple Holiday Sets into ONE calendar entry, by request ("where a
+  // specifically named public holiday applies to multiple Holiday Sets,
+  // Show the Public holiday once with all of the Set Names in the one
+  // calendar item"). Keyed by (dayKey, holidayName) -- NOT dayKey alone --
+  // so two real, differently-named holidays landing on the same day stay
+  // separate entries, and the SAME-named holiday that falls on a
+  // genuinely different real date per set (confirmed real: "King's
+  // Birthday" is 5 Oct for QLD but 28 Sep for WA) still shows as two
+  // distinct entries, one per its own real date.
+  const grouped = new Map();
+  for (const h of holidays) {
+    const dayKey = (h.holidayDate || '').slice(0, 10);
+    const holidaySetName = holidaySetNameById.get(h.holidaySetID) || `Holiday Set #${h.holidaySetID}`;
+    const key = `${dayKey}|${h.holidayName}`;
+    if (!grouped.has(key)) grouped.set(key, { dayKey, holidayName: h.holidayName, holidaySetNames: [] });
+    grouped.get(key).holidaySetNames.push(holidaySetName);
+  }
+  return [...grouped.values()].map((g) => {
+    const holidaySetName = [...new Set(g.holidaySetNames)].sort().join(', ');
+    return {
+      id: `publicholiday-${g.dayKey}-${g.holidayName}`,
+      kind: 'publicHoliday',
+      userId: null,
+      userName: holidaySetName,
+      published: true,
+      startDateTime: null,
+      endDateTime: null,
+      dayKey: g.dayKey,
+      displayName: `Public Holiday - ${g.holidayName}`,
+      holidayName: g.holidayName,
+      holidaySetName,
+      theme: null,
+      notes: null,
+      activities: [],
+      schedulingGroupId: null,
+      schedulingGroupName: null,
+    };
+  });
+}
+
 // A rolling TWO-WEEK window (14 real calendar days, Monday-start), not a
 // paginated fortnight -- by request, "forward"/"back" move exactly one week
 // at a time (the window becomes [week+1, week+2] or [week-1, week]), not
@@ -559,35 +623,43 @@ async function buildShiftsWeek(mondayWeekKey) {
   const team = teams.find((t) => t.name === SHIFTS_TEAM_NAME) || null;
   const todayKey = todayAestKey();
 
-  // Real Autotask Leave (see fetchLeaveEntries() above) is independent of
-  // the Graph Shifts schedule, so it's fetched -- and merged in below --
-  // even in the `!team` case rather than only when the Teams side of this
-  // succeeds; by request ("get Leave from Autotask and add it to the
-  // Shifts data and calendars where it appears"). Bare dateWorked-shaped
-  // ISO strings, NOT aestToUtcIso() -- TimeEntries.dateWorked is a
-  // date-only field that needs no real AEST offset conversion, same
-  // established convention @dashboard/times' own Leave query follows.
+  // Real Autotask Leave (see fetchLeaveEntries() above) and real Autotask
+  // Public Holidays (see fetchPublicHolidayEntries() above) are both
+  // independent of the Graph Shifts schedule, so both are fetched -- and
+  // merged in below -- even in the `!team` case rather than only when the
+  // Teams side of this succeeds; by request ("get Leave from Autotask and
+  // add it to the Shifts data and calendars where it appears" / "can you
+  // get the Public Holidays?"). Bare dateWorked/holidayDate-shaped ISO
+  // strings, NOT aestToUtcIso() -- both are date-only fields that need no
+  // real AEST offset conversion, same established convention
+  // @dashboard/times' own Leave/Public-Holiday queries follow.
   const leaveEntriesPromise = getClient().then((client) => fetchLeaveEntries(client, `${mondayWeekKey}T00:00:00.000Z`, `${endKeyExclusive}T00:00:00.000Z`));
+  const publicHolidayEntriesPromise = getClient().then((client) => fetchPublicHolidayEntries(client, `${mondayWeekKey}T00:00:00.000Z`, `${endKeyExclusive}T00:00:00.000Z`));
 
   if (!team) {
     // Surfaced rather than silently dropped -- same convention as
     // HELPDESK_TEAM_NAME's own notFound handling below.
     const byDay = {};
-    const leaveEntries = await leaveEntriesPromise;
-    for (const row of leaveEntries) (byDay[row.dayKey] = byDay[row.dayKey] || []).push(row);
-    return { weekStart: mondayWeekKey, days, todayKey, totalCount: leaveEntries.length, byDay, teamName: SHIFTS_TEAM_NAME, notFound: leaveEntries.length === 0 };
+    const [leaveEntries, publicHolidayEntries] = await Promise.all([leaveEntriesPromise, publicHolidayEntriesPromise]);
+    const extraEntries = [...leaveEntries, ...publicHolidayEntries];
+    for (const row of extraEntries) (byDay[row.dayKey] = byDay[row.dayKey] || []).push(row);
+    return { weekStart: mondayWeekKey, days, todayKey, totalCount: extraEntries.length, byDay, teamName: SHIFTS_TEAM_NAME, notFound: extraEntries.length === 0 };
   }
 
-  const [{ byDay, totalCount }, leaveEntries] = await Promise.all([getShiftsByDay(team.id, mondayWeekKey, endKeyExclusive), leaveEntriesPromise]);
-  let leaveCount = 0;
-  for (const row of leaveEntries) {
+  const [{ byDay, totalCount }, leaveEntries, publicHolidayEntries] = await Promise.all([
+    getShiftsByDay(team.id, mondayWeekKey, endKeyExclusive),
+    leaveEntriesPromise,
+    publicHolidayEntriesPromise,
+  ]);
+  let extraCount = 0;
+  for (const row of [...leaveEntries, ...publicHolidayEntries]) {
     (byDay[row.dayKey] = byDay[row.dayKey] || []).push(row);
-    leaveCount++;
+    extraCount++;
   }
   for (const day of Object.values(byDay)) {
     day.sort((a, b) => (a.startDateTime || '').localeCompare(b.startDateTime || ''));
   }
-  return { weekStart: mondayWeekKey, days, todayKey, totalCount: totalCount + leaveCount, byDay, teamName: team.name, notFound: false };
+  return { weekStart: mondayWeekKey, days, todayKey, totalCount: totalCount + extraCount, byDay, teamName: team.name, notFound: false };
 }
 
 // Same reasoning as service-calls'/teams-shifts' own report caches -- a

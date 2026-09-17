@@ -1182,7 +1182,11 @@ export function mount(container) {
     // TimeEntries.dateWorked day with an hoursWorked total, not a Graph
     // shift with real clock times -- so line1 shows that hours total
     // instead of a blank "-" a real formatTime(null) pair would produce.
-    const line1 = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
+    // Real Autotask Public Holidays (kind: 'publicHoliday', see
+    // fetchPublicHolidayEntries()) have no clock time OR hours figure at
+    // all -- line1 shows the real holiday's own short name instead
+    // (e.userName/line2 already carries which Holiday Set it's from).
+    const line1 = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : e.kind === 'publicHoliday' ? e.holidayName : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
     const line2 = e.userName || '(Open shift)';
     // Type -- the matched legend category's own clean label when there is
     // one (e.g. "Vacation", not the raw underlying reason text "Vacation
@@ -1201,11 +1205,14 @@ export function mount(container) {
     // rule (and the page's real theme) normally.
     const line2Style = cat ? ' style="color: #6b7280;"' : '';
     const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line2)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line3)}</span>`;
-    const titleLines = [
-      e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
-      `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
-      `Type: ${e.displayName || '(unlabeled)'}${cat ? ` -- ${cat.label}` : ''}`,
-    ];
+    const titleLines =
+      e.kind === 'publicHoliday'
+        ? [`Public Holiday: ${e.holidayName}`, `${e.holidaySetName && e.holidaySetName.includes(',') ? 'Holiday Sets' : 'Holiday Set'}: ${e.holidaySetName}`]
+        : [
+            e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
+            `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
+            `Type: ${e.displayName || '(unlabeled)'}${cat ? ` -- ${cat.label}` : ''}`,
+          ];
     if (e.notes) titleLines.push(`Notes: ${e.notes}`);
     if (!e.published) titleLines.push('Not yet published (draft)');
     const title = escapeHtml(titleLines.join('\n'));
