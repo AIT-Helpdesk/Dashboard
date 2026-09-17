@@ -1,5 +1,5 @@
 const express = require('express');
-const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getTicketUrl, aestDayBoundsIso, excludeMonitoringAlerts } = require('@dashboard/autotask-client');
+const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getTicketUrl, aestDayBoundsIso, excludeMonitoringAlerts, getPicklistLabels } = require('@dashboard/autotask-client');
 
 async function fetchTicketsCreatedOn(client, dateStr) {
   // AEST calendar day, not UTC -- see aestDayBoundsIso() for why.
@@ -26,7 +26,7 @@ router.get('/', async (req, res) => {
 
   try {
     const client = await getClient();
-    const tickets = await fetchTicketsCreatedOn(client, date);
+    const [tickets, statusLabels] = await Promise.all([fetchTicketsCreatedOn(client, date), getPicklistLabels(client.tickets, 'status')]);
 
     const uniqueCompanyIDs = [...new Set(tickets.map((t) => t.companyID).filter((id) => id !== null && id !== undefined))];
     await mapWithConcurrency(uniqueCompanyIDs, 3, (id) => resolveCompanyName(client, id));
@@ -42,7 +42,10 @@ router.get('/', async (req, res) => {
         company: await resolveCompanyName(client, t.companyID),
         createDate: t.createDate,
         priority: t.priority,
-        status: t.status,
+        // Real picklist label, by request ("show Ticket Status between
+        // Created Time and Title") -- same getPicklistLabels() pattern
+        // Ticket Times' own Status column already uses.
+        status: statusLabels.get(t.status) || `#${t.status}`,
       });
     }
     enriched.sort((a, b) => new Date(a.createDate) - new Date(b.createDate));
