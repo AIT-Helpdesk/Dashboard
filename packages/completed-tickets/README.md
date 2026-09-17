@@ -29,3 +29,11 @@ Displayed as `HH:MM` (`formatHours()` in `client.js`), not Autotask's raw decima
 ## Review? column
 
 Reads the ticket's **"Ask For Review"** UDF (Autotask's own field label; the picklist values are `ASK` / `NO`) via `getTicketUdf()` (shared, `@dashboard/autotask-client` -- also used by the Asked for Review page) out of the `userDefinedFields` array the Tickets API includes on every ticket by default, no extra request needed. Blank when the UDF was never set on the ticket (its entry is present with a `null` value, or absent on older tickets).
+
+## $ column -- scoped to the completing technician's own time, not the whole ticket
+
+By request ("use these data sources and formulas for 'awaiting approve and post', posted and invoiced to show the dollar value of the times shown (only for the specific person, not the whole ticket)"). Deliberately a DIFFERENT scope from the Time column above: Time is the ticket's own all-time total across every technician who ever logged against it (see that section's own comment for why); $ is only the portion belonging to `completedByResourceID` -- the one resource each row/group is actually credited to -- via `resolveChargeableValue()` (`@dashboard/autotask-client`, shared with Ticket Times/Time Summaries; see its own comment for the real, 100%-verified rate formula) summed per `ticketID:resourceID` pair (`dollarsByTicketAndResource` in `server.js`). A ticket with real time from more than one technician never mixes their $ together under whichever one happened to complete it. Group headers and the page-level summary total the same way.
+
+## Info line format
+
+`{Date} - {Count} tickets - {total time summed} (h:mm) total - {$ total}`, by request ("change the info line ... to be like the one we just changed on Ticket Times") -- plain text throughout (no bold Count, no smaller/muted total), matching that page's own identically-worded change. Previously "**{Count}** ticket(s) completed on {Date} -- {total} (h:mm) logged against them".
