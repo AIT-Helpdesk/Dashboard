@@ -170,7 +170,7 @@ Visit `https://dashboard.ambientit.com.au/auth/strety-automation/connect`, signe
 
 ### 5. Create the scheduled task
 
-Runs `sync.js` hourly, **8am-6pm only** (by request -- Autotask ticket counts don't need syncing overnight when nobody's working), logging its output (`sync.js`'s own `[OK]`/`[FAILED]` detail per metric -- Task Scheduler's own history only shows a numeric exit code, not that detail, so redirecting to a real log file is the only way to actually diagnose a failed run later):
+Runs `sync.js` every 30 minutes, **4pm-9pm only** (by request -- originally hourly 8am-6pm, changed later; Autotask ticket counts don't need syncing outside real working hours), logging its output (`sync.js`'s own `[OK]`/`[FAILED]` detail per metric -- Task Scheduler's own history only shows a numeric exit code, not that detail, so redirecting to a real log file is the only way to actually diagnose a failed run later):
 
 ```powershell
 New-Item -ItemType Directory -Force -Path C:\apps\autotask-dashboard-git\logs | Out-Null
@@ -179,12 +179,12 @@ $action = New-ScheduledTaskAction -Execute "cmd.exe" `
   -Argument '/c node packages\strety-autotask-sync\sync.js > logs\strety-autotask-sync.log 2>&1' `
   -WorkingDirectory "C:\apps\autotask-dashboard-git"
 
-# Daily trigger starting 8am, repeating hourly for a 10-hour window -- fires
-# at 8,9,10,11,12,13,14,15,16,17,18 (11 runs/day, last one exactly at 6pm;
-# RepetitionDuration is inclusive of the occurrence that lands exactly on
-# its own boundary). Native Task Scheduler support for "hourly, but only
-# within a daily clock-time window" -- no separate script-side time check
-# needed in sync.js itself.
+# Daily trigger starting 4pm, repeating every 30 minutes for a 5-hour
+# window -- fires at 4:00, 4:30, 5:00, ... 9:00pm (11 runs/day, last one
+# exactly at 9pm; RepetitionDuration is inclusive of the occurrence that
+# lands exactly on its own boundary). Native Task Scheduler support for
+# "every N minutes, but only within a daily clock-time window" -- no
+# separate script-side time check needed in sync.js itself.
 #
 # CONFIRMED (the hard way, against a real production task) that
 # New-ScheduledTaskTrigger -Daily does NOT accept -RepetitionInterval/
@@ -201,13 +201,13 @@ $action = New-ScheduledTaskAction -Execute "cmd.exe" `
 # (a -Once trigger, which is only used to harvest its .Repetition object,
 # thrown away otherwise) and assign that WHOLE object onto the real Daily
 # trigger, rather than mutating individual leaf properties on it.
-$trigger = New-ScheduledTaskTrigger -Daily -At 8am
-$repeatSource = New-ScheduledTaskTrigger -Once -At 8am -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Hours 10)
+$trigger = New-ScheduledTaskTrigger -Daily -At 4pm
+$repeatSource = New-ScheduledTaskTrigger -Once -At 4pm -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Hours 5)
 $trigger.Repetition = $repeatSource.Repetition
 
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
 Register-ScheduledTask -TaskName "AmbientStretyAutotaskSync" -Action $action -Trigger $trigger -Settings $settings `
-  -Description "Hourly, 8am-6pm: sync Autotask ticket counts into Strety Helpdesk Task Tracker scorecards"
+  -Description "Every 30 min, 4pm-9pm: sync Autotask ticket counts into Strety Helpdesk Task Tracker scorecards"
 ```
 
 Runs as SYSTEM by default (no `-User` specified) -- fine here, since it only needs filesystem access to its own package folder and outbound HTTPS, nothing more privileged. The log is overwritten each run, not appended (`>` not `>>`) -- Strety's own check-in `context` notes are already the real audit trail of every value actually written, so this log is only for diagnosing a failed run, not a permanent record; unbounded growth wasn't worth it. Switch to `>>` if you want history instead.
@@ -220,24 +220,26 @@ Unregister-ScheduledTask -TaskName "AmbientStretyAutotaskSync" -Confirm:$false
 $action = New-ScheduledTaskAction -Execute "cmd.exe" `
   -Argument '/c node packages\strety-autotask-sync\sync.js > logs\strety-autotask-sync.log 2>&1' `
   -WorkingDirectory "C:\apps\autotask-dashboard-git"
-$trigger = New-ScheduledTaskTrigger -Daily -At 8am
-$repeatSource = New-ScheduledTaskTrigger -Once -At 8am -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Hours 10)
+$trigger = New-ScheduledTaskTrigger -Daily -At 4pm
+$repeatSource = New-ScheduledTaskTrigger -Once -At 4pm -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Hours 5)
 $trigger.Repetition = $repeatSource.Repetition
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
 Register-ScheduledTask -TaskName "AmbientStretyAutotaskSync" -Action $action -Trigger $trigger -Settings $settings `
-  -Description "Hourly, 8am-6pm: sync Autotask ticket counts into Strety Helpdesk Task Tracker scorecards"
+  -Description "Every 30 min, 4pm-9pm: sync Autotask ticket counts into Strety Helpdesk Task Tracker scorecards"
 
-# Verify: TriggerType MSFT_TaskDailyTrigger, StartBoundary ...T08:00:00,
-# Repetition Interval PT1H / Duration PT10H / StopAtDurationEnd True.
+# Verify: TriggerType MSFT_TaskDailyTrigger, StartBoundary ...T16:00:00,
+# Repetition Interval PT30M / Duration PT5H / StopAtDurationEnd True.
 $t = (Get-ScheduledTask -TaskName "AmbientStretyAutotaskSync").Triggers
 $t.CimClass.CimClassName
 $t.StartBoundary
 $t.Repetition | Format-List *
 ```
 
+**Confirmed real gotcha**: running the `Unregister-ScheduledTask` line and the `Register-ScheduledTask` block as two SEPARATE steps (rather than the one paste above) risks ending up with no task registered at all if anything interrupts the session in between (a copy-paste that only grabbed the Unregister line, a terminal closed partway through, ...) -- `Get-ScheduledTask -TaskName "AmbientStretyAutotaskSync"` then fails outright with `CmdletizationQuery_NotFound_TaskName` rather than showing the old schedule. Always re-run the `Get-ScheduledTask` verify block immediately after re-registering to confirm it actually exists, not just that the commands didn't visibly error.
+
 This dashboard previously ran the sync **24/7** (`-RepetitionDuration (New-TimeSpan -Days 3650)`, ~10 years, off a `-Once -At (Get-Date)` trigger rather than a daily one) -- `-RepetitionDuration (New-TimeSpan -Days 3650)`, not `[TimeSpan]::MaxValue`, is still the right move if you ever DO want round-the-clock repetition again: confirmed against a real run `MaxValue` is too large to serialize into Task Scheduler's own XML duration format and gets rejected outright (`Register-ScheduledTask : The task XML contains a value which is incorrectly formatted or out of range`). A large-but-finite duration is the standard workaround for "repeat indefinitely" -- 10 years is far longer than this box will run unattended before someone touches it again anyway.
 
-### 6. Verify it actually works before waiting for the first real hourly run
+### 6. Verify it actually works before waiting for the first real run
 
 ```powershell
 Start-ScheduledTask -TaskName "AmbientStretyAutotaskSync"

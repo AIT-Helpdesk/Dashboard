@@ -2,7 +2,7 @@
 
 An automated job (not a dashboard page -- no `dashboardPage` in `package.json`, so the shell never tries to mount it) that counts things in Autotask and writes them as Strety check-ins on a schedule, without a human in the loop. Built to replace the one-time manual write done earlier for "NOT READY: EOD - Tickets at Set Priority - Should be None" (see What's On's README) with something that keeps itself current.
 
-**Status as of writing**: fully live on production -- connected, all four metrics in `metrics.js` verified against real data, running hourly and unattended via Windows Task Scheduler (see "Production setup" below), with its own health surfaced on What's On (see `status.js` below) if it ever stops working.
+**Status as of writing**: fully live on production -- connected, all four metrics in `metrics.js` verified against real data, running every 30 minutes (4pm-9pm; originally hourly 8am-6pm, changed later by request) and unattended via Windows Task Scheduler (see "Production setup" below), with its own health surfaced on What's On (see `status.js` below) if it ever stops working.
 
 ## A deliberately SEPARATE Strety connection, not the dashboard's own
 
@@ -69,7 +69,7 @@ Verified against real data: a real run wrote `3`, `188`, `11`, and `10` respecti
 After every run, `sync.js` writes its outcome to `last-run.json` (gitignored, like `.tokens.json` -- runtime state, not a credential, but still not checked in) via `writeLastRunStatus()` -- when it ran, whether it succeeded overall, and each metric's own individual result. What's On's `server.js` reads this back via `readLastRunStatus()` and surfaces a warning banner (with a `/auth/strety-automation/connect` button) if either:
 
 - the last run **failed** (a real error, most likely this connection needing reconnecting -- same underlying cause as the main connection's own `reauth-required`, just a separate connection with its own separate failure), or
-- the last run was **too long ago** (more than 3 hours, generous slack over the hourly schedule) -- catching a DIFFERENT failure mode a pure success/failure check can't see: the scheduled task itself has stopped firing entirely (disabled, box rebooted and it didn't come back, etc.), so there's no recent run to even check the success of.
+- the last run was **too long ago** (more than 1.5 hours -- ~3x the real scheduled interval, same generosity the original hourly schedule's own 3-hour threshold had, scaled for the real schedule now being every 30 minutes) -- catching a DIFFERENT failure mode a pure success/failure check can't see: the scheduled task itself has stopped firing entirely (disabled, box rebooted and it didn't come back, etc.), so there's no recent run to even check the success of. Only actually shown 4:15pm-9:00pm (`isWithinAutomationBannerWindow()`) -- outside the real scheduled window the last run always looks stale by that threshold even though nothing is wrong, same reasoning that function's own comment documents.
 
 Deliberately a plain file read, not a live API call from What's On -- checking this costs nothing extra against Strety's rate limit (see `@dashboard/strety-client`'s README, "Rate limiting"), unlike a proactive health-check request would. A healthy, current automation shows nothing at all -- same "silent when fine, loud when not" convention as the main connection's own `not-connected`/`reauth-required` messages.
 

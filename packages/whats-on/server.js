@@ -45,11 +45,15 @@ const { getToken: getIngramToken, fetchAllPages: fetchIngramPages } = require('@
 // checking this costs nothing extra against Strety's rate limit. Two
 // distinct failure modes, not just one: the run itself failed (a real
 // error, e.g. its own connection needs reconnecting), OR nothing has run
-// in far longer than the hourly schedule implies (the scheduled task
-// itself may have stopped firing entirely, which a pure success/failure
-// check on the last run wouldn't catch since there'd BE no last run to
-// check).
-const AUTOMATION_STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours -- hourly schedule, generous buffer before alarming
+// in far longer than the schedule implies (the scheduled task itself may
+// have stopped firing entirely, which a pure success/failure check on
+// the last run wouldn't catch since there'd BE no last run to check).
+//
+// 1.5 hours -- same "~3x the real scheduled interval" generosity the
+// original hourly schedule's own 3-hour threshold had, scaled down for
+// the real schedule now being every 30 minutes (see DEPLOYMENT.md's
+// Windows Task Scheduler setup), not a fresh guess.
+const AUTOMATION_STALE_THRESHOLD_MS = 1.5 * 60 * 60 * 1000;
 function formatAge(ms) {
   const hours = Math.floor(ms / (60 * 60 * 1000));
   if (hours >= 1) return `${hours} hour${hours === 1 ? '' : 's'}`;
@@ -85,19 +89,20 @@ function canSeeAutomationStatus(email) {
 
 // The staleness banner ("hasn't run in X hours") is only meaningful while
 // the automation is actually expected to be running -- it's scheduled
-// hourly, 8am-6pm only (see DEPLOYMENT.md's Windows Task Scheduler
-// setup), so outside that window the last run is ALWAYS going to look
-// stale by the 3-hour threshold below (e.g. every single morning before
-// the first 8am run fires) even though nothing is actually wrong. By
-// request, that specific message+button is only shown 8:15am-6:00pm --
-// 8:15, not 8:00, as a small grace period for the first scheduled run to
-// actually fire and complete. Doesn't apply to the "never run yet" or
-// "last run failed" messages below -- those are real problems worth
-// surfacing any time of day, not an artifact of the schedule itself.
+// every 30 minutes, 4pm-9pm only (originally hourly 8am-6pm; see
+// DEPLOYMENT.md's Windows Task Scheduler setup for the real current
+// schedule), so outside that window the last run is ALWAYS going to look
+// stale by the threshold above (e.g. every single day before the first
+// 4pm run fires) even though nothing is actually wrong. By request, that
+// specific message+button is only shown 4:15pm-9:00pm -- 4:15, not 4:00,
+// as a small grace period for the first scheduled run to actually fire
+// and complete. Doesn't apply to the "never run yet" or "last run
+// failed" messages below -- those are real problems worth surfacing any
+// time of day, not an artifact of the schedule itself.
 function isWithinAutomationBannerWindow() {
   const aestNow = toAest(new Date());
   const minutesSinceMidnight = aestNow.getUTCHours() * 60 + aestNow.getUTCMinutes();
-  return minutesSinceMidnight >= 8 * 60 + 15 && minutesSinceMidnight < 18 * 60;
+  return minutesSinceMidnight >= 16 * 60 + 15 && minutesSinceMidnight < 21 * 60;
 }
 
 function evaluateAutomationStatus() {
@@ -130,7 +135,7 @@ function evaluateAutomationStatus() {
     }
     return {
       ok: false,
-      message: `The automated Autotask sync hasn't run in ${formatAge(ageMs)} (expected hourly) -- these EOD numbers may be stale.`,
+      message: `The automated Autotask sync hasn't run in ${formatAge(ageMs)} (expected every 30 min) -- these EOD numbers may be stale.`,
       ranAt: lastRun.ranAt,
       connectedAs,
     };
