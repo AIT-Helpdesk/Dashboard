@@ -295,6 +295,13 @@ document.addEventListener('keydown', (e) => {
   else setFocusMode(false);
 });
 
+// The real machine currently serving this dashboard (os.hostname(), see
+// /api/me in auth.js) -- also read by checkBoardAutoRestartRotation()
+// below to gate the auto-restart-Rotate behaviour to just BOARD-* kiosk
+// machines, not every browser that happens to be pointed at this
+// dashboard. null until renderUserInfo()'s own fetch resolves.
+let serverHostname = null;
+
 async function renderUserInfo() {
   try {
     const res = await nativeFetch('/api/me');
@@ -304,6 +311,7 @@ async function renderUserInfo() {
     // the logo showing which real machine is currently serving the data,
     // useful even while troubleshooting sign-in itself.
     if (data.hostname && serverHostnameEl) serverHostnameEl.textContent = data.hostname;
+    if (data.hostname) serverHostname = data.hostname;
     if (!data.user) return;
     userInfoEl.innerHTML = `
       <div class="user-name">${escapeHtml(data.user.name || data.user.email)}</div>
@@ -667,6 +675,15 @@ let rotationNavInProgress = false;
 // reset to false by both startRotation() and stopRotation(), so a fresh
 // session never silently starts (or stays) paused from a previous one.
 let rotationPaused = false;
+// When Rotate last went (or has been, since this page loaded) NOT
+// active -- read by checkBoardAutoRestartRotation() below, alongside
+// stopRotation()'s own reset of it, to answer "how long has Rotate been
+// off". Starts at the moment this script itself loads (not 0/undefined),
+// so a board that opens with Rotate not yet running (no "?rotate=on", or
+// a URL that has it but with nothing actually added to Rotate yet) still
+// gets a real, correct "off since" time rather than looking like it's
+// been off forever.
+let rotationInactiveSinceAt = Date.now();
 
 // Loads the NEXT page off-screen before switching to it, by request ("do
 // the refresh and then switch") -- rather than switching first and letting
@@ -742,6 +759,43 @@ function checkRotationWatchdog() {
   window.location.reload();
 }
 setInterval(checkRotationWatchdog, ROTATE_WATCHDOG_INTERVAL_MS);
+
+// ---- Auto-restart Rotate if it's not running, BOARD-* machines only --
+// by request ("make the Rotate automatically restart if not running
+// after 5 minutes only on machines named BOARD-*"). Distinct from
+// checkRotationWatchdog() above -- that one only ever fires while Rotate
+// IS active but stalled; this one covers Rotate not running AT ALL
+// (never started this session, or stopped some other way -- manually, a
+// real-fullscreen Escape, a fullscreenchange event, ...), which the
+// stall watchdog's own `if (!rotationActive...) return` deliberately
+// never touches.
+//
+// Scoped to BOARD-* by real machine name (serverHostname, above -- the
+// SERVER's own os.hostname(), not anything client-side/spoofable),
+// case-insensitive prefix match, since every physical TV-board kiosk in
+// this fleet runs its own local instance of this dashboard and is named
+// accordingly. Nobody else's browser (Amber's own laptop, a technician
+// testing something, ...) should ever have Rotate silently restart out
+// from under them just because they closed it.
+const BOARD_HOSTNAME_PREFIX_RE = /^board-/i;
+const BOARD_AUTO_RESTART_CHECK_INTERVAL_MS = 15000; // same cadence as the stall watchdog above -- plenty fine-grained against a 5-minute threshold
+const BOARD_AUTO_RESTART_AFTER_MS = 5 * 60 * 1000;
+
+function checkBoardAutoRestartRotation() {
+  if (rotationActive) return;
+  if (!BOARD_HOSTNAME_PREFIX_RE.test(serverHostname || '')) return;
+  if (Date.now() - rotationInactiveSinceAt < BOARD_AUTO_RESTART_AFTER_MS) return;
+  // startRotation() is already safe to call speculatively -- a no-op if
+  // this browser has no pages actually added to Rotate yet (its own
+  // early return), and real browser Fullscreen simply won't be entered
+  // (blocked outside a genuine user gesture, same real limitation
+  // maybeAutoStartRotation()'s own comment already documents for the
+  // "?rotate=on" case) -- rotation itself and this app's own CSS-based
+  // Focus Mode still start normally regardless.
+  console.error(`Rotate: not running for 5+ minutes on ${serverHostname} -- auto-restarting.`);
+  startRotation();
+}
+setInterval(checkBoardAutoRestartRotation, BOARD_AUTO_RESTART_CHECK_INTERVAL_MS);
 
 function scheduleNextRotation() {
   clearTimeout(rotationTimer);
@@ -1018,6 +1072,11 @@ function startRotation() {
 function stopRotation() {
   rotationActive = false;
   rotationPaused = false;
+  // Starts the clock checkBoardAutoRestartRotation() (below) reads for
+  // "how long has Rotate been off" -- every real way rotation stops runs
+  // through this one function, so this is the single place that needs to
+  // mark it.
+  rotationInactiveSinceAt = Date.now();
   renderRotateControls();
   clearTimeout(rotationTimer);
   rotationTimer = null;

@@ -31,6 +31,15 @@ By request: a static block (`DAILY_CHECKLIST_HTML` in `client.js`) between the i
 
 This is entirely separate from `PAGE_DESCRIPTIONS`/`loadPageList()` -- it doesn't touch the live/reconciled page list at all, isn't reachable via any registered page id, and its four page links (`#whats-on`, `#service-calls`, `#subscriptions-expiring`, `#my-strety-tasks`) are hardcoded hash links, same in-app navigation convention `pageItemHtml()` uses, just fixed here rather than driven off the live page registry. If any of these four pages is ever renamed or removed, this block needs updating by hand -- it won't silently break, but it won't self-correct either.
 
+## "Special Staff Hours" button -- a real popup window, static content
+
+By request: a button on the Daily Checklist card's own heading row, right-justified (`.section-heading-row`, the same flex layout What's On's own "Today & Tomorrow"/"Team Shifts" headings already use for an inline button beside the heading text -- the button itself is wrapped in a `<div class="date-form">`, same as those, so it picks up that class's existing "reset the heading's own uppercase/letter-spacing/green" rule rather than rendering styled like heading text). Clicking it opens a real separate popup window (`window.open('', '_blank', 'width=480,height=520,scrollbars=yes')` + `document.write()`, same "built client-side from already-loaded data" pattern `@dashboard/teams-shifts`' own `openDayPopup()` uses) showing two technicians' own non-standard working hours:
+
+- **Jett's Hours** -- a table (Day/Start/End/Hours), one row per weekday, real fixed start/end times and hours supplied directly (`JETT_HOURS` in `client.js`).
+- **Peter's Hours** -- plain text (`PETER_HOURS_TEXT`), since his own schedule isn't a fixed weekly table ("Usually works Mon - Wed; with Thu & Fri Off; Occasionally varies when Peter helps out when we have people away").
+
+Static content, not sourced from Autotask/Shifts -- these are real fixed personal schedules known outside any system this dashboard already reads, supplied directly rather than data this page could otherwise derive. No extra popup-positioning code needed -- `shell/public/app.js`'s global `window.open()` wrap already centers any popup with a `width`/`height` in its features string on the same monitor the browser window itself is on, for every page's popups including this one.
+
 ## External system buttons
 
 The right column is a fixed list of buttons (`EXTERNAL_LINKS` in `client.js`) to systems this dashboard itself doesn't integrate with, opened in a new tab (`target="_blank"`) rather than navigating away from the dashboard entirely. By request, the list is: Kaseya One, AIT Intranet, Ingram Micro, Backup Radar, AutoElevate, Huntress, EasyDMARC, Access4, Aussie Broadband, TPP, CloudFlare, WP Engine. No column heading above the buttons, by request. "AIT Intranet" links to Ambient iT's own SharePoint tenant (`https://ambientitptyltd.sharepoint.com/`) -- the label is the internal-facing name people actually use for it, not a literal "SharePoint" mention.
