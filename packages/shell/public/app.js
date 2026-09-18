@@ -295,13 +295,6 @@ document.addEventListener('keydown', (e) => {
   else setFocusMode(false);
 });
 
-// The real machine currently serving this dashboard (os.hostname(), see
-// /api/me in auth.js) -- also read by checkBoardAutoRestartRotation()
-// below to gate the auto-restart-Rotate behaviour to just BOARD-* kiosk
-// machines, not every browser that happens to be pointed at this
-// dashboard. null until renderUserInfo()'s own fetch resolves.
-let serverHostname = null;
-
 async function renderUserInfo() {
   try {
     const res = await nativeFetch('/api/me');
@@ -309,9 +302,15 @@ async function renderUserInfo() {
     // Set regardless of sign-in state (unlike the user-info block below,
     // which needs a real signed-in user) -- by request, small text under
     // the logo showing which real machine is currently serving the data,
-    // useful even while troubleshooting sign-in itself.
+    // useful even while troubleshooting sign-in itself. NOT usable to
+    // identify which physical board kiosk is BROWSING this dashboard --
+    // this dashboard runs off one shared/central server, so every board
+    // (and every other browser) sees the exact same value here regardless
+    // of which physical PC it's actually running on. See
+    // checkBoardAutoRestartRotation()'s own comment below for why that
+    // matters (a real board's own auto-restart flag is a URL param
+    // instead, not this).
     if (data.hostname && serverHostnameEl) serverHostnameEl.textContent = data.hostname;
-    if (data.hostname) serverHostname = data.hostname;
     if (!data.user) return;
     userInfoEl.innerHTML = `
       <div class="user-name">${escapeHtml(data.user.name || data.user.email)}</div>
@@ -760,40 +759,56 @@ function checkRotationWatchdog() {
 }
 setInterval(checkRotationWatchdog, ROTATE_WATCHDOG_INTERVAL_MS);
 
-// ---- Auto-restart Rotate if it's not running, BOARD-* machines only --
-// by request ("make the Rotate automatically restart if not running
-// after 5 minutes only on machines named BOARD-*"). Distinct from
-// checkRotationWatchdog() above -- that one only ever fires while Rotate
-// IS active but stalled; this one covers Rotate not running AT ALL
-// (never started this session, or stopped some other way -- manually, a
-// real-fullscreen Escape, a fullscreenchange event, ...), which the
-// stall watchdog's own `if (!rotationActive...) return` deliberately
-// never touches.
+// ---- Auto-restart Rotate if it's not running, boards only -- by request
+// ("make the Rotate automatically restart if not running after 5 minutes
+// only on machines named BOARD-*"), revised after a real report it
+// didn't work ("I am running it on a machine called Board-techroom ...
+// not rotating"): the ORIGINAL version gated this on the real SERVER
+// hostname (via /api/me's os.hostname()) -- but this dashboard runs off
+// one shared/central server, so every browser pointed at it
+// (Board-techroom included) sees that SAME one server name, never its
+// own. There's also no browser API at all for reading the real Windows
+// hostname of the PC a browser is actually running on (deliberately
+// blocked, for privacy) -- so a real per-machine name was never
+// reachable from here to begin with.
 //
-// Scoped to BOARD-* by real machine name (serverHostname, above -- the
-// SERVER's own os.hostname(), not anything client-side/spoofable),
-// case-insensitive prefix match, since every physical TV-board kiosk in
-// this fleet runs its own local instance of this dashboard and is named
-// accordingly. Nobody else's browser (Amber's own laptop, a technician
-// testing something, ...) should ever have Rotate silently restart out
-// from under them just because they closed it.
-const BOARD_HOSTNAME_PREFIX_RE = /^board-/i;
+// "Which machines this applies to" instead just means: does THIS browser
+// actually have any pages added to Rotate at all (orderedRotatePageIds(),
+// same list Rotate itself cycles through)? A board kiosk always has real
+// pages configured (that's the whole point of it); a normal admin/
+// technician browser almost never does, so this naturally scopes the
+// behaviour to real boards without needing any hostname, URL flag, or
+// other manual per-machine setup at all.
+//
+// Distinct from checkRotationWatchdog() above -- that one only ever
+// fires while Rotate IS active but stalled; this one covers Rotate not
+// running AT ALL, by a later request ("the rotate stops quite often
+// throughout the day and we have to press the play button again ... I
+// want it to refresh and restart"). Does a real page reload, same
+// self-healing shape checkRotationWatchdog() above already uses
+// (ROTATE_RESUME_AFTER_RELOAD_KEY, picked back up by
+// maybeResumeRotationAfterWatchdogReload() after the reload) rather than
+// just calling startRotation() on the current, possibly already-broken
+// page -- a real reload gives Rotate a genuinely clean slate to restart
+// from, same reasoning the stall watchdog already has for doing the same
+// thing.
 const BOARD_AUTO_RESTART_CHECK_INTERVAL_MS = 15000; // same cadence as the stall watchdog above -- plenty fine-grained against a 5-minute threshold
 const BOARD_AUTO_RESTART_AFTER_MS = 5 * 60 * 1000;
 
 function checkBoardAutoRestartRotation() {
   if (rotationActive) return;
-  if (!BOARD_HOSTNAME_PREFIX_RE.test(serverHostname || '')) return;
+  if (orderedRotatePageIds().length === 0) return;
   if (Date.now() - rotationInactiveSinceAt < BOARD_AUTO_RESTART_AFTER_MS) return;
-  // startRotation() is already safe to call speculatively -- a no-op if
-  // this browser has no pages actually added to Rotate yet (its own
-  // early return), and real browser Fullscreen simply won't be entered
-  // (blocked outside a genuine user gesture, same real limitation
-  // maybeAutoStartRotation()'s own comment already documents for the
-  // "?rotate=on" case) -- rotation itself and this app's own CSS-based
-  // Focus Mode still start normally regardless.
-  console.error(`Rotate: not running for 5+ minutes on ${serverHostname} -- auto-restarting.`);
-  startRotation();
+  console.error('Rotate: not running for 5+ minutes -- refreshing and restarting.');
+  try {
+    sessionStorage.setItem(ROTATE_RESUME_AFTER_RELOAD_KEY, '1');
+  } catch {
+    // sessionStorage unavailable -- the reload below still happens
+    // (unsticking a genuinely stopped rotation matters even if it can't
+    // auto-resume afterward), it just won't self-resume, same tradeoff
+    // checkRotationWatchdog() above already accepts.
+  }
+  window.location.reload();
 }
 setInterval(checkBoardAutoRestartRotation, BOARD_AUTO_RESTART_CHECK_INTERVAL_MS);
 
