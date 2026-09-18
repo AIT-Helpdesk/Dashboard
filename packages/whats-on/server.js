@@ -31,6 +31,7 @@ const {
   getTicketUrl,
   getPicklistLabels,
   toAest,
+  fetchLeaveTimeOffRequests,
 } = require('@dashboard/autotask-client');
 const { getTeams, getShiftsByDay } = require('@dashboard/teams-shifts/lib.js');
 // Aliased -- @dashboard/ingram-client's own fetchAllPages/getToken would
@@ -489,16 +490,21 @@ async function fetchScorecardsFor(spaceType, spaceId, allMetrics, client) {
   return byFrequency;
 }
 
-// TimeEntries.timeEntryType picklist values that mean "this hour was
-// leave, not work" -- same 4 real confirmed values @dashboard/times' own
-// README documents (15 PersonalTime, 16 VacationTime, 17 SickTime, 18
-// PaidTimeOff), duplicated here rather than imported, same "separate page
-// package" convention every other small shared piece on this dashboard
-// already follows. By request ("can you get Leave from Autotask and add
-// it to the Shifts data and calendars where it appears").
-const LEAVE_TIME_ENTRY_TYPES = [15, 16, 17, 18];
-const LEAVE_TYPE_FALLBACK_LABEL = { 15: 'Personal Time', 16: 'Vacation', 17: 'Sick Time', 18: 'Paid Time Off' };
-
+// Real Leave, sourced directly from Autotask's own TimeOffRequests entity
+// (`fetchLeaveTimeOffRequests()`, shared with `@dashboard/teams-shifts`/
+// `@dashboard/about-me` -- see that shared function's own comment in
+// `@dashboard/autotask-client` for the full real bug story: a real
+// Vacation request sitting at real `status: 2` Submitted wasn't showing
+// on "Shifts and Schedules" at all, because Autotask only mirrors an
+// APPROVED request into a plain TimeEntries row, which is what this file
+// used to query instead). By request ("can you get Leave from Autotask
+// and add it to the Shifts data and calendars where it appears"),
+// extended by a later request to also surface real not-yet-approved
+// requests ("can we display the Unapproved data with the right colour
+// but with stripes ... so it's obviously different") -- see
+// shiftEntryHtml()'s own striped-background handling in client.js for
+// the `approved: false` case.
+//
 // Every real Autotask resource's Leave in the given range, unscoped by
 // Teams team -- same deliberate scoping choice @dashboard/teams-shifts'
 // own fetchLeaveEntries() makes (see that package's README): Autotask
@@ -507,31 +513,22 @@ const LEAVE_TYPE_FALLBACK_LABEL = { 15: 'Personal Time', 16: 'Vacation', 17: 'Si
 // who "belongs" to this excerpt's team. Shaped to merge straight into the
 // same byDay rows real shifts/timesOff already use.
 async function fetchLeaveEntries(client, startISO, endISO) {
-  const entries = await listAll(client.timeEntries, [
-    { op: 'gte', field: 'dateWorked', value: startISO },
-    { op: 'lt', field: 'dateWorked', value: endISO },
-    { op: 'in', field: 'timeEntryType', value: LEAVE_TIME_ENTRY_TYPES },
-    { op: 'notExist', field: 'ticketID' },
-    { op: 'notExist', field: 'taskID' },
-  ]);
-  if (entries.length === 0) return [];
-  const [billingCodes, resources] = await Promise.all([
-    fetchByFieldIn(client.billingCodes, 'id', [...new Set(entries.map((e) => e.billingCodeID).filter((id) => id !== null && id !== undefined))]),
-    fetchByFieldIn(client.resources, 'id', [...new Set(entries.map((e) => e.resourceID).filter((id) => id !== null && id !== undefined))]),
-  ]);
-  const billingCodeNameById = new Map(billingCodes.map((c) => [c.id, c.name]));
+  const requests = await fetchLeaveTimeOffRequests(client, startISO, endISO);
+  if (requests.length === 0) return [];
+  const resources = await fetchByFieldIn(client.resources, 'id', [...new Set(requests.map((r) => r.resourceID).filter((id) => id !== null && id !== undefined))]);
   const resourceNameById = new Map(resources.map((r) => [r.id, [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || `Resource #${r.id}`]));
-  return entries.map((e) => ({
-    id: `leave-${e.id}`,
+  return requests.map((r) => ({
+    id: `leave-${r.id}`,
     kind: 'leave',
     userId: null,
-    userName: resourceNameById.get(e.resourceID) || null,
+    userName: resourceNameById.get(r.resourceID) || null,
     published: true,
     startDateTime: null,
     endDateTime: null,
-    dayKey: (e.dateWorked || '').slice(0, 10),
-    displayName: billingCodeNameById.get(e.billingCodeID) || LEAVE_TYPE_FALLBACK_LABEL[e.timeEntryType] || 'Leave',
-    hoursWorked: e.hoursWorked,
+    dayKey: r.dayKey,
+    displayName: r.displayName,
+    hoursWorked: r.hoursWorked,
+    approved: r.approved,
     theme: null,
     notes: null,
     activities: [],

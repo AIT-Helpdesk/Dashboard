@@ -240,6 +240,57 @@ include it if it's important for people to keep on top of").
    ("but not on the 'About Me' page") -- see `@dashboard/teams-shifts`
    for where the legend went instead.
 
+   **Widens past 30 days when the date-range picker's own "to" date
+   reaches further out**, by a later request ("show Next 30 days plus
+   through to the end date on the selectors above if that's later").
+   `fetchShiftsSection()` takes the picked `toKey` as an extra argument and
+   computes `endKey = toKey > defaultEndKey ? toKey : defaultEndKey` --
+   the window only ever gets PUSHED OUT, never pulled in (a "to" date
+   inside the next 30 days changes nothing). The picker's own "from" date
+   is never consulted -- the window's start stays pinned to today
+   regardless. Confirmed live: a "to" 60 days out widens the real fetched
+   window to match it exactly; a "to" only 5 days out leaves the window at
+   the plain 30-day default. The server echoes back `windowEndKey`/
+   `widened` so the card's own subtitle can read "Next 30 days, to {date}"
+   instead of the plain "Next 30 days" whenever it actually widened.
+
+   **Consecutive-day grouping is per-LABEL, not a single flat pointer**,
+   fixing a real reported bug (Jackson Worth, today-31 Dec): a real
+   On Call run and a real Vacation run covering the SAME calendar days
+   (confirmed real: both real records exist on 30 Nov-2 Dec) used to
+   fragment into many tiny one/two-day groups instead of their own two
+   real continuous runs, because the old grouping only ever compared a
+   new entry against the single most-recently-closed group, regardless of
+   its label -- an interleaved same-day entry of a DIFFERENT label broke
+   the run every time. `shiftsGroupConsecutiveDays()` now tracks one open
+   run per label independently (`openByLabel`), so same-day entries of
+   different labels no longer interrupt each other's own run.
+
+   **"Gaps at weekends is normal"**, by the same request -- real Teams
+   shifts/Autotask leave are only ever logged on real work days, so a
+   real multi-week run naturally has no Saturday/Sunday entries in the
+   middle. `isBridgeableGap()` treats a gap made up ENTIRELY of
+   Saturdays/Sundays as still-consecutive; a gap containing even one real
+   weekday still breaks the run, same as before. Final groups are sorted
+   by each group's own START day for display (confirmed real desired
+   order: a Vacation run starting 20 Nov sorts before an On Call run
+   starting 30 Nov, even though the On Call run's own last day is later).
+
+   **On Call dates show in red when they overlap a real Vacation/other
+   entry on the same real day**, by request ("show the dates in RED on
+   any On Call which overlaps with other entries like Vacation") --
+   `shiftsGroupConsecutiveDays()` builds a real day -> every distinct real
+   label landing on it (`labelsByDay`) BEFORE grouping, so an On Call
+   entry (`categorizeShift(label)?.key === 'onCall'`) whose own real day
+   also carries another real label sets that day's `overlaps` flag; a
+   merged On Call group is flagged `hasOverlap` if ANY of its own real
+   days does, and the WHOLE displayed date range goes red (not just the
+   overlapping portion) -- the group is one displayed unit, same as its
+   own single merged pill. Only On Call is flagged -- two different real
+   leave types landing on the same day isn't the scheduling conflict this
+   was asking about. Same shared `.text-highlight-red` class every other
+   red figure on this dashboard uses, not a new one-off colour.
+
 ## Date range picker -- Completed Tickets/Ticket Times/Asked for Review/Accrued Time only
 
 By request ("Add date selectors and buttons to the 'About Me' page
@@ -300,28 +351,45 @@ pill SHAPE, just none of the colour override, falling back to
 
 By request ("can you get Leave from Autotask and add it to the Shifts
 data and calendars where it appears having it look just like the Shifts
-entries and using that same colour scheme"). Same real, confirmed
-`TimeEntries.timeEntryType` picklist `@dashboard/times`' own README
-documents (15 PersonalTime, 16 VacationTime, 17 SickTime, 18
-PaidTimeOff; `LEAVE_TIME_ENTRY_TYPES` in `server.js`), scoped here to
-just this page's own resource and the same next-30-days window the
-Shifts card already uses (`fetchLeaveEntries()`, server.js) -- unlike the
-date-range picker above, Leave rides on the SAME fixed window Shifts
-itself uses, not the picked From/To range, since it's merged into that
-same list, not a section of its own.
+entries and using that same colour scheme"). Real `TimeOffRequests` rows
+(`fetchLeaveTimeOffRequests()`, shared with
+`@dashboard/teams-shifts`/`@dashboard/whats-on` -- see that shared
+function's own comment in `@dashboard/autotask-client` for the full real
+bug story and the `.env`-configured `LEAVE_TYPES` list it resolves
+against), scoped here to just this resource (`resourceId` passed through)
+and the same next-30-days window the Shifts card already uses
+(`fetchLeaveEntries()`, server.js) -- unlike the date-range picker above,
+Leave rides on the SAME fixed window Shifts itself uses, not the picked
+From/To range, since it's merged into that same list, not a section of
+its own.
 
-Each real leave entry's own `billingCodeID` is resolved to its real
-`BillingCodes` name (NOT `getPicklistLabels()` -- same reason Accrued
-Time's own `resolveBillingCodeNames()` gives: `billingCodeID` is a record
-reference, not a small-int picklist) and rendered through the exact same
-`shiftPillHtml()` a real Graph shift/time-off entry already uses -- by
-request, "having it look just like the Shifts entries". Confirmed
-against real data this tenant's real leave billing codes are "Vacation",
-"Sick Time", and "Floating Holiday"; the first two match the shared
-SHIFT_CATEGORIES legend's own `vacation`/`sickOther` regexes directly,
-"Floating Holiday" needed that legend's `rdoTil` regex widened (see
+Each real request's own `timeOffRequestType` is resolved to its own real
+label (`getPicklistLabels(client.timeOffRequests, 'timeOffRequestType')`)
+and rendered through the exact same `shiftPillHtml()` a real Graph
+shift/time-off entry already uses -- by request, "having it look just
+like the Shifts entries". The real `.env`-configured `LEAVE_TYPES` list
+is "Vacation, Unpaid, RDO, Sick Time, Personal Time, Jury Duty, Holiday,
+Floating Holiday, Bereavement Leave"; "Vacation"/"Sick Time"/"Unpaid"
+match the shared SHIFT_CATEGORIES legend's own
+`vacation`/`sickOther`/`unpaidLeave` regexes directly, "Floating
+Holiday"/"RDO" needed that legend's `rdoTil` regex widened (see
 `@dashboard/teams-shifts`' own README for the full reasoning, shared
 verbatim across all three pages that use this legend).
+
+**Not-yet-approved leave renders striped**, by a follow-up request ("can
+we display the Unapproved data with the right colour but with stripes ...
+so it's obviously different") after a real bug report (Damon
+Kirkpatrick's real Vacation request for 19-23 Oct 2026 wasn't showing on
+Shifts and Schedules at all -- it sat at real `status: 2` Submitted, and
+Autotask only mirrors an APPROVED request into a plain TimeEntries row,
+which every one of these pages used to query instead of TimeOffRequests
+directly). `shiftPillHtml(label, approved)` now takes a second argument
+-- an `approved: false` pill gets a diagonal `repeating-linear-gradient`
+through its own category colour instead of a flat tint, plus a "Not yet
+approved" tooltip. `shiftsGroupConsecutiveDays()`'s own grouping key
+includes `approved` alongside the label, so a real Approved run and a
+real Submitted run of the same leave type never merge into one displayed
+group even if their real days happen to be adjacent.
 
 **A real person can show up TWICE for the same leave day** -- confirmed
 against real data (Hamza Mahmood, 28 Sep 2026 Vacation): once from this

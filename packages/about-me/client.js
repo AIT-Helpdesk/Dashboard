@@ -138,7 +138,7 @@ export function mount(container) {
       </div>
       <div class="date-form-row">
         <button type="submit">Load</button>
-        <span class="inline-subtext">Applies to Completed Tickets, Ticket Times, Asked for Review, and Accrued Time only -- Service Calls, Deadlines, Strety Tasks, and Shifts keep their own fixed windows.</span>
+        <span class="inline-subtext">Applies to Completed Tickets, Ticket Times, Asked for Review, and Accrued Time only -- Service Calls, Deadlines, and Strety Tasks keep their own fixed windows. Shifts stays "Next 30 days" too, unless the "to" date above reaches further out.</span>
       </div>
     </form>
     <p id="status" class="status">Loading...</p>
@@ -773,9 +773,19 @@ export function mount(container) {
   // though, by request ("but not on the 'About Me' page"); see
   // @dashboard/teams-shifts' own client.js for where the legend went
   // instead. ----
+  // "Next 30 days" normally; widened to name the real later end date when
+  // the date-range picker's own "to" date reaches further out, by request
+  // ("show Next 30 days plus through to the end date on the selectors
+  // above if that's later") -- see fetchShiftsSection()'s own comment in
+  // server.js for the actual window-widening logic (`widened`/
+  // `windowEndKey` are just echoed back here for the label).
+  function shiftsSubtitle(s) {
+    return s && s.widened ? `Next 30 days, to ${formatShortDate(s.windowEndKey)}` : 'Next 30 days';
+  }
   function shiftsCardHtml(section) {
     if (!section.ok) return cardHtml('Shifts', 'Next 30 days', errorNote(section), FULL_PAGE_LINKS.shifts);
     const s = section.data;
+    const subtitle = shiftsSubtitle(s);
     // 'team-not-found-leave-only' means the real Graph Shifts schedule
     // itself couldn't be reached, but real Autotask Leave (see
     // fetchLeaveEntries() in server.js) is independent of that and still
@@ -783,18 +793,24 @@ export function mount(container) {
     // message when there's truly nothing at all to show, not just because
     // the Shifts half specifically failed.
     if (s.status === 'team-not-found-leave-only' && s.entries.length === 0) {
-      return cardHtml('Shifts', 'Next 30 days', emptyNote('General team schedule not found.'), FULL_PAGE_LINKS.shifts);
+      return cardHtml('Shifts', subtitle, emptyNote('General team schedule not found.'), FULL_PAGE_LINKS.shifts);
     }
-    if (s.entries.length === 0) return cardHtml('Shifts (0)', 'Next 30 days', emptyNote('None scheduled.'), FULL_PAGE_LINKS.shifts);
+    if (s.entries.length === 0) return cardHtml('Shifts (0)', subtitle, emptyNote('None scheduled.'), FULL_PAGE_LINKS.shifts);
     const groups = shiftsGroupConsecutiveDays(s.entries);
     return cardHtml(
       `Shifts (${s.entries.length})`,
-      'Next 30 days',
+      subtitle,
       `<ul>${groups
         .map((g) => {
-          const dateLabel =
+          const dateText =
             g.fromDayKey === g.toDayKey ? escapeHtml(formatShortDate(g.fromDayKey)) : `${escapeHtml(formatShortDate(g.fromDayKey))} to ${escapeHtml(formatShortDate(g.toDayKey))}`;
-          return `<li>${dateLabel} ${shiftPillHtml(g.label)}</li>`;
+          // Red dates on an On Call entry that overlaps a real Vacation/
+          // other entry on at least one of its own real days, by request
+          // -- see shiftsGroupConsecutiveDays()'s own comment for how
+          // hasOverlap is computed. Same shared .text-highlight-red class
+          // every other red figure on this dashboard uses.
+          const dateLabel = g.hasOverlap ? `<span class="text-highlight-red">${dateText}</span>` : dateText;
+          return `<li>${dateLabel} ${shiftPillHtml(g.label, g.approved)}</li>`;
         })
         .join('')}</ul>`,
       FULL_PAGE_LINKS.shifts
@@ -812,25 +828,52 @@ export function mount(container) {
   // category match) still gets the pill SHAPE for visual consistency,
   // just none of the inline colour override -- it falls back to
   // .button-link--small's own plain default tint.
-  function shiftPillHtml(label) {
+  // Not-yet-approved real Leave (a real TimeOffRequests row still at
+  // Submitted/Partially Approved, see fetchLeaveEntries() in server.js)
+  // renders with a diagonal stripe through its own category colour
+  // instead of a flat tint, by request ("can we display the Unapproved
+  // data with the right colour but with stripes or something so that
+  // it's obviously different") -- keeps the same colour identity (still
+  // recognisably "Vacation" etc.) while staying visually unmistakable
+  // from a confirmed, Approved entry.
+  function shiftPillHtml(label, approved) {
     const cat = categorizeShift(label);
+    const tint = cat ? `color-mix(in srgb, ${cat.color} 22%, white)` : '';
+    const background = approved === false ? `repeating-linear-gradient(45deg, ${tint}, ${tint} 6px, white 6px, white 12px)` : tint;
     const style = !cat
       ? ''
       : cat.key === 'publicHoliday'
         ? ' style="background: #ffffff; color: #1a1a1a; border: 1px solid #e5e7eb;"'
-        : ` style="background: color-mix(in srgb, ${cat.color} 22%, white); color: #1a1a1a;"`;
+        : ` style="background: ${background}; color: #1a1a1a;"`;
     // Public Holiday keeps its own already-composed "Public Holiday,
     // {Set(s)}, {Name}" text (see shiftsGroupConsecutiveDays()) rather
     // than collapsing to the category's plain "Public Holiday" label --
     // every other category still shows its own clean cat.label as before.
     const text = cat && cat.key === 'publicHoliday' ? label : cat ? cat.label : label;
-    return `<span class="button-link button-link--small about-me-shift-pill"${style}>${escapeHtml(text)}</span>`;
+    const title = approved === false ? ' title="Not yet approved"' : '';
+    return `<span class="button-link button-link--small about-me-shift-pill"${style}${title}>${escapeHtml(text)}</span>`;
   }
-  // Entries arrive one-per-day (server.js) -- sorted by day, then merged
-  // whenever the SAME label (displayName, or the same Shift/Time off
-  // fallback) runs on truly consecutive calendar days. `isNextAestDay()`
-  // does real date arithmetic (month/year rollover included), not a
-  // string comparison, since "next day" isn't just "+1" on the day digit.
+  // Entries arrive one-per-day (server.js), but more than one label can
+  // land on the SAME real day (confirmed real case: Jackson Worth has
+  // both an "On Call" shift AND a "Vacation" entry on 30 Nov-2 Dec, since
+  // an on-call duty and a real leave booking are independent real
+  // records) -- merged per-LABEL, each label tracking its own open run
+  // independently of whichever other label's entries happen to be
+  // interleaved with it on the same days, rather than one single
+  // "previous entry" pointer shared across every label (which used to
+  // fragment a real run like "30 Nov to 6 Dec On Call" into a separate
+  // group every time a same-day Vacation entry broke the flat day-sorted
+  // sequence -- confirmed real bug, reported live: a real multi-week
+  // Vacation and a real multi-week On Call run, both spanning the same
+  // calendar days, showed as several tiny fragments each instead of the
+  // two real continuous runs).
+  //
+  // "Gaps at weekends is normal" (by request) -- real Teams shifts and
+  // real Autotask leave are only ever logged on real work days, so a
+  // real multi-week run naturally has no Saturday/Sunday entries in the
+  // middle of it; `isBridgeableGap()` treats a gap made up ENTIRELY of
+  // Saturdays/Sundays as still-consecutive for grouping purposes (a gap
+  // that includes even one real weekDAY breaks the run, same as before).
   function shiftsGroupConsecutiveDays(entries) {
     const labeled = entries
       .map((e) => ({
@@ -844,23 +887,65 @@ export function mount(container) {
         // Holiday" so categorizeShift()'s own regex still matches it for
         // the white/bordered styling.
         label: e.kind === 'publicHoliday' ? `Public Holiday, ${e.holidaySetName}, ${e.holidayName}` : e.displayName || (e.kind === 'timeOff' ? 'Time off' : 'Shift'),
+        // `undefined` for every non-leave kind (shift/timeOff/
+        // publicHoliday) -- only real Leave rows carry a real
+        // approved/not-yet-approved distinction.
+        approved: e.approved,
       }))
       .sort((a, b) => a.dayKey.localeCompare(b.dayKey) || a.label.localeCompare(b.label));
-    const groups = [];
+    // Real day -> every distinct real label landing on it, so an On Call
+    // group (below) can tell whether any of its own real days is ALSO a
+    // real Vacation/other day -- by request ("show the dates in RED on
+    // any On Call which overlaps with other entries like Vacation").
+    const labelsByDay = new Map();
     for (const e of labeled) {
-      const last = groups[groups.length - 1];
-      if (last && last.label === e.label && isNextAestDay(last.toDayKey, e.dayKey)) {
-        last.toDayKey = e.dayKey;
+      if (!labelsByDay.has(e.dayKey)) labelsByDay.set(e.dayKey, new Set());
+      labelsByDay.get(e.dayKey).add(e.label);
+    }
+    const groups = [];
+    const openByLabel = new Map(); // "label|approved" -> the group object still open for it -- approved is part of the key so an Approved run and a Submitted run of the same label never merge into one group
+    for (const e of labeled) {
+      // Only On Call is flagged, by request -- an On Call duty clashing
+      // with a real Vacation/other booking on the same real day is the
+      // real scheduling conflict worth a visual flag; other pairings
+      // (e.g. two different leave types on the same day) aren't what was
+      // asked for.
+      if (categorizeShift(e.label)?.key === 'onCall' && labelsByDay.get(e.dayKey).size > 1) e.overlaps = true;
+      const key = `${e.label}|${e.approved}`;
+      const open = openByLabel.get(key);
+      if (open && isBridgeableGap(open.toDayKey, e.dayKey)) {
+        open.toDayKey = e.dayKey;
+        if (e.overlaps) open.hasOverlap = true;
       } else {
-        groups.push({ fromDayKey: e.dayKey, toDayKey: e.dayKey, label: e.label });
+        const group = { fromDayKey: e.dayKey, toDayKey: e.dayKey, label: e.label, approved: e.approved, hasOverlap: !!e.overlaps };
+        groups.push(group);
+        openByLabel.set(key, group);
       }
     }
+    // Display order is chronological by each group's own START day, not
+    // insertion order (which interleaves labels the same way the source
+    // days do) -- confirmed real desired order: a Vacation run starting
+    // 20 Nov sorts before an On Call run starting 30 Nov even though the
+    // On Call run's own LAST day (6 Dec) is later than Vacation's.
+    groups.sort((a, b) => a.fromDayKey.localeCompare(b.fromDayKey));
     return groups;
   }
-  function isNextAestDay(dayKey, candidateDayKey) {
+  // True when `candidateDayKey` is either the very next real calendar day
+  // after `dayKey`, or every real day strictly between the two is a
+  // Saturday/Sunday -- see shiftsGroupConsecutiveDays()'s own comment
+  // above ("Gaps at weekends is normal"). Real date arithmetic throughout
+  // (month/year rollover included), not string comparison.
+  function isBridgeableGap(dayKey, candidateDayKey) {
     const [y, m, d] = dayKey.split('-').map(Number);
-    const expected = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
-    return expected === candidateDayKey;
+    let cursor = new Date(Date.UTC(y, m - 1, d));
+    for (let i = 0; i < 30; i++) {
+      cursor = new Date(cursor.getTime() + 86400000);
+      const key = cursor.toISOString().slice(0, 10);
+      if (key === candidateDayKey) return true;
+      const dayOfWeek = cursor.getUTCDay(); // 0 Sun, 6 Sat
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) return false; // a real weekday in the gap breaks the run
+    }
+    return false; // safety valve -- no real gap this page ever needs to bridge is this long
   }
 
   // ---- Tickets Dashboard's own two small cell helpers -- kept even

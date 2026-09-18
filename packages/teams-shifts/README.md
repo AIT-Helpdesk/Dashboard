@@ -33,15 +33,44 @@ Originally coloured by Microsoft Teams Shifts' own raw `theme` enum (`THEME_COLO
 By request ("can you get Leave from Autotask and add it to the Shifts
 data and calendars where it appears having it look just like the Shifts
 entries and using that same colour scheme"). Real Autotask
-`TimeEntries` rows tagged with the same `timeEntryType` picklist
-`@dashboard/times`' own README documents as Leave (15 PersonalTime, 16
-VacationTime, 17 SickTime, 18 PaidTimeOff; `LEAVE_TIME_ENTRY_TYPES` in
-`server.js`), no `ticketID`/`taskID`, `dateWorked` inside the queried
-month -- merged straight into the same `byDay` rows real Graph
-shifts/timesOff already fill (`kind: 'leave'`, alongside `'shift'` and
-`'timeOff'`), rendered through the exact same `entryHtml()`/
-`categorizeShift()`/legend path, so a real leave day looks like any
-other calendar entry, by request.
+`TimeOffRequests` rows (`fetchLeaveTimeOffRequests()`, shared with
+`@dashboard/whats-on`/`@dashboard/about-me` -- see that shared
+function's own comment in `@dashboard/autotask-client` for the full real
+bug story and the `.env`-configured `LEAVE_TYPES` list it resolves
+against), `requestDate` inside the queried month -- merged straight into
+the same `byDay` rows real Graph shifts/timesOff already fill (`kind:
+'leave'`, alongside `'shift'` and `'timeOff'`), rendered through the
+exact same `entryHtml()`/`categorizeShift()`/legend path, so a real
+leave day looks like any other calendar entry, by request.
+
+**Superseded twice**, both real bug reports in sequence -- full story in
+`@dashboard/autotask-client`'s own README:
+
+1. Original: matched `TimeEntries.timeEntryType` in `[15 PersonalTime, 16
+   VacationTime, 17 SickTime, 18 PaidTimeOff]` with `notExist ticketID`/
+   `notExist taskID` -- correct for real Vacation/Sick Time/Floating
+   Holiday/Personal Time, but this tenant's real "Unpaid" leave carries
+   `timeEntryType: 10` (CompanyTask) AND a real `taskID`, so that old
+   filter could never catch it (confirmed real report: Peter Kiem's own
+   Unpaid days weren't showing here either).
+2. Second: matched real `billingCodeID` against the real `.env`
+   `LEAVE_TYPES` list directly on `TimeEntries` -- fixed the Unpaid gap,
+   but a further real report (Damon Kirkpatrick's real Vacation request
+   for 19-23 Oct 2026 wasn't showing at all) found the deeper problem:
+   Autotask only mirrors a Time Off Request into a plain TimeEntries row
+   once it's actually **Approved**. His real request sat at real
+   `status: 2` (Submitted), so it had no TimeEntries row to find at all,
+   confirmed by investigating live (his real TimeEntries AND real Graph
+   Shifts data were both genuinely empty for that window). Querying
+   `TimeOffRequests` directly sidesteps the mirroring question entirely,
+   and -- by a follow-up request ("can we display the Unapproved data
+   with the right colour but with stripes ... so it's obviously
+   different") -- surfaces real pending leave too, striped rather than
+   hidden. See `entryHtml()`'s own `categoryBackground()` helper in
+   `client.js`: an `approved: false` entry (real `status` 2 Submitted or
+   6 Partially Approved) gets a diagonal `repeating-linear-gradient`
+   through its own category colour instead of a flat tint, plus "Not yet
+   approved" in its tooltip and day-popup badge.
 
 **Unscoped by Teams team** -- a deliberate choice, not an oversight.
 Autotask resources aren't organised into a "General" Teams-Shifts
@@ -60,19 +89,26 @@ special-case `kind === 'leave'` to show that hours total instead of the
 blank `formatTime(null)` pair a real shift's own fields would otherwise
 produce.
 
-**Colour mapping**: real confirmed billing code names in this tenant are
-"Vacation", "Sick Time", and "Floating Holiday" (`billingCodeID`
-resolved via the real `BillingCodes` entity, same reason
-`@dashboard/accrued-time`'s own `resolveBillingCodeNames()` gives --
-`billingCodeID` is a record reference, not a small-int picklist).
-"Vacation" and "Sick Time" match the shared `SHIFT_CATEGORIES` legend's
-own `vacation`/`sickOther` regexes directly, no extra mapping needed.
+**Colour mapping**: the real `.env`-configured `LEAVE_TYPES` list is
+"Vacation, Unpaid, RDO, Sick Time, Personal Time, Jury Duty, Holiday,
+Floating Holiday, Bereavement Leave" (real `TimeOffRequests.
+timeOffRequestType` resolved to its own label via `getPicklistLabels()`
+-- a different real picklist from `BillingCodes`, now that Leave is
+sourced from TimeOffRequests directly rather than TimeEntries). "Vacation", "Sick Time", and
+"Unpaid" match the shared `SHIFT_CATEGORIES` legend's own
+`vacation`/`sickOther`/`unpaidLeave` regexes directly, no extra mapping
+needed. "RDO" already matched `rdoTil`'s own `\brdo\b` regex natively.
 "Floating Holiday" doesn't literally say "public" so `publicHoliday`'s
-own regex wouldn't catch it -- folded into `rdoTil` instead (a
+own regex wouldn't catch it either -- folded into `rdoTil` instead (a
 floating/discretionary day off reads closer to an individually-earned
 RDO/Time in Lieu than to an actual gazetted, company-wide Public
 Holiday), by widening that category's own regex rather than guessing it
-into the wrong bucket. Same widened regex duplicated into
+into the wrong bucket. "Personal Time", "Jury
+Duty", "Holiday", and "Bereavement Leave" don't match any of the 7 fixed
+categories -- they render with the same plain, uncoloured pill shape
+every other unmatched label already got before Leave existed at all, not
+a new gap; extending the fixed legend to cover every real `LEAVE_TYPES`
+name wasn't part of this fix. Same widened regex duplicated into
 `@dashboard/about-me`'s and `@dashboard/whats-on`'s own `client.js`
 copies of this legend, for the same reason.
 

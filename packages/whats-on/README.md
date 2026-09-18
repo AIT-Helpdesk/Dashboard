@@ -190,25 +190,39 @@ By request: a 2-week rolling calendar of the **General** Team's Microsoft Teams 
 By request ("can you get Leave from Autotask and add it to the Shifts
 data and calendars where it appears having it look just like the Shifts
 entries and using that same colour scheme"). Real Autotask
-`TimeEntries` rows carrying the same `timeEntryType` Leave values
-`@dashboard/times`' own README documents (15 PersonalTime, 16
-VacationTime, 17 SickTime, 18 PaidTimeOff), no ticket/task, `dateWorked`
-inside the excerpt's own 2-week window -- fetched (`fetchLeaveEntries()`,
-`server.js`) alongside the Graph shift/time-off call and merged into the
-same `byDay` rows (`kind: 'leave'`), rendered through the exact same
-`shiftEntryHtml()`/`categorizeShift()`/legend path real shifts already
-use. Unscoped by Teams team, same deliberate reasoning
+`TimeOffRequests` rows (`fetchLeaveTimeOffRequests()`, shared with
+`@dashboard/teams-shifts`/`@dashboard/about-me` -- see that shared
+function's own comment in `@dashboard/autotask-client` for the full real
+bug story and the `.env`-configured `LEAVE_TYPES` list it resolves
+against), `requestDate` inside the excerpt's own 2-week window -- fetched
+(`fetchLeaveEntries()`, `server.js`) alongside the Graph shift/time-off
+call and merged into the same `byDay` rows (`kind: 'leave'`), rendered
+through the exact same `shiftEntryHtml()`/`categorizeShift()`/legend path
+real shifts already use. Superseded twice, both real bug reports in
+sequence (see `@dashboard/teams-shifts`'s own README for the full story):
+first a narrower `timeEntryType`-based TimeEntries query that couldn't
+catch "Unpaid" leave, then a `billingCodeID`-based TimeEntries query that
+fixed Unpaid but couldn't catch a real not-yet-approved request at all
+(Autotask only mirrors an APPROVED request into a TimeEntries row).
+Real not-yet-approved (Submitted/Partially Approved) requests now show
+too, by a follow-up request ("can we display the Unapproved data with
+the right colour but with stripes ... so it's obviously different") --
+`shiftEntryHtml()`'s own `categoryBackground()` helper renders an
+`approved: false` entry with a diagonal stripe through its own category
+colour instead of a flat tint, plus "Not yet approved" in its tooltip.
+Unscoped by Teams team, same deliberate reasoning
 `@dashboard/teams-shifts`' own README gives for its identical merge (this
 tenant's whole staff is small enough that showing every real leave entry
 in the window beats guessing who "belongs" to General). Has no real
 start/end clock time -- `shiftEntryHtml()` shows the entry's real
 `hoursWorked` total instead of a blank time range for `kind === 'leave'`.
-Colour mapping (including why "Floating Holiday" lives under
-`rdoTil`, not `publicHoliday`) and the confirmed real double-booking case
-(a person can have both a real Autotask Leave entry and a real Teams
-time-off request for the same day) are documented in full in
-`@dashboard/teams-shifts`'s own README -- same shared `SHIFT_CATEGORIES`
-legend, same real data, not repeated here.
+Colour mapping (including why "Floating Holiday"/"RDO" live under
+`rdoTil`, not `publicHoliday`, and which real `LEAVE_TYPES` names render
+uncoloured) and the confirmed real double-booking case (a person can have
+both a real Autotask Leave entry and a real Teams time-off request for
+the same day) are documented in full in `@dashboard/teams-shifts`'s own
+README -- same shared `SHIFT_CATEGORIES` legend, same real data, not
+repeated here.
 
 ### Public Holidays, from Autotask -- merged into the same excerpt
 
