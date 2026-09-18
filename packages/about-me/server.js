@@ -15,6 +15,7 @@ const {
   aestToUtcIso,
   aestDayBoundsIso,
   todayAestKey,
+  fetchLeaveTimeOffRequests,
 } = require('@dashboard/autotask-client');
 const { getPersonalClient, getTodoUrl } = require('@dashboard/strety-client');
 const { getTeams, getShiftsByDay } = require('@dashboard/teams-shifts/lib.js');
@@ -32,12 +33,14 @@ const { getTeams, getShiftsByDay } = require('@dashboard/teams-shifts/lib.js');
 // Review/Accrued Time all take an explicit [fromKey, toKey] AEST date range
 // now (both inclusive), by request ("Add date selectors and buttons to the
 // 'About Me' page matching what we have on the Time Summaries page") --
-// Service Calls/Deadlines/Strety Tasks/Shifts are explicitly NOT part of
-// this ("won't be affected by this"), so they keep their own fixed windows
-// regardless of what's picked here. `isoForKey()` turns a plain YYYY-MM-DD
-// key into the real UTC instant aestToUtcIso() needs, the same tiny
-// adapter @dashboard/whats-on's own server.js already uses for its
-// "next 7 working days" window. ----
+// Service Calls/Deadlines/Strety Tasks are explicitly NOT part of this
+// ("won't be affected by this"), so they keep their own fixed windows
+// regardless of what's picked here. Shifts is a later, narrower exception:
+// its own toKey is consulted (fromKey never is) just to widen its next-30-
+// days window when toKey reaches further out -- see fetchShiftsSection().
+// `isoForKey()` turns a plain YYYY-MM-DD key into the real UTC instant
+// aestToUtcIso() needs, the same tiny adapter @dashboard/whats-on's own
+// server.js already uses for its "next 7 working days" window. ----
 function isoForKey(dateKey) {
   const [y, m, d] = dateKey.split('-').map(Number);
   return aestToUtcIso(y, m, d);
@@ -487,51 +490,40 @@ async function fetchStretyTasksSection(viewerEmail, resourceEmail) {
   return { status: 'ok', personName: person.attributes.name, asOf: new Date().toISOString(), tasks: rows };
 }
 
-// TimeEntries.timeEntryType picklist values that mean "this hour was
-// leave, not work" -- same 4 real confirmed values @dashboard/times' own
-// README documents (15 PersonalTime, 16 VacationTime, 17 SickTime, 18
-// PaidTimeOff), duplicated here rather than imported, same "separate page
-// package" convention every other small shared piece on this dashboard
-// already follows. By request ("can you get Leave from Autotask and add
-// it to the Shifts data and calendars where it appears").
-const LEAVE_TIME_ENTRY_TYPES = [15, 16, 17, 18];
-// Fallback label when a leave entry's own billingCodeID somehow fails to
-// resolve to a real BillingCodes name (never seen against real data --
-// every real leave entry confirmed carries one -- but a null/deleted
-// billing code shouldn't render a blank pill).
-const LEAVE_TYPE_FALLBACK_LABEL = { 15: 'Personal Time', 16: 'Vacation', 17: 'Sick Time', 18: 'Paid Time Off' };
-
-// This resource's own real Leave time entries (no ticket/task, dateWorked
-// in range) -- merged into the same Shifts list below so it renders as
-// one combined timeline, same request. billingCodeID is resolved via the
-// real BillingCodes entity, NOT getPicklistLabels(), same reason Accrued
-// Time's own resolveBillingCodeNames() gives (billingCodeID is a record
-// reference, not a small-int picklist). Confirmed against real data:
-// this tenant's real leave billing codes are "Vacation", "Sick Time",
-// and "Floating Holiday" -- the first two match the shared
-// SHIFT_CATEGORIES legend's own vacation/sickOther regexes directly (no
-// extra mapping needed); "Floating Holiday" doesn't literally say
-// "public holiday" so it needed the rdoTil regex widened (see
-// client.js's own SHIFT_CATEGORIES comment) rather than guessing it into
-// the wrong bucket.
+// Real Leave, sourced directly from Autotask's own TimeOffRequests entity
+// (`fetchLeaveTimeOffRequests()`, shared with `@dashboard/teams-shifts`/
+// `@dashboard/whats-on` -- see that shared function's own comment in
+// `@dashboard/autotask-client` for the full real bug story: a real
+// Vacation request sitting at real `status: 2` Submitted wasn't showing
+// on Shifts and Schedules at all, because Autotask only mirrors an
+// APPROVED request into a plain TimeEntries row, which is what this file
+// used to query instead). By request ("can you get Leave from Autotask
+// and add it to the Shifts data and calendars where it appears"),
+// extended by a later request to also surface real not-yet-approved
+// requests ("can we display the Unapproved data with the right colour
+// but with stripes ... so it's obviously different") -- see
+// shiftPillHtml()'s own striped-background handling in client.js for the
+// `approved: false` case.
+//
+// This resource's own real Leave (`requestDate` in range) -- merged into
+// the same Shifts list below so it renders as one combined timeline,
+// same request. Real confirmed leave types in this tenant (the real
+// LEAVE_TYPES .env value): Vacation, Unpaid, RDO, Sick Time, Personal
+// Time, Jury Duty, Holiday, Floating Holiday, Bereavement Leave --
+// Vacation/Sick Time/Unpaid/RDO/Floating Holiday match the shared
+// SHIFT_CATEGORIES legend's own regexes (see client.js's own comment);
+// Personal Time/Jury Duty/Holiday/Bereavement Leave don't match any of
+// the 7 fixed categories and render with the same plain, uncoloured pill
+// shape every other unmatched label already gets -- not a gap introduced
+// here, the same fallback this page's own shiftPillHtml() always had.
 async function fetchLeaveEntries(client, resourceId, startISO, endISO) {
-  const entries = await listAll(client.timeEntries, [
-    { op: 'gte', field: 'dateWorked', value: startISO },
-    { op: 'lt', field: 'dateWorked', value: endISO },
-    { op: 'eq', field: 'resourceID', value: resourceId },
-    { op: 'in', field: 'timeEntryType', value: LEAVE_TIME_ENTRY_TYPES },
-    { op: 'notExist', field: 'ticketID' },
-    { op: 'notExist', field: 'taskID' },
-  ]);
-  if (entries.length === 0) return [];
-  const billingCodeIds = [...new Set(entries.map((e) => e.billingCodeID).filter((id) => id !== null && id !== undefined))];
-  const billingCodes = billingCodeIds.length > 0 ? await fetchByFieldIn(client.billingCodes, 'id', billingCodeIds) : [];
-  const nameById = new Map(billingCodes.map((c) => [c.id, c.name]));
-  return entries.map((e) => ({
-    dayKey: (e.dateWorked || '').slice(0, 10),
+  const requests = await fetchLeaveTimeOffRequests(client, startISO, endISO, resourceId);
+  return requests.map((r) => ({
+    dayKey: r.dayKey,
     kind: 'leave',
-    displayName: nameById.get(e.billingCodeID) || LEAVE_TYPE_FALLBACK_LABEL[e.timeEntryType] || 'Leave',
-    hoursWorked: e.hoursWorked,
+    displayName: r.displayName,
+    hoursWorked: r.hoursWorked,
+    approved: r.approved,
     startDateTime: null,
     endDateTime: null,
   }));
@@ -591,12 +583,23 @@ async function fetchPublicHolidayEntriesForResource(client, locationID, startISO
 // this page). ----
 const SHIFTS_TEAM_NAME = 'General'; // same real team @dashboard/teams-shifts is locked to, by request
 const SHIFTS_WINDOW_DAYS = 30;
-async function fetchShiftsSection(client, resourceId, resourceName, locationID) {
+// Widened past the plain "next 30 days" whenever the date-range picker's
+// own "to" date reaches further out than that, by request ("show Next 30
+// days plus through to the end date on the selectors above if that's
+// later"). The picker's own from/to otherwise never touches Shifts at
+// all (see the big comment on the shared date-range helper above, and the
+// route handler below) -- this is the one narrow exception: only the
+// picker's "to" date can PUSH the window further out, never pull it in
+// (a "to" date inside the next 30 days changes nothing here), and the
+// picker's own "from" date is never consulted at all -- the window's
+// start stays pinned to today regardless.
+async function fetchShiftsSection(client, resourceId, resourceName, locationID, toKey) {
   const teams = await getTeams();
   const team = teams.find((t) => t.name === SHIFTS_TEAM_NAME);
   const today = todayAestKey();
   const [ty, tm, td] = today.split('-').map(Number);
-  const endKey = new Date(Date.UTC(ty, tm - 1, td + SHIFTS_WINDOW_DAYS)).toISOString().slice(0, 10);
+  const defaultEndKey = new Date(Date.UTC(ty, tm - 1, td + SHIFTS_WINDOW_DAYS)).toISOString().slice(0, 10);
+  const endKey = toKey && toKey > defaultEndKey ? toKey : defaultEndKey;
   // Bare dateWorked/holidayDate-shaped ISO strings, NOT isoForKey()/
   // aestToUtcIso() -- both are date-only fields that need no real AEST
   // offset conversion, same established convention this page's own
@@ -622,7 +625,10 @@ async function fetchShiftsSection(client, resourceId, resourceName, locationID) 
     if (a.dayKey !== b.dayKey) return a.dayKey < b.dayKey ? -1 : 1;
     return new Date(a.startDateTime || 0) - new Date(b.startDateTime || 0);
   });
-  return { status: team ? 'ok' : 'team-not-found-leave-only', entries: rows };
+  // windowEndKey echoed back so the client can show the real end date in
+  // the card's own subtitle whenever it was actually widened past the
+  // plain 30-day default (see the comment above).
+  return { status: team ? 'ok' : 'team-not-found-leave-only', entries: rows, windowEndKey: endKey, widened: endKey > defaultEndKey };
 }
 
 const router = express.Router();
@@ -664,10 +670,15 @@ router.get('/', async (req, res) => {
   // the page still auto-loads sensible data on first visit without
   // requiring the user to pick a range first -- same "auto-loads on
   // mount" convention every other part of this page already follows.
-  // Service Calls/Deadlines/Strety Tasks/Shifts never read these two
-  // params at all -- their own fetchers keep the fixed windows they
-  // always had, by request ("The Service Calls, Deadlines, Strety Tasks
-  // abd Shifts won't be affected by this").
+  // Service Calls/Deadlines/Strety Tasks never read these two params at
+  // all -- their own fetchers keep the fixed windows they always had, by
+  // request ("The Service Calls, Deadlines, Strety Tasks abd Shifts won't
+  // be affected by this"). Shifts is the one later exception to that: its
+  // own next-30-days window now widens to cover `toKey` too, whenever
+  // that's further out, by a later request ("show Next 30 days plus
+  // through to the end date on the selectors above if that's later") --
+  // see fetchShiftsSection()'s own comment. `fromKey` is still never
+  // consulted by Shifts; its start stays pinned to today.
   const today = todayAestKey();
   const fromKey = req.query.from || today;
   const toKey = req.query.to || today;
@@ -713,7 +724,7 @@ router.get('/', async (req, res) => {
       settle(() => fetchAskedForReviewSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchAccruedTimeSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchStretyTasksSection(viewerEmail, resource.email)),
-      settle(() => fetchShiftsSection(client, resourceId, resource.name, resource.locationID)),
+      settle(() => fetchShiftsSection(client, resourceId, resource.name, resource.locationID, toKey)),
     ]);
 
     res.json({

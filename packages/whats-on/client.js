@@ -1175,6 +1175,22 @@ export function mount(container) {
     shiftsCalendarEl.appendChild(table);
   }
 
+  // Not-yet-approved real Leave (kind: 'leave', approved: false -- a real
+  // TimeOffRequests row still at Submitted/Partially Approved, see
+  // fetchLeaveEntries() in server.js) renders with a diagonal stripe
+  // through its own category colour instead of a flat tint, by request
+  // ("can we display the Unapproved data with the right colour but with
+  // stripes or something so that it's obviously different") -- keeps the
+  // same colour identity (still recognisably "Vacation" etc.) while
+  // staying visually unmistakable from a confirmed, Approved entry.
+  // `approved` is `undefined` for every non-leave kind (shift/timeOff/
+  // publicHoliday), which reads as "not false" here -- solid, same as
+  // always.
+  function categoryBackground(cat, approved) {
+    const tint = `color-mix(in srgb, ${cat.color} 22%, white)`;
+    if (approved !== false) return `background: ${tint};`;
+    return `background: repeating-linear-gradient(45deg, ${tint}, ${tint} 6px, white 6px, white 12px);`;
+  }
   function shiftEntryHtml(e) {
     const cat = categorizeShift(e);
     // Real Autotask Leave (kind: 'leave', see fetchLeaveEntries() in
@@ -1215,6 +1231,7 @@ export function mount(container) {
           ];
     if (e.notes) titleLines.push(`Notes: ${e.notes}`);
     if (!e.published) titleLines.push('Not yet published (draft)');
+    if (e.kind === 'leave' && e.approved === false) titleLines.push('Not yet approved');
     const title = escapeHtml(titleLines.join('\n'));
 
     // Public Holiday's box is white -- a translucent color-mix tint (the
@@ -1241,7 +1258,7 @@ export function mount(container) {
       ? '' // unmatched label (e.g. real data's "Working ", or an unlabeled shift) -- plain default look, not falsely colored
       : cat.key === 'publicHoliday'
         ? `background: #ffffff; color: #1a1a1a; border: 1px solid #e5e7eb; border-left: 4.5px solid #9ca3af;`
-        : `background: color-mix(in srgb, ${cat.color} 22%, white); color: #1a1a1a; border-left-color: ${cat.color};`;
+        : `${categoryBackground(cat, e.approved)} color: #1a1a1a; border-left-color: ${cat.color};`;
     return `<div class="calendar-entry calendar-entry--allocated" style="${style}" title="${title}">${inner}</div>`;
   }
 

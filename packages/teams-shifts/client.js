@@ -231,6 +231,22 @@ export function mount(container) {
     calendarEl.appendChild(table);
   }
 
+  // Not-yet-approved real Leave (kind: 'leave', approved: false -- a real
+  // TimeOffRequests row still at Submitted/Partially Approved, see
+  // fetchLeaveEntries() in server.js) renders with a diagonal stripe
+  // through its own category colour instead of a flat tint, by request
+  // ("can we display the Unapproved data with the right colour but with
+  // stripes or something so that it's obviously different") -- keeps the
+  // same colour identity (still recognisably "Vacation" etc.) while
+  // staying visually unmistakable from a confirmed, Approved entry.
+  // `approved` is `undefined` for every non-leave kind (shift/timeOff/
+  // publicHoliday), which reads as "not false" here -- solid, same as
+  // always.
+  function categoryBackground(cat, approved) {
+    const tint = `color-mix(in srgb, ${cat.color} 22%, white)`;
+    if (approved !== false) return `background: ${tint};`;
+    return `background: repeating-linear-gradient(45deg, ${tint}, ${tint} 6px, white 6px, white 12px);`;
+  }
   function entryHtml(e) {
     const cat = categorizeShift(e);
     // Real Autotask Leave (kind: 'leave', see fetchLeaveEntries() in
@@ -272,6 +288,7 @@ export function mount(container) {
     if (e.schedulingGroupName) titleLines.push(`Group: ${e.schedulingGroupName}`);
     if (e.notes) titleLines.push(`Notes: ${e.notes}`);
     if (!e.published) titleLines.push('Not yet published (draft)');
+    if (e.kind === 'leave' && e.approved === false) titleLines.push('Not yet approved');
     const title = escapeHtml(titleLines.join('\n'));
 
     // Public Holiday's box is white -- a translucent tint would be
@@ -287,7 +304,7 @@ export function mount(container) {
       ? ''
       : cat.key === 'publicHoliday'
         ? `style="background: #ffffff; color: #1a1a1a; border: 1px solid #e5e7eb; border-left: 4.5px solid #9ca3af;"`
-        : `style="background: color-mix(in srgb, ${cat.color} 22%, white); color: #1a1a1a; border-left-color: ${cat.color};"`;
+        : `style="${categoryBackground(cat, e.approved)} color: #1a1a1a; border-left-color: ${cat.color};"`;
     const draftClass = e.published ? '' : ' calendar-entry--onsite-tba'; // reuse the existing dashed/red-accent look for "needs attention" -- draft shifts aren't final yet
     return `<div class="calendar-entry calendar-entry--allocated${draftClass}" ${style} title="${title}">${inner}</div>`;
   }
@@ -348,9 +365,10 @@ ${cardsHtml || '<p class="empty">No shifts.</p>'}
           .map((a) => `${escapeHtml(a.code || '')} (${formatTime(a.startDateTime)} - ${formatTime(a.endDateTime)})`)
           .join(', ')}</dd>`
       : '';
+    const notApprovedBadge = e.kind === 'leave' && e.approved === false ? '<span class="badge">Not yet approved</span>' : '';
     return `
       <div class="card">
-        <h2>${escapeHtml(time)} -- ${escapeHtml(e.userName || 'Open shift')}${!e.published ? '<span class="badge">Draft</span>' : ''}</h2>
+        <h2>${escapeHtml(time)} -- ${escapeHtml(e.userName || 'Open shift')}${!e.published ? '<span class="badge">Draft</span>' : ''}${notApprovedBadge}</h2>
         <dl>
           ${e.displayName ? `<dt>Label</dt><dd>${escapeHtml(e.displayName)}</dd>` : ''}
           ${e.schedulingGroupName ? `<dt>Group</dt><dd>${escapeHtml(e.schedulingGroupName)}</dd>` : ''}
