@@ -37,18 +37,9 @@ By request: "I need to vary the hours for some staff ... well just one really ..
 
 ## Leave, from Autotask -- confirmed against real data
 
-Confirmed before writing any of this (by request: "You should be able to get the Leave from Autotask"). Autotask's own `TimeEntries.timeEntryType` picklist carries real, structured leave categories -- no separate "Time Off" entity needed:
+**Superseded twice** after two real bug reports in sequence -- full story, including why Autotask's own "Display In Time Off" checkbox has no REST API equivalent, is documented in full in `@dashboard/autotask-client`'s own README (`resolveLeaveBillingCodeIds()`), not repeated here since it's now shared by four pages (this one, `@dashboard/teams-shifts`, `@dashboard/whats-on`, `@dashboard/about-me`) that must never quietly disagree.
 
-| Value | Label |
-|---|---|
-| 15 | PersonalTime |
-| 16 | VacationTime |
-| 17 | SickTime |
-| 18 | PaidTimeOff |
-
-`LEAVE_TIME_ENTRY_TYPES` in `server.js`. Confirmed against a real month of data: 14 real leave entries, all `ticketID`/`taskID` null (internal time, not logged against client work) and each carrying a real internal billing code -- `VacationTime` entries used the "Vacation" code, `SickTime` used "Sick Time", `PaidTimeOff` used "Floating Holiday" -- and every full-day entry seen was exactly `7.6` hours, the same figure this page uses for Normal Hours (per day), a small real-data cross-check that the two numbers are talking about the same thing. `PersonalTime` (15) and the separate "RDO" internal billing code exist in this tenant's configuration but had zero real entries in the confirmed month -- included anyway since they're the same kind of entry, just unused in that particular window.
-
-The `notExist` filters on `ticketID`/`taskID` in `fetchByFieldIn(... LEAVE_TIME_ENTRY_TYPES ...)` are a confirming double-check, not an assumption -- every real leave entry found already had both null.
+Short version: Leave is matched by real `billingCodeID`, not `timeEntryType`, with only `notExist ticketID` as a safety filter -- no `timeEntryType` or `notExist taskID` constraint at all, since the billing code itself is what makes an entry Leave, regardless of which internal `timeEntryType`/task-linkage Autotask happens to record it under (real confirmed case: "Unpaid" carries `timeEntryType: 10` CompanyTask AND a real `taskID`, unlike Vacation/Sick Time/Floating Holiday/Personal Time). The real billing code list itself is **configured in `.env`** (`LEAVE_TYPES`), sourced from Amber's own real Autotask Internal Time admin screen -- not hardcoded in this file at all. Confirmed live: Peter Kiem's 2 real Unpaid days (17-18 Sep 2026, 7.6h each) now sum to `leaveHours: 15.2` for that period, and both real rows show up in the Leave Hours drill-down.
 
 ## Resources -- derived from who has real data, not from today's roster
 
@@ -227,7 +218,7 @@ Click any non-zero hours value anywhere on the page and a real new browser windo
 
 | `kind` | Row it's wired to | Matching logic |
 |---|---|---|
-| `leave` | Table 1 Leave Hours | `timeEntryType` in `LEAVE_TIME_ENTRY_TYPES`, no ticket/task |
+| `leave` | Table 1 Leave Hours | `billingCodeID` in `resolveLeaveBillingCodeIds()`'s resolved ids, `notExist ticketID` only |
 | `ticket-hours` | Table 1 Ticket Hours | all ticket time for the resource, any company, unfiltered |
 | `aittime-title` | AITTIME breakdown rows | ticket title matches the clicked AITTIME title exactly (`fetchAittimeTickets()`) |
 | `contract` | Total Client Hours Recorded / Billable / Non-Billable | `clientContractRowLabel()`'s row label, Ambient IT excluded, optional `billable` filter |

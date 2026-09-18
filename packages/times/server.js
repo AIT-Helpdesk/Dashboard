@@ -7,6 +7,7 @@ const {
   getTicketUrl,
   resolveResourceName,
   fetchServiceDeskAndProfessionalServicesMembership,
+  resolveLeaveBillingCodeIds,
   fetchRoleHourlyRates,
   fetchWorkTypeModifiers,
   fetchBillingItemsByTimeEntryId,
@@ -90,15 +91,31 @@ function sumNormalHoursForRange(resourceName, fromKey, toKey) {
   return total;
 }
 
-// TimeEntries.timeEntryType picklist values that mean "this hour was leave,
-// not work" -- confirmed against real data (see the package README's own
-// "Confirmed against real data" section): 15 PersonalTime, 16 VacationTime,
-// 17 SickTime, 18 PaidTimeOff. Every real leave entry found in this
-// tenant also carried no ticketID/taskID (internal time only) -- the
-// notExist filters below confirm that rather than assume it, so a
-// mis-tagged entry that somehow also references a ticket doesn't silently
-// double-count as both leave and ticket time.
-const LEAVE_TIME_ENTRY_TYPES = [15, 16, 17, 18];
+// Real Leave/Time Off billing codes -- what makes an entry Leave here,
+// by request ("There is a list of Billing Codes identified as Internal.
+// You've recognised the Vacation one ... There's more that need to be
+// treated as Time Off") after a real bug report: Peter Kiem's 2 real
+// "Unpaid" leave days weren't showing in Leave Hours at all. Root cause:
+// this page used to infer Leave from plain TimeEntries rows tagged with
+// one of 4 specific timeEntryType values (15 PersonalTime, 16
+// VacationTime, 17 SickTime, 18 PaidTimeOff) with no ticketID/taskID --
+// true for real Vacation/Sick Time/Floating Holiday/Personal Time
+// entries, but NOT for "Unpaid" (confirmed real: every real Unpaid leave
+// entry instead carries timeEntryType 10 CompanyTask AND a real taskID)
+// -- so the old query's own type-list/`notExist taskID` filter could
+// never catch it no matter how it was tuned.
+//
+// `resolveLeaveBillingCodeIds()` (shared, `@dashboard/autotask-client` --
+// see its own comment for the full LEAVE_TYPES/.env story and why
+// Autotask's own "Display In Time Off" checkbox has no REST API
+// equivalent) resolves the real .env-configured list to real billing
+// code ids -- matched by billingCodeID directly, with no timeEntryType or
+// ticketID/taskID constraint at all, since the billing code itself is
+// what makes an entry Leave regardless of which internal timeEntryType
+// or task-linkage Autotask happens to record it under. Shared with
+// @dashboard/teams-shifts, @dashboard/whats-on, and @dashboard/about-me
+// -- all four need the exact same real definition of Leave and must
+// never quietly disagree.
 
 // Resources.licenseType 7 is "API User" -- confirmed against real data: 25
 // of this tenant's 38 "active" resources are integration service accounts
@@ -214,14 +231,15 @@ function mapAndFilterResources(resources) {
 // the main report route doesn't need a second TimeEntries fetch for the
 // exact same period.
 async function resolveResourcesWithData(client, fromIso, toIso, team) {
+  const timeOffBillingCodeIds = await resolveLeaveBillingCodeIds(client);
   const [leaveEntries, ticketEntries, membership] = await Promise.all([
-    listAll(client.timeEntries, [
-      { op: 'gte', field: 'dateWorked', value: fromIso },
-      { op: 'lte', field: 'dateWorked', value: toIso },
-      { op: 'in', field: 'timeEntryType', value: LEAVE_TIME_ENTRY_TYPES },
-      { op: 'notExist', field: 'ticketID' },
-      { op: 'notExist', field: 'taskID' },
-    ]),
+    timeOffBillingCodeIds.length > 0
+      ? listAll(client.timeEntries, [
+          { op: 'gte', field: 'dateWorked', value: fromIso },
+          { op: 'lte', field: 'dateWorked', value: toIso },
+          { op: 'in', field: 'billingCodeID', value: timeOffBillingCodeIds },
+        ])
+      : Promise.resolve([]),
     listAll(client.timeEntries, [
       { op: 'gte', field: 'dateWorked', value: fromIso },
       { op: 'lte', field: 'dateWorked', value: toIso },
@@ -1044,16 +1062,18 @@ router.get('/entries-view', async (req, res) => {
     let ctx = null;
 
     if (kind === 'leave') {
-      // No ticket at all -- its own real TimeEntries fetch, same filter
-      // shape as Table 1's own Leave Hours row.
-      matching = await listAll(client.timeEntries, [
-        { op: 'eq', field: 'resourceID', value: resourceId },
-        { op: 'gte', field: 'dateWorked', value: fromIso },
-        { op: 'lte', field: 'dateWorked', value: toIso },
-        { op: 'in', field: 'timeEntryType', value: LEAVE_TIME_ENTRY_TYPES },
-        { op: 'notExist', field: 'ticketID' },
-        { op: 'notExist', field: 'taskID' },
-      ]);
+      // Same real Time Off billing-code match as Table 1's own Leave
+      // Hours row -- see resolveLeaveBillingCodeIds()'s own comment.
+      const timeOffBillingCodeIds = await resolveLeaveBillingCodeIds(client);
+      matching =
+        timeOffBillingCodeIds.length > 0
+          ? await listAll(client.timeEntries, [
+              { op: 'eq', field: 'resourceID', value: resourceId },
+              { op: 'gte', field: 'dateWorked', value: fromIso },
+              { op: 'lte', field: 'dateWorked', value: toIso },
+              { op: 'in', field: 'billingCodeID', value: timeOffBillingCodeIds },
+            ])
+          : [];
     } else {
       const entries = await listAll(client.timeEntries, [
         { op: 'eq', field: 'resourceID', value: resourceId },

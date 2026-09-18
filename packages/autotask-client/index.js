@@ -230,6 +230,124 @@ async function fetchServiceDeskAndProfessionalServicesMembership(client) {
   return { serviceDesk, professionalServices, leadership };
 }
 
+// ---- Real Leave/Time Off billing codes -- shared across Times, Shifts and
+// Schedules, What's On, and About Me, since all four need the exact same
+// real definition of "which internal billing codes count as Leave" and
+// must never quietly disagree with each other.
+//
+// Configured in .env (`LEAVE_TYPES`, a comma-separated list of exact real
+// `BillingCodes.name` values), not hardcoded here -- by request, after
+// Autotask's own "Display In Time Off" checkbox (on the Internal Time
+// admin screen) turned out to have no REST API equivalent at all
+// (confirmed live: not a field on BillingCodes -- the full real field
+// list was pulled via `/entityInformation/fields` and checked, 15 real
+// fields, nothing close; no UserDefinedFields either; no separate
+// "Internal Time" entity anywhere in the SDK). Amber's own real
+// LEAVE_TYPES list, read directly off that admin screen, is the
+// authoritative source instead -- kept in .env rather than a JS array so
+// it can be updated there, with no code change or redeploy, if that real
+// list is ever changed in Autotask.
+//
+// Real confirmed value at the time this was written: "Vacation, Unpaid,
+// RDO, Sick Time, Personal Time, Jury Duty, Holiday, Floating Holiday,
+// Bereavement Leave" -- 9 names, matching (and superseding) the earlier
+// useType===3 ("Internal")-based guess @dashboard/times' own README
+// documents in full, including the original bug story (a real approved
+// "Unpaid" leave request wasn't showing in Leave Hours at all, because
+// Unpaid in this tenant mirrors into a TimeEntries row shaped like
+// ticket/task work -- timeEntryType 10 CompanyTask, a real taskID -- not
+// like the other leave types).
+//
+// Resolved to real billing code ids by NAME every call, not cached, so a
+// renamed code in Autotask (or an edited LEAVE_TYPES value) takes effect
+// immediately, without a server restart -- same "don't bake in a number
+// that lives in Autotask" reasoning every other named-lookup on this
+// dashboard already follows.
+async function resolveLeaveBillingCodeIds(client) {
+  const names = (process.env.LEAVE_TYPES || '')
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean);
+  if (names.length === 0) return [];
+  const codes = await listAll(client.billingCodes, [{ op: 'in', field: 'name', value: names }]);
+  return codes.map((c) => c.id);
+}
+
+// ---- Real Leave, sourced directly from TimeOffRequests -- shared across
+// Shifts and Schedules, What's On, and About Me (NOT Times, which keeps
+// the `resolveLeaveBillingCodeIds()`/TimeEntries approach above for its
+// own numeric Leave Hours total -- see below for why).
+//
+// Superseded (for these three calendar/schedule pages only) the
+// TimeEntries-based approach above after a real bug report: Damon
+// Kirkpatrick's real 19-23 Oct Vacation request wasn't showing on
+// "Shifts and Schedules" at all. Root cause: his real TimeOffRequests
+// rows sat at real `status: 2` (Submitted) -- confirmed live, Autotask
+// only mirrors a Time Off Request into a matching plain TimeEntries row
+// once it's actually Approved (`status: 3`), so a real pending request
+// has no TimeEntries row to find yet, no matter how the TimeEntries
+// query is tuned. Querying TimeOffRequests directly sidesteps the whole
+// mirroring question, and lets real pending leave show up too, by
+// request ("can we display the Unapproved data with the right colour but
+// with stripes or something so that it's obviously different").
+//
+// Real confirmed `status` picklist: 1 Unsubmitted, 2 Submitted, 3
+// Approved, 4 Rejected, 5 Canceled, 6 Partially Approved. Only Approved
+// and Submitted are fetched here -- Unsubmitted/Rejected/Canceled are
+// never real, actionable leave. Partially Approved is treated the same
+// as Submitted (`approved: false`) since its own `hours` isn't confirmed
+// to reflect just the approved portion rather than the full original
+// request, and no real example exists in this tenant to confirm which;
+// callers use the returned `approved` boolean to render Approved rows
+// solid and Submitted/Partially-Approved rows differently (e.g. striped).
+//
+// `resourceId` is optional -- omit it for an unscoped, company-wide fetch
+// (Shifts and Schedules/What's On's own Team Shifts excerpt, same
+// deliberate "show every real leave entry, don't guess who belongs to
+// this team" reasoning `@dashboard/teams-shifts`' own README already
+// documents), or pass one to scope to a single resource (About Me).
+const TIME_OFF_REQUEST_STATUS_APPROVED = 3;
+const TIME_OFF_REQUEST_STATUS_SUBMITTED = 2;
+const TIME_OFF_REQUEST_STATUS_PARTIALLY_APPROVED = 6;
+
+async function resolveLeaveTimeOffRequestTypeIds(client) {
+  const names = (process.env.LEAVE_TYPES || '')
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean);
+  if (names.length === 0) return [];
+  const nameSet = new Set(names);
+  const labels = await getPicklistLabels(client.timeOffRequests, 'timeOffRequestType');
+  const ids = [];
+  for (const [value, label] of labels) {
+    if (nameSet.has(label)) ids.push(value);
+  }
+  return ids;
+}
+
+async function fetchLeaveTimeOffRequests(client, startISO, endISO, resourceId) {
+  const typeIds = await resolveLeaveTimeOffRequestTypeIds(client);
+  if (typeIds.length === 0) return [];
+  const filters = [
+    { op: 'gte', field: 'requestDate', value: startISO },
+    { op: 'lt', field: 'requestDate', value: endISO },
+    { op: 'in', field: 'timeOffRequestType', value: typeIds },
+    { op: 'in', field: 'status', value: [TIME_OFF_REQUEST_STATUS_APPROVED, TIME_OFF_REQUEST_STATUS_SUBMITTED, TIME_OFF_REQUEST_STATUS_PARTIALLY_APPROVED] },
+  ];
+  if (resourceId !== null && resourceId !== undefined) filters.push({ op: 'eq', field: 'resourceID', value: resourceId });
+  const requests = await listAll(client.timeOffRequests, filters);
+  if (requests.length === 0) return [];
+  const typeLabels = await getPicklistLabels(client.timeOffRequests, 'timeOffRequestType');
+  return requests.map((r) => ({
+    id: r.id,
+    resourceID: r.resourceID,
+    dayKey: (r.requestDate || '').slice(0, 10),
+    displayName: typeLabels.get(r.timeOffRequestType) || 'Leave',
+    hoursWorked: r.hours || 0,
+    approved: r.status === TIME_OFF_REQUEST_STATUS_APPROVED,
+  }));
+}
+
 // ---- Chargeable $ value of a TimeEntries row -- shared across About Me
 // (previously)/Times/Ticket Times/Completed Tickets, since every page
 // asking "what's this time worth" needs the exact same real formula, by
@@ -662,6 +780,8 @@ module.exports = {
   resolveCompanyName,
   resolveResourceIdByEmail,
   fetchServiceDeskAndProfessionalServicesMembership,
+  resolveLeaveBillingCodeIds,
+  fetchLeaveTimeOffRequests,
   fetchRoleHourlyRates,
   fetchWorkTypeModifiers,
   resolveChargeableRate,
