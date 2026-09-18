@@ -145,7 +145,12 @@ const INTRO_TEXT =
 // fixed, curated list rather than the live/reconciled full page list.
 const DAILY_CHECKLIST_HTML = `
   <div class="resource-group start-here-checklist">
-    <div class="section-heading section-heading--nav">Daily Checklist</div>
+    <div class="section-heading section-heading--nav section-heading-row">
+      <span>Daily Checklist</span>
+      <div class="date-form">
+        <button type="button" id="special-staff-hours-button" class="button-link button-link--small">Special Staff Hours</button>
+      </div>
+    </div>
     <div class="start-here-checklist-featured">
       <div class="start-here-checklist-col start-here-checklist-col-main">
         <a href="#whats-on" class="start-here-checklist-title">What's On</a>
@@ -204,6 +209,77 @@ export function mount(container) {
 
   loadPageList(container.querySelector('#page-groups'));
   loadUpdatesExcerpt(container.querySelector('#updates-excerpt'));
+  container.querySelector('#special-staff-hours-button').addEventListener('click', openSpecialStaffHoursPopup);
+}
+
+// Two technicians' own non-standard working hours, by request -- a
+// "Special Staff Hours" button, right-justified on the Daily Checklist
+// card's own heading row (same `.section-heading-row` pattern What's On's
+// "Today & Tomorrow"/"Team Shifts" headings already use for an inline
+// button beside the heading text), popping up a real separate window
+// (`window.open('', ...)` + `document.write()`, same "built client-side
+// from already-loaded data" pattern @dashboard/teams-shifts' own
+// openDayPopup() uses -- shell/public/app.js's global window.open() wrap
+// centers it on the same monitor automatically, no extra positioning
+// code needed here). Static content, supplied directly rather than
+// sourced from Autotask/Shifts -- these are real fixed personal
+// schedules known outside any system this dashboard already reads, not
+// data this page could otherwise derive.
+const JETT_HOURS = [
+  { day: 'Mon', start: '9:00am', end: '5:00pm', hours: '7.5 hrs' },
+  { day: 'Tue', start: '11:00am', end: '5:00pm', hours: '5.5 hrs' },
+  { day: 'Wed', start: '9:00am', end: '1:00pm', hours: '4 hrs' },
+  { day: 'Thu', start: '10:00am', end: '5:00pm', hours: '6.5 hrs' },
+  { day: 'Fri', start: '10:00am', end: '4:00pm', hours: '5.5 hrs' },
+];
+const PETER_HOURS_TEXT = 'Usually works Mon - Wed; with Thu & Fri Off; Occasionally varies when Peter helps out when we have people away.';
+
+function openSpecialStaffHoursPopup() {
+  const popup = window.open('', '_blank', 'width=480,height=520,scrollbars=yes');
+  if (!popup) return; // genuinely blocked by the browser's popup blocker -- nothing more to do
+
+  const isDark =
+    document.documentElement.getAttribute('data-theme') === 'dark' ||
+    (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const colors = isDark
+    ? { bg: '#14161a', fg: '#eef0f3', muted: '#9aa3af', border: '#2a2e35', card: '#1b1e24' }
+    : { bg: '#ffffff', fg: '#1a1a1a', muted: '#6b7280', border: '#e5e7eb', card: '#f9fafb' };
+
+  const jettRowsHtml = JETT_HOURS.map((r) => `<tr><td>${escapeHtml(r.day)}</td><td>${escapeHtml(r.start)}</td><td>${escapeHtml(r.end)}</td><td>${escapeHtml(r.hours)}</td></tr>`).join('');
+
+  popup.document.open();
+  popup.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Special Staff Hours</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: ${colors.bg}; color: ${colors.fg}; margin: 0; padding: 1rem 1.25rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
+  .card { border: 1px solid ${colors.border}; border-radius: 8px; background: ${colors.card}; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+  .card h2 { font-size: 1rem; margin: 0 0 0.6rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 0.3rem 0.6rem 0.3rem 0; border-bottom: 1px solid ${colors.border}; }
+  th { color: ${colors.muted}; font-weight: 600; }
+  p { margin: 0; }
+</style>
+</head>
+<body>
+<h1>Special Staff Hours</h1>
+<div class="card">
+  <h2>Jett's Hours</h2>
+  <table>
+    <thead><tr><th>Day</th><th>Start</th><th>End</th><th>Hours</th></tr></thead>
+    <tbody>${jettRowsHtml}</tbody>
+  </table>
+</div>
+<div class="card">
+  <h2>Peter's Hours</h2>
+  <p>${escapeHtml(PETER_HOURS_TEXT)}</p>
+</div>
+</body>
+</html>`);
+  popup.document.close();
 }
 
 const UPDATES_EXCERPT_LIMIT = 5;
