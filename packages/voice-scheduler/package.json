@@ -1,0 +1,20 @@
+{
+  "name": "@dashboard/voice-scheduler",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "voice-scheduler",
+    "label": "Voice Scheduler",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/shell": "*",
+    "axios": "^1.7.0",
+    "express": "^4.19.2",
+    "form-data": "^4.0.0",
+    "multer": "^2.0.0"
+  }
+}

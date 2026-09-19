@@ -27,7 +27,14 @@ for (const [name, value] of Object.entries(REQUIRED)) {
   }
 }
 
-const scopes = ['openid', 'profile', 'email', 'User.Read'];
+const scopes = ['openid', 'profile', 'email', 'User.Read', 'Calendars.ReadWrite'];
+
+// Resource (Graph) scopes ONLY -- used for acquireTokenSilent below, which
+// requests an access token for a specific resource. openid/profile/email
+// aren't resource scopes (they only shape the ID token from the initial
+// sign-in), so they're deliberately left out here; including them in a
+// silent-token request is invalid.
+const graphScopes = ['User.Read', 'Calendars.ReadWrite'];
 
 // Derived from the CURRENT request's own Host header, not a single fixed
 // env var -- this app is reachable at more than one address at once
@@ -140,6 +147,13 @@ function registerAuthRoutes(app) {
       }
 
       req.session.user = { name: tokenResponse.account.name, email: tokenResponse.account.username };
+      // homeAccountId, not the token itself -- MSAL's own token cache (see
+      // getGraphTokenForSession below) already holds the real access/refresh
+      // tokens, keyed by account; the session only needs to remember WHICH
+      // account is this browser's, so a later request can look its own
+      // tokens back up and silently renew them via MSAL rather than this
+      // app managing raw tokens/expiry itself.
+      req.session.msalHomeAccountId = tokenResponse.account.homeAccountId;
       const redirectTo = req.session.postLoginRedirect || '/';
       delete req.session.postLoginRedirect;
       res.redirect(redirectTo);
@@ -176,4 +190,34 @@ function registerAuthRoutes(app) {
   });
 }
 
-module.exports = { registerAuthRoutes, requireAuth };
+// Returns a fresh Microsoft Graph access token for whoever is ACTUALLY
+// signed in on this session, scoped to graphScopes -- for any page that
+// needs to call Graph as the real signed-in user (e.g. Voice Scheduler
+// writing to /me/events). Delegated, not app-only: the token Microsoft
+// hands back is bound to this one account server-side -- there is no
+// "which mailbox" parameter a caller could pass wrong, so a page built on
+// this can never reach another person's data no matter what its own code
+// does. acquireTokenSilent renews transparently from MSAL's own in-memory
+// cache (populated at /auth/callback above via the account it stored) --
+// no page needs its own refresh-token handling.
+//
+// Returns null when there's nothing to renew from -- no homeAccountId on
+// this session, or the process restarted since this person signed in (the
+// in-memory MSAL cache, like the in-memory session store, doesn't survive
+// that). Callers should treat null as "this person needs to sign in
+// again", not surface a raw Graph 401.
+async function getGraphTokenForSession(req) {
+  const homeAccountId = req.session.msalHomeAccountId;
+  if (!homeAccountId) return null;
+  try {
+    const account = await msalClient.getTokenCache().getAccountByHomeId(homeAccountId);
+    if (!account) return null;
+    const result = await msalClient.acquireTokenSilent({ account, scopes: graphScopes });
+    return result.accessToken;
+  } catch (err) {
+    console.error('Silent Graph token acquisition failed:', err);
+    return null;
+  }
+}
+
+module.exports = { registerAuthRoutes, requireAuth, getGraphTokenForSession };
