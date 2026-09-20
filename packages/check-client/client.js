@@ -24,6 +24,7 @@ let lastSince = null;
 let lastMonth = null;
 let lastOrdersData = null;
 let lastSubscriptionsData = null;
+let lastM365Data = null;
 let lastServicesData = null;
 
 // Same six checkbox-style fields Contract Checks itself carries -- see
@@ -102,6 +103,11 @@ export function mount(container) {
     <div id="subs-summary" class="summary" hidden></div>
     <div id="subs-results" class="results"></div>
 
+    <h2 class="chk-section-heading">Microsoft 365 Tenancy <span class="inline-subtext">(Ingram tenant ID &rarr; Rewst)</span></h2>
+    <p id="m365-status" class="status" hidden></p>
+    <div id="m365-summary" class="summary" hidden></div>
+    <div id="m365-results" class="results"></div>
+
     <h2 class="chk-section-heading">Contracts <span class="inline-subtext">(Autotask)</span></h2>
     <p id="services-status" class="status" hidden></p>
     <div id="services-summary" class="summary" hidden></div>
@@ -124,6 +130,9 @@ export function mount(container) {
   const subsStatusEl = container.querySelector('#subs-status');
   const subsSummaryEl = container.querySelector('#subs-summary');
   const subsResultsEl = container.querySelector('#subs-results');
+  const m365StatusEl = container.querySelector('#m365-status');
+  const m365SummaryEl = container.querySelector('#m365-summary');
+  const m365ResultsEl = container.querySelector('#m365-results');
   const servicesStatusEl = container.querySelector('#services-status');
   const servicesSummaryEl = container.querySelector('#services-summary');
   const servicesResultsEl = container.querySelector('#services-results');
@@ -233,6 +242,11 @@ export function mount(container) {
     searchButton.disabled = true;
     try {
       await Promise.allSettled([loadOrders(ingramClient, since), loadSubscriptions(ingramClient), loadServices(autotaskClient, exactClient, month)]);
+      // Runs only after all three above have settled -- Microsoft 365
+      // Tenancy's own fallback path (see loadM365Tenancy()'s comment) wants
+      // the resolved Autotask name too, not just Ingram's, and that only
+      // exists once Contract Services' own load has finished.
+      await loadM365Tenancy();
     } finally {
       lastAutotaskClient = autotaskClient;
       lastExactClient = exactClient;
@@ -636,6 +650,15 @@ export function mount(container) {
     subsStatusEl.textContent = `Loading subscriptions for "${client}"...`;
     subsSummaryEl.hidden = true;
     subsResultsEl.innerHTML = '';
+    // Stale the moment a new search starts -- Microsoft 365 Tenancy is
+    // derived from this section's (and Contract Services') own results (see
+    // loadM365Tenancy() below), so the previous search's answer shouldn't
+    // linger on screen while a new one is in flight.
+    m365StatusEl.hidden = false;
+    m365StatusEl.className = 'status';
+    m365StatusEl.textContent = 'Waiting on Subscriptions and Contracts...';
+    m365SummaryEl.hidden = true;
+    m365ResultsEl.innerHTML = '';
     try {
       const params = new URLSearchParams({ client });
       const data = await fetchJson(`/api/check-client/subscriptions?${params.toString()}`, 'GET');
@@ -645,6 +668,125 @@ export function mount(container) {
       subsStatusEl.className = 'status error';
       subsStatusEl.textContent = `Error: ${err.message}`;
     }
+  }
+
+  // Microsoft 365 Tenancy -- runs after Orders/Subscriptions/Contracts have
+  // ALL settled (called from search() itself, not from any one section's
+  // own load), since its fallback path wants Contract Services' resolved
+  // Autotask name too, not just Ingram's.
+  //
+  // PRIMARY: joins the client's real Microsoft tenant ID (Ingram's own
+  // ms_customer_id, confirmed elsewhere this session to BE the real MS
+  // tenant id -- see Match IDs) against Rewst's own tenant_id field for an
+  // EXACT match, by request ("use the Tenant ID from Ingram Micro... is
+  // that a better choice?") -- an exact GUID join can't misfire the way
+  // name matching sometimes does (e.g. "Sleepys" vs "Sleepy's Pty Ltd").
+  // Needs a real Microsoft-named Ingram subscription to read the tenant id
+  // off of, and exactly one resolved Ingram client (an ambiguous multi-
+  // client match isn't safe to guess a subscription from).
+  //
+  // FALLBACK, by request ("if not found in Ingram Micro, only then try
+  // Rewst"): when there's no such subscription, the resolved Autotask/
+  // Ingram client NAME (preferring Autotask's, since Autotask is this
+  // MSP's own system of record) is sent instead, and server.js's own
+  // matchRewstCustomerByName() -- the same normalize+cascade approach
+  // Match IDs' bigger cross-reference uses -- tries to find the right
+  // Rewst customer that way. Server-side always tries the tenant-id path
+  // first when a subscriptionId is sent, falling back to the name only if
+  // that doesn't resolve -- so sending both here is safe, never a
+  // name-match overriding a good tenant-id match.
+  async function loadM365Tenancy() {
+    m365StatusEl.hidden = false;
+    m365StatusEl.className = 'status';
+    m365SummaryEl.hidden = true;
+    m365ResultsEl.innerHTML = '';
+
+    let subscriptionId = null;
+    if (lastSubscriptionsData && lastSubscriptionsData.byClient.length === 1) {
+      const msSub = lastSubscriptionsData.byClient[0].subscriptions.find((s) => /microsoft/i.test(s.name));
+      if (msSub) subscriptionId = msSub.id;
+    }
+
+    const autotaskNames = lastServicesData ? [...new Set(lastServicesData.byCompany.map((c) => c.companyName))] : [];
+    const ingramNames = lastSubscriptionsData ? [...new Set(lastSubscriptionsData.byClient.map((c) => c.clientName))] : [];
+    const clientName = autotaskNames.length === 1 ? autotaskNames[0] : ingramNames.length === 1 ? ingramNames[0] : null;
+
+    if (!subscriptionId && !clientName) {
+      m365StatusEl.textContent = 'No single client resolved above -- narrow the search to look up Microsoft 365 Tenancy.';
+      return;
+    }
+
+    m365StatusEl.textContent = 'Loading Microsoft 365 Tenancy...';
+    try {
+      const params = new URLSearchParams();
+      if (subscriptionId) params.set('subscriptionId', subscriptionId);
+      if (clientName) params.set('clientName', clientName);
+      const data = await fetchJson(`/api/check-client/m365-tenancy?${params.toString()}`, 'GET');
+      lastM365Data = data;
+      renderM365Tenancy(data);
+    } catch (err) {
+      m365StatusEl.className = 'status error';
+      m365StatusEl.textContent = `Error: ${err.message}`;
+    }
+  }
+
+  function renderM365Tenancy(data) {
+    if (!data.matched) {
+      m365StatusEl.hidden = false;
+      m365StatusEl.className = 'status';
+      m365StatusEl.textContent = m365UnmatchedText(data);
+      m365SummaryEl.hidden = true;
+      m365ResultsEl.innerHTML = '';
+      return;
+    }
+    m365StatusEl.hidden = true;
+    m365SummaryEl.hidden = false;
+    const sourceText = data.tenantSource === 'rewst-name-match' ? ' (matched by name via Rewst -- no Ingram Microsoft subscription found)' : '';
+    m365SummaryEl.innerHTML = `<strong>${data.skus.length}</strong> SKU${data.skus.length === 1 ? '' : 's'} for <strong>${escapeHtml(data.rewstClientName)}</strong><span class="inline-subtext"> -- Tenant ID ${escapeHtml(data.tenantId)}${sourceText}</span>`;
+
+    m365ResultsEl.innerHTML = '';
+    if (data.skus.length === 0) {
+      m365ResultsEl.innerHTML = '<p class="status">No subscribed SKUs found.</p>';
+      return;
+    }
+    // Bare table (no .ingram-subscriptions-table -- that class's own
+    // nth-child column widths are tuned for THAT section's 8 columns, wrong
+    // fit for this one's 5), same plain-table-in-a-.resource-group pattern
+    // CSP Customers' own client.js uses for its own differently-shaped table.
+    const group = document.createElement('div');
+    group.className = 'resource-group';
+    group.innerHTML = `
+      <table>
+        <thead>
+          <tr class="shaded-row"><th>SKU</th><th>Status</th><th>Enabled</th><th>Consumed</th><th>Suspended</th></tr>
+        </thead>
+        <tbody>
+          ${data.skus
+            .map(
+              (s) => `
+            <tr>
+              <td>${escapeHtml(s.sku)}</td>
+              <td${s.status !== 'Enabled' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(s.status)}</td>
+              <td class="ticket-number">${s.enabled ?? ''}</td>
+              <td class="ticket-number">${s.consumed ?? ''}</td>
+              <td class="ticket-number${s.suspended ? ' cell-flag-red' : ''}">${s.suspended ?? ''}</td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    `;
+    m365ResultsEl.appendChild(group);
+  }
+
+  function m365UnmatchedText(data) {
+    if (data.reason === 'no-rewst-customer') {
+      return data.tenantId
+        ? `No Rewst customer found with tenant ID ${data.tenantId} -- this client may not be set up in Rewst yet.`
+        : 'No Microsoft-named Ingram subscription and no name match in Rewst -- this client may not be set up in Rewst yet.';
+    }
+    if (data.reason === 'no-organisation-id') return `Rewst customer "${data.rewstClientName}" has no linked Organisation -- can’t look up licenses.`;
+    return 'Could not resolve Microsoft 365 Tenancy for this client.';
   }
 
   function renderSubscriptions(data) {
@@ -890,6 +1032,7 @@ export function mount(container) {
 
   if (lastOrdersData) renderOrders(lastOrdersData);
   if (lastSubscriptionsData) renderSubscriptions(lastSubscriptionsData);
+  if (lastM365Data) renderM365Tenancy(lastM365Data);
   if (lastServicesData) renderServices(lastServicesData);
 
   async function fetchJson(url, method, body) {
