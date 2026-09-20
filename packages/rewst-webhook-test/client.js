@@ -218,7 +218,7 @@ export function mount(container) {
             <th>Company Name</th>
             <th class="col-center">Consent</th>
             <th>Tenant ID</th>
-            <th>CSP Tenant ID</th>
+            <th>Organisation ID</th>
             <th>Linked Organizations</th>
             <th>Rewst Customer ID</th>
           </tr>
@@ -232,12 +232,22 @@ export function mount(container) {
 
   function customerRowHtml(c) {
     const linkedOrgs = Array.isArray(c.linked_organizations) ? c.linked_organizations.map((o) => o.name).join(', ') : '';
+    // The real "Organisation ID" (what @dashboard/rewst-webhook-test's own
+    // "Customer_M365_Licenses" webhook needs as its org_id input) is NOT
+    // c.id (Rewst's own internal customer-record id) or c.csp_tenant_id
+    // (a Microsoft CSP tenant id, confirmed the same across every real
+    // customer -- not useful to show, by request) -- it's nested inside
+    // linked_organizations[].id, confirmed live against real data (G & H
+    // Civil: linked_organizations[0].id === the real Organisation ID).
+    // Joined the same way linkedOrgs (names) already is, in case a real
+    // customer is ever linked to more than one organisation.
+    const linkedOrgIds = Array.isArray(c.linked_organizations) ? c.linked_organizations.map((o) => o.id).join(', ') : '';
     return `
       <tr>
         <td>${escapeHtml(c.company_name)}</td>
         <td class="col-center">${c.has_consent ? 'Yes' : 'No'}</td>
         <td>${escapeHtml(c.tenant_id)}</td>
-        <td>${escapeHtml(c.csp_tenant_id)}</td>
+        <td>${escapeHtml(linkedOrgIds)}</td>
         <td>${escapeHtml(linkedOrgs)}</td>
         <td>${escapeHtml(c.id)}</td>
       </tr>
