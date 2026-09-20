@@ -1,0 +1,17 @@
+{
+  "name": "@dashboard/match-ids",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "match-ids",
+    "label": "Match IDs",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/ingram-client": "*",
+    "axios": "^1.7.2",
+    "express": "^4.19.2"
+  }
+}

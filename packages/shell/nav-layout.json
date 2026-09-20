@@ -215,6 +215,10 @@
       },
       {
         "type": "page",
+        "id": "match-ids"
+      },
+      {
+        "type": "page",
         "id": "contract-services-update-contracts"
       },
       {
@@ -302,5 +306,9 @@
     "type": "page",
     "id": "updates",
     "hidden": true
+  },
+  {
+    "type": "page",
+    "id": "voice-scheduler"
   }
 ]
