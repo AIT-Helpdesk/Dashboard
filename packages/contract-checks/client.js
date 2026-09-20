@@ -123,9 +123,10 @@ export function mount(container) {
           <input type="text" id="status-input" name="status" placeholder="optional, e.g. complet* (wildcards with *)" />
           <label for="product-input">Product</label>
           <input type="text" id="product-input" name="product" placeholder="optional, e.g. *Business Basic* (wildcards with *)" />
-          <button type="submit" id="refresh-button">Refresh</button>
-          <button type="button" id="sync-button">Check IM for More</button>
-          <button type="button" id="change-report-button">Change Report</button>
+          <button type="submit" id="refresh-button" class="button-link button-link--small">Refresh</button>
+          <button type="button" id="sync-button" class="button-link button-link--small">Check IM for More</button>
+          <button type="button" id="change-report-button" class="button-link button-link--small">Change Report</button>
+          <button type="button" id="mark-renewals-button" class="button-link button-link--small cc-mark-renewals-btn">Mark Renewals as Done</button>
         </div>
         <div class="date-form-row">
           <label for="include-renewals-input" class="inline-checkbox-label">
@@ -168,6 +169,7 @@ export function mount(container) {
   const refreshButton = container.querySelector('#refresh-button');
   const syncButton = container.querySelector('#sync-button');
   const changeReportButton = container.querySelector('#change-report-button');
+  const markRenewalsButton = container.querySelector('#mark-renewals-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
@@ -245,6 +247,7 @@ export function mount(container) {
   });
 
   changeReportButton.addEventListener('click', () => openChangeReportModal());
+  markRenewalsButton.addEventListener('click', () => openMarkRenewalsModal());
 
   async function load() {
     const allDates = allDatesInput.checked;
@@ -1290,6 +1293,209 @@ export function mount(container) {
       }
     });
     sinceInputEl.focus();
+  }
+
+  // "Mark Renewals as Done" -- a dedicated bulk workflow for renewal orders
+  // that are the ONLY order present for their client (db.js's own
+  // listRenewalsEligibleForBulkDone() has the exact eligibility rule), by
+  // request. A separate popup rather than folding into the existing
+  // same-client-only row-selection bulk-close above (see the .cc-toggle
+  // change handler further up) -- that mechanism was built around one
+  // client at a time; this list can span however many different clients
+  // happen to qualify right now. server.js's own POST /items/bulk-close
+  // still only ever accepts items from ONE client per call though (see its
+  // own comment), so markSelectedRenewalsDone-equivalent logic here groups
+  // the confirmed selection by customerId and issues one bulk-close call
+  // per client, reusing confirmCloseTicket() for the same Write Notes &
+  // Complete / Write Notes, Don't Complete / Cancel choice the existing
+  // bulk-close flow already asks once per batch.
+  function openMarkRenewalsModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel wsp-qa-modal-panel cc-mark-renewals-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>Mark Renewals as Done</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <p class="cc-confirm-warning">Have you run "Check IM for More"? This list is only as fresh as the last sync.</p>
+          <div class="wsp-form-actions">
+            <button type="button" class="button-link button-link--small cc-mark-renewals-sync-button">Check IM for More</button>
+          </div>
+          <p class="status cc-mark-renewals-status">Loading eligible renewals...</p>
+          <div class="cc-mark-renewals-list" hidden></div>
+          <div class="wsp-form-actions cc-mark-renewals-actions" hidden>
+            <button type="button" class="button-link cc-mark-renewals-confirm-button">Mark Selected as Done</button>
+            <button type="button" class="cc-mark-renewals-cancel-button">Cancel</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.querySelector('.cc-mark-renewals-cancel-button').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const syncBtn = overlay.querySelector('.cc-mark-renewals-sync-button');
+    const modalStatusEl = overlay.querySelector('.cc-mark-renewals-status');
+    const listEl = overlay.querySelector('.cc-mark-renewals-list');
+    const actionsEl = overlay.querySelector('.cc-mark-renewals-actions');
+    const confirmButton = overlay.querySelector('.cc-mark-renewals-confirm-button');
+
+    let eligibleItems = [];
+
+    async function loadEligible() {
+      modalStatusEl.hidden = false;
+      modalStatusEl.className = 'status';
+      modalStatusEl.textContent = 'Loading eligible renewals...';
+      listEl.hidden = true;
+      actionsEl.hidden = true;
+      try {
+        const data = await fetchJson('/api/contract-checks/renewals-eligible', 'GET');
+        eligibleItems = data.items || [];
+        renderList();
+      } catch (err) {
+        modalStatusEl.className = 'status error';
+        modalStatusEl.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    function renderList() {
+      if (eligibleItems.length === 0) {
+        modalStatusEl.hidden = false;
+        modalStatusEl.className = 'status';
+        modalStatusEl.textContent = 'No renewals currently qualify -- either nothing is a client’s only order right now, or everything eligible is already marked done.';
+        listEl.hidden = true;
+        actionsEl.hidden = true;
+        return;
+      }
+      modalStatusEl.hidden = true;
+      listEl.hidden = false;
+      actionsEl.hidden = false;
+      listEl.innerHTML = `
+        <table class="contract-checks-table">
+          <thead>
+            <tr>
+              <th><input type="checkbox" class="cc-mark-renewals-select-all" checked title="Select/deselect all" /></th>
+              <th>Client</th>
+              <th>Order #</th>
+              <th>Product</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${eligibleItems
+              .map(
+                (o) => `
+              <tr>
+                <td><input type="checkbox" class="cc-mark-renewals-row-select" data-id="${o.id}" checked /></td>
+                <td>${escapeHtml(o.clientName)}</td>
+                <td class="ticket-number">${escapeHtml(o.orderNumber)}</td>
+                <td class="cc-product-cell">${escapeHtml((o.products || []).map((p) => p.name).join(', '))}</td>
+                <td class="ticket-number">${formatDateTime(o.creationDate)}</td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      `;
+      const selectAllEl = listEl.querySelector('.cc-mark-renewals-select-all');
+      const rowEls = () => [...listEl.querySelectorAll('.cc-mark-renewals-row-select')];
+      selectAllEl.addEventListener('change', () => {
+        rowEls().forEach((el) => (el.checked = selectAllEl.checked));
+      });
+      rowEls().forEach((el) => {
+        el.addEventListener('change', () => {
+          selectAllEl.checked = rowEls().every((r) => r.checked);
+        });
+      });
+    }
+
+    syncBtn.addEventListener('click', async () => {
+      syncBtn.disabled = true;
+      modalStatusEl.hidden = false;
+      modalStatusEl.className = 'status';
+      modalStatusEl.textContent = 'Checking Ingram Micro for new or changed orders, and for new terminations -- this can take a little while...';
+      listEl.hidden = true;
+      actionsEl.hidden = true;
+      try {
+        await fetchJson('/api/contract-checks/sync', 'POST');
+        await loadEligible();
+      } catch (err) {
+        modalStatusEl.className = 'status error';
+        modalStatusEl.textContent = `Error: ${err.message}`;
+      } finally {
+        syncBtn.disabled = false;
+      }
+    });
+
+    confirmButton.addEventListener('click', async () => {
+      const selectedIds = new Set(
+        [...listEl.querySelectorAll('.cc-mark-renewals-row-select')].filter((el) => el.checked).map((el) => Number(el.dataset.id))
+      );
+      if (selectedIds.size === 0) {
+        alert('Select at least one renewal first.');
+        return;
+      }
+      const selectedItems = eligibleItems.filter((o) => selectedIds.has(o.id));
+
+      const warningLines = selectedItems
+        .filter((o) => o.ticketStatus && o.ticketStatus !== 'Billing - Contract')
+        .map((o) => `Warning: ${o.orderNumber} Ticket Status is ${o.ticketStatus}`);
+      const choice = await confirmCloseTicket(selectedItems.length, warningLines);
+      if (choice === 'none') return;
+
+      confirmButton.disabled = true;
+      confirmButton.textContent = 'Marking as Done...';
+      try {
+        // One bulk-close call per client -- see this function's own
+        // top-of-block comment for why (server.js's bulk-close route
+        // enforces a single client per call, but this selection can span
+        // several).
+        const byCustomer = new Map();
+        for (const item of selectedItems) {
+          if (!byCustomer.has(item.customerId)) byCustomer.set(item.customerId, []);
+          byCustomer.get(item.customerId).push(item);
+        }
+        const failedByAction = new Map();
+        for (const items of byCustomer.values()) {
+          const result = await fetchJson('/api/contract-checks/items/bulk-close', 'POST', {
+            itemIds: items.map((i) => i.id),
+            closeTicket: choice === 'close',
+          });
+          for (const r of result.results || []) {
+            if (!r.ticketAction || r.ticketAction.ok) continue;
+            const key = JSON.stringify(r.ticketAction);
+            if (!failedByAction.has(key)) failedByAction.set(key, { error: r.ticketAction.error, orderNumbers: [] });
+            failedByAction.get(key).orderNumbers.push(r.orderNumber);
+          }
+        }
+        if (failedByAction.size > 0) {
+          const lines = [...failedByAction.values()].map(({ error, orderNumbers }) => `${orderNumbers.join(', ')}: ${error}`);
+          alert(`ALL DONE saved for every selected renewal, but some Autotask actions failed:\n${lines.join('\n')}`);
+        }
+        close();
+        await load();
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      } finally {
+        confirmButton.disabled = false;
+        confirmButton.textContent = 'Mark Selected as Done';
+      }
+    });
+
+    loadEligible();
   }
 
   // "Sent to Autotask" / "Failed: <error>" / "Not sent (left as Complete)"

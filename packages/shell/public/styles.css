@@ -6287,7 +6287,14 @@ tr.accrued-time-yellow-row th {
    remaining 1/3 for the right side"). No column heading on either side
    -- the original "Upcoming" label was removed earlier, by request. Each
    column is a plain vertical stack, not a wrapping grid -- card order
-   follows document order, not an explicit grid position. */
+   within a column is meaningful (client.js's own render() comment has
+   the full placement reasoning), unlike the original single auto-fill
+   grid this replaced. Collapses to one column on a narrow window rather
+   than squeezing two columns of already-wide tables (see
+   .about-me-table--wide below) into too little room each. Tickets
+   Dashboard and Subscriptions Expiring were both removed from this page
+   entirely, by request ("Leave off 'Tickets Dashboard' section and
+   'Subscriptions Expiring'"). */
 
 /* Match IDs -- coloured pills for the Match column plus a clickable filter-
    chip row above the table, same visual language as the published Ingram x
@@ -6362,14 +6369,34 @@ tr.accrued-time-yellow-row th {
 .mid-filter-chip.active .count {
   color: inherit;
 }
-   within a column is meaningful (client.js's own render() comment has
-   the full placement reasoning), unlike the original single auto-fill
-   grid this replaced. Collapses to one column on a narrow window rather
-   than squeezing two columns of already-wide tables (see
-   .about-me-table--wide below) into too little room each. Tickets
-   Dashboard and Subscriptions Expiring were both removed from this page
-   entirely, by request ("Leave off 'Tickets Dashboard' section and
-   'Subscriptions Expiring'"). */
+
+/* Contract Checks -- "Mark Renewals as Done" trigger button, by request:
+   every OTHER button in this toolbar (Refresh/Check IM for More/Change
+   Report) was just given the light-blue pill look (.button-link.
+   button-link--small, this dashboard's established "pill style blue
+   buttons" -- see Times' own quick-date buttons for the same wording used
+   before), but this one stays red instead -- it's a bulk, harder-to-undo
+   action, worth standing out from the others rather than blending in.
+   Same light-tint-pill shape as .button-link--small (padding/font-size/
+   radius all still come from that class -- only background/color differ
+   here), just #dc2626 red instead of the accent blue. Scoped with the
+   same class+element+class specificity as the existing .date-form
+   button.button-link--small fix above (this button lives in that same
+   toolbar), rather than reaching for !important. */
+.date-form button.button-link--small.cc-mark-renewals-btn {
+  background: color-mix(in srgb, #dc2626 15%, transparent);
+  color: #dc2626;
+}
+
+/* Widened for the "Mark Renewals as Done" popup's own small table (Client/
+   Order #/Product/Created plus a leading checkbox column) -- the default
+   .history-modal-panel's 30rem max-width (styles.css, further down) is
+   sized for a simple form, not a table. */
+.history-modal-panel.cc-mark-renewals-modal-panel {
+  width: 50rem;
+  max-width: min(50rem, 95vw);
+}
+
 .about-me-columns {
   display: grid;
   grid-template-columns: 2fr 1fr;

@@ -642,6 +642,28 @@ function listOutstandingProcessing(processType) {
   return db.prepare(`SELECT * FROM items WHERE process_type = ? AND status = 'processing'`).all(processType);
 }
 
+// "Mark Renewals as Done" popup, by request -- every not-yet-done renewal
+// order whose client has no OTHER order (of any type, including a second
+// renewal) anywhere in the synced dataset for this process type, so a bulk
+// approval here can't silently sweep past a client that also has a change/
+// cancellation/other renewal worth a closer look. Deliberately NOT scoped
+// by whatever Since date happens to be selected on the page right now --
+// "no other orders" has to mean the whole dataset, not just today's filtered
+// view, or a client's second order sitting just outside the date range
+// would make this wrongly think they only have the one.
+function listRenewalsEligibleForBulkDone(processType) {
+  return db
+    .prepare(
+      `SELECT * FROM items
+       WHERE process_type = ? AND order_type = 'renewal' AND all_done_at IS NULL
+         AND customer_id IN (
+           SELECT customer_id FROM items WHERE process_type = ? GROUP BY customer_id HAVING COUNT(*) = 1
+         )
+       ORDER BY client_name ASC`
+    )
+    .all(processType, processType);
+}
+
 // Backfill target for a real bug: sync.js's "refresh outstanding" step used
 // to only refetch rows still 'processing' -- but the actual event that
 // needs a refetch (a status flip processing -> completed, which is when
@@ -718,6 +740,7 @@ module.exports = {
   saveSyncState,
   listItemsRaw,
   listChangeEventsSince,
+  listRenewalsEligibleForBulkDone,
   listOutstandingProcessing,
   listCompletedMissingProvisioningDate,
   getItemHistory,
