@@ -12,8 +12,10 @@
   "dependencies": {
     "@dashboard/autotask-client": "*",
     "@dashboard/contract-checks": "*",
+    "@dashboard/ingram-client": "*",
     "@dashboard/ingram-subscriptions": "*",
     "@dashboard/contract-services": "*",
+    "axios": "^1.7.2",
     "express": "^4.19.2"
   }
 }
