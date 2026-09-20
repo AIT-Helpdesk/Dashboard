@@ -7,6 +7,7 @@ const {
   updateItemFields,
   listItemsRaw,
   listChangeEventsSince,
+  listRenewalsEligibleForBulkDone,
   getItemHistory,
   getToggleHistories,
   getHistoryCounts,
@@ -632,6 +633,32 @@ router.get('/', async (req, res) => {
       statusCounts,
       byClient,
     });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Mark Renewals as Done" popup's own data source -- see db.js's
+// listRenewalsEligibleForBulkDone() for the eligibility rule (a renewal,
+// not yet done, whose client has no other order at all in the synced
+// dataset). Same shapeItem()/getTicketUrl()/attachTicketDetails()
+// enrichment the main list already uses, so the popup's own warning-line
+// logic (ticket status not "Billing - Contract") works the same way the
+// existing bulk-close confirm dialog's warnings already do.
+router.get('/renewals-eligible', async (req, res) => {
+  try {
+    const processType = req.query.processType || PROCESS_TYPE;
+    const rows = listRenewalsEligibleForBulkDone(processType);
+    const items = await Promise.all(
+      rows.map(async (row) => {
+        const shaped = shapeItem(row);
+        shaped.ticketUrl = row.ticket_autotask_id ? await getTicketUrl(row.ticket_autotask_id) : null;
+        return shaped;
+      })
+    );
+    await attachTicketDetails(items);
+    res.json({ items });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
