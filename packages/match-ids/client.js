@@ -25,6 +25,7 @@ export function mount(container) {
         <button type="button" id="refresh-button">Refresh</button>
       </div>
     </header>
+    <p id="cache-note" class="inline-subtext">This data is cached for 60 minutes -- last updated: <span id="cache-note-time">checking...</span>. Click Refresh to check again now (can take a minute or two).</p>
     <div id="bucket-filters" class="mid-filter-row"></div>
     <p id="status" class="status">Loading...</p>
     <div id="summary" class="summary" hidden></div>
@@ -33,6 +34,7 @@ export function mount(container) {
 
   const filterInput = container.querySelector('#filter-input');
   const refreshButton = container.querySelector('#refresh-button');
+  const cacheNoteTimeEl = container.querySelector('#cache-note-time');
   const bucketFiltersEl = container.querySelector('#bucket-filters');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
@@ -77,6 +79,7 @@ export function mount(container) {
   function render(data) {
     statusEl.hidden = true;
     summaryEl.hidden = false;
+    cacheNoteTimeEl.textContent = formatDateTime(data.asOf);
     const counts = data.matchCounts || {};
     const matchBreakdown = ['exact', 'fuzzy', 'ambiguous', 'none']
       .filter((b) => counts[b])
