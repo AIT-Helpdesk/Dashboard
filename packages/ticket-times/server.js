@@ -59,19 +59,51 @@ async function fetchTimeEntriesInRange(client, fromKey, toKey) {
   ]);
 }
 
+// Team selector, by request ("add a Team selector dropdown like on the
+// Time Summaries page defaulting to Both") -- same three real options/
+// rules @dashboard/times' own server.js already established (see that
+// file's own Team selector comment for the full Departments/membership
+// story): Support Desk = everyone except Professional Services or
+// Leadership; Professional Services = ONLY that team; Both = everyone
+// except Leadership. Duplicated here rather than imported -- same
+// per-page-independence convention this dashboard already follows for
+// small page-specific constants (Time Summaries and Ingram Orders/Ingram
+// Subscriptions each keep their own copies of similar small logic too).
+// Defaults to "both" here specifically, by request -- Time Summaries
+// itself still defaults to Support Desk.
+const TEAM_SERVICE_DESK = 'service-desk';
+const TEAM_PROFESSIONAL_SERVICES = 'professional-services';
+const TEAM_BOTH = 'both';
+const VALID_TEAMS = new Set([TEAM_SERVICE_DESK, TEAM_PROFESSIONAL_SERVICES, TEAM_BOTH]);
+const DEFAULT_TEAM = TEAM_BOTH;
+function resolveTeam(rawTeam) {
+  return VALID_TEAMS.has(rawTeam) ? rawTeam : DEFAULT_TEAM;
+}
+// Applied to a resourceID directly (this page groups raw TimeEntries, not
+// a pre-fetched resource list, unlike Time Summaries' own
+// filterResourcesByTeam()) -- Leadership Team is already excluded
+// unconditionally above regardless of team, so "Both" needs no further
+// filtering here.
+function resourcePassesTeamFilter(resourceId, team, membership) {
+  if (team === TEAM_PROFESSIONAL_SERVICES) return membership.professionalServices.has(resourceId);
+  if (team === TEAM_BOTH) return true;
+  return !membership.professionalServices.has(resourceId);
+}
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const router = express.Router();
 
 router.get('/', async (req, res) => {
   const from = req.query.from;
   const to = req.query.to;
+  const team = resolveTeam((req.query.team || '').toString());
   if (!from || !DATE_RE.test(from)) return res.status(400).json({ error: 'Query param "from" is required in YYYY-MM-DD format.' });
   if (!to || !DATE_RE.test(to)) return res.status(400).json({ error: 'Query param "to" is required in YYYY-MM-DD format.' });
   if (to < from) return res.status(400).json({ error: '"to" must not be before "from".' });
 
   try {
     const client = await getClient();
-    const [rawEntries, { leadership }] = await Promise.all([fetchTimeEntriesInRange(client, from, to), fetchServiceDeskAndProfessionalServicesMembership(client)]);
+    const [rawEntries, membership] = await Promise.all([fetchTimeEntriesInRange(client, from, to), fetchServiceDeskAndProfessionalServicesMembership(client)]);
 
     // Leadership Team members omitted entirely, by request -- their own
     // time entries are dropped before anything else builds off them, not
@@ -79,11 +111,12 @@ router.get('/', async (req, res) => {
     // technician's totals, this page's own grand total, or show up as
     // their own group. A ticket that also has a real entry from a
     // non-Leadership technician still shows that technician's own entry
-    // normally -- this excludes the PERSON, not the ticket.
-    const entries = rawEntries.filter((e) => !leadership.has(e.resourceID));
+    // normally -- this excludes the PERSON, not the ticket. Team filter
+    // (Support Desk/Professional Services/Both) applied in the same pass.
+    const entries = rawEntries.filter((e) => !membership.leadership.has(e.resourceID) && resourcePassesTeamFilter(e.resourceID, team, membership));
 
     if (entries.length === 0) {
-      return res.json({ from, to, totalCount: 0, totalHoursWorked: 0, totalDollars: 0, totalInvoicedDollars: 0, totalPostedDollars: 0, totalPendingDollars: 0, totalTcEliteDollars: 0, byResource: [] });
+      return res.json({ from, to, team, totalCount: 0, totalHoursWorked: 0, totalDollars: 0, totalInvoicedDollars: 0, totalPostedDollars: 0, totalPendingDollars: 0, totalTcEliteDollars: 0, byResource: [] });
     }
 
     const ticketIds = [...new Set(entries.map((e) => e.ticketID))];
@@ -256,6 +289,7 @@ router.get('/', async (req, res) => {
     res.json({
       from,
       to,
+      team,
       totalCount: new Set(rows.map((r) => r.id)).size,
       totalHoursWorked: rows.reduce((sum, r) => sum + r.hoursWorked, 0),
       totalDollars: rows.reduce((sum, r) => sum + r.dollars, 0),
