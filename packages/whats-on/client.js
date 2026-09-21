@@ -285,6 +285,7 @@ export function mount(container) {
   const scStatusEl = container.querySelector('#sc-status');
   const scColumnWrapEl = container.querySelector('#sc-column-wrap');
 
+  const ttSectionEl = container.querySelector('.tt-section');
   const ttRefreshButton = container.querySelector('#tt-refresh-button');
   const ttStatusEl = container.querySelector('#tt-status');
   const ttColumnsEl = container.querySelector('#tt-columns');
@@ -402,6 +403,28 @@ export function mount(container) {
   }
   new ResizeObserver(syncServiceCallsHeight).observe(scorecardsWrapEl);
   window.addEventListener('resize', syncServiceCallsHeight);
+
+  // Scorecards' own initial loading placeholder is much shorter than its
+  // real, loaded content -- and Service Calls' box (above) is kept in
+  // lock-step with Scorecards' height, so on a fresh page load, where
+  // Service Calls' own data tends to arrive first, Service Calls briefly
+  // renders tiny and then visibly jumps taller once Scorecards' slower
+  // fetch finally lands. By request, Scorecards gets a floor of its own --
+  // at least as tall as Today & Tomorrow -- so both boxes start (and stay)
+  // reasonably sized from first paint, real content growing past that
+  // floor exactly as before. Same live-ResizeObserver approach as
+  // syncServiceCallsHeight above (a real measurement, not a guessed pixel
+  // value, and self-updates if Today & Tomorrow's own height ever
+  // changes) rather than a fixed CSS min-height.
+  function syncScorecardsMinHeight() {
+    if (window.matchMedia(NARROW_LAYOUT_QUERY).matches) {
+      scorecardsWrapEl.style.minHeight = '';
+      return;
+    }
+    scorecardsWrapEl.style.minHeight = `${ttSectionEl.offsetHeight}px`;
+  }
+  new ResizeObserver(syncScorecardsMinHeight).observe(ttSectionEl);
+  window.addEventListener('resize', syncScorecardsMinHeight);
 
   if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
   else loadTodayTomorrow(justConnectedStrety);
