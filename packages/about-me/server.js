@@ -5,8 +5,6 @@ const {
   fetchByFieldIn,
   getPicklistLabels,
   getTicketUrl,
-  getTicketUdf,
-  resolveResourceName,
   resolveCompanyName,
   resolveResourceIdByEmail,
   fetchServiceDeskAndProfessionalServicesMembership,
@@ -246,44 +244,6 @@ async function fetchTicketTimesSection(client, resourceId, fromKey, toKey) {
   return rows;
 }
 
-// ---- Asked for Review -- this resource's own, within the picked date
-// range (see the shared date-range helper above). Same real definition
-// @dashboard/asked-for-review already uses ("Ask For Review" UDF is ASK,
-// on a ticket completed within the range), re-scoped to
-// completedByResourceID. ----
-async function fetchAskedForReviewSection(client, resourceId, fromKey, toKey) {
-  const startISO = isoForKey(fromKey);
-  const endISO = isoForKey(addDaysToKey(toKey, 1)); // exclusive -- covers the whole "to" day
-  const [completed, billing] = await Promise.all([
-    listAll(client.tickets, [
-      { op: 'eq', field: 'status', value: 5 },
-      { op: 'eq', field: 'completedByResourceID', value: resourceId },
-      { op: 'gte', field: 'completedDate', value: startISO },
-      { op: 'lt', field: 'completedDate', value: endISO },
-    ]),
-    listAll(client.tickets, [
-      { op: 'eq', field: 'status', value: 20 },
-      { op: 'eq', field: 'completedByResourceID', value: resourceId },
-      { op: 'gte', field: 'resolvedDateTime', value: startISO },
-      { op: 'lt', field: 'resolvedDateTime', value: endISO },
-    ]),
-  ]);
-  const tickets = excludeMonitoringAlerts([...completed, ...billing]).filter((t) => getTicketUdf(t, 'Ask For Review') === 'ASK');
-  const rows = [];
-  for (const t of tickets) {
-    rows.push({
-      id: t.id,
-      ticketNumber: t.ticketNumber,
-      ticketUrl: await getTicketUrl(t.id),
-      title: t.title,
-      company: await resolveCompanyName(client, t.companyID),
-      billingContract: t.status === 20,
-    });
-  }
-  rows.sort((a, b) => a.company.localeCompare(b.company));
-  return rows;
-}
-
 // ---- Accrued Time -- this resource's own qualifying tickets, "qualifying"
 // meaning real Accrue-* activity within the picked date range (see the
 // shared date-range helper above). Same real "Accrue-" qualification +
@@ -378,52 +338,100 @@ async function fetchAccruedTimeSection(client, resourceId, fromKey, toKey) {
   return rows;
 }
 
-// ---- Tickets Dashboard widgets -- Critical (P1), company-wide, NOT
-// resource-filtered. Same real priority value @dashboard/tickets-
-// dashboard already confirmed (4 = "P1 - CRITICAL"). Only used by
-// Deadlines below now -- the Tickets Dashboard and Subscriptions
-// Expiring cards themselves were removed from this page, by request
-// ("Leave off 'Tickets Dashboard' section and 'Subscriptions
-// Expiring'"). ----
-const CRITICAL_PRIORITY_VALUE = 4;
-async function fetchOpenTicketsByPriority(client, priorityValue, statusLabels) {
-  const tickets = await listAll(client.tickets, [
-    { op: 'notExist', field: 'completedDate' },
-    { op: 'eq', field: 'priority', value: priorityValue },
-  ]);
-  const rows = [];
-  for (const t of excludeMonitoringAlerts(tickets)) {
-    rows.push({
-      id: t.id,
-      ticketNumber: t.ticketNumber,
-      ticketUrl: await getTicketUrl(t.id),
-      title: t.title,
-      company: await resolveCompanyName(client, t.companyID),
-      status: statusLabels.get(t.status) || `#${t.status}`,
-      resourceName: t.assignedResourceID ? await resolveResourceName(client, t.assignedResourceID) : 'Unassigned',
-      createDate: t.createDate || null,
-      dueDateTime: t.dueDateTime || null, // same real field @dashboard/workshop's own "Ticket Due Date" column already uses; only used by Deadlines below
-    });
+// ---- Ticket Counts widget (under Ticket Times), by request -- four real
+// ticket lists (not just counts, since the donut cards are clickable, by
+// request, "open a list of tickets including ticket number, client and
+// title"): this resource's own overdue tickets, this resource's own
+// tickets due today, everyone ELSE's tickets due today (company-wide
+// due-today minus this resource's own), and this resource's own open
+// tickets overall regardless of due date (by request, "a widget for all
+// open tickets in the name of the resource"). Same real "open ticket"
+// (notExist completedDate) + excludeMonitoringAlerts() definition every
+// other open-ticket query on this page already uses -- deliberately not
+// restricted to any one priority (unlike the old Tickets Dashboard/
+// Deadlines widgets this replaced, which were Critical (P1) only), and
+// split by assignedResourceID (a ticket's real named owner). Company-
+// wide, NOT scoped by the picked date range above -- always "today" for
+// the due-date buckets, "right now" for the open-tickets-overall one,
+// same as Service Calls' own fixed window.
+async function fetchTicketDueCountsSection(client, resourceId) {
+  // No `exist: dueDateTime` filter (unlike the earlier due-date-only
+  // version of this query) -- allOpenMine below needs every open ticket
+  // assigned to this resource, due date or not.
+  const tickets = excludeMonitoringAlerts(await listAll(client.tickets, [{ op: 'notExist', field: 'completedDate' }]));
+  const { startISO: todayStartISO, endISO: todayEndISO } = aestDayBoundsIso(todayAestKey());
+  const overdueMine = [];
+  const dueTodayMine = [];
+  const dueTodayOthers = [];
+  const allOpenMine = [];
+  for (const t of tickets) {
+    const isMine = t.assignedResourceID === resourceId;
+    if (isMine) allOpenMine.push(t);
+    if (!t.dueDateTime) continue;
+    if (t.dueDateTime < todayStartISO) {
+      if (isMine) overdueMine.push(t);
+    } else if (t.dueDateTime < todayEndISO) {
+      if (isMine) dueTodayMine.push(t);
+      else dueTodayOthers.push(t);
+    }
   }
-  rows.sort((a, b) => (a.ticketNumber || '').localeCompare(b.ticketNumber || ''));
-  return rows;
+  // Ticket #/Client/Title only, by request -- same fields every other
+  // ticket-table row on this page already carries (Completed Tickets'
+  // own rows are the closest shape). getTicketUrl()/resolveCompanyName()
+  // are both cheap here (no real per-ticket API call -- see their own
+  // comments in @dashboard/autotask-client), so a plain sequential loop
+  // is fine, same convention fetchCompletedTicketsSection() etc. already
+  // use above rather than a concurrency-limited fetch.
+  async function shapeRows(rows) {
+    const shaped = [];
+    for (const t of rows) {
+      shaped.push({
+        id: t.id,
+        ticketNumber: t.ticketNumber,
+        ticketUrl: await getTicketUrl(t.id),
+        title: t.title,
+        company: await resolveCompanyName(client, t.companyID),
+      });
+    }
+    shaped.sort((a, b) => (a.company || '').localeCompare(b.company || ''));
+    return shaped;
+  }
+  const [overdueMineRows, dueTodayMineRows, dueTodayOthersRows, allOpenMineRows] = await Promise.all([
+    shapeRows(overdueMine),
+    shapeRows(dueTodayMine),
+    shapeRows(dueTodayOthers),
+    shapeRows(allOpenMine),
+  ]);
+  return { overdueMine: overdueMineRows, dueTodayMine: dueTodayMineRows, dueTodayOthers: dueTodayOthersRows, allOpenMine: allOpenMineRows };
 }
-// ---- Deadlines -- company-wide, NOT resource-filtered. Same real
-// selection criteria as the Tickets Dashboard's own Critical (P1) widget
-// (open tickets, no completedDate, priority = P1-CRITICAL, excluding
-// monitoring alerts), by request ("Use the selection criteria for the
-// first Critical (P1) widget on the Tickets Dashboard page"), further
-// narrowed to just the ones that have already hit or passed their own
-// real Tickets.dueDateTime (by request, "Due Today or earlier") -- same
-// real field @dashboard/workshop's own "Ticket Due Date" column already
-// uses. This is the only remaining consumer of fetchOpenTicketsByPriority()
-// now that the Tickets Dashboard and Subscriptions Expiring cards
-// themselves have been removed from this page, by request. ----
-async function fetchDeadlinesSection(client) {
-  const statusLabels = await getPicklistLabels(client.tickets, 'status');
-  const critical = await fetchOpenTicketsByPriority(client, CRITICAL_PRIORITY_VALUE, statusLabels);
-  const todayEndISO = aestDayBoundsIso(todayAestKey()).endISO; // exclusive end of today, AEST
-  return critical.filter((t) => t.dueDateTime && t.dueDateTime < todayEndISO).sort((a, b) => a.dueDateTime.localeCompare(b.dueDateTime));
+
+// ---- Utilization, under Ticket Counts, by request. Deliberately the
+// simplest honest definition available from data this page already has --
+// what share of this resource's OWN logged hours (any TimeEntries row,
+// picked date range) went to ticket work specifically, vs internal/admin/
+// AITTIME time with no ticket attached at all. NOT the fuller "Total Tech
+// Hours (at work) / Tech Hours Available / Total Client Hours Billable"
+// picture Time Summaries' own Hours Summary box builds (that needs Normal
+// Hours per day + Leave + Public Holidays layered in too, real complexity
+// that page's own server.js already owns) -- this is a lighter, single-
+// resource slice, not a re-implementation of that page. Same real
+// TimeEntries.dateWorked field/range handling @dashboard/ticket-times and
+// this page's own fetchTicketTimesSection() already use.
+async function fetchUtilizationSection(client, resourceId, fromKey, toKey) {
+  const entries = await listAll(client.timeEntries, [
+    { op: 'gte', field: 'dateWorked', value: `${fromKey}T00:00:00.000Z` },
+    { op: 'lt', field: 'dateWorked', value: `${addDaysToKey(toKey, 1)}T00:00:00.000Z` },
+    { op: 'eq', field: 'resourceID', value: resourceId },
+  ]);
+  let hoursLogged = 0;
+  let ticketHours = 0;
+  for (const e of entries) {
+    const hours = e.hoursWorked || 0;
+    hoursLogged += hours;
+    if (e.ticketID) ticketHours += hours;
+  }
+  const utilizationPct = hoursLogged > 0 ? (ticketHours / hoursLogged) * 100 : 0;
+  return { hoursLogged, ticketHours, utilizationPct };
 }
 
 // ---- Strety Tasks -- this resource's own open todos. Uses the VIEWER's
@@ -716,12 +724,12 @@ router.get('/', async (req, res) => {
       }
     };
 
-    const [serviceCalls, deadlines, completedTickets, ticketTimesToday, askedForReview, accruedTime, stretyTasks, shifts] = await Promise.all([
+    const [serviceCalls, completedTickets, ticketTimesToday, ticketDueCounts, utilization, accruedTime, stretyTasks, shifts] = await Promise.all([
       settle(() => fetchServiceCallsSection(client, resourceId)),
-      settle(() => fetchDeadlinesSection(client)),
       settle(() => fetchCompletedTicketsSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchTicketTimesSection(client, resourceId, fromKey, toKey)),
-      settle(() => fetchAskedForReviewSection(client, resourceId, fromKey, toKey)),
+      settle(() => fetchTicketDueCountsSection(client, resourceId)),
+      settle(() => fetchUtilizationSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchAccruedTimeSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchStretyTasksSection(viewerEmail, resource.email)),
       settle(() => fetchShiftsSection(client, resourceId, resource.name, resource.locationID, toKey)),
@@ -733,10 +741,10 @@ router.get('/', async (req, res) => {
       from: fromKey,
       to: toKey,
       serviceCalls,
-      deadlines,
       completedTickets,
       ticketTimesToday,
-      askedForReview,
+      ticketDueCounts,
+      utilization,
       accruedTime,
       stretyTasks,
       shifts,

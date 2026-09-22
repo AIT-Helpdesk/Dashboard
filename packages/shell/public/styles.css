@@ -6399,7 +6399,9 @@ tr.accrued-time-yellow-row th {
 
 .about-me-columns {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  /* 3fr/2fr -- left column 3/5, right column 2/5, by request (was 2fr/1fr,
+     2/3 and 1/3). */
+  grid-template-columns: 3fr 2fr;
   gap: 1rem;
   align-items: start;
 }
@@ -6459,6 +6461,42 @@ tr.accrued-time-yellow-row th {
 .about-me-card-full-link {
   float: right;
   margin-left: 0.5rem;
+}
+/* Minimize/maximize toggle on a card's own heading, by request (Completed
+   Tickets/Ticket Times default minimized, Accrued Time defaults maximized)
+   -- .toggle-arrow itself (the > / v indicator) already exists dashboard-
+   wide (used by Ticket Times' own by-resource groups, styles.css above),
+   reused here as-is; this just makes the heading clickable, same
+   cursor/no-text-select treatment .resource-group-header--toggle already
+   gives its own heading, without that class's hover background (a plain
+   .section-heading has no card-header fill to darken the way
+   .resource-group-header's own solid background does). */
+.about-me-card-heading--toggle {
+  cursor: pointer;
+  user-select: none;
+}
+/* Collapsed card body is fully removed from layout (matches every other
+   [hidden] on this dashboard) -- toggled via the .hidden attribute in
+   client.js, not a class, so no rule is needed here beyond the browser's
+   own default [hidden] handling. */
+
+/* Ticket Counts widget (under Ticket Times) -- donut-ring cards, by
+   request ("put those numbers in circular widgets like on the Tickets
+   Dashboard"). No new CSS needed here: it reuses Tickets Dashboard's own
+   .datto-card-grid/.datto-card/.datto-donut-* classes as-is (see
+   client.js's own comment on ticketCountDonutHtml() for the full
+   reasoning) -- an earlier flat-number version of this widget lived here
+   first, replaced entirely rather than left dead. */
+/* The Ticket Counts widget's own click-through popup (Ticket #/Client/
+   Title), by request -- widened past the default .history-modal-panel's
+   30rem (a ticket Title can run long), same two-class specificity fix
+   (.history-modal-panel.<page>-modal-panel) Contract Checks' own
+   .cc-mark-renewals-modal-panel and .cc-change-report-modal-panel already
+   use for the identical "a lone class loses to .history-modal-panel's own
+   width" issue. */
+.history-modal-panel.about-me-ticket-count-modal-panel {
+  width: 44rem;
+  max-width: min(44rem, 95vw);
 }
 /* Shifts card's own per-entry colour pill, by request ("Colour the
    Shifts Items in a style similar to the buttons on this page but using
