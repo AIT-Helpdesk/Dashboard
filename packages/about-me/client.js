@@ -26,6 +26,15 @@ let lastFrom = null;
 let lastTo = null;
 let lastActiveQuickButtonId = 'am-quick-today-button';
 
+// Minimize/maximize state for the three collapsible cards, by request --
+// Completed Tickets and Ticket Times default minimized, Accrued Time
+// defaults maximized. Module-scope (not inside mount()), same "survives a
+// navigate-away-and-back, and a resource switch/re-search" convention
+// every other module-scope state on this page already follows -- a user's
+// own minimize choice shouldn't silently reset just because they picked a
+// new date range or resource.
+let collapsedCards = { completedTickets: true, ticketTimes: true, accruedTime: false };
+
 // Deliberately at true MODULE scope, not inside mount() -- same real
 // ReferenceError-on-revisit bug @dashboard/my-strety-tasks' own client.js
 // hit and documented (a `const` declared inside mount() sits after the
@@ -78,28 +87,23 @@ function categorizeShift(displayName) {
 // Each card's own "jump to the full page" button, by request -- {href,
 // label} passed straight into cardHtml()'s own fullPageLink param (see
 // its own comment). "<Item> Page" labels, by request ("instead of
-// labelling the buttons 'Show All {Item}' call them '{Item} Page'") --
-// Deadlines keeps its own original "Open Tickets Dashboard" label
-// instead, by request ("Leave the two 'Open Tickets Dashboard' as they
-// are"). Points at #tickets-dashboard -- Deadlines is a narrower view of
-// that exact same Critical (P1) data, there's no separate "Deadlines"
-// page of its own. Strety Tasks points at My Strety Tasks (#my-strety-
-// tasks), same real target What's On's own "Show All of My Strety Tasks"
-// link already uses -- worth knowing that page always shows the SIGNED-
-// IN VIEWER's own tasks, not necessarily the resource currently selected
-// here (see this package's own README).
+// labelling the buttons 'Show All {Item}' call them '{Item} Page'").
+// Strety Tasks points at My Strety Tasks (#my-strety-tasks), same real
+// target What's On's own "Show All of My Strety Tasks" link already uses
+// -- worth knowing that page always shows the SIGNED-IN VIEWER's own
+// tasks, not necessarily the resource currently selected here (see this
+// package's own README).
 //
 // No entries for Tickets Dashboard or Subscriptions Expiring -- both
 // cards were removed from this page entirely, by request ("Leave off
-// 'Tickets Dashboard' section and 'Subscriptions Expiring'"). The second
-// original "Open Tickets Dashboard" button (Tickets Dashboard's own) was
-// removed along with that card.
+// 'Tickets Dashboard' section and 'Subscriptions Expiring'"). Asked for
+// Review and Deadlines were later removed too, by request -- their own
+// entries here went with them. Ticket Counts and Utilization have no
+// entry either -- neither has a dedicated page of its own.
 const FULL_PAGE_LINKS = {
   serviceCalls: { href: '#service-calls', label: 'Service Calls Page' },
-  deadlines: { href: '#tickets-dashboard', label: 'Open Tickets Dashboard' },
   completedTickets: { href: '#completed-tickets', label: 'Completed Tickets Page' },
   ticketTimes: { href: '#ticket-times', label: 'Ticket Times Page' },
-  askedForReview: { href: '#asked-for-review', label: 'Asked for Review Page' },
   accruedTime: { href: '#accrued-time', label: 'Accrued Time Page' },
   stretyTasks: { href: '#my-strety-tasks', label: 'My Strety Tasks Page' },
   shifts: { href: '#teams-shifts', label: 'Shifts Page' },
@@ -161,6 +165,33 @@ export function mount(container) {
     if (link) {
       e.preventDefault();
       window.open(link.href, '_blank', 'noopener,noreferrer,width=1200,height=900');
+      return;
+    }
+    // Minimize/maximize toggle -- the whole heading is clickable (bigger
+    // target than just the arrow), EXCEPT the "<Item> Page" link inside
+    // it, which should navigate normally rather than toggle. DOM mutation
+    // only (no re-render) -- same "toggle in place" approach Ticket
+    // Times' own by-resource groups use, cheaper than rebuilding the
+    // whole card and it means the rest of the page's scroll position
+    // isn't disturbed either.
+    const heading = e.target.closest('.about-me-card-heading--toggle');
+    if (heading && !e.target.closest('a')) {
+      const key = heading.dataset.collapseKey;
+      collapsedCards[key] = !collapsedCards[key];
+      heading.nextElementSibling.hidden = collapsedCards[key];
+      heading.querySelector('.toggle-arrow').textContent = collapsedCards[key] ? '▸' : '▾';
+      return;
+    }
+    // Ticket Counts widget -- clicking a donut card opens a popup listing
+    // that bucket's real tickets, by request. Reads straight out of
+    // lastData (module-scope, already the exact data this card was drawn
+    // from) rather than a second fetch -- the rows are already right
+    // here, this is just showing more of what's already loaded.
+    const donutCard = e.target.closest('.about-me-ticket-count-card');
+    if (donutCard && lastData?.ticketDueCounts?.ok) {
+      const bucket = donutCard.dataset.bucket;
+      const rows = lastData.ticketDueCounts.data[bucket] || [];
+      openTicketCountModal(donutCard.dataset.modalTitle, rows);
     }
   });
 
@@ -169,12 +200,25 @@ export function mount(container) {
     if (Number.isInteger(id)) load(id);
   });
 
+  // Auto-load only when there's exactly one real choice -- by request,
+  // "when the dropdown list is present, don't autoload the page with the
+  // first person. Do autoload when it's for one person." canSelectOthers
+  // true means the dropdown is showing (Leadership, several real people
+  // to pick from) -- silently loading resources[0] (or even the viewer's
+  // own default) used to guess which one they wanted; now it just waits
+  // for an explicit dropdown pick. !canSelectOthers means the viewer is
+  // locked to their own single resource (no dropdown at all, nothing to
+  // choose) -- that one case still auto-loads, same as before. A
+  // `lastResourceId` already set (a remount, or navigating back to this
+  // page) is never treated as "the first person" either way -- it's the
+  // viewer's own earlier real pick, restored, not a guess.
   async function loadResourceList() {
     if (allResources) {
       renderResourceOptions();
       if (!canSelectOthers && !ownResourceInPool) return; // already showed the "not available" status below, nothing to load
       if (lastResourceId) load(lastResourceId);
-      else if (allResources.length > 0) load(allResources[0].id);
+      else if (!canSelectOthers) load(ownDefaultResourceId || (allResources[0] && allResources[0].id));
+      else promptForResourcePick();
       return;
     }
     try {
@@ -196,17 +240,30 @@ export function mount(container) {
         statusEl.textContent = 'About Me isn’t available for your account (not in Support Desk or Professional Services).';
         return;
       }
-      const startId = lastResourceId || data.defaultResourceId || (allResources[0] && allResources[0].id);
-      if (startId) load(startId);
-      else {
-        statusEl.hidden = false;
-        statusEl.textContent = 'No resources found in Support Desk or Professional Services.';
+      if (lastResourceId) {
+        load(lastResourceId);
+        return;
       }
+      if (!canSelectOthers) {
+        const startId = data.defaultResourceId || (allResources[0] && allResources[0].id);
+        if (startId) load(startId);
+        else {
+          statusEl.hidden = false;
+          statusEl.textContent = 'No resources found in Support Desk or Professional Services.';
+        }
+        return;
+      }
+      promptForResourcePick();
     } catch (err) {
       statusEl.hidden = false;
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
     }
+  }
+  function promptForResourcePick() {
+    statusEl.hidden = false;
+    statusEl.className = 'status';
+    statusEl.textContent = 'Pick a resource above to load their page.';
   }
   // The dropdown itself is Leadership Team only, by request ("Allow the
   // Resource dropdown at the top only for people logged in who are
@@ -220,7 +277,16 @@ export function mount(container) {
       resourceLabelEl.textContent = 'Resource';
       resourceInput.hidden = false;
       resourceLockedNameEl.hidden = true;
-      resourceInput.innerHTML = allResources.map((r) => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
+      // Blank leading option, shown only while nothing's been picked yet
+      // (no lastResourceId) -- without it, the browser's own default
+      // "first option pre-selected" behaviour would visually show a real
+      // person as chosen despite nothing having loaded for them, and
+      // picking that SAME already-shown option wouldn't even fire a
+      // 'change' event (plain <select> behaviour), silently doing
+      // nothing. Dropped once a real pick exists (load() itself sets
+      // resourceInput.value, so the normal option shows selected then).
+      const placeholder = lastResourceId ? '' : '<option value="" selected disabled hidden>Pick a resource...</option>';
+      resourceInput.innerHTML = placeholder + allResources.map((r) => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
       return;
     }
     resourceLabelEl.textContent = 'Viewing';
@@ -366,28 +432,24 @@ export function mount(container) {
   // Two columns -- swapped, by request ("Put all the sections currently
   // on the right on the left and all the left items onto the right"):
   // left is now the date-range-scoped activity (Completed Tickets,
-  // Accrued Time, Ticket Times, Asked for Review), right is Shifts
-  // (moved to the TOP of this side, by request) followed by the four
-  // sections the date range above doesn't touch (Service Calls,
-  // Deadlines, Strety Tasks). No column heading on either side, by
+  // Accrued Time, Ticket Times, Ticket Counts, Utilization), right is
+  // Shifts (moved to the TOP of this side, by request) followed by
+  // Service Calls and Strety Tasks. No column heading on either side, by
   // request (the original "Upcoming" label was removed earlier). Tickets
   // Dashboard and Subscriptions Expiring were both removed from this
   // page entirely, by request ("Leave off 'Tickets Dashboard' section
-  // and 'Subscriptions Expiring'").
+  // and 'Subscriptions Expiring'"); Asked for Review and Deadlines were
+  // later removed too, by request.
   function render(data) {
     statusEl.hidden = true;
     const leftHtml = [
       completedTicketsCardHtml(data.completedTickets, data.from, data.to),
       accruedTimeCardHtml(data.accruedTime, data.from, data.to),
       ticketTimesCardHtml(data.ticketTimesToday, data.from, data.to),
-      askedForReviewCardHtml(data.askedForReview, data.from, data.to),
+      ticketDueCountsCardHtml(data.ticketDueCounts),
+      utilizationCardHtml(data.utilization, data.from, data.to),
     ].join('');
-    const rightHtml = [
-      shiftsCardHtml(data.shifts),
-      serviceCallsCardHtml(data.serviceCalls),
-      deadlinesCardHtml(data.deadlines),
-      stretyTasksCardHtml(data.stretyTasks),
-    ].join('');
+    const rightHtml = [shiftsCardHtml(data.shifts), serviceCallsCardHtml(data.serviceCalls), stretyTasksCardHtml(data.stretyTasks)].join('');
     resultsEl.innerHTML = `
       <div class="about-me-column">${leftHtml}</div>
       <div class="about-me-column">${rightHtml}</div>
@@ -414,14 +476,32 @@ export function mount(container) {
   // reasoning What's On's own footerLink already established -- jumping
   // to the full page is useful in every case, not just when there's data
   // to show.
-  function cardHtml(title, subtitle, innerHtml, fullPageLink) {
+  // `collapseKey`, when given, makes this card's own heading a minimize/
+  // maximize toggle -- by request (Completed Tickets/Ticket Times default
+  // minimized, Accrued Time defaults maximized; every other card on this
+  // page stays permanently expanded, unaffected). State is read from/
+  // written to collapsedCards (module-scope, see its own comment) rather
+  // than tracked locally here, so it survives this card being rebuilt by
+  // a fresh render() (a new search, a resource switch) instead of
+  // silently resetting.
+  function cardHtml(title, subtitle, innerHtml, fullPageLink, collapseKey) {
     const buttonHtml = fullPageLink
       ? ` <a class="button-link button-link--small about-me-card-full-link" href="${escapeHtml(fullPageLink.href)}">${escapeHtml(fullPageLink.label)}</a>`
       : '';
+    const titleHtml = `${escapeHtml(title)}${subtitle ? ` <span class="inline-subtext">${escapeHtml(subtitle)}</span>` : ''}${buttonHtml}`;
+    if (!collapseKey) {
+      return `
+        <div class="about-me-card">
+          <h2 class="section-heading">${titleHtml}</h2>
+          ${innerHtml}
+        </div>
+      `;
+    }
+    const collapsed = collapsedCards[collapseKey];
     return `
       <div class="about-me-card">
-        <h2 class="section-heading">${escapeHtml(title)}${subtitle ? ` <span class="inline-subtext">${escapeHtml(subtitle)}</span>` : ''}${buttonHtml}</h2>
-        ${innerHtml}
+        <h2 class="section-heading about-me-card-heading--toggle" data-collapse-key="${collapseKey}"><span class="toggle-arrow">${collapsed ? '▸' : '▾'}</span>${titleHtml}</h2>
+        <div${collapsed ? ' hidden' : ''}>${innerHtml}</div>
       </div>
     `;
   }
@@ -476,46 +556,14 @@ export function mount(container) {
       </table></div>`;
   }
 
-  // ---- Deadlines -- company-wide (every resource), by request. Same
-  // real Critical (P1) selection criteria as the Tickets Dashboard card
-  // below (statusColored red -- every ticket here IS Critical), narrowed
-  // to just the ones due today or already overdue (server.js). Same
-  // table shape as Tickets Dashboard's own groups, with a "Due" subtext
-  // instead of a create-time one. ----
-  function deadlinesCardHtml(section) {
-    if (!section.ok) return cardHtml('Deadlines', 'Due today or earlier — everyone', errorNote(section), FULL_PAGE_LINKS.deadlines);
-    if (section.data.length === 0)
-      return cardHtml('Deadlines (0)', 'Due today or earlier — everyone', emptyNote('Nothing overdue or due today.'), FULL_PAGE_LINKS.deadlines);
-    return cardHtml(
-      `Deadlines (${section.data.length})`,
-      'Due today or earlier — everyone',
-      `<div class="about-me-table-wrap"><table class="about-me-table about-me-table--wide">
-        <thead><tr class="shaded-row"><th>Status</th><th>Ticket #</th><th>Client</th><th>Title</th><th>Resource</th></tr></thead>
-        <tbody>${section.data
-          .map(
-            (t) => `
-          <tr>
-            <td>${ticketsDashboardStatusCellHtml(t.status, true)}</td>
-            <td class="ticket-number">${ticketNumberHtml(t)}<br><span class="inline-subtext">Due ${escapeHtml(formatShortDateFromIso(t.dueDateTime))}</span></td>
-            <td>${escapeHtml(t.company)}</td>
-            <td>${escapeHtml(t.title)}</td>
-            <td>${ticketsDashboardResourceCellHtml(t.resourceName)}</td>
-          </tr>`
-          )
-          .join('')}</tbody>
-      </table></div>`,
-      FULL_PAGE_LINKS.deadlines
-    );
-  }
-
   // ---- Completed Tickets -- same 3 columns @dashboard/completed-tickets'
-  // own table shows (Company, Ticket #, Title), minus its Time/Ask-for-
-  // Review columns (not tracked by this section, and Asked for Review is
-  // already its own card below). ----
+  // own table shows (Company, Ticket #, Title), minus its Time column
+  // (not tracked by this section). ----
   function completedTicketsCardHtml(section, from, to) {
     const rangeLabel = dateRangeLabel(from, to);
-    if (!section.ok) return cardHtml('Completed Tickets', rangeLabel, errorNote(section), FULL_PAGE_LINKS.completedTickets);
-    if (section.data.length === 0) return cardHtml('Completed Tickets (0)', rangeLabel, emptyNote('None in this range.'), FULL_PAGE_LINKS.completedTickets);
+    if (!section.ok) return cardHtml('Completed Tickets', rangeLabel, errorNote(section), FULL_PAGE_LINKS.completedTickets, 'completedTickets');
+    if (section.data.length === 0)
+      return cardHtml('Completed Tickets (0)', rangeLabel, emptyNote('None in this range.'), FULL_PAGE_LINKS.completedTickets, 'completedTickets');
     return cardHtml(
       `Completed Tickets (${section.data.length})`,
       rangeLabel,
@@ -532,7 +580,8 @@ export function mount(container) {
           )
           .join('')}</tbody>
       </table></div>`,
-      FULL_PAGE_LINKS.completedTickets
+      FULL_PAGE_LINKS.completedTickets,
+      'completedTickets'
     );
   }
 
@@ -543,8 +592,9 @@ export function mount(container) {
   // that page's own formatHours() uses. ----
   function ticketTimesCardHtml(section, from, to) {
     const rangeLabel = dateRangeLabel(from, to);
-    if (!section.ok) return cardHtml('Ticket Times', rangeLabel, errorNote(section), FULL_PAGE_LINKS.ticketTimes);
-    if (section.data.length === 0) return cardHtml('Ticket Times (0)', rangeLabel, emptyNote('No time logged in this range.'), FULL_PAGE_LINKS.ticketTimes);
+    if (!section.ok) return cardHtml('Ticket Times', rangeLabel, errorNote(section), FULL_PAGE_LINKS.ticketTimes, 'ticketTimes');
+    if (section.data.length === 0)
+      return cardHtml('Ticket Times (0)', rangeLabel, emptyNote('No time logged in this range.'), FULL_PAGE_LINKS.ticketTimes, 'ticketTimes');
     // Sum up in the card's own title, alongside the row count, by
     // request ("REMOVE THIS [the column-header sum]. I WANT IT UP IN THE
     // HEADING WHERE the sum of items is") -- moved out of the "Time"
@@ -568,36 +618,200 @@ export function mount(container) {
           )
           .join('')}</tbody>
       </table></div>`,
-      FULL_PAGE_LINKS.ticketTimes
+      FULL_PAGE_LINKS.ticketTimes,
+      'ticketTimes'
     );
   }
 
-  // ---- Asked for Review -- same Company/Ticket #/Title columns
-  // @dashboard/asked-for-review's own table shows, including its blue
-  // .cell-flag-blue Title flag for a Billing - Contract ticket. Its own
-  // Completed By column is dropped -- redundant here, this card is
-  // already scoped to one resource. ----
-  function askedForReviewCardHtml(section, from, to) {
+  // ---- Ticket Counts widget, under Ticket Times, by request -- three
+  // plain counts: this resource's own overdue tickets, this resource's
+  // own tickets due today, and everyone else's tickets due today. Always
+  // "today", company-wide otherwise unfiltered -- NOT scoped by the
+  // date-range picker above (same as Deadlines/Service Calls). No
+  // minimize toggle (nothing requested for this one) and no "<Item> Page"
+  // link (no dedicated page behind this widget).
+  //
+  // Rendered as donut-ring cards, by request ("put those numbers in
+  // circular widgets like on the Tickets Dashboard") -- reuses that
+  // page's own .datto-card-grid/.datto-card/.datto-donut-* classes
+  // (originally Datto RMM's, shared by Tickets Dashboard's own Critical
+  // (P1)/Triage Now widgets) and its exact donutSvg()/polarToCartesian()/
+  // describeArc() arc-drawing helpers, duplicated here rather than
+  // imported -- same "separate page package" convention every small
+  // shared UI piece on this dashboard already follows. Unlike Tickets
+  // Dashboard's own two-colour (red if count>0, else green) rule, each
+  // ring here keeps its own fixed colour regardless of count -- matches
+  // this widget's own red/amber/plain urgency language rather than a
+  // binary "problem or not" read, since "Due Today (mine)" isn't a
+  // problem the way an overdue ticket or a Critical (P1) ticket is. Each
+  // ring's own denominator (DONUT_SCALE_MINE/_OTHERS below) is a fixed
+  // "looks full" reference point, same idea as Tickets Dashboard's own
+  // WIDGET_DONUT_SCALE -- not a real ceiling, just what makes the ring
+  // read as meaningfully full without needing a real total to divide by.
+  // ----
+  const DONUT_SCALE_MINE = 10; // same "a handful is meaningfully full" reasoning as Tickets Dashboard's own scale of 6, just a little roomier for two counts combined
+  const DONUT_SCALE_OTHERS = 50; // company-wide, routinely much bigger than either "mine" count -- confirmed real case, ~79 on a normal day
+  const DONUT_SCALE_ALL_OPEN = 20; // a resource's own whole open-ticket backlog, not just today's due-date buckets -- routinely bigger than DONUT_SCALE_MINE
+  // `bucket` is the real key into section.data (overdueMine/dueTodayMine/
+  // dueTodayOthers/allOpenMine) -- stashed on the card itself (data-
+  // bucket) so the click handler (see the delegated #results listener
+  // above) can look the right array back up out of lastData without a
+  // second fetch, by request ("allow a click on these circles to open a
+  // list of tickets... "). `modalTitle` is the popup's own heading text.
+  function ticketCountDonutHtml(bucket, count, scale, color, label, sub, modalTitle) {
+    return `
+      <div class="datto-card datto-card--clickable about-me-ticket-count-card" data-bucket="${escapeHtml(bucket)}" data-modal-title="${escapeHtml(modalTitle)}" title="Click to see the list">
+        <div class="datto-donut-wrap">
+          ${donutSvg(count, scale, color)}
+          <div class="datto-donut-center"><span class="datto-donut-count">${count}</span></div>
+        </div>
+        <div class="datto-card-label">${escapeHtml(label)}</div>
+        <div class="datto-card-sub">${escapeHtml(sub)}</div>
+      </div>
+    `;
+  }
+  // No section title, by request ("the ticket counts section doesn't
+  // need a section title, just the widgets please") -- bareCardHtml()
+  // keeps the same .about-me-card green-bordered box every other section
+  // on this page has (visual consistency with the rest of the column),
+  // just without cardHtml()'s own <h2> heading row.
+  function bareCardHtml(innerHtml) {
+    return `<div class="about-me-card">${innerHtml}</div>`;
+  }
+  function ticketDueCountsCardHtml(section) {
+    if (!section.ok) return bareCardHtml(errorNote(section));
+    const { overdueMine, dueTodayMine, dueTodayOthers, allOpenMine } = section.data;
+    return bareCardHtml(
+      `<div class="datto-card-grid">
+        ${ticketCountDonutHtml('overdueMine', overdueMine.length, DONUT_SCALE_MINE, '#dc2626', 'Overdue', 'Assigned to me', 'Overdue -- Assigned to me')}
+        ${ticketCountDonutHtml('dueTodayMine', dueTodayMine.length, DONUT_SCALE_MINE, '#f59e0b', 'Due Today', 'Assigned to me', 'Due Today -- Assigned to me')}
+        ${ticketCountDonutHtml('dueTodayOthers', dueTodayOthers.length, DONUT_SCALE_OTHERS, 'var(--accent)', 'Due Today', 'Everyone else', 'Due Today -- Everyone else')}
+        ${ticketCountDonutHtml('allOpenMine', allOpenMine.length, DONUT_SCALE_ALL_OPEN, '#8b5cf6', 'All Open', 'Assigned to me', 'All Open -- Assigned to me')}
+      </div>`
+    );
+  }
+  // The popup itself -- Ticket #/Client/Title, same three columns/table
+  // classes every other ticket list on this page already uses (see e.g.
+  // completedTicketsCardHtml()'s own table). Same .history-modal-overlay/
+  // -panel shell every other popup on this dashboard already uses; a
+  // ticket-number click inside it opens the same real Autotask popup
+  // window every other ticket-link on this page does -- wired locally on
+  // this overlay (not through the page-level #results listener above,
+  // which never sees clicks here: the overlay is appended straight to
+  // document.body, outside #results).
+  function openTicketCountModal(title, rows) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel about-me-ticket-count-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>${escapeHtml(title)} (${rows.length})</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          ${
+            rows.length === 0
+              ? '<p class="status">None.</p>'
+              : `<div class="about-me-table-wrap"><table class="about-me-table">
+                  <thead><tr class="shaded-row"><th>Ticket #</th><th>Client</th><th>Title</th></tr></thead>
+                  <tbody>${rows
+                    .map(
+                      (t) => `
+                    <tr>
+                      <td class="ticket-number">${ticketNumberHtml(t)}</td>
+                      <td>${escapeHtml(t.company)}</td>
+                      <td>${escapeHtml(t.title)}</td>
+                    </tr>`
+                    )
+                    .join('')}</tbody>
+                </table></div>`
+          }
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        close();
+        return;
+      }
+      const link = e.target.closest('a.ticket-link');
+      if (link) {
+        e.preventDefault();
+        window.open(link.href, '_blank', 'noopener,noreferrer,width=1200,height=900');
+      }
+    });
+  }
+  // Same single-arc donut ring (count/scale as one coloured sweep over a
+  // plain background ring) as Tickets Dashboard's own donutSvg() -- see
+  // that page's client.js for the fuller comment. Fixed default size
+  // (120, Datto RMM's own default) -- About Me's card is a compact
+  // sidebar-style widget, not Tickets Dashboard's own enlarged 180
+  // variant.
+  function donutSvg(count, scale, color, size = 120) {
+    const cx = size / 2;
+    const cy = size / 2;
+    const r = size * 0.4;
+    const stroke = size * 0.14;
+    const pct = scale > 0 ? Math.min(1, count / scale) : 0;
+    const sweep = pct * 360;
+    const bg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${stroke}" />`;
+    const arc = sweep > 0 ? `<path d="${describeArc(cx, cy, r, 0, sweep)}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="butt" />` : '';
+    return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">${bg}${arc}</svg>`;
+  }
+  function polarToCartesian(cx, cy, r, angleDeg) {
+    const rad = ((angleDeg - 90) * Math.PI) / 180;
+    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+  }
+  function describeArc(cx, cy, r, startAngle, endAngle) {
+    const start = polarToCartesian(cx, cy, r, endAngle);
+    const end = polarToCartesian(cx, cy, r, startAngle);
+    const largeArc = endAngle - startAngle <= 180 ? '0' : '1';
+    return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
+  }
+
+  // ---- Utilization, under Ticket Counts, by request -- one donut card
+  // (0-100% real percentage fill, unlike Ticket Counts' own arbitrary-
+  // scale rings above) showing what share of this resource's own logged
+  // hours (picked date range) went to ticket work specifically, vs
+  // internal/admin/AITTIME time with no ticket attached. See server.js's
+  // own fetchUtilizationSection() comment for why this is deliberately a
+  // simpler slice than Time Summaries' own multi-row Hours Summary box,
+  // not a re-implementation of it. Colour thresholds (green 70%+, amber
+  // 40-69%, red under 40%) are a starting point, not a confirmed real
+  // target -- easy to retune once real numbers are actually being looked
+  // at. No minimize toggle, no "<Item> Page" link (no dedicated page
+  // behind this one either) -- same reasoning Ticket Counts above already
+  // gives. ----
+  function utilizationCardHtml(section, from, to) {
     const rangeLabel = dateRangeLabel(from, to);
-    if (!section.ok) return cardHtml('Asked for Review', rangeLabel, errorNote(section), FULL_PAGE_LINKS.askedForReview);
-    if (section.data.length === 0) return cardHtml('Asked for Review (0)', rangeLabel, emptyNote('None in this range.'), FULL_PAGE_LINKS.askedForReview);
+    if (!section.ok) return cardHtml('Utilization', rangeLabel, errorNote(section));
+    const { hoursLogged, ticketHours, utilizationPct } = section.data;
+    if (hoursLogged === 0) return cardHtml('Utilization', rangeLabel, emptyNote('No time logged in this range.'));
+    const pct = Math.round(utilizationPct);
+    const color = pct >= 70 ? '#16a34a' : pct >= 40 ? '#f59e0b' : '#dc2626';
     return cardHtml(
-      `Asked for Review (${section.data.length})`,
+      'Utilization',
       rangeLabel,
-      `<div class="about-me-table-wrap"><table class="about-me-table about-me-table--wide">
-        <thead><tr class="shaded-row"><th>Company</th><th>Ticket #</th><th>Title</th></tr></thead>
-        <tbody>${section.data
-          .map(
-            (t) => `
-          <tr>
-            <td>${escapeHtml(t.company)}</td>
-            <td class="ticket-number">${ticketNumberHtml(t)}</td>
-            <td${t.billingContract ? ' class="cell-flag-blue"' : ''}>${escapeHtml(t.title)}</td>
-          </tr>`
-          )
-          .join('')}</tbody>
-      </table></div>`,
-      FULL_PAGE_LINKS.askedForReview
+      `<div class="datto-card-grid">
+        <div class="datto-card">
+          <div class="datto-donut-wrap">
+            ${donutSvg(pct, 100, color)}
+            <div class="datto-donut-center"><span class="datto-donut-count">${pct}%</span></div>
+          </div>
+          <div class="datto-card-label">Ticket Time</div>
+          <div class="datto-card-sub">${formatHoursHM(ticketHours)} of ${formatHoursHM(hoursLogged)} logged</div>
+        </div>
+      </div>`
     );
   }
 
@@ -631,9 +845,9 @@ export function mount(container) {
   }
   function accruedTimeCardHtml(section, from, to) {
     const rangeLabel = dateRangeLabel(from, to) ? `${dateRangeLabel(from, to)}, Complete tickets` : 'Complete tickets';
-    if (!section.ok) return cardHtml('Accrued Time', rangeLabel, errorNote(section), FULL_PAGE_LINKS.accruedTime);
+    if (!section.ok) return cardHtml('Accrued Time', rangeLabel, errorNote(section), FULL_PAGE_LINKS.accruedTime, 'accruedTime');
     if (section.data.length === 0)
-      return cardHtml('Accrued Time (0)', rangeLabel, emptyNote('No qualifying tickets in this range.'), FULL_PAGE_LINKS.accruedTime);
+      return cardHtml('Accrued Time (0)', rangeLabel, emptyNote('No qualifying tickets in this range.'), FULL_PAGE_LINKS.accruedTime, 'accruedTime');
     // Just the discrepancy now, by request ("just show the discrepancy
     // (--INGs minus --END*) only including the lines ... where the
     // --END* [is] less than the --INGs ... sum them only") -- replaces
@@ -678,7 +892,8 @@ export function mount(container) {
           })
           .join('')}</tbody>
       </table></div>`,
-      FULL_PAGE_LINKS.accruedTime
+      FULL_PAGE_LINKS.accruedTime,
+      'accruedTime'
     );
   }
 
@@ -948,21 +1163,6 @@ export function mount(container) {
     return false; // safety valve -- no real gap this page ever needs to bridge is this long
   }
 
-  // ---- Tickets Dashboard's own two small cell helpers -- kept even
-  // though the Tickets Dashboard card itself was removed from this page,
-  // by request ("Leave off 'Tickets Dashboard' section and 'Subscriptions
-  // Expiring'"), because Deadlines above still uses them (it's built from
-  // the exact same real Critical (P1) selection criteria). ----
-  function ticketsDashboardStatusCellHtml(status, statusColored) {
-    if (status === 'License Update (CRITICAL)') return `<span class="text-highlight-yellow">License Update</span>`;
-    if (!statusColored) return escapeHtml(status);
-    return `<span class="text-highlight-red">${escapeHtml(status)}</span>`;
-  }
-  function ticketsDashboardResourceCellHtml(resourceName) {
-    const resLabel = escapeHtml(resourceName);
-    return resourceName === 'Unassigned' ? `<span class="text-highlight-red">${resLabel}</span>` : resLabel;
-  }
-
   function formatDateTime(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
@@ -985,17 +1185,6 @@ export function mount(container) {
   function formatCreateTime(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-  // "D Mon" from a full timestamp (Tickets.dueDateTime), for the
-  // Deadlines card's own "Due" subtext -- same short-date shape
-  // formatShortDate() below uses for a plain YYYY-MM-DD day key, just
-  // reading the day/month straight off a real Date instead of a key
-  // string (a due date is a genuine timestamp, no AEST-anchored day-key
-  // parsing needed).
-  function formatShortDateFromIso(iso) {
-    if (!iso) return '';
-    const d = new Date(iso);
-    return `${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
   }
   function formatShortDate(dateKey) {
     if (!dateKey) return '';
