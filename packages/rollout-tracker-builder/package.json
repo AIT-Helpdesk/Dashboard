@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/rollout-tracker-builder",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "rollout-tracker-builder",
+    "label": "Rollout Tracker Builder",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/shell": "*",
+    "express": "^4.19.2"
+  }
+}

@@ -326,3 +326,42 @@ Start-Service AmbientDashboard
 Visit the TC Elite Rollout page on the real domain and confirm the real client list shows up (not an empty grid) -- spot-check a client you recognize against what you know is actually true for them.
 
 The sidebar's new "Process & Progress" category needs no separate step -- `nav-layout.json` is part of the normal git-tracked deploy, so it arrives with the regular `git pull`.
+
+## Deploying Rollout Tracker Builder / trackers (first-time)
+
+A separate one-time step, additional to the "Updating later" routine above, needed the first time `packages/rollout-tracker-builder` (and any tracker package it's generated, e.g. `packages/*-tracker`) lands on production. Same shape as TC Elite Rollout's own first deploy above -- read that section first, this one only calls out what's different.
+
+### 1. Node version -- already covered if TC Elite Rollout is deployed
+
+Same `node:sqlite` (`DatabaseSync`) requirement, Node >=22.5 -- see TC Elite Rollout's own step 1 above. Already satisfied if that page is already running here; check again (`node -v`) if this is somehow the first `node:sqlite`-backed page to land.
+
+### 2. `npm install` is required this time, not optional
+
+`@dashboard/rollout-tracker-builder` is a brand-new workspace package -- same reasoning as every other first-time package deploy in this doc.
+
+### 3. Add `TRACKER_MANAGER` to production's `.env`
+
+`.env` is never in a `git pull` (gitignored) -- add this line by hand to `C:\apps\autotask-dashboard-git\.env` on the server, same comma-separated exact Entra display names as local (see `.env.example` for the full explanation of why names, not emails):
+
+```
+TRACKER_MANAGER=Amber Worth, Jackson Worth
+```
+
+Without this, nobody is recognised as a Tracker Manager on production -- every tracker-management action (create a tracker, add a column, mark complete/incomplete, edit a tracker's Notes) 403s for everyone, even Amber. Adding a row stays open to everyone regardless.
+
+### 4. Any tracker's REAL data has to be copied over as a file -- git pull alone won't bring it
+
+Same situation as TC Elite Rollout's own `data.db` (see that section above) -- each tracker's `data.db` (and its own `notes.json`, if it has one) is deliberately gitignored, so `git pull` brings the tracker's PAGE (it'll appear in the sidebar, seeded as an empty grid) but not whatever rows/columns/statuses/notes were actually entered for it locally. If a tracker's real content is worth keeping on production rather than re-entering it there:
+
+```powershell
+cd C:\apps\autotask-dashboard-git\packages\<tracker-id>   # e.g. update-break-glass-accounts-mfa-tracker
+node -e "const {createRolloutTrackerDb}=require('../shell/rollout-tracker-db.js'); createRolloutTrackerDb(require('path').join(__dirname,'data.db')).db.exec('PRAGMA wal_checkpoint(TRUNCATE)');"
+```
+
+on the SOURCE machine first (checkpoints the WAL so the single file is complete and self-contained), then copy `data.db` (and `notes.json`, if present -- not any `-shm`/`-wal` sidecars) to the same path under `C:\apps\autotask-dashboard-git\packages\<tracker-id>\` on the server, same RDP-clipboard-carries-files approach as every other manual file copy in this doc. Do this before `Restart-Service AmbientDashboard` where possible, and if the page already looks empty after copying despite that, check for leftover `data.db-shm`/`data.db-wal` from an already-started empty database the same way TC Elite Rollout's own troubleshooting step above describes.
+
+A tracker not worth carrying over (a throwaway test, say) needs nothing extra -- it'll just start empty on production, exactly as if it had been created fresh there.
+
+### 5. Verify
+
+Visit Rollout Tracker Builder on the real domain, confirm the "only a Tracker Manager can..." notice/form shows correctly for your own account, and confirm any tracker you copied real data for shows that data (not an empty grid -- use Show All to tell a genuinely-empty tracker apart from one merely fully resolved, same trick as TC Elite Rollout's own verify step).

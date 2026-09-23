@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/test-tracker-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "test-tracker-tracker",
+    "label": "Test Tracker",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/shell": "*",
+    "express": "^4.19.2"
+  }
+}

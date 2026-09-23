@@ -1,0 +1,16 @@
+{
+  "name": "@dashboard/update-break-glass-accounts-mfa-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "update-break-glass-accounts-mfa-tracker",
+    "label": "Update Break Glass Accounts & MFA",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/shell": "*",
+    "express": "^4.19.2"
+  }
+}
