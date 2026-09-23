@@ -33,9 +33,11 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             <input type="checkbox" id="show-all-toggle" /> Show All
           </label>
           <button type="button" id="add-row-button" class="button-link button-link--small">Add ${escapeHtml(rowNoun)}</button>
+          <button type="button" id="bulk-add-rows-button" class="button-link button-link--small">Bulk Add ${escapeHtml(rowNoun)}s</button>
           <button type="button" id="add-column-button" class="button-link button-link--small" hidden>Add Column</button>
           <button type="button" id="hide-complete-button" class="button-link button-link--small" hidden>Tracking Complete</button>
           <button type="button" id="uncomplete-button" class="button-link button-link--small" hidden>Un-Complete This</button>
+          <button type="button" id="delete-tracker-button" class="button-link button-link--small rt-delete-button" hidden>Delete Tracker</button>
           <button type="button" id="refresh-button" class="button-link button-link--small">Refresh</button>
         </div>
       </header>
@@ -78,6 +80,18 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         </div>
       </div>
 
+      <div id="bulk-add-rows-form" class="resource-group" hidden>
+        <div class="section-heading">Bulk Add ${escapeHtml(rowNoun)}s</div>
+        <div class="rt-form-body">
+          <textarea id="bulk-row-names" rows="8" placeholder="One ${rowNoun.toLowerCase()} per line" style="display:block; width:100%; font: inherit; padding:0.4rem 0.6rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--fg);"></textarea>
+          <p id="bulk-add-rows-error" class="status error" hidden></p>
+          <div class="rt-form-actions">
+            <button type="button" id="save-bulk-rows-button" class="button-link">Save</button>
+            <button type="button" id="cancel-bulk-rows-button">Cancel</button>
+          </div>
+        </div>
+      </div>
+
       <div id="add-column-form" class="resource-group" hidden>
         <div class="section-heading">Add Column</div>
         <div class="rt-form-body">
@@ -97,10 +111,13 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     const refreshButton = container.querySelector('#refresh-button');
     const showAllToggle = container.querySelector('#show-all-toggle');
     const addRowButton = container.querySelector('#add-row-button');
+    const bulkAddRowsButton = container.querySelector('#bulk-add-rows-button');
     const addColumnButton = container.querySelector('#add-column-button');
     const hideCompleteButton = container.querySelector('#hide-complete-button');
     const uncompleteButton = container.querySelector('#uncomplete-button');
+    const deleteTrackerButton = container.querySelector('#delete-tracker-button');
     const addRowForm = container.querySelector('#add-row-form');
+    const bulkAddRowsForm = container.querySelector('#bulk-add-rows-form');
     const addColumnForm = container.querySelector('#add-column-form');
     const gridContainer = container.querySelector('#grid-container');
     const notesToggle = container.querySelector('#notes-toggle');
@@ -131,8 +148,13 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         const data = await res.json();
         hideCompleteButton.hidden = !!data.complete;
         uncompleteButton.hidden = !data.complete;
+        // Delete Tracker only ever shows alongside Un-Complete This -- by
+        // request, only a tracker already filed under Trackers - Complete
+        // can be deleted at all (enforced again server-side in POST
+        // /delete, not just this visibility check).
+        deleteTrackerButton.hidden = !data.complete;
       } catch {
-        // Leave both hidden -- not worth surfacing an error for this.
+        // Leave all three hidden -- not worth surfacing an error for this.
       }
     }
     hideCompleteButton.addEventListener('click', async () => {
@@ -153,6 +175,26 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
         await loadCompletionState();
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      }
+    });
+
+    // Totally deletes this tracker -- rows, columns, every status, the
+    // full audit trail, its Notes, all of it, permanently. Only ever
+    // reachable while it's already filed under Trackers - Complete (see
+    // loadCompletionState above), and enforced again server-side, same as
+    // every other tracker-management action. A second, more explicit
+    // confirm than Hide Complete/Un-Complete This get -- this one can't
+    // be undone by clicking another button.
+    deleteTrackerButton.addEventListener('click', async () => {
+      if (!confirm(`Permanently delete "${label}"? This deletes every row, column, status, and note -- it cannot be undone.`)) return;
+      try {
+        const res = await fetch(`${apiBase}/delete`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        alert(data.filesRemoved ? `"${label}" has been deleted.` : `"${label}" was removed from the sidebar, but its files couldn't be fully deleted -- ask Claude to finish cleaning it up.`);
+        window.location.href = '/';
       } catch (err) {
         alert(`Error: ${err.message}`);
       }
@@ -273,6 +315,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     // ---- Add Row ----
     addRowButton.addEventListener('click', () => {
       addColumnForm.hidden = true;
+      bulkAddRowsForm.hidden = true;
       addRowForm.hidden = false;
       container.querySelector('#new-row-name').focus();
     });
@@ -305,9 +348,59 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       }
     });
 
+    // ---- Bulk Add Rows ----
+    // Same textarea-of-names idea Rollout Tracker Builder's own form uses
+    // for its Rows field -- open to everyone, same as the single-row Add
+    // {rowNoun} above (a batch of the exact same ungated action isn't a
+    // new permission). Duplicate names are reported back rather than
+    // failing the whole batch (see POST /rows/bulk in
+    // rollout-tracker-server.js).
+    bulkAddRowsButton.addEventListener('click', () => {
+      addRowForm.hidden = true;
+      addColumnForm.hidden = true;
+      bulkAddRowsForm.hidden = false;
+      container.querySelector('#bulk-row-names').focus();
+    });
+    container.querySelector('#cancel-bulk-rows-button').addEventListener('click', () => {
+      bulkAddRowsForm.hidden = true;
+    });
+    container.querySelector('#save-bulk-rows-button').addEventListener('click', async () => {
+      const errorEl = container.querySelector('#bulk-add-rows-error');
+      errorEl.hidden = true;
+      const namesInput = container.querySelector('#bulk-row-names');
+      const names = namesInput.value
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (names.length === 0) {
+        errorEl.hidden = false;
+        errorEl.textContent = `Enter at least one ${rowNoun.toLowerCase()}.`;
+        return;
+      }
+      try {
+        const res = await fetch(`${apiBase}/rows/bulk`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ names }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        bulkAddRowsForm.hidden = true;
+        namesInput.value = '';
+        await loadGrid();
+        if (data.skipped && data.skipped.length > 0) {
+          alert(`${data.added.length} added. Skipped (already existed): ${data.skipped.join(', ')}`);
+        }
+      } catch (err) {
+        errorEl.hidden = false;
+        errorEl.textContent = `Error: ${err.message}`;
+      }
+    });
+
     // ---- Add Column ----
     addColumnButton.addEventListener('click', () => {
       addRowForm.hidden = true;
+      bulkAddRowsForm.hidden = true;
       addColumnForm.hidden = false;
       container.querySelector('#new-column-label').focus();
     });
@@ -359,6 +452,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         } else {
           hideCompleteButton.hidden = true;
           uncompleteButton.hidden = true;
+          deleteTrackerButton.hidden = true;
         }
         statusEl.hidden = true;
       } catch (err) {
