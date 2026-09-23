@@ -287,6 +287,10 @@
       {
         "type": "page",
         "id": "external-page-builder"
+      },
+      {
+        "type": "page",
+        "id": "rollout-tracker-builder"
       }
     ],
     "hidden": true
@@ -310,5 +314,27 @@
   {
     "type": "page",
     "id": "voice-scheduler"
+  },
+  {
+    "type": "category",
+    "id": "trackers",
+    "label": "Trackers",
+    "children": [
+      {
+        "type": "page",
+        "id": "update-break-glass-accounts-mfa-tracker"
+      }
+    ]
+  },
+  {
+    "type": "category",
+    "id": "trackers-complete",
+    "label": "Trackers - Complete",
+    "children": [
+      {
+        "type": "page",
+        "id": "test-tracker-tracker"
+      }
+    ]
   }
 ]

@@ -3903,6 +3903,281 @@ tr.row-text-highlight-blue td {
   box-sizing: border-box;
 }
 
+/* Rollout Tracker Builder -- every generated tracker shares this one
+   .rt-table/.rt-cell markup and editing behaviour (see
+   rollout-tracker-client.js's wireCellInteractions()). Its own class
+   family, not a reuse/rename of TC Elite Rollout's .tcr-* above -- same
+   visual language (this page's own mechanism inspired the shared engine),
+   independent implementation, own real data per generated tracker. */
+.rt-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+}
+.rt-table th,
+.rt-table td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.5rem;
+  text-align: center;
+}
+.rt-table td {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.rt-table th {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: normal;
+  max-width: 5.5rem;
+  line-height: 1.2;
+}
+.rt-table th:first-child,
+.rt-table td:first-child {
+  text-align: left;
+  white-space: nowrap;
+  max-width: none;
+}
+.rt-bulk-row-btn,
+.rt-bulk-col-btn {
+  border: none;
+  background: none;
+  padding: 0 0.2rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+  vertical-align: middle;
+}
+.rt-bulk-row-btn:hover,
+.rt-bulk-col-btn:hover {
+  color: var(--accent);
+}
+.rt-bulk-row-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: 0.5rem;
+  padding: 0.2rem 0.4rem;
+  background: var(--row-alt-bg);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.rt-rename-btn {
+  border: none;
+  background: none;
+  padding: 0 0.2rem;
+  cursor: pointer;
+  color: var(--muted);
+  vertical-align: middle;
+  line-height: 1;
+}
+.rt-rename-btn:hover {
+  color: var(--accent);
+}
+.rt-table th:has(.rt-bulk-row-editor) {
+  max-width: none;
+}
+.rt-table th .rt-bulk-row-editor {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 0.8rem;
+  font-weight: normal;
+  color: var(--fg);
+}
+.rt-cell {
+  font-weight: 600;
+}
+.rt-cell--editable {
+  cursor: pointer;
+}
+.rt-cell--editable:hover {
+  filter: brightness(0.93);
+}
+.rt-cell--not_done {
+  background: color-mix(in srgb, #dc2626 18%, transparent);
+  color: #dc2626;
+}
+.rt-cell--started {
+  background: color-mix(in srgb, #f39c12 18%, transparent);
+  color: #f39c12;
+}
+.rt-cell--done {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: #16a34a;
+}
+.rt-cell--na {
+  background: color-mix(in srgb, #16a34a 13%, transparent);
+  color: #16a34a;
+  font-weight: 400;
+}
+.rt-cell--cancelled {
+  background: color-mix(in srgb, #16a34a 13%, transparent);
+  color: #16a34a;
+  font-weight: 400;
+}
+.rt-cell--issue {
+  background: color-mix(in srgb, #8b5cf6 18%, transparent);
+  color: #8b5cf6;
+}
+/* Note -- grey, lighter tint (13%, same tier as na/cancelled), by
+   request: an annotation, not a work-status verdict, so it shouldn't read
+   with the same visual weight as an outstanding not_done/started/issue. */
+.rt-cell--note {
+  background: color-mix(in srgb, #6b7280 13%, transparent);
+  color: #6b7280;
+  font-weight: 400;
+}
+
+.rt-tooltip {
+  position: absolute;
+  z-index: 1000;
+  background: #1b1e24;
+  color: white;
+  padding: 0.45rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  max-width: 20rem;
+}
+.rt-tooltip-when {
+  color: #b7bdc7;
+  margin-top: 0.2rem;
+}
+.rt-tooltip-history-link {
+  display: inline-block;
+  margin-top: 0.35rem;
+  background: none;
+  border: none;
+  padding: 0;
+  color: #8ab4ff;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.rt-form-body {
+  padding: 0.75rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 28rem;
+}
+.rt-form-body input[type='text'] {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.rt-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+.rt-inline-input,
+.rt-status-select {
+  font: inherit;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.rt-reason-input {
+  display: block;
+  margin-top: 0.3rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Rollout tracker Notes -- minimised-by-default free-form instructions
+   field, above the grid (see rollout-tracker-client.js). */
+.rt-notes {
+  margin-bottom: 0.75rem;
+}
+.rt-notes-toggle {
+  border: none;
+  background: none;
+  padding: 0.2rem 0;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  color: var(--fg);
+}
+.rt-notes-toggle:hover {
+  color: var(--accent);
+}
+.rt-notes-body {
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--row-alt-bg);
+  max-width: 42rem;
+}
+/* Read view and the editable surface share the same list/paragraph
+   spacing -- otherwise a bullet list looks fine while editing (browser
+   default UA spacing) then visually tightens up the instant it's saved
+   and re-rendered read-only, or vice versa. */
+.rt-notes-view,
+.rt-notes-editable {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.rt-notes-view p,
+.rt-notes-editable p,
+.rt-notes-view div,
+.rt-notes-editable div {
+  margin: 0 0 0.5rem;
+}
+.rt-notes-view ul,
+.rt-notes-editable ul,
+.rt-notes-view ol,
+.rt-notes-editable ol {
+  margin: 0 0 0.5rem;
+  padding-left: 1.4rem;
+}
+.rt-notes-view > *:last-child,
+.rt-notes-editable > *:last-child {
+  margin-bottom: 0;
+}
+.rt-notes-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-bottom: 0.4rem;
+}
+.rt-notes-tool {
+  min-width: 1.8rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.rt-notes-tool:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.rt-notes-editable {
+  min-height: 5rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.rt-notes-editable:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .bar-fill {
   display: block;
   height: 100%;
@@ -6643,4 +6918,493 @@ tr.accrued-time-yellow-row th {
 }
 :root[data-theme="dark"] .about-me-card .section-heading--red {
   background: #fef2f3;
+}
+
+/* Meeting Prep -- its own card-grid picker, built on TOP of Datto RMM's
+   .datto-card-grid/.datto-card (that section's own comment already notes
+   those are plain, page-agnostic SVG despite the name -- Tickets
+   Dashboard already reuses them too). These classes only add what's new
+   here: a checkbox overlay, a small per-card source label, and a
+   click-to-preview "active" state -- everything else (border/radius/
+   background/padding/layout) comes from .datto-card itself. */
+.mtg-card {
+  position: relative;
+  cursor: pointer;
+}
+.mtg-card:hover {
+  border-color: var(--accent);
+}
+/* Currently open in the detail panel below the grid -- same inset-ring
+   convention already used elsewhere on this dashboard (line ~492) for a
+   "this one's the current selection" state. */
+.mtg-card--active {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* Ticked for the meeting pack -- kept separate from --active (a card can
+   be selected without being the one currently previewed, and vice versa)
+   -- accent border only, no background tint, so it reads clearly against
+   both light and dark themes without a color-mix() fallback to maintain. */
+.mtg-card--selected {
+  border-color: var(--accent);
+}
+/* The "Selected Overview" tile -- always first in the grid, no checkbox of
+   its own (it previews what's ticked, it isn't itself tickable). Dashed
+   border plus a faint accent tint marks it as a pinned utility tile rather
+   than another report card, without a heavier treatment that would fight
+   with .mtg-card--active/--selected's own accent-colour cues. */
+.mtg-card--overview {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--accent) 6%, var(--card));
+}
+/* Drag-to-reorder, by request -- plain HTML5 drag-and-drop, no library.
+   .mtg-card--overview is never draggable (see cardEl()'s own comment), so
+   this only ever applies to the real report cards. */
+.mtg-card[draggable="true"] {
+  cursor: grab;
+}
+.mtg-card--dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+/* The card currently being dragged OVER (not the one being dragged) -- an
+   accent-coloured dashed outline reads as "drop here" without fighting
+   .mtg-card--active's own inset ring or .mtg-card--selected's border
+   colour, both of which can be true on the same card at the same time. */
+.mtg-card--drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+/* Tick All / Invert Ticks / Untick All, by request -- a small row of bulk-
+   selection buttons above the card grid. Reuses .button-link/.button-link--small
+   (the same small-pill style every other secondary action on this page
+   already uses, e.g. "Generate Recommendations Summary") rather than a new
+   button style, and a plain flex row with the same 0.5rem gap this page's
+   other button clusters use. Hidden/shown in lockstep with .summary and
+   the recommendations button (see render()'s own comment on why) -- there's
+   nothing useful to tick in bulk before a search has actually returned
+   components. */
+.mtg-tick-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+.mtg-card-checkbox {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  cursor: pointer;
+}
+.mtg-card-checkbox input {
+  width: 1.15rem;
+  height: 1.15rem;
+  cursor: pointer;
+}
+.mtg-card-source {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+/* The intro paragraph under the page header, by request -- explains the
+   "cards + pick + preview" model and that Datto RMM is the only source
+   wired in so far, right where a first-time visitor will actually read it. */
+.mtg-intro {
+  padding: 0 1rem 0.5rem;
+}
+
+/* Report-derived detail content (Executive Summary, Device Health Summary
+   etc. -- see data/README.md in meeting-prep) -- a subsection heading
+   inside the detail panel, plus a 4-tier score badge reusing the same
+   red/green/blue/amber palette .mid-badge already established on the
+   Ingram Matchup page (line ~6308), kept as its own class rather than
+   reusing .mid-badge's name since these are score thresholds, not
+   match-confidence levels. */
+.mtg-report-section {
+  margin-top: 1.25rem;
+}
+/* Inside the overview tile specifically, each ticked section's widgets sit
+   back-to-back -- a divider between them (skipped on the first) stops
+   adjacent sections' widgets from reading as one continuous block. */
+.mtg-overview-panel .mtg-report-section {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+.mtg-overview-panel .mtg-report-section:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+.mtg-report-section h3 {
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.mtg-report-subhead {
+  margin: 0.6rem 0 0.3rem;
+}
+.mtg-score-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.mtg-score-badge--good {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: #16a34a;
+}
+.mtg-score-badge--ok {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.mtg-score-badge--warn {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #f59e0b;
+}
+.mtg-score-badge--bad {
+  background: color-mix(in srgb, #dc2626 18%, transparent);
+  color: #dc2626;
+}
+
+/* Report widgets -- gauge / donut / bar / check-icon, hand-built with SVG
+   and CSS (no chart library added), by request ("let's formulate some
+   results creating widgets like those"). Shown above the fold on every
+   report card; the plain table each report already had stays available
+   underneath, collapsed behind .mtg-details ("the ability to include the
+   table data where required"). A short-lived exact-PDF-crop image gallery
+   used to live here too (data/images/ + reportImagesHtml() in client.js);
+   removed once these widgets covered the same need better, by request --
+   the server-side crop generation and the /images route are untouched in
+   case a future PDF/PPTX export wants pixel-exact source images again,
+   they're just not rendered on this page any more. */
+.mtg-widget-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+.mtg-widget {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  flex: 1 1 260px;
+}
+.mtg-widget-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin: 0 0 0.6rem;
+}
+.mtg-widget--gauge {
+  text-align: center;
+}
+.mtg-gauge {
+  color: var(--fg);
+}
+.mtg-gauge-score {
+  font-size: 1.3rem;
+  font-weight: 700;
+  fill: var(--fg);
+}
+.mtg-gauge-services {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem 0.8rem;
+  font-size: 0.78rem;
+  margin-top: -0.5rem;
+}
+.mtg-mini-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+}
+.mtg-donut-row {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+.mtg-donut-total {
+  font-size: 1.4rem;
+  font-weight: 700;
+  fill: var(--fg);
+}
+.mtg-donut-legend {
+  flex: 1;
+  font-size: 0.8rem;
+  min-width: 0;
+}
+.mtg-donut-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+}
+.mtg-swatch {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.mtg-donut-val {
+  margin-left: auto;
+  font-weight: 700;
+  padding-left: 0.5rem;
+}
+.mtg-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.82rem;
+  padding: 0.3rem 0;
+}
+.mtg-bar-label {
+  width: 8rem;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mtg-bar-track {
+  flex: 1;
+  height: 0.55rem;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.mtg-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+}
+.mtg-bar-pct {
+  width: 3.2rem;
+  text-align: right;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.mtg-check-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+  vertical-align: middle;
+}
+.mtg-check-cell {
+  text-align: center;
+}
+
+/* Meeting Prep's title + "Generate Recommendations Summary" button,
+   grouped together as ONE flex item inside .page-header (same reasoning as
+   .tm-title-row above it in this file) so .page-header's own
+   `justify-content: space-between` puts the pair at the header's start,
+   with the search form still pushed to the far right, rather than
+   splitting three items evenly across the header. */
+.mtg-title-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+/* The recommendations summary panel -- a rules-based cross-reference of
+   whatever report components are currently loaded (by request, "add a
+   button at the top to produce the summary"), grouped by how urgently each
+   finding needs attention before a client meeting rather than by which
+   report it came from. Reuses .resource-group's card-like container feel
+   via its own box rather than that class directly, since this isn't a
+   per-component detail view. */
+.mtg-rec-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+}
+.mtg-rec-group {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.mtg-rec-group:first-of-type {
+  margin-top: 0.75rem;
+  padding-top: 0;
+  border-top: none;
+}
+.mtg-rec-group h3 {
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.mtg-rec-group--action h3 { color: #dc2626; }
+.mtg-rec-group--gather h3 { color: #f59e0b; }
+.mtg-rec-group--watch h3 { color: #2563eb; }
+.mtg-rec-group--good h3 { color: #16a34a; }
+.mtg-rec-item {
+  padding: 0.4rem 0;
+}
+.mtg-rec-item-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  margin: 0 0 0.15rem;
+}
+.mtg-rec-item-detail {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* Dark Web Monitoring's clean/found headline -- full width, above the
+   widget grid rather than inside it, since it's the one thing worth
+   knowing before any of the other widgets (and a clean month, the common
+   case, deserves to read as good news, not just an empty donut). */
+.mtg-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  margin-top: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.mtg-status-banner--good {
+  background: rgba(22, 163, 74, 0.1);
+  border: 1px solid rgba(22, 163, 74, 0.35);
+}
+.mtg-status-banner--bad {
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.35);
+}
+.mtg-status-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.mtg-status-icon svg {
+  width: 1.3rem;
+  height: 1.3rem;
+}
+.mtg-status-text {
+  color: var(--fg);
+}
+
+/* "Show full table data" -- native <details>/<summary>, no JS state, so
+   the plain table view every report already had is still there, just
+   collapsed under the widgets above it by default. */
+.mtg-details {
+  margin-top: 1rem;
+}
+.mtg-details summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 0.3rem 0;
+}
+.mtg-details-body {
+  margin-top: 0.5rem;
+}
+
+/* Live "Core Resources" widgets (Datto RMM devices) -- by request, matching
+   a reference dashboard screenshot ("From Datto RMM like you previously
+   did but as widgets like this"): a KPI/stat-tile row, a devices-by-type
+   bar breakdown (reuses .mtg-bar-row/.mtg-bar-track/.mtg-swatch as-is, no
+   new CSS needed for that one), a single check-in-freshness bar split into
+   coloured segments with a legend, and a live-filterable device list --
+   the first widget on this page with its own JS behaviour rather than a
+   static render, since a device list is genuinely long and worth being
+   able to narrow down live. */
+.mtg-kpi-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+.mtg-kpi-tile {
+  flex: 1 1 130px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  text-align: center;
+}
+.mtg-kpi-value {
+  font-size: 1.6rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+.mtg-kpi-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.3rem;
+}
+.mtg-kpi-sub {
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-top: 0.15rem;
+}
+.mtg-kpi-tile--good .mtg-kpi-value,
+.mtg-kpi-tile--good .mtg-kpi-sub {
+  color: #16a34a;
+}
+.mtg-kpi-tile--warn .mtg-kpi-value,
+.mtg-kpi-tile--warn .mtg-kpi-sub {
+  color: #f59e0b;
+}
+.mtg-kpi-tile--bad .mtg-kpi-value,
+.mtg-kpi-tile--bad .mtg-kpi-sub {
+  color: #dc2626;
+}
+
+.mtg-segbar-track {
+  display: flex;
+  height: 0.85rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border);
+  margin-top: 0.6rem;
+}
+.mtg-segbar-seg {
+  height: 100%;
+}
+.mtg-segbar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 0.6rem;
+}
+.mtg-segbar-legend .mtg-swatch {
+  margin-right: 0.35rem;
+}
+
+.mtg-device-filter {
+  margin: 0.85rem 0 0.5rem;
+}
+.mtg-device-filter-input {
+  width: 100%;
+  max-width: 22rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.85rem;
+}
+.mtg-device-table-wrap {
+  max-height: 26rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mtg-device-table-empty {
+  padding: 0.75rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.mtg-devicetype-caveat {
+  margin-top: 0.6rem;
 }
