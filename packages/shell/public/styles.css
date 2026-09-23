@@ -891,6 +891,24 @@ h1 {
   text-decoration: none;
   cursor: pointer;
 }
+/* Same CSS-specificity pitfall confirmed elsewhere on this dashboard
+   (.rotate-controls[hidden]/.nav-category-children[hidden]/.sidebar-
+   toggle[hidden]): this class's own `display: inline-block` above has
+   equal specificity to the browser's built-in `[hidden] { display: none
+   }` rule, and an author rule always beats the UA default regardless of
+   source order or specificity ties -- without this, the native `hidden`
+   attribute set on any conditionally-shown .button-link (Add Column,
+   Tracking Complete/Un-Complete This, Delete Tracker, Edit Notes, ...)
+   would be silently ignored, showing every one of them all the time
+   regardless of what the JS actually decided. Confirmed the hard way:
+   Rollout Tracker Builder's Tracking Complete/Un-Complete This both
+   showing on every tracker regardless of its real Trackers/Trackers -
+   Complete state, the moment those buttons picked up the .button-link
+   class -- they were never broken before that, just plain <button>s
+   relying on the browser default. */
+.button-link[hidden] {
+  display: none;
+}
 
 /* Smaller variant, by request -- What's On's Today & Tomorrow "Show All
    <X>" links under each column, deliberately less prominent than a normal
@@ -4176,6 +4194,26 @@ tr.row-text-highlight-blue td {
 .rt-notes-editable:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
+}
+
+/* Delete Tracker -- red, by request. Same #dc2626 reused everywhere else
+   on this dashboard for this exact shade (.rotate-control-btn--stop,
+   .cc-mark-renewals-btn, .text-highlight-red, etc), not a new one-off.
+   This button lives inside the page header's own .date-form toolbar, same
+   as every other rollout-tracker button -- .date-form button.button-link
+   --small (class+element+class, see its own comment above) deliberately
+   out-specifies a plain .button-link--small override to win in every
+   toolbar, so matching that same class+element+class shape (rather than
+   .button-link.rt-delete-button, which loses the tie) is what actually
+   wins here -- confirmed the hard way, same fix already applied once for
+   Contract Checks' own .cc-mark-renewals-btn in this exact spot. */
+.date-form button.button-link--small.rt-delete-button {
+  background: color-mix(in srgb, #dc2626 15%, transparent);
+  color: #dc2626;
+}
+.date-form button.button-link--small.rt-delete-button:hover {
+  background: #dc2626;
+  color: white;
 }
 
 .bar-fill {

@@ -9,6 +9,7 @@ const {
   TRACKERS_COMPLETE_CATEGORY_ID,
   TRACKERS_COMPLETE_CATEGORY_LABEL,
   movePageToCategory,
+  removePageNode,
 } = require('./rollout-tracker-nav.js');
 const { isTrackerManager } = require('./rollout-tracker-permissions.js');
 
@@ -167,6 +168,32 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     }
   });
 
+  // Bulk-add -- one POST per line typed into a textarea client-side,
+  // rather than clicking Add {rowNoun} repeatedly. Open to everyone, same
+  // as the single-row POST /rows above -- a batch of the exact same
+  // ungated action isn't a new permission. Duplicates (a name already in
+  // the tracker) are skipped rather than failing the whole batch, same
+  // "don't let one bad row block the rest" reasoning as bulkSetCells etc.
+  // in rollout-tracker-db.js.
+  router.post('/rows/bulk', (req, res) => {
+    try {
+      const names = Array.isArray(req.body?.names) ? req.body.names.map((s) => String(s).trim()).filter(Boolean) : [];
+      if (names.length === 0) return res.status(400).json({ error: `At least one ${rowNoun.toLowerCase()} name is required.` });
+      const actor = actorFrom(req);
+      const added = [];
+      const skipped = [];
+      for (const name of names) {
+        const rowId = addRow(name, actor);
+        if (rowId === null) skipped.push(name);
+        else added.push({ id: rowId, name });
+      }
+      res.status(201).json({ added, skipped });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   router.patch('/rows/:rowId/name', (req, res) => {
     try {
       const rowId = Number(req.params.rowId);
@@ -318,6 +345,71 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const completeCategory = tree.find((n) => n.type === 'category' && n.id === TRACKERS_COMPLETE_CATEGORY_ID);
       const complete = !!(completeCategory && completeCategory.children.some((c) => c.type === 'page' && c.id === pageId));
       res.json({ complete });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Totally deletes this tracker -- by request, for cleaning up a
+  // finished/throwaway one without asking Claude (or Amber, by hand) to
+  // do it every time. Tracker Manager-only, and only ALLOWED while the
+  // tracker is filed under "Trackers - Complete" -- enforced here too,
+  // not just hidden client-side, same "never trust the client alone"
+  // rule every admin-gated action on this dashboard follows. Removes the
+  // sidebar entry outright (not moved -- there's nowhere left to move it
+  // to) and deletes the package folder from disk.
+  //
+  // Checkpointing the WAL and closing `db` FIRST matters on Windows: this
+  // router's `db` has held data.db (and its WAL/SHM sidecars) open since
+  // this tracker's server.js was first required, and a still-open SQLite
+  // handle blocks deleting the folder that holds it (confirmed
+  // repeatedly in this dashboard's own dev-loop smoke tests -- EPERM).
+  // Confirmed the hard way that close() ALONE isn't always enough --
+  // Windows can still be a beat behind releasing the underlying file
+  // handle even after close() returns, so the checkpoint (folds the WAL
+  // back into the main file, same step DEPLOYMENT.md's own manual data.db
+  // copy instructions use) plus a short retry loop on the actual delete
+  // covers that gap instead of failing on the very first attempt.
+  router.post('/delete', async (req, res) => {
+    try {
+      if (!isTrackerManager(req)) {
+        return res.status(403).json({ error: 'Only a Tracker Manager can delete a tracker.' });
+      }
+      const tree = readNavLayout() || [];
+      const completeCategory = tree.find((n) => n.type === 'category' && n.id === TRACKERS_COMPLETE_CATEGORY_ID);
+      const isComplete = !!(completeCategory && completeCategory.children.some((c) => c.type === 'page' && c.id === pageId));
+      if (!isComplete) {
+        return res.status(409).json({ error: 'Only a tracker marked Tracking Complete can be deleted.' });
+      }
+
+      removePageNode(tree, pageId);
+      writeNavLayout(tree);
+
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      db.close();
+      let filesRemoved = false;
+      let lastErr = null;
+      for (let attempt = 0; attempt < 5 && !filesRemoved; attempt++) {
+        try {
+          fs.rmSync(storageDir, { recursive: true, force: true });
+          filesRemoved = true;
+        } catch (err) {
+          lastErr = err;
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+      if (!filesRemoved) {
+        // Best-effort -- the tracker is already gone from the sidebar
+        // either way (the part that actually matters to a viewer), so a
+        // leftover folder isn't worth failing this request over. Rare
+        // even with the checkpoint+retries above, but if it happens, a
+        // dev-server restart clears it (see DEPLOYMENT.md's own
+        // "Deploying Rollout Tracker Builder" section for the equivalent
+        // production case).
+        console.error(`Tracker "${pageId}" removed from the sidebar, but its files could not be fully deleted after 5 attempts:`, lastErr);
+      }
+      res.json({ ok: true, filesRemoved });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
