@@ -52,16 +52,24 @@ const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, c
 // MENUCATEGORY_TESTING lists, on top of Amber), "trackers-complete" (NOT
 // hidden, now newly restricted down to only whoever
 // MENUCATEGORY_TRACKERS_COMPLETE lists, having previously been visible to
-// everyone), and a blank-valued MENUCATEGORY_<ID> (open to everyone,
-// never hidden, no individual lockdown needed). A category's own children
-// still get the plain hidden:true check regardless -- an access rule is a
-// CATEGORY-level concept.
+// everyone), a blank-valued MENUCATEGORY_<ID> (open to everyone, never
+// hidden, no individual lockdown needed), and a HIDE-valued one (excluded
+// from a non-admin's sidebar exactly like plain hidden:true -- but
+// pageVisibleTo, registry.js, still leaves the underlying page/API fully
+// open, unlike a real name-restricted or ADMIN ONLY rule -- see
+// categoryAccessFor's own comment for why that distinction exists: a
+// category whose pages are also reachable through their own "-tabs"
+// wrapper page needs its sidebar entry hidden without breaking that
+// wrapper's own tabs, which load by hitting those same pages' APIs
+// directly). A category's own children still get the plain hidden:true
+// check regardless -- an access rule is a CATEGORY-level concept.
 function stripHiddenForUser(tree, user) {
   return (tree || [])
     .filter((node) => {
       if (node.type === 'category') {
         const access = categoryAccessFor(node.id);
         if (access) {
+          if (access.hide) return false;
           if (access.open) return true;
           const name = user?.name?.trim().toLowerCase();
           return !!name && access.names.includes(name);
