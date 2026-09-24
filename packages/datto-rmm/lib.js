@@ -342,6 +342,22 @@ function mapDeviceSummary(device) {
     lastSeen: device.lastSeen ?? device.lastSeenDate ?? null,
     agentVersion: device.aor ?? device.agentVersion ?? null,
     rebootRequired: Boolean(device.rebootRequired),
+    // UNCONFIRMED against this account's real live payload -- unlike every
+    // other field in this mapping (each checked against a real raw device
+    // dump, per this file's own header comment), this one hasn't been.
+    // Datto RMM's v2 API is documented (publicly, not confirmed live here)
+    // as returning a nested `deviceType: { category, type }` object, with
+    // `category` being the coarse bucket a "devices by type" breakdown
+    // would want (e.g. "Laptop", "Desktop", "Server", "Printer", "Mobile",
+    // "ESXi Host", "Network Device"). Added for Meeting Prep's own live
+    // "Core Resources" widgets (by request), same purely-additive
+    // reasoning getAllDevices() itself was added under -- every existing
+    // export/behavior in this file is unchanged. Falls back to 'Unknown'
+    // rather than breaking anything if the real shape turns out to differ.
+    // Confirm against a real device payload from this account (e.g. log one
+    // raw `device` object here) before relying on the category labels for
+    // anything beyond a rough breakdown.
+    deviceType: pick(device.deviceType?.category, device.deviceType?.type) ?? 'Unknown',
   };
 }
 
@@ -357,6 +373,25 @@ async function getDevicesForFilter(filterId) {
   const totalCount = Number(payload.pageDetails?.totalCount ?? payload.devices?.length ?? 0);
   const devices = (payload.devices ?? []).map(mapDeviceSummary).filter(Boolean);
   return { devices, totalCount, truncated: totalCount > devices.length };
+}
+
+// Every device on the account, fully paginated -- unlike
+// getDevicesForFilter() (capped at one page/250, by design, for its own
+// popup-list use case), this is for a caller that needs the REAL complete
+// device list to filter/group itself. Added for Check Client's own Datto
+// RMM section (by request -- "collect report content... segmented by
+// client" needed the full device list grouped by real Datto site, not
+// just a single filter's own count/list). Confirmed against the real
+// account: ~1629 devices as of this addition, needing 7 pages at
+// 250/page -- MAX_DEVICE_PAGES (50) leaves comfortable headroom for real
+// fleet growth well beyond that, same margin-above-confirmed-need
+// reasoning as MAX_ALERT_PAGES above. Purely additive -- every existing
+// export/behavior in this file is unchanged.
+const MAX_DEVICE_PAGES = 50;
+
+async function getAllDevices() {
+  const raw = await fetchAllPages('/v2/account/devices', {}, 'devices', MAX_DEVICE_PAGES);
+  return raw.map(mapDeviceSummary).filter(Boolean);
 }
 
 // Disk-space parsing -- the ORIGINAL client's own parseDisksFromAudit()
@@ -483,4 +518,4 @@ async function getDeviceDetails(deviceUid) {
   };
 }
 
-module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts };
+module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts, getAllDevices };

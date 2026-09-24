@@ -8,8 +8,9 @@
 // caching behavior are always identical to visiting that page directly.
 const express = require('express');
 const axios = require('axios');
-const { aestDayBoundsIso } = require('@dashboard/autotask-client');
+const { aestDayBoundsIso, matchesWildcard } = require('@dashboard/autotask-client');
 const { getToken: getIngramToken, getSubscriptionDetail } = require('@dashboard/ingram-client');
+const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 
 const contractChecks = require('@dashboard/contract-checks/server.js');
 const ingramSubscriptions = require('@dashboard/ingram-subscriptions/server.js');
@@ -235,6 +236,111 @@ router.get('/services', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Section 5 -- Datto RMM, via @dashboard/datto-rmm's own lib.js (NOT its
+// server.js -- that package's own router/cache is for its account-wide
+// overview page, a different shape; this calls the underlying client
+// functions directly, in-process, same "reuse the sibling's own function,
+// don't duplicate it" spirit as Sections 1-4 above, just one layer lower
+// since datto-rmm/server.js has nothing this page's own per-client shape
+// could reuse as-is). Own independent 20-minute cache here (same TTL
+// convention as every other external-API snapshot on this dashboard) --
+// getAllDevices()/getOpenAlerts() are both real multi-request pulls (the
+// alerts one in particular, ~14-20s cold -- see datto-rmm/README.md), so
+// this must not re-fetch either on every client search.
+//
+// Datto's own siteName is a THIRD naming system alongside Autotask's and
+// Ingram's own client names (see the Autotask Client/Ingram Client split
+// above) -- so this gets its own "Datto Site" search field client-side
+// (defaulted from Autotask Client, editable, same one-way-mirror pattern
+// Ingram Client already uses) rather than assuming Datto's site names
+// line up with either. Matched with matchesWildcard() (@dashboard/
+// autotask-client), the same wildcard/contains convention every other
+// search on this dashboard uses -- no bespoke fuzzy-matching cascade
+// (unlike the Rewst tenant match above) since there's no real Datto site
+// name data available to calibrate one against; a plain wildcard search
+// the user can adjust themselves is the honest default here.
+const DATTO_CACHE_TTL_MS = 20 * 60 * 1000; // 20 min -- same convention as Datto RMM's own overview cache
+let dattoDevicesCache = null; // { data, expiresAt }
+let dattoDevicesInFlight = null;
+async function getCachedDattoDevices(force) {
+  if (!force && dattoDevicesCache && Date.now() < dattoDevicesCache.expiresAt) return dattoDevicesCache.data;
+  if (!dattoDevicesInFlight) {
+    dattoDevicesInFlight = dattoRmm
+      .getAllDevices()
+      .then((data) => {
+        dattoDevicesCache = { data, expiresAt: Date.now() + DATTO_CACHE_TTL_MS };
+        return data;
+      })
+      .finally(() => {
+        dattoDevicesInFlight = null;
+      });
+  }
+  return dattoDevicesInFlight;
+}
+
+let dattoAlertsCache = null; // { data, expiresAt }
+let dattoAlertsInFlight = null;
+async function getCachedDattoAlerts(force) {
+  if (!force && dattoAlertsCache && Date.now() < dattoAlertsCache.expiresAt) return dattoAlertsCache.data;
+  if (!dattoAlertsInFlight) {
+    dattoAlertsInFlight = dattoRmm
+      .getOpenAlerts()
+      .then((data) => {
+        dattoAlertsCache = { data, expiresAt: Date.now() + DATTO_CACHE_TTL_MS };
+        return data;
+      })
+      .finally(() => {
+        dattoAlertsInFlight = null;
+      });
+  }
+  return dattoAlertsInFlight;
+}
+
+router.get('/datto-rmm', async (req, res) => {
+  if (!dattoRmm.hasDattoCredentials()) return res.json({ connected: false });
+  const siteTerm = (req.query.site || '').trim();
+  if (!siteTerm) return res.status(400).json({ error: 'Query param "site" is required.' });
+  try {
+    const force = req.query.force === 'true';
+    const [allDevices, alertsResult] = await Promise.all([getCachedDattoDevices(force), getCachedDattoAlerts(force)]);
+
+    const devices = allDevices.filter((d) => matchesWildcard(d.site, siteTerm));
+    const alerts = alertsResult.alerts.filter((a) => matchesWildcard(a.siteName, siteTerm));
+
+    const bySite = new Map();
+    for (const d of devices) {
+      if (!bySite.has(d.site)) bySite.set(d.site, []);
+      bySite.get(d.site).push(d);
+    }
+    const sites = [...bySite.keys()].sort((a, b) => a.localeCompare(b));
+
+    res.json({
+      connected: true,
+      asOf: new Date().toISOString(),
+      siteTerm,
+      totalDevices: devices.length,
+      onlineCount: devices.filter((d) => d.online).length,
+      offlineCount: devices.filter((d) => !d.online).length,
+      rebootRequiredCount: devices.filter((d) => d.rebootRequired).length,
+      bySite: sites.map((site) => ({ site, devices: bySite.get(site) })),
+      alertsTotalCount: alerts.length,
+      // Real alerts total (alertsResult.totalCount) can be bigger than this
+      // client-matched list even when NOT truncated overall -- that's just
+      // every High/Critical alert account-wide, most of which belong to
+      // other clients. truncated only means "the underlying account-wide
+      // fetch itself hit its own safety cap" (see datto-rmm/lib.js), which
+      // would make even THIS client's own count potentially incomplete --
+      // worth flagging here rather than silently inheriting.
+      alertsTruncated: alertsResult.truncated,
+      alerts,
+    });
+  } catch (err) {
+    console.error(err);
+    const detail = err.response ? `Datto API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
+    res.status(500).json({ error: detail });
   }
 });
 
