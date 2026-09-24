@@ -1,4 +1,5 @@
 const express = require('express');
+const { isDashboardAdmin } = require('@dashboard/shell/registry.js');
 const { matchesWildcard, aestDayBoundsIso, getTicketUrl, getClient, fetchByFieldIn, getPicklistLabels, resolveCompanyName, mapWithConcurrency } = require('@dashboard/autotask-client');
 const {
   TOGGLE_FIELDS,
@@ -18,15 +19,10 @@ const {
 } = require('./db.js');
 const { runSync, PROCESS_TYPE, resolveTicketAutotaskId } = require('./sync.js');
 
-// Edit Template (below) is restricted to Amber, by request -- same pattern
-// TC Elite Rollout's own COLUMN_ADMIN_EMAIL uses. Checked here again, not
-// just in client.js's matching gate, since a client-side-only check is
+// Edit Template (below) is restricted to ADMIN_FULL_ACCESS (.env,
+// packages/shell/registry.js), by request. Checked here again, not just
+// in client.js's matching gate, since a client-side-only check is
 // trivially bypassed by anyone hitting the API directly.
-const CONTRACT_CHECKS_ADMIN_EMAIL = 'amber@ambientit.com.au';
-function isContractChecksAdmin(req) {
-  const email = req.session.user?.email;
-  return !!email && email.toLowerCase() === CONTRACT_CHECKS_ADMIN_EMAIL;
-}
 
 // True only for a request that reached this app AS localhost -- a direct
 // dev hit (`npm start`, http://localhost:3000), never the real production
@@ -990,7 +986,7 @@ router.get('/templates/:key', (req, res) => {
 });
 
 router.patch('/templates/:key', (req, res) => {
-  if (!isContractChecksAdmin(req)) {
+  if (!isDashboardAdmin(req)) {
     return res.status(403).json({ error: 'Editing the note template is restricted to Amber for now.' });
   }
   const { name, content } = req.body || {};

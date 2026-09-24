@@ -26,8 +26,7 @@ let lastAllDates = false; // off by default -- the "All" checkbox that removes t
 // work; server.js's own PATCH /templates/:key checks this again, since a
 // client-side-only check is trivially bypassed by anyone hitting the API
 // directly.
-let currentUserEmail = null;
-const CONTRACT_CHECKS_ADMIN_EMAIL = 'amber@ambientit.com.au';
+let currentUserIsAdmin = false;
 
 // The six checkbox-style fields every item row carries -- see this
 // package's db.js/README for the schema. Duplicated here (not imported --
@@ -92,12 +91,12 @@ export function mount(container) {
   fetch('/api/me')
     .then((res) => res.json())
     .then((data) => {
-      currentUserEmail = data.user ? data.user.email : null;
+      currentUserIsAdmin = !!data.isAdmin;
     })
     .catch(() => {
       // Non-essential for anything except the Edit Template gate below --
-      // fails open to "not Amber" (the button just tells the user to see
-      // her) rather than blocking the page.
+      // fails open to "not admin" (the button just tells the user to see
+      // Amber) rather than blocking the page.
     });
 
   container.innerHTML = `
@@ -1203,7 +1202,7 @@ export function mount(container) {
     });
 
     overlay.querySelector('.cc-ticket-note-edit-template-button').addEventListener('click', () => {
-      if (!currentUserEmail || currentUserEmail.toLowerCase() !== CONTRACT_CHECKS_ADMIN_EMAIL) {
+      if (!currentUserIsAdmin) {
         alert('See Amber to edit the note template.');
         return;
       }

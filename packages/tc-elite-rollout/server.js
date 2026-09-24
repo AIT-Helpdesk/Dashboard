@@ -1,4 +1,5 @@
 const express = require('express');
+const { isAdminFullAccess } = require('@dashboard/shell/registry.js');
 const {
   db,
   nowIso,
@@ -33,15 +34,14 @@ function actorFrom(req) {
 // Adding a whole new column to the grid, or a new stage to an existing
 // compound column's detail sheet, changes what every client/staff member
 // sees, unlike an ordinary status edit -- by request, both are restricted
-// to a single person rather than every signed-in user. A single
-// hardcoded email rather than a role/permissions table -- this is a
-// one-person allowlist, not a general auth system; if that changes, this
-// is the one place to generalise. Checked server-side (not just
-// hidden/disabled client-side in client.js) since the client is just a
-// UI convenience layer over this API, not the enforcement point.
-const COLUMN_ADMIN_EMAIL = 'amber@ambientit.com.au';
+// to ADMIN_FULL_ACCESS (.env, packages/shell/registry.js) rather than
+// every signed-in user. `actor` ({email, name} -- see actorFrom above)
+// already has what isAdminFullAccess needs (matches by name). Checked
+// server-side (not just hidden/disabled client-side in client.js) since
+// the client is just a UI convenience layer over this API, not the
+// enforcement point.
 function isColumnAdmin(actor) {
-  return actor.email && actor.email.toLowerCase() === COLUMN_ADMIN_EMAIL;
+  return isAdminFullAccess(actor);
 }
 
 // Column `key` is a stable slug derived from its label at creation time

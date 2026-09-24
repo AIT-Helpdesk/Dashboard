@@ -12,14 +12,13 @@ let lastDetailData = null;
 // A detail sheet's own Show All, separate from the master grid's -- see
 // buildAddStageSection().
 let showAllDetail = false;
-// Fetched fresh on every mount() from /api/me -- who's currently signed
-// in, used only to give an immediate "see Amber" message on click rather
-// than a wasted form-open + round trip. Not the real enforcement point --
-// server.js checks this again on the actual POST /columns, since a
-// client-side-only check is trivially bypassed by anyone hitting the API
-// directly.
-let currentUserEmail = null;
-const COLUMN_ADMIN_EMAIL = 'amber@ambientit.com.au';
+// Fetched fresh on every mount() from /api/me's own `isAdmin` (ADMIN_FULL_
+// ACCESS, packages/shell/registry.js) -- used only to give an immediate
+// "see Amber" message on click rather than a wasted form-open + round
+// trip. Not the real enforcement point -- server.js checks this again on
+// the actual POST /columns, since a client-side-only check is trivially
+// bypassed by anyone hitting the API directly.
+let currentUserIsAdmin = false;
 
 // STATUS_LABELS is what the edit dropdown shows (full text -- no
 // ambiguity while actually picking a value); STATUS_SYMBOLS is what a
@@ -116,11 +115,11 @@ export function mount(container) {
   fetch('/api/me')
     .then((res) => res.json())
     .then((data) => {
-      currentUserEmail = data.user ? data.user.email : null;
+      currentUserIsAdmin = !!data.isAdmin;
     })
     .catch(() => {
       // Non-essential for anything except the Add Column gate below --
-      // if this fails, that gate just falls back to "not Amber" (the
+      // if this fails, that gate just falls back to "not admin" (the
       // server-side check is the real enforcement anyway).
     });
 
@@ -224,11 +223,12 @@ export function mount(container) {
   });
 
   // ---- Add Column ----
-  // Restricted to Amber -- see COLUMN_ADMIN_EMAIL above and the matching
-  // server-side check in server.js. Everyone else can still click the
-  // button; they just get told who to see instead of the form opening.
+  // Restricted to ADMIN_FULL_ACCESS -- see currentUserIsAdmin above and
+  // the matching server-side check in server.js. Everyone else can still
+  // click the button; they just get told who to see instead of the form
+  // opening.
   addColumnButton.addEventListener('click', () => {
-    if (!currentUserEmail || currentUserEmail.toLowerCase() !== COLUMN_ADMIN_EMAIL) {
+    if (!currentUserIsAdmin) {
       alert('See Amber to authorise this function.');
       return;
     }
@@ -455,8 +455,8 @@ export function mount(container) {
     wireBulkColumnButtons(table, 'detail');
   }
 
-  // Add Stage -- restricted to Amber, same as Add Column (see
-  // COLUMN_ADMIN_EMAIL above and the matching server-side check in
+  // Add Stage -- restricted to ADMIN_FULL_ACCESS, same as Add Column (see
+  // currentUserIsAdmin above and the matching server-side check in
   // server.js). Built fresh on every renderDetail() call (rather than
   // living in the static header HTML like Add Client/Add Column) since
   // it's scoped to whichever compound column's detail sheet is currently
@@ -509,7 +509,7 @@ export function mount(container) {
     wrapper.appendChild(form);
 
     button.addEventListener('click', () => {
-      if (!currentUserEmail || currentUserEmail.toLowerCase() !== COLUMN_ADMIN_EMAIL) {
+      if (!currentUserIsAdmin) {
         alert('See Amber to authorise this function.');
         return;
       }

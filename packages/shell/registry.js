@@ -90,9 +90,72 @@ function mountPageRouter(page) {
 // page id. All three answer 404, not 403 -- the point is that the page
 // doesn't appear to exist at all for anyone not on the list, not merely
 // that it's visibly locked.
-function pageVisibleTo(page, email) {
-  if (!page.restrictedTo) return true;
-  return !!email && page.restrictedTo.includes(email.toLowerCase());
+//
+// Takes the whole `user` object ({email, name} -- req.session.user, or
+// null when signed out), not just an email, since ADMIN_FULL_ACCESS below
+// and CATEGORY-level access (categoryAllowedNames) both match by name, not
+// email -- restrictedTo itself still matches by email, unchanged.
+//
+// A page also inherits whatever access list its own sidebar CATEGORY
+// currently has configured (see categoryAllowedNames below) -- e.g. a page
+// filed under "Trackers - Complete" is only visible to whoever
+// TRACKERS_COMPLETE lists, on top of (not instead of) any restrictedTo the
+// page has of its own. Both checks are ANDed together deliberately: a
+// page's own narrower restrictedTo (e.g. Ticket Dashboards (Test), still
+// Amber-only) is never silently loosened just because its category grants
+// broader access to more people.
+function pageVisibleTo(page, user) {
+  if (isAdminFullAccess(user)) return true;
+  if (page.restrictedTo) {
+    const email = user?.email;
+    if (!email || !page.restrictedTo.includes(email.toLowerCase())) return false;
+  }
+  const categoryId = categoryIdForPage(page.id);
+  if (categoryId) {
+    const allowed = categoryAllowedNames(categoryId);
+    if (allowed !== null) {
+      const name = user?.name?.trim().toLowerCase();
+      if (!name || !allowed.includes(name)) return false;
+    }
+  }
+  return true;
+}
+
+// Which sidebar category (if any) a page currently sits directly under --
+// read fresh from nav-layout.json every call (same "no separate cache to
+// invalidate" tradeoff as reading `pages` itself), since which category a
+// page is filed under can change at runtime (drag-and-drop reorder, or
+// Rollout Tracker Builder's own Hide Complete/Un-Complete This moving a
+// tracker between "Trackers" and "Trackers - Complete"). Only ever one
+// level deep -- nav-layout.json never nests a category inside another.
+function categoryIdForPage(pageId) {
+  const tree = readNavLayout() || [];
+  for (const node of tree) {
+    if (node.type === 'category' && Array.isArray(node.children) && node.children.some((c) => c.id === pageId)) {
+      return node.id;
+    }
+  }
+  return null;
+}
+
+// A sidebar category can have its own access list in .env -- the key is
+// the category's id, uppercased with hyphens turned to underscores (e.g.
+// "trackers-complete" -> TRACKERS_COMPLETE, "testing" -> TESTING), value a
+// comma-separated list of exact Entra display names, same format/matching
+// as ADMIN_FULL_ACCESS and TRACKER_MANAGER. Returns null when that env var
+// isn't set at all -- the category has NO explicit access list configured,
+// so callers fall back to the plain hidden:true/stripHidden behaviour
+// instead. This is what makes "any category mentioned in .env restricts
+// itself automatically" work with zero code changes per category -- by
+// request, so Amber can add more restricted categories later just by
+// adding more lines to .env, never touching this file again.
+function categoryAllowedNames(categoryId) {
+  const envKey = categoryId.toUpperCase().replace(/-/g, '_');
+  if (!(envKey in process.env)) return null;
+  return (process.env[envKey] || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 // Shared sidebar layout (categories + page order/grouping) -- one JSON file
@@ -115,18 +178,35 @@ function writeNavLayout(tree) {
   fs.writeFileSync(NAV_LAYOUT_PATH, JSON.stringify(tree, null, 2));
 }
 
-// One-person allowlist for every "only Amber can change this SHARED
-// setting" gate across the dashboard -- originally just the sidebar
-// layout (reorder + hide/unhide), now also Ticket Info's own permanent
-// tabs (see ticket-info-tabs/server.js), so it lives here rather than
-// inside shell/server.js, the same reason `pages`/pageVisibleTo/nav-layout
-// live here: any sibling package's own server.js needs to reach it too.
-// Same one-person-allowlist pattern as COLUMN_ADMIN_EMAIL/isColumnAdmin()
-// in TC Elite Rollout.
-const DASHBOARD_ADMIN_EMAIL = 'amber@ambientit.com.au';
+// Dashboard-wide full-access allowlist, driven by .env's ADMIN_FULL_ACCESS
+// -- comma-separated exact Entra display names, same format/matching as
+// TRACKER_MANAGER (rollout-tracker-permissions.js) and every category
+// access list above. This is now the SINGLE source of truth for "only
+// Amber can change this SHARED setting" across the whole dashboard --
+// the sidebar layout (reorder + hide/unhide), Ticket Info's own permanent
+// tabs (ticket-info-tabs/server.js), TC Elite Rollout's own column-admin
+// gate, Contract Checks' note-template editor, What's On's automation
+// status banner, the Strety automation reconnect flow, and every
+// category-level access list above (an ADMIN_FULL_ACCESS name always
+// bypasses those too) -- replacing what used to be a separately
+// hardcoded 'amber@ambientit.com.au' email constant in each of those
+// files. Matched by NAME (req.session.user.name, Entra's own displayName
+// -- see auth.js), not email, the one deliberate departure from
+// restrictedTo's own email matching, same reasoning TRACKER_MANAGER
+// already established: a human-editable .env list beats maintaining
+// exact emails everywhere.
+function adminFullAccessNames() {
+  return (process.env.ADMIN_FULL_ACCESS || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+function isAdminFullAccess(user) {
+  const name = user?.name?.trim().toLowerCase();
+  return !!name && adminFullAccessNames().includes(name);
+}
 function isDashboardAdmin(req) {
-  const email = req.session.user?.email;
-  return !!email && email.toLowerCase() === DASHBOARD_ADMIN_EMAIL;
+  return isAdminFullAccess(req.session?.user);
 }
 
 module.exports = {
@@ -136,9 +216,11 @@ module.exports = {
   setMountPageRouterImpl,
   mountPageRouter,
   pageVisibleTo,
+  categoryIdForPage,
+  categoryAllowedNames,
   NAV_LAYOUT_PATH,
   readNavLayout,
   writeNavLayout,
-  DASHBOARD_ADMIN_EMAIL,
+  isAdminFullAccess,
   isDashboardAdmin,
 };

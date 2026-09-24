@@ -22,7 +22,7 @@ const PORT = process.env.PORT || 3000;
 // external-page-builder, ticket-info-tabs) can reach the same shared state
 // and register a brand-new page package at runtime with no process
 // restart. See that module's own comment for the full reasoning.
-const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, setMountPageRouterImpl, mountPageRouter } = require('./registry.js');
+const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, categoryAllowedNames, setMountPageRouterImpl, mountPageRouter } = require('./registry.js');
 
 // The sidebar (drag-and-drop reorder AND right-click hide/unhide, both in
 // app.js) is only editable by the one dashboard-admin account
@@ -38,11 +38,33 @@ const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, s
 // it's sent to a non-admin browser -- not just visually filtered client
 // side, so a hidden item's very existence never reaches anyone else's
 // network tab. A surviving category also has its own children filtered the
-// same way. The admin's own browser always gets the RAW tree (see
-// /api/nav-layout below) so they can find and unhide something.
-function stripHidden(tree) {
+// same way. The admin's (ADMIN_FULL_ACCESS's) own browser always gets the
+// RAW tree (see /api/nav-layout below) so they can find and unhide
+// something.
+//
+// A category with its OWN access list configured (categoryAllowedNames,
+// registry.js -- e.g. .env's TESTING or TRACKERS_COMPLETE) is handled
+// differently: that list REPLACES the hidden:true check for that one
+// category entirely, rather than adding to it -- the explicit list is a
+// stronger, more specific signal than the generic hidden flag. This is
+// what makes both existing shapes work correctly: "testing" (hidden:true,
+// now opened back up to whoever TESTING lists, on top of Amber) and
+// "trackers-complete" (NOT hidden, now newly restricted down to only
+// whoever TRACKERS_COMPLETE lists, having previously been visible to
+// everyone). A category's own children still get the plain hidden:true
+// check regardless -- an access list is a CATEGORY-level concept.
+function stripHiddenForUser(tree, user) {
   return (tree || [])
-    .filter((node) => !node.hidden)
+    .filter((node) => {
+      if (node.type === 'category') {
+        const allowed = categoryAllowedNames(node.id);
+        if (allowed !== null) {
+          const name = user?.name?.trim().toLowerCase();
+          return !!name && allowed.includes(name);
+        }
+      }
+      return !node.hidden;
+    })
     .map((node) => (node.type === 'category' ? { ...node, children: node.children.filter((c) => !c.hidden) } : node));
 }
 
@@ -252,21 +274,17 @@ function stretyAutomationRedirectUriFor(req) {
 // silently reused her own already-active session rather than the
 // login_hint below. Every automated check-in since then was correctly,
 // faithfully attributed to her -- there was no bug in what Strety recorded,
-// only in who was allowed to trigger the reconnect. Gated to Amber only
-// for now (both here and its matching visibility gate in
-// packages/whats-on/server.js's canSeeAutomationStatus) while a permanent
-// design gets decided. This token store (packages/strety-autotask-sync/
-// .tokens.json, via stretyAutomationClient) is read ONLY by sync.js's
-// scheduled writes -- confirmed nothing dashboard-facing requires this
-// module anywhere else, so reconnecting it here never affects what Strety
-// data any user's own dashboard session sees.
-const STRETY_AUTOMATION_ADMIN_EMAIL = 'amber@ambientit.com.au';
-function isStretyAutomationAdmin(req) {
-  const email = req.session.user?.email;
-  return !!email && email.toLowerCase() === STRETY_AUTOMATION_ADMIN_EMAIL;
-}
+// only in who was allowed to trigger the reconnect. Gated to ADMIN_FULL_
+// ACCESS (isDashboardAdmin, registry.js -- both here and its matching
+// visibility gate in packages/whats-on/server.js's canSeeAutomationStatus)
+// while a permanent design gets decided. This token store
+// (packages/strety-autotask-sync/.tokens.json, via stretyAutomationClient)
+// is read ONLY by sync.js's scheduled writes -- confirmed nothing
+// dashboard-facing requires this module anywhere else, so reconnecting it
+// here never affects what Strety data any user's own dashboard session
+// sees.
 
-// The admin gate above (isStretyAutomationAdmin) fixed "wrong PERSON
+// The admin gate above (isDashboardAdmin) fixed "wrong PERSON
 // triggers the reconnect" -- it does NOT fix "the right person's own
 // browser happens to already have a different Strety session active",
 // which is a second, separate way this has gone wrong (Strety's login page
@@ -307,7 +325,7 @@ function stretyAutomationConnectInterstitialPage() {
 }
 
 app.get('/auth/strety-automation/connect', (req, res) => {
-  if (!isStretyAutomationAdmin(req)) {
+  if (!isDashboardAdmin(req)) {
     return res.status(403).send(stretyConnectPage('Reconnecting the Helpdesk automation account is restricted to Amber for now.'));
   }
   if (!process.env.STRETY_AUTOMATION_CLIENT_ID) {
@@ -339,7 +357,7 @@ app.get('/auth/strety-automation/callback', async (req, res) => {
   // treated as a secret (it's a plain OAuth query param, visible in this
   // very URL), so someone could in principle reach this callback with a
   // real code without ever passing through our own /connect route.
-  if (!isStretyAutomationAdmin(req)) {
+  if (!isDashboardAdmin(req)) {
     return res.status(403).send(stretyConnectPage('Reconnecting the Helpdesk automation account is restricted to Amber for now.'));
   }
   if (req.query.error) {
@@ -375,7 +393,7 @@ app.get('/auth/strety-automation/callback', async (req, res) => {
 // visible failure on What's On than continuing to write as the wrong
 // account.
 app.get('/auth/strety-automation/disconnect', (req, res) => {
-  if (!isStretyAutomationAdmin(req)) {
+  if (!isDashboardAdmin(req)) {
     return res.status(403).send(stretyConnectPage('Disconnecting the Helpdesk automation account is restricted to Amber for now.'));
   }
   stretyAutomationClient.clearTokens();
@@ -398,7 +416,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/pages-registry.js', (req, res) => {
   const entries = pages
-    .filter((p) => pageVisibleTo(p, req.session.user?.email))
+    .filter((p) => pageVisibleTo(p, req.session.user))
     .map(
       (p) =>
         `  { id: ${JSON.stringify(p.id)}, label: ${JSON.stringify(p.label)}, external: ${JSON.stringify(!!p.external)}, tabbed: ${JSON.stringify(!!p.tabbed)}, module: () => import('/pages/${p.id}/client.js') },`
@@ -409,14 +427,14 @@ app.get('/pages-registry.js', (req, res) => {
 
 app.get('/pages/:id/client.js', (req, res) => {
   const page = pages.find((p) => p.id === req.params.id);
-  if (!page || !page.client || !pageVisibleTo(page, req.session.user?.email)) return res.status(404).end();
+  if (!page || !page.client || !pageVisibleTo(page, req.session.user)) return res.status(404).end();
   res.type('application/javascript').sendFile(path.join(page.root, page.client));
 });
 
 app.get('/api/nav-layout', (req, res) => {
   const admin = isDashboardAdmin(req);
   const rawTree = readNavLayout();
-  res.json({ tree: admin ? rawTree : stripHidden(rawTree), editable: admin });
+  res.json({ tree: admin ? rawTree : stripHiddenForUser(rawTree, req.session.user), editable: admin });
 });
 
 app.put('/api/nav-layout', express.json(), (req, res) => {
@@ -456,7 +474,7 @@ setMountPageRouterImpl((page) => {
   if (!page.server) return;
   const router = require(path.join(page.root, page.server));
   app.use(`/api/${page.id}`, (req, res, next) => {
-    if (!pageVisibleTo(page, req.session.user?.email)) return res.status(404).json({ error: 'Not found.' });
+    if (!pageVisibleTo(page, req.session.user)) return res.status(404).json({ error: 'Not found.' });
     next();
   }, router);
 });
