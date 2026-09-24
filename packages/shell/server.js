@@ -43,16 +43,18 @@ const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, c
 // something.
 //
 // A category with its OWN access list configured (categoryAllowedNames,
-// registry.js -- e.g. .env's TESTING or TRACKERS_COMPLETE) is handled
-// differently: that list REPLACES the hidden:true check for that one
-// category entirely, rather than adding to it -- the explicit list is a
-// stronger, more specific signal than the generic hidden flag. This is
-// what makes both existing shapes work correctly: "testing" (hidden:true,
-// now opened back up to whoever TESTING lists, on top of Amber) and
+// registry.js -- e.g. .env's MENUCATEGORY_TESTING or
+// MENUCATEGORY_TRACKERS_COMPLETE) is handled differently: that list
+// REPLACES the hidden:true check for that one category entirely, rather
+// than adding to it -- the explicit list is a stronger, more specific
+// signal than the generic hidden flag. This is what makes both existing
+// shapes work correctly: "testing" (hidden:true, now opened back up to
+// whoever MENUCATEGORY_TESTING lists, on top of Amber) and
 // "trackers-complete" (NOT hidden, now newly restricted down to only
-// whoever TRACKERS_COMPLETE lists, having previously been visible to
-// everyone). A category's own children still get the plain hidden:true
-// check regardless -- an access list is a CATEGORY-level concept.
+// whoever MENUCATEGORY_TRACKERS_COMPLETE lists, having previously been
+// visible to everyone). A category's own children still get the plain
+// hidden:true check regardless -- an access list is a CATEGORY-level
+// concept.
 function stripHiddenForUser(tree, user) {
   return (tree || [])
     .filter((node) => {

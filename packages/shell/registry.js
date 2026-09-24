@@ -99,7 +99,7 @@ function mountPageRouter(page) {
 // A page also inherits whatever access list its own sidebar CATEGORY
 // currently has configured (see categoryAllowedNames below) -- e.g. a page
 // filed under "Trackers - Complete" is only visible to whoever
-// TRACKERS_COMPLETE lists, on top of (not instead of) any restrictedTo the
+// MENUCATEGORY_TRACKERS_COMPLETE lists, on top of (not instead of) any restrictedTo the
 // page has of its own. Both checks are ANDed together deliberately: a
 // page's own narrower restrictedTo (e.g. Ticket Dashboards (Test), still
 // Amber-only) is never silently loosened just because its category grants
@@ -139,18 +139,33 @@ function categoryIdForPage(pageId) {
 }
 
 // A sidebar category can have its own access list in .env -- the key is
-// the category's id, uppercased with hyphens turned to underscores (e.g.
-// "trackers-complete" -> TRACKERS_COMPLETE, "testing" -> TESTING), value a
-// comma-separated list of exact Entra display names, same format/matching
-// as ADMIN_FULL_ACCESS and TRACKER_MANAGER. Returns null when that env var
-// isn't set at all -- the category has NO explicit access list configured,
-// so callers fall back to the plain hidden:true/stripHidden behaviour
-// instead. This is what makes "any category mentioned in .env restricts
-// itself automatically" work with zero code changes per category -- by
-// request, so Amber can add more restricted categories later just by
-// adding more lines to .env, never touching this file again.
+// MENUCATEGORY_ followed by the category's id, uppercased with hyphens
+// turned to underscores (e.g. "trackers-complete" ->
+// MENUCATEGORY_TRACKERS_COMPLETE, "testing" -> MENUCATEGORY_TESTING),
+// value a comma-separated list of exact Entra display names, same
+// format/matching as ADMIN_FULL_ACCESS and TRACKER_MANAGER. Returns null
+// when that env var isn't set at all -- the category has NO explicit
+// access list configured, so callers fall back to the plain hidden:true/
+// stripHidden behaviour instead. This is what makes "any category
+// mentioned in .env restricts itself automatically" work with zero code
+// changes per category -- by request, so Amber can add more restricted
+// categories later just by adding more lines to .env, never touching this
+// file again.
+//
+// CONFIRMED the hard way this prefix matters and isn't optional: an
+// earlier version of this function derived the bare key (TESTING, not
+// MENUCATEGORY_TESTING) because that's what got pasted into this
+// conversation at the time -- production's real .env had already been set
+// up with the MENUCATEGORY_ prefix (matching Amber's own original
+// description of this feature), so categoryAllowedNames('testing')
+// silently returned null there even though TESTING's actual intended
+// value was sitting right there under a different key. No error anywhere
+// -- it just read as "this category has no access list configured" and
+// fell back to plain hidden:true, invisible to anyone who wasn't already
+// ADMIN_FULL_ACCESS. If this ever goes quiet again, check the exact env
+// var name on THAT machine's real .env before assuming the code is wrong.
 function categoryAllowedNames(categoryId) {
-  const envKey = categoryId.toUpperCase().replace(/-/g, '_');
+  const envKey = `MENUCATEGORY_${categoryId.toUpperCase().replace(/-/g, '_')}`;
   if (!(envKey in process.env)) return null;
   return (process.env[envKey] || '')
     .split(',')
