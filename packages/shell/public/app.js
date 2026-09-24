@@ -1581,9 +1581,13 @@ function renderCategory(node, index, activeId, admin) {
   const isExpanded = expandedCategories.has(node.id);
 
   const header = document.createElement('div');
-  // node.hidden only ever appears in an admin's own tree -- see server.js's
-  // stripHidden(), which removes it before a non-admin's browser ever
-  // receives it.
+  // node.hidden reaching a non-admin's own tree at all is normally
+  // impossible -- server.js's stripHiddenForUser() removes it before
+  // their browser ever receives it. The one exception: a category with
+  // its own MENUCATEGORY_ access list (registry.js's categoryAllowedNames)
+  // strips the flag off THAT category specifically once it's decided the
+  // current viewer is allowed in, so this dimmed/"(hidden)" styling never
+  // shows for someone who was actually just granted access to it.
   header.className = 'nav-category-header' + (node.hidden ? ' nav-category-header--hidden' : '');
   header.innerHTML =
     `<span class="nav-category-toggle">${isExpanded ? '▾' : '▸'}</span>${escapeHtml(node.label)}` +

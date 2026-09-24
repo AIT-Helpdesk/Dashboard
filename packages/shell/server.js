@@ -67,7 +67,24 @@ function stripHiddenForUser(tree, user) {
       }
       return !node.hidden;
     })
-    .map((node) => (node.type === 'category' ? { ...node, children: node.children.filter((c) => !c.hidden) } : node));
+    .map((node) => {
+      if (node.type !== 'category') return node;
+      const shaped = { ...node, children: node.children.filter((c) => !c.hidden) };
+      // A category admitted via its own access list is no longer
+      // "hidden" from THIS viewer's point of view -- strip the flag so
+      // app.js's renderCategory() doesn't render it dimmed with a
+      // "(hidden)" badge, which reads as a broken/admin-leftover artifact
+      // to someone who was actually just explicitly granted access.
+      // CONFIRMED the hard way against a real account (Dechen): the
+      // category correctly passed the filter above (the right people got
+      // let in), but the raw node still carried hidden:true through to
+      // the client, which renderCategory() had only ever expected to see
+      // on an ADMIN's own tree (see its own comment there) -- nobody else
+      // was ever supposed to receive hidden:true at all before category
+      // access lists existed, so this case was never handled.
+      if (categoryAllowedNames(node.id) !== null) delete shaped.hidden;
+      return shaped;
+    });
 }
 
 const app = express();
