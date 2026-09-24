@@ -278,6 +278,74 @@ function loadFileReportComponents(siteTerm) {
   return components;
 }
 
+// Same walk as loadFileReportComponents() above, but for EVERY client
+// folder at once and with no site-name filter -- used by Service Actions
+// (a separate page) to run the recommendations engine across the whole
+// client base in one request. Kept here rather than duplicated because
+// it's the exact same "latest date wins per kind" logic, just without the
+// matchesWildcard() narrowing loadFileReportComponents() applies. Returns
+// one entry per client folder that has at least one component, `site`
+// taken from whichever file supplied it (they're expected to agree within
+// one client folder -- see data/README.md's own note on this) falling
+// back to a prettified version of the folder name on the rare chance no
+// file inside it has a `site` field at all.
+function loadAllFileReportComponentsByClient() {
+  let clientDirs;
+  try {
+    clientDirs = fs
+      .readdirSync(REPORT_DATA_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name !== 'images');
+  } catch {
+    return [];
+  }
+  const results = [];
+  for (const clientDir of clientDirs) {
+    const clientPath = path.join(REPORT_DATA_DIR, clientDir.name);
+    let dateDirs;
+    try {
+      dateDirs = fs.readdirSync(clientPath, { withFileTypes: true }).filter((d) => d.isDirectory());
+    } catch {
+      continue;
+    }
+    dateDirs.sort((a, b) => b.name.localeCompare(a.name));
+    const seenKinds = new Set();
+    const components = [];
+    let site = null;
+    for (const dateDir of dateDirs) {
+      const datePath = path.join(clientPath, dateDir.name);
+      let filenames;
+      try {
+        filenames = fs.readdirSync(datePath).filter((f) => f.endsWith('.json'));
+      } catch {
+        continue;
+      }
+      for (const filename of filenames) {
+        const kind = filename.replace(/\.json$/, '');
+        if (seenKinds.has(kind)) continue;
+        let data;
+        try {
+          data = JSON.parse(fs.readFileSync(path.join(datePath, filename), 'utf8'));
+        } catch (err) {
+          console.error(`Meeting Prep: failed to read data/${clientDir.name}/${dateDir.name}/${filename}:`, err.message);
+          continue;
+        }
+        seenKinds.add(kind);
+        if (!site && data.site) site = data.site;
+        const component = buildReportComponent(kind, data);
+        if (component) components.push(component);
+      }
+    }
+    if (components.length === 0) continue;
+    components.sort((a, b) => REPORT_ORDER.indexOf(a.kind) - REPORT_ORDER.indexOf(b.kind));
+    results.push({
+      client: site || clientDir.name.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      components,
+    });
+  }
+  results.sort((a, b) => a.client.localeCompare(b.client));
+  return results;
+}
+
 // --------------------------------------------------------------------------
 // Live components -- fetched fresh from each system's own API on every
 // search, rather than read from data/. Each builder below is wrapped
@@ -572,6 +640,27 @@ router.get('/components', async (req, res) => {
     // const ticketsComponent = ... -- see comment above; disabled for now.
 
     res.json({ connected: true, asOf, siteTerm, components });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk, all-clients equivalent of /components -- used by the separate
+// Service Actions page to run the same rules-based recommendations across
+// every client at once. File-based only, deliberately -- no live
+// Datto/Autotask calls fanned out across 28 clients, both because the
+// recommendations engine itself never looks at live data anyway (see
+// meeting-prep-recommendations.js's own header) and because Autotask
+// ticket counts have already tripped a real rate limit once at even the
+// one-client-at-a-time volume this page's own /components route uses (see
+// the comment above) -- a bulk version of that same call would be a much
+// worse version of the same problem.
+router.get('/all-file-components', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const byClient = loadAllFileReportComponentsByClient();
+    res.json({ asOf: new Date().toISOString(), clients: byClient });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
