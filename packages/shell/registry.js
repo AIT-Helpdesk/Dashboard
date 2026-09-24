@@ -173,7 +173,7 @@ function normalizeForEnvKey(text) {
 // mismatch like that: a category being auto-CREATED on every restart
 // generally means the .env key didn't match anything real.
 //
-// Returns one of three shapes, each meaning something different to a
+// Returns one of four shapes, each meaning something different to a
 // caller (pageVisibleTo below, stripHiddenForUser in server.js):
 //   - null                          -- env var not set at all. No access
 //                                      rule configured; caller falls back
@@ -186,24 +186,51 @@ function normalizeForEnvKey(text) {
 //                                      by request, this means "no
 //                                      individual lockdown needed, allow
 //                                      everyone" rather than a real
-//                                      restriction. Never hidden.
+//                                      restriction. Never hidden, page
+//                                      access never restricted.
+//   - { open: true, hide: true }    -- value = "HIDE" (exact,
+//                                      case-insensitive). Cosmetic ONLY --
+//                                      pageVisibleTo treats this exactly
+//                                      like plain { open: true } (never
+//                                      restricts the underlying page/API),
+//                                      but stripHiddenForUser excludes the
+//                                      category from a non-admin's sidebar
+//                                      the same way a plain hidden:true
+//                                      category always has. By request,
+//                                      for a category whose pages are ALSO
+//                                      reachable through their own
+//                                      "-tabs" wrapper page (Client Info,
+//                                      Ticket Info, Time Reporting,
+//                                      Client Financials, Licensing,
+//                                      Contract Mgmt, ...) -- ADMIN ONLY
+//                                      (below) real-restricts the
+//                                      underlying pages, which breaks
+//                                      that wrapper's own tabs for
+//                                      everyone but an admin, since a tab
+//                                      loads by hitting that same page's
+//                                      /api/<id> directly. HIDE keeps the
+//                                      tabs working while still keeping
+//                                      the raw category out of a regular
+//                                      user's own sidebar.
 //   - { open: false, names: [...] } -- comma-separated exact Entra
 //                                      display names, same format/
 //                                      matching as ADMIN_FULL_ACCESS and
 //                                      TRACKER_MANAGER. Restricted to
 //                                      exactly this list (plus
 //                                      ADMIN_FULL_ACCESS, who always
-//                                      bypasses every category rule).
-//                                      value = "ADMIN ONLY" is this same
-//                                      shape with an EMPTY names list --
-//                                      nobody's name can ever match an
-//                                      empty array, so only
+//                                      bypasses every category rule) --
+//                                      REAL restriction, blocks the
+//                                      underlying page/API too, not just
+//                                      the sidebar. value = "ADMIN ONLY"
+//                                      is this same shape with an EMPTY
+//                                      names list -- nobody's name can
+//                                      ever match an empty array, so only
 //                                      ADMIN_FULL_ACCESS (checked before
 //                                      this function is ever consulted,
 //                                      at each call site) gets through.
 //                                      Deliberately reuses the ordinary
 //                                      restricted-list mechanism rather
-//                                      than a fourth return shape.
+//                                      than a fifth return shape.
 // This is what makes "any category mentioned in .env restricts itself
 // automatically" work with zero code changes per category -- by request,
 // so Amber can add more restricted categories later just by adding more
@@ -232,6 +259,20 @@ function categoryAccessFor(categoryId) {
   if (!(envKey in process.env)) return null;
   const raw = (process.env[envKey] || '').trim();
   if (raw === '' || raw.toUpperCase() === 'DELETE') return { open: true };
+  // HIDE is deliberately still `open: true` for pageVisibleTo's purposes
+  // -- CONFIRMED the hard way this distinction matters: several of these
+  // categories (Client Info, Ticket Info, Time Reporting, Client
+  // Financials, Licensing, Contract Mgmt) exist ONLY to hold pages that
+  // are ALSO reachable through their own "-tabs" wrapper page (Client
+  // Lookup, Ticket Info Tabs, ...) that everyone uses -- a tab loads by
+  // hitting that page's own /api/<id> directly, the exact same route
+  // pageVisibleTo gates. ADMIN ONLY (real restriction) blocked that route
+  // outright, breaking the tabs for everyone but an admin, even though
+  // the tabbED page itself was still visible to them. `hide: true` tells
+  // stripHiddenForUser (server.js) to keep excluding the category from a
+  // non-admin's SIDEBAR the same way plain hidden:true always did, while
+  // pageVisibleTo (below and in server.js) stays fully open regardless.
+  if (raw.toUpperCase() === 'HIDE') return { open: true, hide: true };
   if (raw.toUpperCase() === 'ADMIN ONLY') return { open: false, names: [] };
   const names = raw
     .split(',')
