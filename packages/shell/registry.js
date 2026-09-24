@@ -93,11 +93,11 @@ function mountPageRouter(page) {
 //
 // Takes the whole `user` object ({email, name} -- req.session.user, or
 // null when signed out), not just an email, since ADMIN_FULL_ACCESS below
-// and CATEGORY-level access (categoryAllowedNames) both match by name, not
+// and CATEGORY-level access (categoryAccessFor) both match by name, not
 // email -- restrictedTo itself still matches by email, unchanged.
 //
-// A page also inherits whatever access list its own sidebar CATEGORY
-// currently has configured (see categoryAllowedNames below) -- e.g. a page
+// A page also inherits whatever access rule its own sidebar CATEGORY
+// currently has configured (see categoryAccessFor below) -- e.g. a page
 // filed under "Trackers - Complete" is only visible to whoever
 // MENUCATEGORY_TRACKERS_COMPLETE lists, on top of (not instead of) any restrictedTo the
 // page has of its own. Both checks are ANDed together deliberately: a
@@ -112,10 +112,10 @@ function pageVisibleTo(page, user) {
   }
   const categoryId = categoryIdForPage(page.id);
   if (categoryId) {
-    const allowed = categoryAllowedNames(categoryId);
-    if (allowed !== null) {
+    const access = categoryAccessFor(categoryId);
+    if (access && !access.open) {
       const name = user?.name?.trim().toLowerCase();
-      if (!name || !allowed.includes(name)) return false;
+      if (!name || !access.names.includes(name)) return false;
     }
   }
   return true;
@@ -138,39 +138,125 @@ function categoryIdForPage(pageId) {
   return null;
 }
 
-// A sidebar category can have its own access list in .env -- the key is
+// A sidebar category can have its own access rule in .env -- the key is
 // MENUCATEGORY_ followed by the category's id, uppercased with hyphens
 // turned to underscores (e.g. "trackers-complete" ->
-// MENUCATEGORY_TRACKERS_COMPLETE, "testing" -> MENUCATEGORY_TESTING),
-// value a comma-separated list of exact Entra display names, same
-// format/matching as ADMIN_FULL_ACCESS and TRACKER_MANAGER. Returns null
-// when that env var isn't set at all -- the category has NO explicit
-// access list configured, so callers fall back to the plain hidden:true/
-// stripHidden behaviour instead. This is what makes "any category
-// mentioned in .env restricts itself automatically" work with zero code
-// changes per category -- by request, so Amber can add more restricted
-// categories later just by adding more lines to .env, never touching this
-// file again.
+// MENUCATEGORY_TRACKERS_COMPLETE, "testing" -> MENUCATEGORY_TESTING).
+// Returns one of three shapes, each meaning something different to a
+// caller (pageVisibleTo below, stripHiddenForUser in server.js):
+//   - null                          -- env var not set at all. No access
+//                                      rule configured; caller falls back
+//                                      to the plain hidden:true/
+//                                      stripHidden behaviour instead.
+//   - { open: true }                -- env var set but its value is blank
+//                                      (or "DELETE" -- see
+//                                      reconcileEnvCategories below for
+//                                      why that can still reach here) --
+//                                      by request, this means "no
+//                                      individual lockdown needed, allow
+//                                      everyone" rather than a real
+//                                      restriction. Never hidden.
+//   - { open: false, names: [...] } -- comma-separated exact Entra
+//                                      display names, same format/
+//                                      matching as ADMIN_FULL_ACCESS and
+//                                      TRACKER_MANAGER. Restricted to
+//                                      exactly this list (plus
+//                                      ADMIN_FULL_ACCESS, who always
+//                                      bypasses every category rule).
+//                                      value = "ADMIN ONLY" is this same
+//                                      shape with an EMPTY names list --
+//                                      nobody's name can ever match an
+//                                      empty array, so only
+//                                      ADMIN_FULL_ACCESS (checked before
+//                                      this function is ever consulted,
+//                                      at each call site) gets through.
+//                                      Deliberately reuses the ordinary
+//                                      restricted-list mechanism rather
+//                                      than a fourth return shape.
+// This is what makes "any category mentioned in .env restricts itself
+// automatically" work with zero code changes per category -- by request,
+// so Amber can add more restricted categories later just by adding more
+// lines to .env, never touching this file again.
 //
 // CONFIRMED the hard way this prefix matters and isn't optional: an
 // earlier version of this function derived the bare key (TESTING, not
 // MENUCATEGORY_TESTING) because that's what got pasted into this
 // conversation at the time -- production's real .env had already been set
 // up with the MENUCATEGORY_ prefix (matching Amber's own original
-// description of this feature), so categoryAllowedNames('testing')
-// silently returned null there even though TESTING's actual intended
-// value was sitting right there under a different key. No error anywhere
-// -- it just read as "this category has no access list configured" and
-// fell back to plain hidden:true, invisible to anyone who wasn't already
-// ADMIN_FULL_ACCESS. If this ever goes quiet again, check the exact env
-// var name on THAT machine's real .env before assuming the code is wrong.
-function categoryAllowedNames(categoryId) {
+// description of this feature), so this function silently returned null
+// there even though TESTING's actual intended value was sitting right
+// there under a different key. No error anywhere -- it just read as "this
+// category has no access rule configured" and fell back to plain
+// hidden:true, invisible to anyone who wasn't already ADMIN_FULL_ACCESS.
+// If this ever goes quiet again, check the exact env var name on THAT
+// machine's real .env before assuming the code is wrong.
+function categoryAccessFor(categoryId) {
   const envKey = `MENUCATEGORY_${categoryId.toUpperCase().replace(/-/g, '_')}`;
   if (!(envKey in process.env)) return null;
-  return (process.env[envKey] || '')
+  const raw = (process.env[envKey] || '').trim();
+  if (raw === '' || raw.toUpperCase() === 'DELETE') return { open: true };
+  if (raw.toUpperCase() === 'ADMIN ONLY') return { open: false, names: [] };
+  const names = raw
     .split(',')
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
+  return { open: false, names };
+}
+
+// Runs once at process startup (called right after `const pages =
+// discoverPages()` above) -- scans every MENUCATEGORY_<ID> key in .env
+// and reconciles the sidebar tree against it, by request:
+//   - No category with that id exists yet -> creates an empty one (label
+//     is the id's own words, title-cased -- e.g. AMBER_ONLY ->
+//     "amber-only" / "Amber Only"), landing at the root of the sidebar,
+//     same "lands at root, drag into place" convention every builder on
+//     this dashboard already uses. Runs regardless of the value (blank,
+//     "DELETE", or a real name list) -- even a "DELETE" for a category
+//     that doesn't exist yet is simply a no-op, never a reason to create
+//     one just to immediately consider deleting it.
+//   - value is exactly "DELETE" (case-insensitive) AND the category
+//     already exists AND it's currently EMPTY (no children) -> removes
+//     it outright. A category that still has real pages in it is left
+//     completely alone, on purpose -- never force-deleted, so a stray
+//     "DELETE" can't silently orphan or hide real pages. Once deleted,
+//     later restarts just no-op on the same line forever (existing ===
+//     undefined), so there's no need to remember to clean up the .env
+//     line afterward.
+//   - Otherwise (category already exists, value isn't DELETE) -- nothing
+//     to reconcile structurally; categoryAccessFor above is what actually
+//     governs who can see it, checked fresh on every request, not just at
+//     startup.
+function reconcileEnvCategories() {
+  const tree = readNavLayout();
+  if (!tree) return; // no nav-layout.json yet -- nothing to reconcile against
+  let changed = false;
+  for (const key of Object.keys(process.env)) {
+    const match = /^MENUCATEGORY_(.+)$/.exec(key);
+    if (!match) continue;
+    const categoryId = match[1].toLowerCase().replace(/_/g, '-');
+    const rawValue = (process.env[key] || '').trim();
+    const existingIndex = tree.findIndex((n) => n.type === 'category' && n.id === categoryId);
+
+    if (rawValue.toUpperCase() === 'DELETE') {
+      if (existingIndex !== -1 && tree[existingIndex].children.length === 0) {
+        tree.splice(existingIndex, 1);
+        changed = true;
+      }
+      continue;
+    }
+
+    if (existingIndex === -1) {
+      const label = match[1]
+        .toLowerCase()
+        .split('_')
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+      tree.push({ type: 'category', id: categoryId, label, children: [] });
+      changed = true;
+    }
+  }
+  if (changed) writeNavLayout(tree);
 }
 
 // Shared sidebar layout (categories + page order/grouping) -- one JSON file
@@ -192,6 +278,20 @@ function readNavLayout() {
 function writeNavLayout(tree) {
   fs.writeFileSync(NAV_LAYOUT_PATH, JSON.stringify(tree, null, 2));
 }
+
+// Auto-creates/deletes sidebar categories purely from .env's own
+// MENUCATEGORY_<ID> entries -- run ONCE, right here at module load (once
+// per process start, same as every other env-configured thing on this
+// dashboard needing a restart to take effect). By request: a brand-new
+// restricted category can be stood up with nothing more than an .env
+// line + a restart, no nav-layout.json hand-editing and no code change,
+// from here on. Called down here, AFTER NAV_LAYOUT_PATH/readNavLayout/
+// writeNavLayout above rather than right after discoverPages() near the
+// top of this file -- confirmed the hard way that calling it any earlier
+// hits those consts' temporal dead zone (readNavLayout's own try/catch
+// swallows the ReferenceError and silently returns null, so this looked
+// like "nothing happened" rather than a crash).
+reconcileEnvCategories();
 
 // Dashboard-wide full-access allowlist, driven by .env's ADMIN_FULL_ACCESS
 // -- comma-separated exact Entra display names, same format/matching as
@@ -232,7 +332,7 @@ module.exports = {
   mountPageRouter,
   pageVisibleTo,
   categoryIdForPage,
-  categoryAllowedNames,
+  categoryAccessFor,
   NAV_LAYOUT_PATH,
   readNavLayout,
   writeNavLayout,

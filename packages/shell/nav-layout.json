@@ -336,5 +336,11 @@
         "id": "test-tracker-tracker"
       }
     ]
+  },
+  {
+    "type": "category",
+    "id": "amber-only",
+    "label": "Amber Only",
+    "children": []
   }
 ]
