@@ -9,9 +9,9 @@ const packagesRoot = path.resolve(__dirname, '..');
 
 // A generated page carries no restrictedTo of its own any more -- it
 // lands in the Testing category (below), and that category's own access
-// list (.env's TESTING, checked via categoryIdForPage/categoryAllowedNames
-// in packages/shell/registry.js) is what actually gates who can see it
-// now. A per-page restrictedTo here would only ever narrow that further
+// rule (.env's MENUCATEGORY_TESTING, checked via categoryIdForPage/
+// categoryAccessFor in packages/shell/registry.js) is what actually gates
+// who can see it now. A per-page restrictedTo here would only ever narrow that further
 // (pageVisibleTo ANDs the two together) -- previously hardcoded to Amber
 // only, which would have silently blocked anyone else TESTING lists.
 

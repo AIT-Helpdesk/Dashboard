@@ -1584,7 +1584,7 @@ function renderCategory(node, index, activeId, admin) {
   // node.hidden reaching a non-admin's own tree at all is normally
   // impossible -- server.js's stripHiddenForUser() removes it before
   // their browser ever receives it. The one exception: a category with
-  // its own MENUCATEGORY_ access list (registry.js's categoryAllowedNames)
+  // its own MENUCATEGORY_ access rule (registry.js's categoryAccessFor)
   // strips the flag off THAT category specifically once it's decided the
   // current viewer is allowed in, so this dimmed/"(hidden)" styling never
   // shows for someone who was actually just granted access to it.

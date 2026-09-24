@@ -22,7 +22,7 @@ const PORT = process.env.PORT || 3000;
 // external-page-builder, ticket-info-tabs) can reach the same shared state
 // and register a brand-new page package at runtime with no process
 // restart. See that module's own comment for the full reasoning.
-const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, categoryAllowedNames, setMountPageRouterImpl, mountPageRouter } = require('./registry.js');
+const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, categoryAccessFor, setMountPageRouterImpl, mountPageRouter } = require('./registry.js');
 
 // The sidebar (drag-and-drop reorder AND right-click hide/unhide, both in
 // app.js) is only editable by the one dashboard-admin account
@@ -42,27 +42,29 @@ const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, c
 // RAW tree (see /api/nav-layout below) so they can find and unhide
 // something.
 //
-// A category with its OWN access list configured (categoryAllowedNames,
+// A category with its OWN access rule configured (categoryAccessFor,
 // registry.js -- e.g. .env's MENUCATEGORY_TESTING or
-// MENUCATEGORY_TRACKERS_COMPLETE) is handled differently: that list
+// MENUCATEGORY_TRACKERS_COMPLETE) is handled differently: that rule
 // REPLACES the hidden:true check for that one category entirely, rather
-// than adding to it -- the explicit list is a stronger, more specific
-// signal than the generic hidden flag. This is what makes both existing
-// shapes work correctly: "testing" (hidden:true, now opened back up to
-// whoever MENUCATEGORY_TESTING lists, on top of Amber) and
-// "trackers-complete" (NOT hidden, now newly restricted down to only
-// whoever MENUCATEGORY_TRACKERS_COMPLETE lists, having previously been
-// visible to everyone). A category's own children still get the plain
-// hidden:true check regardless -- an access list is a CATEGORY-level
-// concept.
+// than adding to it -- an explicit rule is a stronger, more specific
+// signal than the generic hidden flag. This is what makes every shape
+// work correctly: "testing" (hidden:true, now opened back up to whoever
+// MENUCATEGORY_TESTING lists, on top of Amber), "trackers-complete" (NOT
+// hidden, now newly restricted down to only whoever
+// MENUCATEGORY_TRACKERS_COMPLETE lists, having previously been visible to
+// everyone), and a blank-valued MENUCATEGORY_<ID> (open to everyone,
+// never hidden, no individual lockdown needed). A category's own children
+// still get the plain hidden:true check regardless -- an access rule is a
+// CATEGORY-level concept.
 function stripHiddenForUser(tree, user) {
   return (tree || [])
     .filter((node) => {
       if (node.type === 'category') {
-        const allowed = categoryAllowedNames(node.id);
-        if (allowed !== null) {
+        const access = categoryAccessFor(node.id);
+        if (access) {
+          if (access.open) return true;
           const name = user?.name?.trim().toLowerCase();
-          return !!name && allowed.includes(name);
+          return !!name && access.names.includes(name);
         }
       }
       return !node.hidden;
@@ -70,7 +72,7 @@ function stripHiddenForUser(tree, user) {
     .map((node) => {
       if (node.type !== 'category') return node;
       const shaped = { ...node, children: node.children.filter((c) => !c.hidden) };
-      // A category admitted via its own access list is no longer
+      // A category admitted via its own access rule is no longer
       // "hidden" from THIS viewer's point of view -- strip the flag so
       // app.js's renderCategory() doesn't render it dimmed with a
       // "(hidden)" badge, which reads as a broken/admin-leftover artifact
@@ -81,8 +83,8 @@ function stripHiddenForUser(tree, user) {
       // the client, which renderCategory() had only ever expected to see
       // on an ADMIN's own tree (see its own comment there) -- nobody else
       // was ever supposed to receive hidden:true at all before category
-      // access lists existed, so this case was never handled.
-      if (categoryAllowedNames(node.id) !== null) delete shaped.hidden;
+      // access rules existed, so this case was never handled.
+      if (categoryAccessFor(node.id) !== null) delete shaped.hidden;
       return shaped;
     });
 }
