@@ -5,6 +5,7 @@
 const os = require('os');
 const session = require('express-session');
 const { ConfidentialClientApplication } = require('@azure/msal-node');
+const { isDashboardAdmin } = require('./registry.js');
 
 const {
   AUTH_CLIENT_ID,
@@ -184,9 +185,12 @@ function registerAuthRoutes(app) {
   // is serving the data currently open, e.g. distinguishing a local dev
   // copy from the real production box) rides along on this same response
   // rather than a separate endpoint, since app.js already fetches this
-  // once on load anyway.
+  // once on load anyway. `isAdmin` (ADMIN_FULL_ACCESS, registry.js) rides
+  // along too -- the one shared place any page's own client.js can ask
+  // "am I an admin" without hardcoding/comparing an email itself (see TC
+  // Elite Rollout's and Contract Checks' own client.js for the pattern).
   app.get('/api/me', (req, res) => {
-    res.json({ user: req.session.user || null, hostname: os.hostname() });
+    res.json({ user: req.session.user || null, hostname: os.hostname(), isAdmin: isDashboardAdmin(req) });
   });
 }
 

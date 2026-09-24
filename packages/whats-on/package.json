@@ -12,6 +12,7 @@
   "dependencies": {
     "@dashboard/autotask-client": "*",
     "@dashboard/ingram-client": "*",
+    "@dashboard/shell": "*",
     "@dashboard/strety-client": "*",
     "@dashboard/teams-shifts": "*",
     "express": "^4.19.2"

@@ -1,4 +1,5 @@
 const express = require('express');
+const { isDashboardAdmin } = require('@dashboard/shell/registry.js');
 // This page no longer uses the shared default Strety connection at all --
 // by request, every fetch here (Helpdesk team scorecards, Personal
 // scorecards, and Today & Tomorrow's Strety Tasks column) goes through the
@@ -78,13 +79,13 @@ function isLocalhostRequest(req) {
 // connection must run as Helpdesk, and a "Reconnect" link shown to every
 // signed-in user turned out to be exactly how it stopped -- see the
 // matching gate on the route itself in packages/shell/server.js for the
-// real story. Until there's a permanent design, only Amber gets any
-// visibility into automationStatus at all (including the harmless "last
-// synced" line below) -- everyone else gets null, same as localhost, which
-// client.js's banner render already treats as "nothing to show".
-const AUTOMATION_STATUS_ADMIN_EMAIL = 'amber@ambientit.com.au';
-function canSeeAutomationStatus(email) {
-  return !!email && email.toLowerCase() === AUTOMATION_STATUS_ADMIN_EMAIL;
+// real story. Until there's a permanent design, only ADMIN_FULL_ACCESS
+// (.env, packages/shell/registry.js) gets any visibility into
+// automationStatus at all (including the harmless "last synced" line
+// below) -- everyone else gets null, same as localhost, which client.js's
+// banner render already treats as "nothing to show".
+function canSeeAutomationStatus(req) {
+  return isDashboardAdmin(req);
 }
 
 // The staleness banner ("hasn't run in X hours") is only meaningful while
@@ -1288,7 +1289,7 @@ router.get('/', async (req, res) => {
       // above) for anyone but Amber. client.js's own banner render is
       // already gated on `data.automationStatus && !data.automationStatus.ok`,
       // so null suppresses it with no client-side change needed.
-      automationStatus: isLocalhostRequest(req) || !canSeeAutomationStatus(email) ? null : evaluateAutomationStatus(),
+      automationStatus: isLocalhostRequest(req) || !canSeeAutomationStatus(req) ? null : evaluateAutomationStatus(),
       // Lets client.js show a "reconnect to enable the Update button"
       // banner ONLY for someone whose connection genuinely can't write
       // yet, by request -- a plain file read (hasWriteScope(), see

@@ -7,12 +7,13 @@ const { registerPage, pages, readNavLayout, writeNavLayout } = require('@dashboa
 // package sits alongside every other page package, one level up from here.
 const packagesRoot = path.resolve(__dirname, '..');
 
-// Restricted to Amber only, same as this page itself (see package.json's
-// dashboardPage.restrictedTo) -- every page this tool generates inherits
-// that same allowlist, since a freshly-published page always lands in the
-// Amber-only Testing category first (by request) and she opens it up
-// herself once she's happy with it.
-const GENERATED_PAGE_RESTRICTED_TO = ['amber@ambientit.com.au'];
+// A generated page carries no restrictedTo of its own any more -- it
+// lands in the Testing category (below), and that category's own access
+// list (.env's TESTING, checked via categoryIdForPage/categoryAllowedNames
+// in packages/shell/registry.js) is what actually gates who can see it
+// now. A per-page restrictedTo here would only ever narrow that further
+// (pageVisibleTo ANDs the two together) -- previously hardcoded to Amber
+// only, which would have silently blocked anyone else TESTING lists.
 
 // Hyphenated, matching this dashboard's own `id` convention (rewst-form-test,
 // check-client, ...) -- NOT the underscore-based slugify() TC Elite Rollout
@@ -74,7 +75,6 @@ function buildPackageJson(slug, label) {
           id: slug,
           label,
           client: 'client.js',
-          restrictedTo: GENERATED_PAGE_RESTRICTED_TO,
           // Every page this tool generates is, by definition, a direct
           // embed of an outside site -- flags it in the sidebar with the
           // same small "external" icon Automation Forms/Rewst Form Test
@@ -134,7 +134,6 @@ router.post('/publish', (req, res) => {
       id: slug,
       label,
       client: 'client.js',
-      restrictedTo: GENERATED_PAGE_RESTRICTED_TO,
       external: true,
     });
 
