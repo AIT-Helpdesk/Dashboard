@@ -1,0 +1,17 @@
+{
+  "name": "@dashboard/service-actions",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "service-actions",
+    "label": "Service Actions",
+    "client": "client.js",
+    "server": "../meeting-prep/server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/datto-rmm": "*",
+    "express": "^4.19.2"
+  }
+}

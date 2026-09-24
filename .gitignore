@@ -67,3 +67,16 @@ packages/*-tracker/data.db
 packages/*-tracker/data.db-shm
 packages/*-tracker/data.db-wal
 packages/*-tracker/notes.json
+
+# Meeting Prep's own report data (packages/meeting-prep/data/) -- real,
+# live client report content (parsed Datto RMM/Dark Web ID PDFs), not
+# source, and not expected to live in git long-term: once the automated
+# SharePoint pickup job (see data/README.md) exists, each environment
+# regenerates/receives its own copy independently, the same way every
+# *-tracker's data.db above is real data rather than source. Until then,
+# moved between environments by hand (dev -> production) rather than via
+# git. data/README.md itself (documentation, not client data) stays
+# tracked -- hence excluding contents one level down rather than the
+# whole data/ directory.
+packages/meeting-prep/data/*
+!packages/meeting-prep/data/README.md
