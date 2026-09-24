@@ -1,0 +1,17 @@
+{
+  "name": "@dashboard/meeting-prep",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "meeting-prep",
+    "label": "Meeting Prep",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/datto-rmm": "*",
+    "express": "^4.19.2"
+  }
+}
