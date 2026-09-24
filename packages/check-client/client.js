@@ -20,12 +20,23 @@ let lastAutotaskClient = '';
 let lastExactClient = false; // off by default -- the normal wildcard/contains search
 let lastIngramClient = '';
 let lastIngramClientManuallyEdited = false;
+// Same one-way-mirror-until-edited pattern as Ingram Client -- Datto's own
+// siteName is a third naming system, but in practice tends to track
+// Autotask's own client naming more closely than Ingram's catalog-style
+// names do (both are this MSP's own internal naming, not a distributor's),
+// so Autotask Client is the more useful default to mirror here. Not a
+// `required` field, unlike Autotask/Ingram Client -- the Datto RMM section
+// is additive, and a client with no matching Datto site shouldn't block
+// the rest of the search.
+let lastDattoSite = '';
+let lastDattoSiteManuallyEdited = false;
 let lastSince = null;
 let lastMonth = null;
 let lastOrdersData = null;
 let lastSubscriptionsData = null;
 let lastM365Data = null;
 let lastServicesData = null;
+let lastDattoData = null;
 
 // Same six checkbox-style fields Contract Checks itself carries -- see
 // packages/contract-checks/db.js/README for the schema. Duplicated here
@@ -91,6 +102,10 @@ export function mount(container) {
           <input type="text" id="ingram-client-input" name="ingramClient" placeholder="e.g. Acme* (wildcards with *)" required />
           <button type="submit" id="search-button">Search</button>
         </div>
+        <div class="date-form-row">
+          <label for="datto-site-input">Datto Site</label>
+          <input type="text" id="datto-site-input" name="dattoSite" placeholder="e.g. Acme* (wildcards with *, optional)" />
+        </div>
       </form>
     </header>
     <h2 class="chk-section-heading">Orders <span class="inline-subtext">(Ingram Micro)</span></h2>
@@ -112,6 +127,11 @@ export function mount(container) {
     <p id="services-status" class="status" hidden></p>
     <div id="services-summary" class="summary" hidden></div>
     <div id="services-results" class="results"></div>
+
+    <h2 class="chk-section-heading">Datto RMM <span class="inline-subtext">(devices &amp; open alerts)</span></h2>
+    <p id="datto-status" class="status" hidden></p>
+    <div id="datto-summary" class="summary" hidden></div>
+    <div id="datto-results" class="results"></div>
     </div>
   `;
 
@@ -120,6 +140,7 @@ export function mount(container) {
   const autotaskClientInput = container.querySelector('#autotask-client-input');
   const exactClientInput = container.querySelector('#exact-client-input');
   const ingramClientInput = container.querySelector('#ingram-client-input');
+  const dattoSiteInput = container.querySelector('#datto-site-input');
   const sinceInput = container.querySelector('#since-input');
   const monthInput = container.querySelector('#month-input');
   const searchButton = container.querySelector('#search-button');
@@ -136,6 +157,9 @@ export function mount(container) {
   const servicesStatusEl = container.querySelector('#services-status');
   const servicesSummaryEl = container.querySelector('#services-summary');
   const servicesResultsEl = container.querySelector('#services-results');
+  const dattoStatusEl = container.querySelector('#datto-status');
+  const dattoSummaryEl = container.querySelector('#datto-summary');
+  const dattoResultsEl = container.querySelector('#datto-results');
 
   // AEST (UTC+10, no DST in Queensland) "today", not the browser's own local
   // timezone -- same defaultSinceISO() Contract Checks' own client.js uses.
@@ -159,6 +183,7 @@ export function mount(container) {
   autotaskClientInput.value = lastAutotaskClient;
   exactClientInput.checked = lastExactClient;
   ingramClientInput.value = lastIngramClient;
+  dattoSiteInput.value = lastDattoSite;
   sinceInput.value = lastSince || defaultSinceISO();
   monthInput.value = lastMonth || currentMonthISO();
 
@@ -212,11 +237,16 @@ export function mount(container) {
   // (the mirror below) never fire 'input', only genuine typing does, so
   // this is a clean one-way "linked until diverged" switch, by request.
   let ingramClientManuallyEdited = lastIngramClientManuallyEdited;
+  let dattoSiteManuallyEdited = lastDattoSiteManuallyEdited;
   autotaskClientInput.addEventListener('input', () => {
     if (!ingramClientManuallyEdited) ingramClientInput.value = autotaskClientInput.value;
+    if (!dattoSiteManuallyEdited) dattoSiteInput.value = autotaskClientInput.value;
   });
   ingramClientInput.addEventListener('input', () => {
     ingramClientManuallyEdited = true;
+  });
+  dattoSiteInput.addEventListener('input', () => {
+    dattoSiteManuallyEdited = true;
   });
 
   form.addEventListener('submit', (e) => {
@@ -237,11 +267,20 @@ export function mount(container) {
     const autotaskClient = autotaskClientInput.value.trim();
     const exactClient = exactClientInput.checked;
     const ingramClient = ingramClientInput.value.trim();
+    const dattoSite = dattoSiteInput.value.trim();
     const since = sinceInput.value;
     const month = monthInput.value;
     searchButton.disabled = true;
     try {
-      await Promise.allSettled([loadOrders(ingramClient, since), loadSubscriptions(ingramClient), loadServices(autotaskClient, exactClient, month)]);
+      // Datto RMM has no dependency on the other sections' own results
+      // (unlike Microsoft 365 Tenancy below), so it runs alongside the
+      // first three rather than waiting on them.
+      await Promise.allSettled([
+        loadOrders(ingramClient, since),
+        loadSubscriptions(ingramClient),
+        loadServices(autotaskClient, exactClient, month),
+        loadDattoRmm(dattoSite),
+      ]);
       // Runs only after all three above have settled -- Microsoft 365
       // Tenancy's own fallback path (see loadM365Tenancy()'s comment) wants
       // the resolved Autotask name too, not just Ingram's, and that only
@@ -252,6 +291,8 @@ export function mount(container) {
       lastExactClient = exactClient;
       lastIngramClient = ingramClient;
       lastIngramClientManuallyEdited = ingramClientManuallyEdited;
+      lastDattoSite = dattoSite;
+      lastDattoSiteManuallyEdited = dattoSiteManuallyEdited;
       lastSince = since;
       lastMonth = month;
       searchButton.disabled = false;
@@ -1025,6 +1066,115 @@ export function mount(container) {
   }
 
   // ---------------------------------------------------------------------
+  // Section 5 -- Datto RMM (devices & open alerts), read-only
+  // ---------------------------------------------------------------------
+
+  async function loadDattoRmm(site, force) {
+    dattoStatusEl.hidden = false;
+    dattoStatusEl.className = 'status';
+    dattoSummaryEl.hidden = true;
+    dattoResultsEl.innerHTML = '';
+    if (!site) {
+      dattoStatusEl.textContent = 'Type a Datto Site above (defaults to Autotask Client) to look up devices.';
+      return;
+    }
+    dattoStatusEl.textContent = `Loading Datto RMM devices for "${site}"...`;
+    try {
+      const params = new URLSearchParams({ site });
+      if (force) params.set('force', 'true');
+      const data = await fetchJson(`/api/check-client/datto-rmm?${params.toString()}`, 'GET');
+      lastDattoData = data;
+      renderDattoRmm(data);
+    } catch (err) {
+      dattoStatusEl.className = 'status error';
+      dattoStatusEl.textContent = `Error: ${err.message}`;
+    }
+  }
+
+  function renderDattoRmm(data) {
+    if (!data.connected) {
+      dattoStatusEl.hidden = false;
+      dattoStatusEl.className = 'status';
+      dattoStatusEl.textContent = 'Datto RMM is not configured in .env.';
+      dattoSummaryEl.hidden = true;
+      dattoResultsEl.innerHTML = '';
+      return;
+    }
+    dattoStatusEl.hidden = true;
+    dattoSummaryEl.hidden = false;
+    const alertsText = data.alertsTotalCount > 0 ? `, ${data.alertsTotalCount} open High/Critical alert${data.alertsTotalCount === 1 ? '' : 's'}` : ', no open High/Critical alerts';
+    dattoSummaryEl.innerHTML = `<strong>${data.totalDevices}</strong> device${data.totalDevices === 1 ? '' : 's'} (${data.onlineCount} online, ${data.offlineCount} offline, ${data.rebootRequiredCount} reboot required) across ${data.bySite.length} site${data.bySite.length === 1 ? '' : 's'}${alertsText}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
+
+    dattoResultsEl.innerHTML = '';
+    if (data.bySite.length === 0) {
+      dattoResultsEl.innerHTML = '<p class="status">No matching Datto RMM sites found.</p>';
+      return;
+    }
+
+    if (data.alertsTotalCount > 0) {
+      const alertsGroup = document.createElement('div');
+      alertsGroup.className = 'resource-group';
+      alertsGroup.innerHTML = `
+        <div class="resource-group-header"><span>Open Alerts (High/Critical)</span><span class="count">${data.alertsTotalCount}</span></div>
+        <table>
+          <thead>
+            <tr class="shaded-row"><th>Time</th><th>Site</th><th>Priority</th><th>Device</th><th>Message</th></tr>
+          </thead>
+          <tbody>${alertRowsHtml(data.alerts)}</tbody>
+        </table>
+        ${data.alertsTruncated ? '<p class="inline-subtext" style="padding:0.5rem 1rem;">More alerts exist than shown -- the account-wide alert fetch hit its own cap.</p>' : ''}
+      `;
+      dattoResultsEl.appendChild(alertsGroup);
+    }
+
+    for (const site of data.bySite) {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'resource-group';
+      groupEl.innerHTML = `
+        <div class="resource-group-header"><span>${escapeHtml(site.site)}</span><span class="count">${site.devices.length} device${site.devices.length === 1 ? '' : 's'}</span></div>
+        <table>
+          <thead>
+            <tr class="shaded-row"><th>Hostname</th><th>Online</th><th>OS</th><th>Patch Status</th><th>Last User</th><th>Last Seen</th></tr>
+          </thead>
+          <tbody>${deviceRowsHtml(site.devices)}</tbody>
+        </table>
+      `;
+      dattoResultsEl.appendChild(groupEl);
+    }
+  }
+
+  function deviceRowsHtml(devices) {
+    return devices
+      .map(
+        (d) => `
+      <tr>
+        <td>${escapeHtml(d.hostname)}${d.rebootRequired ? ' <span class="inline-subtext">(reboot required)</span>' : ''}</td>
+        <td class="${d.online ? 'cell-flag-green' : 'cell-flag-red'}">${d.online ? 'Online' : 'Offline'}</td>
+        <td>${escapeHtml(d.os)}</td>
+        <td>${escapeHtml(d.patchStatus)}</td>
+        <td>${escapeHtml(d.lastUser)}</td>
+        <td class="ticket-number">${formatDateTime(d.lastSeen)}</td>
+      </tr>`
+      )
+      .join('');
+  }
+
+  function alertRowsHtml(alerts) {
+    return alerts
+      .map(
+        (a) => `
+      <tr>
+        <td class="ticket-number">${formatDateTime(a.timestamp)}</td>
+        <td>${escapeHtml(a.siteName)}</td>
+        <td class="${a.priority === 'Critical' ? 'cell-flag-red' : 'cell-flag-blue'}">${escapeHtml(a.priority)}</td>
+        <td>${escapeHtml(a.deviceName)}</td>
+        <td>${escapeHtml(a.message)}</td>
+      </tr>`
+      )
+      .join('');
+  }
+
+  // ---------------------------------------------------------------------
   // Shared boilerplate -- no shared module for this in the codebase (every
   // page keeps its own copy), so this is copied from Contract Checks'
   // own client.js.
@@ -1034,6 +1184,7 @@ export function mount(container) {
   if (lastSubscriptionsData) renderSubscriptions(lastSubscriptionsData);
   if (lastM365Data) renderM365Tenancy(lastM365Data);
   if (lastServicesData) renderServices(lastServicesData);
+  if (lastDattoData) renderDattoRmm(lastDattoData);
 
   async function fetchJson(url, method, body) {
     const res = await fetch(url, {

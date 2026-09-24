@@ -15,6 +15,7 @@
     "@dashboard/ingram-client": "*",
     "@dashboard/ingram-subscriptions": "*",
     "@dashboard/contract-services": "*",
+    "@dashboard/datto-rmm": "*",
     "axios": "^1.7.2",
     "express": "^4.19.2"
   }
