@@ -138,10 +138,41 @@ function categoryIdForPage(pageId) {
   return null;
 }
 
+// Turns any free-text label into the suffix half of a MENUCATEGORY_ key --
+// uppercased, any run of non-alphanumeric characters collapsed to one
+// underscore, no leading/trailing underscore. Used both directions: to
+// derive the key a category's own visible label maps to, and (in
+// reconcileEnvCategories below) to derive a sensible title-cased label
+// back out of a key that doesn't match anything yet.
+function normalizeForEnvKey(text) {
+  return text
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
 // A sidebar category can have its own access rule in .env -- the key is
-// MENUCATEGORY_ followed by the category's id, uppercased with hyphens
-// turned to underscores (e.g. "trackers-complete" ->
-// MENUCATEGORY_TRACKERS_COMPLETE, "testing" -> MENUCATEGORY_TESTING).
+// MENUCATEGORY_ followed by the category's own VISIBLE LABEL (not its
+// internal id, which often doesn't match -- e.g. the "Client Financials"
+// category's real id is "financials", "Contract Mgmt"'s is
+// "update-contracts"), normalized per normalizeForEnvKey above (e.g.
+// "Trackers - Complete" -> MENUCATEGORY_TRACKERS_COMPLETE, "Testing" ->
+// MENUCATEGORY_TESTING). By request: matching against the id would have
+// been an internal implementation detail Amber can't see or reason about
+// day to day -- the label is what's actually on the menu, so that's what
+// the .env key should mirror.
+//
+// CONFIRMED the hard way this matters: an earlier version of this
+// function matched by id, so MENUCATEGORY_CLIENT_FINANCIALS (a
+// perfectly reasonable guess at "Client Financials") matched nothing --
+// the real id is "financials" -- and silently created a brand-new, empty,
+// duplicate "client-financials" category instead of restricting the real
+// one. Label matching still isn't typo-proof (a genuine misspelling, e.g.
+// "Mgmnt" instead of "Mgmt", still won't match) -- see the console.log in
+// reconcileEnvCategories below, which is the fastest way to notice a
+// mismatch like that: a category being auto-CREATED on every restart
+// generally means the .env key didn't match anything real.
+//
 // Returns one of three shapes, each meaning something different to a
 // caller (pageVisibleTo below, stripHiddenForUser in server.js):
 //   - null                          -- env var not set at all. No access
@@ -191,7 +222,13 @@ function categoryIdForPage(pageId) {
 // If this ever goes quiet again, check the exact env var name on THAT
 // machine's real .env before assuming the code is wrong.
 function categoryAccessFor(categoryId) {
-  const envKey = `MENUCATEGORY_${categoryId.toUpperCase().replace(/-/g, '_')}`;
+  const tree = readNavLayout() || [];
+  const node = tree.find((n) => n.type === 'category' && n.id === categoryId);
+  // Falls back to the id itself only if the category has somehow vanished
+  // out from under an already-resolved categoryId (a genuine race, not a
+  // normal call shape -- every real caller resolves categoryId from a
+  // page/category that's already known to exist in the tree it just read).
+  const envKey = `MENUCATEGORY_${normalizeForEnvKey(node ? node.label : categoryId)}`;
   if (!(envKey in process.env)) return null;
   const raw = (process.env[envKey] || '').trim();
   if (raw === '' || raw.toUpperCase() === 'DELETE') return { open: true };
@@ -204,28 +241,36 @@ function categoryAccessFor(categoryId) {
 }
 
 // Runs once at process startup (called right after `const pages =
-// discoverPages()` above) -- scans every MENUCATEGORY_<ID> key in .env
-// and reconciles the sidebar tree against it, by request:
-//   - No category with that id exists yet -> creates an empty one (label
-//     is the id's own words, title-cased -- e.g. AMBER_ONLY ->
-//     "amber-only" / "Amber Only"), landing at the root of the sidebar,
-//     same "lands at root, drag into place" convention every builder on
-//     this dashboard already uses. Runs regardless of the value (blank,
-//     "DELETE", or a real name list) -- even a "DELETE" for a category
-//     that doesn't exist yet is simply a no-op, never a reason to create
-//     one just to immediately consider deleting it.
-//   - value is exactly "DELETE" (case-insensitive) AND the category
-//     already exists AND it's currently EMPTY (no children) -> removes
+// discoverPages()` above) -- scans every MENUCATEGORY_<LABEL> key in .env
+// and reconciles the sidebar tree against it, matching against each
+// existing category's own LABEL (normalizeForEnvKey'd -- see
+// categoryAccessFor above for why label, not id), by request:
+//   - No existing category's label matches -> creates a new empty one
+//     (fresh id from the key's own words, hyphenated; label the same
+//     words, title-cased -- e.g. MENUCATEGORY_AMBER_ONLY -> id
+//     "amber-only", label "Amber Only"), landing at the root of the
+//     sidebar, same "lands at root, drag into place" convention every
+//     builder on this dashboard already uses. Runs regardless of the
+//     value (blank, "DELETE", or a real name list) -- even a "DELETE"
+//     for a category that doesn't exist yet is simply a no-op, never a
+//     reason to create one just to immediately consider deleting it.
+//     LOGGED to the console every time -- the fastest way to notice a
+//     typo'd .env key (meant to restrict an EXISTING category, e.g.
+//     "Mgmnt" instead of "Mgmt") is seeing an unexpected "Auto-created
+//     Menu Category" line at startup for a category that should already
+//     have existed.
+//   - value is exactly "DELETE" (case-insensitive) AND a matching
+//     category exists AND it's currently EMPTY (no children) -> removes
 //     it outright. A category that still has real pages in it is left
 //     completely alone, on purpose -- never force-deleted, so a stray
 //     "DELETE" can't silently orphan or hide real pages. Once deleted,
-//     later restarts just no-op on the same line forever (existing ===
-//     undefined), so there's no need to remember to clean up the .env
-//     line afterward.
-//   - Otherwise (category already exists, value isn't DELETE) -- nothing
-//     to reconcile structurally; categoryAccessFor above is what actually
-//     governs who can see it, checked fresh on every request, not just at
-//     startup.
+//     later restarts just no-op on the same line forever (no more
+//     matching category to find), so there's no need to remember to
+//     clean up the .env line afterward.
+//   - Otherwise (a matching category already exists, value isn't DELETE)
+//     -- nothing to reconcile structurally; categoryAccessFor above is
+//     what actually governs who can see it, checked fresh on every
+//     request, not just at startup.
 function reconcileEnvCategories() {
   const tree = readNavLayout();
   if (!tree) return; // no nav-layout.json yet -- nothing to reconcile against
@@ -233,12 +278,13 @@ function reconcileEnvCategories() {
   for (const key of Object.keys(process.env)) {
     const match = /^MENUCATEGORY_(.+)$/.exec(key);
     if (!match) continue;
-    const categoryId = match[1].toLowerCase().replace(/_/g, '-');
+    const suffix = match[1];
     const rawValue = (process.env[key] || '').trim();
-    const existingIndex = tree.findIndex((n) => n.type === 'category' && n.id === categoryId);
+    const existingIndex = tree.findIndex((n) => n.type === 'category' && normalizeForEnvKey(n.label) === suffix);
 
     if (rawValue.toUpperCase() === 'DELETE') {
       if (existingIndex !== -1 && tree[existingIndex].children.length === 0) {
+        console.log(`[nav] Deleted Menu Category "${tree[existingIndex].label}" (${key}=DELETE, it was empty).`);
         tree.splice(existingIndex, 1);
         changed = true;
       }
@@ -246,13 +292,11 @@ function reconcileEnvCategories() {
     }
 
     if (existingIndex === -1) {
-      const label = match[1]
-        .toLowerCase()
-        .split('_')
-        .filter(Boolean)
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(' ');
-      tree.push({ type: 'category', id: categoryId, label, children: [] });
+      const words = suffix.toLowerCase().split('_').filter(Boolean);
+      const label = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      const id = words.join('-');
+      console.log(`[nav] Auto-created Menu Category "${label}" (${key}) -- new, no existing category's label matched "${suffix}". If you meant to restrict an EXISTING category instead, check its exact label in the sidebar and fix the .env key to match.`);
+      tree.push({ type: 'category', id, label, children: [] });
       changed = true;
     }
   }
