@@ -99,10 +99,17 @@ function loadReportImages(kind, siteSlug) {
 
 const REPORT_TITLES = {
   'executive-summary': 'Executive Summary Report',
+  'device-activity': 'Device Activity Report',
   'device-health-summary': 'Device Health Summary Report',
+  'device-monitor-status': 'Device Monitor Status Report',
   'device-storage': 'Device Storage Report',
   'hardware-lifecycle': 'Hardware Lifecycle Report',
+  'network-audit': 'Network Audit Report',
+  'open-monitor-alerts': 'Open Monitor Alerts Report',
+  'patch-management-activity': 'Patch Management Activity Report',
+  'patch-management-details': 'Patch Management Details Report',
   'patch-management-summary': 'Patch Management Summary Report',
+  software: 'Software Report',
   'dark-web-monitoring': 'Dark Web Monitoring Report',
 };
 
@@ -115,24 +122,46 @@ const REPORT_TITLES = {
 // nothing about loadFileReportComponents() itself needed to change.
 const REPORT_SOURCES = {
   'executive-summary': 'Datto RMM Report',
+  'device-activity': 'Datto RMM Report',
   'device-health-summary': 'Datto RMM Report',
+  'device-monitor-status': 'Datto RMM Report',
   'device-storage': 'Datto RMM Report',
   'hardware-lifecycle': 'Datto RMM Report',
+  'network-audit': 'Datto RMM Report',
+  'open-monitor-alerts': 'Datto RMM Report',
+  'patch-management-activity': 'Datto RMM Report',
+  'patch-management-details': 'Datto RMM Report',
   'patch-management-summary': 'Datto RMM Report',
+  software: 'Datto RMM Report',
   'dark-web-monitoring': 'Dark Web Monitoring',
 };
 
-// Fixed display order (Executive Summary first as the overview, the 4
-// other Datto reports alphabetically, Dark Web Monitoring last as a
+// Fixed display order (Executive Summary first as the overview, the other
+// Datto reports alphabetically by title, Dark Web Monitoring last as a
 // different system) so cards don't reshuffle between searches/refreshes
 // just because fs.readdirSync happened to return files in a different
-// order.
+// order. Device Activity, Device Monitor Status, Network Audit, Open
+// Monitor Alerts, Patch Management Activity, Patch Management Details,
+// and Software were all added in the same batch (by request, "process
+// all files") -- each carries only a `summary` (counts), not full
+// per-device detail, for the ones with a huge amount of per-device data
+// (Device Activity's event log, Device Monitor Status's per-monitor
+// readings, Software's per-device version list, Patch Management
+// Activity/Details' per-patch listings) -- see this file's data/README.md
+// and buildReportComponent() below for the same reasoning per kind.
 const REPORT_ORDER = [
   'executive-summary',
+  'device-activity',
   'device-health-summary',
+  'device-monitor-status',
   'device-storage',
   'hardware-lifecycle',
+  'network-audit',
+  'open-monitor-alerts',
+  'patch-management-activity',
+  'patch-management-details',
   'patch-management-summary',
+  'software',
   'dark-web-monitoring',
 ];
 
@@ -193,6 +222,42 @@ function buildReportComponent(kind, data) {
       summary: data.summary || {},
       bands,
     };
+  }
+  if (kind === 'network-audit') {
+    return { ...base, stats: { managedCount: data.managedCount || 0, unmanagedCount: data.unmanagedCount || 0 }, devices: data.devices || [] };
+  }
+  if (kind === 'open-monitor-alerts') {
+    const devices = data.devices || [];
+    return {
+      ...base,
+      stats: { totalOpen: devices.reduce((n, d) => n + (d.total || 0), 0), devicesWithAlerts: devices.filter((d) => (d.total || 0) > 0).length },
+      devices,
+    };
+  }
+  // Device Activity, Device Monitor Status, Software, and the two Patch
+  // Management event-log reports all carry a huge amount of per-device
+  // detail in the source PDF (a month of activity events, a live monitor
+  // reading per device, every installed software version per device, a
+  // patch-by-patch table per device) -- by request, these only get a
+  // `summary` (counts) here, not the full per-device breakdown, so a
+  // client with many devices doesn't blow this up into an unreadable
+  // card. The counts themselves are computed once, at parse time, and
+  // stored directly in data/*.json's own `summary` -- this just passes
+  // them through.
+  if (kind === 'device-activity') {
+    return { ...base, stats: { failedEvents: (data.summary || {}).failedEvents || 0 }, summary: data.summary || {} };
+  }
+  if (kind === 'device-monitor-status') {
+    return { ...base, stats: { totalMonitorEntries: (data.summary || {}).totalMonitorEntries || 0 }, summary: data.summary || {} };
+  }
+  if (kind === 'software') {
+    return { ...base, stats: { distinctTitles: (data.summary || {}).distinctTitles || 0 }, summary: data.summary || {} };
+  }
+  if (kind === 'patch-management-activity') {
+    return { ...base, stats: { totalPatchInstallEvents: (data.summary || {}).totalPatchInstallEvents || 0 }, summary: data.summary || {} };
+  }
+  if (kind === 'patch-management-details') {
+    return { ...base, stats: { totalPatchesListed: (data.summary || {}).totalPatchesListed || 0 }, summary: data.summary || {} };
   }
   if (kind === 'dark-web-monitoring') {
     const summary = data.summary || {};

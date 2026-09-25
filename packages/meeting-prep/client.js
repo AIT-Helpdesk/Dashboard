@@ -240,14 +240,34 @@ export function mount(container) {
   // component that's newly appeared) is appended in the server's own
   // order -- so a fresh search always starts in REPORT_ORDER, and only
   // diverges from it once you've actually dragged something.
+  // Default position for a component that componentOrder doesn't know
+  // about yet -- by request ("Datto RMM (Live) tile first, then Executive
+  // Summary, then all other Summary Reports, then any others"): the live
+  // Datto widget leads even though it's appended after every file-based
+  // component server-side, Executive Summary (the one-page overview of
+  // everything else) comes next, then every OTHER report whose title
+  // contains "Summary" (Device Health Summary, Patch Management Summary
+  // today -- title-matched rather than a hardcoded kind list so a future
+  // "X Summary" report kind falls into this group automatically, no edit
+  // needed here), then everything else keeps the server's own REPORT_ORDER
+  // relative order. Only ever consulted for ids NOT already in
+  // componentOrder -- once dragged, a tile stays wherever it was put,
+  // this never runs again for it.
+  function defaultOrderPriority(component) {
+    if (component.kind === 'datto-live-devices') return 0;
+    if (component.kind === 'executive-summary') return 1;
+    if (component.title && component.title.includes('Summary')) return 2;
+    return 3;
+  }
+
   function orderedComponents(data) {
     const known = new Set(componentOrder);
-    for (const c of data.components) {
-      if (!known.has(c.id)) {
-        componentOrder.push(c.id);
-        known.add(c.id);
-      }
-    }
+    const newOnes = data.components.filter((c) => !known.has(c.id));
+    // Array.prototype.sort is stable (ES2019+), so components sharing a
+    // priority keep the server's own relative order between themselves --
+    // this only ever reorders across priority tiers, never within one.
+    newOnes.sort((a, b) => defaultOrderPriority(a) - defaultOrderPriority(b));
+    for (const c of newOnes) componentOrder.push(c.id);
     const present = new Set(data.components.map((c) => c.id));
     componentOrder = componentOrder.filter((id) => present.has(id));
     const byId = new Map(data.components.map((c) => [c.id, c]));
@@ -425,6 +445,35 @@ export function mount(container) {
       const s = component.stats;
       return `${s.totalCompromises} compromise${s.totalCompromises === 1 ? '' : 's'} this period (customer average ${s.customerAverage})`;
     }
+    if (component.kind === 'network-audit') {
+      const s = component.stats;
+      return `${s.managedCount} managed${s.unmanagedCount ? `, ${s.unmanagedCount} unmanaged` : ''}`;
+    }
+    if (component.kind === 'open-monitor-alerts') {
+      const s = component.stats;
+      return `${s.totalOpen} open alert${s.totalOpen === 1 ? '' : 's'} across ${s.devicesWithAlerts} device${s.devicesWithAlerts === 1 ? '' : 's'}`;
+    }
+    // Device Activity/Monitor Status, Software, and the two Patch
+    // Management event-log kinds only ever carry a `summary` object (see
+    // buildReportComponent()'s own comment on why -- huge per-device data,
+    // counts only), so each just surfaces its own headline count here.
+    if (component.kind === 'device-activity') {
+      const s = component.stats;
+      return `${s.failedEvents} failed event${s.failedEvents === 1 ? '' : 's'} this period`;
+    }
+    if (component.kind === 'device-monitor-status') {
+      return `${component.stats.totalMonitorEntries} monitor entries`;
+    }
+    if (component.kind === 'software') {
+      return `${component.stats.distinctTitles} distinct titles installed`;
+    }
+    if (component.kind === 'patch-management-activity') {
+      const s = component.stats;
+      return `${s.totalPatchInstallEvents} patch install event${s.totalPatchInstallEvents === 1 ? '' : 's'}`;
+    }
+    if (component.kind === 'patch-management-details') {
+      return `${component.stats.totalPatchesListed} patches listed`;
+    }
     if (component.kind === 'datto-live-devices') {
       const s = component.stats;
       return `${s.total} device${s.total === 1 ? '' : 's'} (live)${s.notSeenStale ? `, ${s.notSeenStale} not seen 30+ days` : ''}`;
@@ -508,6 +557,37 @@ export function mount(container) {
         <div class="resource-group-header"><span>${escapeHtml(component.source)} -- ${escapeHtml(component.title)}</span><span class="count">${component.resolveStatus === 'ok' ? escapeHtml(component.companyName) : ''}</span></div>
         ${autotaskTicketsWidgetsHtml(component)}
       `;
+    } else if (component.kind === 'network-audit') {
+      group.innerHTML = `
+        <div class="resource-group-header"><span>${escapeHtml(component.source)} -- ${escapeHtml(component.title)}</span><span class="count">${component.devices.length} device${component.devices.length === 1 ? '' : 's'}</span></div>
+        ${networkAuditWidgetsHtml(component)}
+        ${detailsBlock('Show full table data', networkAuditHtml(component))}
+      `;
+    } else if (component.kind === 'open-monitor-alerts') {
+      group.innerHTML = `
+        <div class="resource-group-header"><span>${escapeHtml(component.source)} -- ${escapeHtml(component.title)}</span><span class="count">${component.stats.totalOpen} open</span></div>
+        ${openMonitorAlertsHtml(component)}
+      `;
+    } else if (component.kind === 'software') {
+      group.innerHTML = `
+        <div class="resource-group-header"><span>${escapeHtml(component.source)} -- ${escapeHtml(component.title)}</span><span class="count">${component.stats.distinctTitles} titles</span></div>
+        ${softwareWidgetsHtml(component)}
+        ${detailsBlock('Show full table data', softwareSummaryHtml(component))}
+      `;
+    } else if (component.kind === 'patch-management-activity') {
+      group.innerHTML = `
+        <div class="resource-group-header"><span>${escapeHtml(component.source)} -- ${escapeHtml(component.title)}</span><span class="count">${component.createDate ? escapeHtml(component.createDate) : ''}</span></div>
+        ${patchManagementActivityWidgetsHtml(component)}
+        ${detailsBlock('Show full table data', genericSummaryHtml(component.summary))}
+      `;
+    } else if (['device-activity', 'device-monitor-status', 'patch-management-details'].includes(component.kind)) {
+      // Summary-only kinds (see buildReportComponent()'s own comment) --
+      // just the counts already computed into data/*.json's own `summary`,
+      // no per-device breakdown to render.
+      group.innerHTML = `
+        <div class="resource-group-header"><span>${escapeHtml(component.source)} -- ${escapeHtml(component.title)}</span><span class="count">${component.createDate ? escapeHtml(component.createDate) : ''}</span></div>
+        ${genericSummaryHtml(component.summary)}
+      `;
     }
     detailEl.appendChild(group);
     // Wires up any live-filterable device table(s) just rendered into
@@ -531,19 +611,50 @@ export function mount(container) {
     if (component.kind === 'dark-web-monitoring') return darkWebMonitoringWidgetsHtml(component);
     if (component.kind === 'datto-live-devices') return dattoLiveDevicesWidgetsHtml(component);
     if (component.kind === 'autotask-tickets') return autotaskTicketsWidgetsHtml(component);
+    if (component.kind === 'network-audit') return networkAuditWidgetsHtml(component);
+    if (component.kind === 'patch-management-activity') return patchManagementActivityWidgetsHtml(component);
+    if (component.kind === 'software') return softwareWidgetsHtml(component);
     return '';
   }
 
+  // Same kind -> full-table-html mapping renderDetail()'s own per-card
+  // branches use (each wrapped there in its own detailsBlock('Show full
+  // table data', ...)) -- kept as its own dispatcher for the same reason
+  // widgetsHtmlForComponent() above already is: so the individual-card
+  // branches stay untouched. null for the two live kinds (datto-live-
+  // devices, autotask-tickets), same as renderDetail() -- their own
+  // filterable device list/summary already IS the full picture, nothing
+  // collapsed underneath there either.
+  function fullTableHtmlForComponent(component) {
+    if (component.kind === 'executive-summary') return executiveSummaryHtml(component);
+    if (component.kind === 'device-storage') return deviceStorageHtml(component);
+    if (component.kind === 'patch-management-summary') return patchManagementSummaryHtml(component);
+    if (component.kind === 'device-health-summary') return deviceHealthSummaryHtml(component);
+    if (component.kind === 'hardware-lifecycle') return hardwareLifecycleHtml(component);
+    if (component.kind === 'dark-web-monitoring') return darkWebMonitoringHtml(component);
+    if (component.kind === 'network-audit') return networkAuditHtml(component);
+    if (component.kind === 'open-monitor-alerts') return openMonitorAlertsHtml(component);
+    if (component.kind === 'software') return softwareSummaryHtml(component);
+    if (['device-activity', 'device-monitor-status', 'patch-management-activity', 'patch-management-details'].includes(component.kind)) {
+      return genericSummaryHtml(component.summary);
+    }
+    return null;
+  }
+
   // The overview tile's own detail: every ticked component's widgets, one
-  // after another, in the same fixed order they appear in the grid (server
-  // side REPORT_ORDER) -- no full table data underneath any of them, by
-  // request ("shows the widgets from all sections"); the individual card
-  // is still there to click for that. Nothing ticked yet is treated as a
-  // normal, expected starting state, not an error.
+  // after another, in the CURRENT tile order (whatever componentOrder is
+  // right now, including any dragging -- by request, "always use the
+  // current tile order after user has dragged"; orderedComponents() is the
+  // one place that already knows that order, so this reuses it rather than
+  // lastData.components' own raw server order), each followed by its own
+  // "Show full table data" toggle (by request) when that kind has one --
+  // the individual card is still there to click for the same thing on its
+  // own. Nothing ticked yet is treated as a normal, expected starting
+  // state, not an error.
   function overviewDetailEl() {
     const group = document.createElement('div');
     group.className = 'resource-group';
-    const selected = lastData.components.filter((c) => selectedIds.has(c.id));
+    const selected = orderedComponents(lastData).filter((c) => selectedIds.has(c.id));
     if (selected.length === 0) {
       group.innerHTML = `
         <div class="resource-group-header"><span>Selected Overview</span></div>
@@ -552,13 +663,21 @@ export function mount(container) {
       return group;
     }
     const sections = selected
-      .map(
-        (c) => `
-        <div class="mtg-report-section">
+      .map((c) => {
+        const table = fullTableHtmlForComponent(c);
+        const widgets = widgetsHtmlForComponent(c);
+        // No widgets means this section is just a header plus (usually) a
+        // "Show full table data" link -- give it the compact, fit-content
+        // treatment (see .mtg-report-section--compact in styles.css)
+        // instead of claiming a full row for one line of text.
+        const compact = !widgets;
+        return `
+        <div class="mtg-report-section${compact ? ' mtg-report-section--compact' : ''}">
           <h3>${escapeHtml(c.source)} -- ${escapeHtml(c.title)}</h3>
-          ${widgetsHtmlForComponent(c)}
-        </div>`
-      )
+          ${widgets}
+          ${table ? detailsBlock('Show full table data', table) : ''}
+        </div>`;
+      })
       .join('');
     group.innerHTML = `
       <div class="resource-group-header"><span>Selected Overview</span><span class="count">${selected.length} of ${lastData.components.length} ticked</span></div>
@@ -673,7 +792,8 @@ export function mount(container) {
   function donutWidget(title, segments, centerLabel) {
     const rows = segments
       .map(
-        (s) => `<div class="mtg-donut-legend-row"><span class="mtg-swatch" style="background:${s.color}"></span>${escapeHtml(s.label)}<span class="mtg-donut-val">${s.value}</span></div>`
+        (s) =>
+          `<div class="mtg-donut-legend-row" title="${escapeHtml(s.label)}"><span class="mtg-swatch" style="background:${s.color}"></span><span class="mtg-donut-legend-label">${escapeHtml(s.label)}</span><span class="mtg-donut-val">${s.value}</span></div>`
       )
       .join('');
     return `
@@ -793,9 +913,23 @@ export function mount(container) {
       'No Policy': '#9aa3af',
       Unmanaged: '#9aa3af',
     };
+    // Open (unresolved) alerts by priority -- same semantics as the
+    // separate Open Monitor Alerts report kind, just this section's own
+    // cross-check of it. Fixed colour map (not the Patch/Software/
+    // Antivirus one above -- these are priority levels, not agent
+    // status) since Critical/High/Moderate/Low/Information is a fixed,
+    // known set of labels every Monitoring section uses.
+    const alertPriorityColors = { Critical: '#dc2626', High: '#f59e0b', Moderate: '#2563eb', Low: '#9aa3af', Information: '#9aa3af' };
+    const monitoringSection = component.sections.find((s) => s.kind === 'monitoring');
+    let monitoringDonut = '';
+    if (monitoringSection && (monitoringSection.alertsByPriority || []).length > 0) {
+      const segments = monitoringSection.alertsByPriority.map((a) => ({ label: a.priority, value: a.unresolved, color: alertPriorityColors[a.priority] || '#9aa3af' }));
+      const total = segments.reduce((s, x) => s + x.value, 0);
+      monitoringDonut = donutWidget(`Open Alerts by Priority (${monitoringSection.score}%)`, segments, total);
+    }
     const donuts = [];
     for (const section of component.sections) {
-      if (section.kind === 'summary' || section.kind === 'asset-management') continue;
+      if (section.kind === 'summary' || section.kind === 'asset-management' || section.kind === 'monitoring' || section.kind === 'proactive-maintenance') continue;
       for (const who of ['server', 'workstation']) {
         const d = section[who];
         if (!d || d.total === 0) continue;
@@ -804,7 +938,59 @@ export function mount(container) {
         donuts.push(donutWidget(`${escapeHtml(section.title)} (${whoLabel}, ${d.score}%)`, segments, d.total));
       }
     }
-    return `<div class="mtg-widget-grid">${gauge}${donuts.join('')}</div>`;
+    // Gauge on its own row, everything else below it -- by request. Two
+    // separate .mtg-widget-grid containers rather than one, since a flex
+    // row only wraps when it runs out of width; on a wide enough screen
+    // the gauge would otherwise happily share a row with a donut or two.
+    return `<div class="mtg-widget-grid">${gauge}</div><div class="mtg-widget-grid">${monitoringDonut}${donuts.join('')}</div>`;
+  }
+
+  // The PDF's own SUMMARY page is a Managed/Unmanaged donut (matching
+  // Network Audit Report's own colour convention, blue for managed) --
+  // missed the first time round (device table only, no chart), by
+  // request ("check the other reports for missing widgets").
+  function networkAuditWidgetsHtml(component) {
+    const segments = [
+      { label: 'Managed', value: component.stats.managedCount, color: '#2563eb' },
+      { label: 'Unmanaged', value: component.stats.unmanagedCount, color: '#dc2626' },
+    ];
+    const total = component.stats.managedCount + component.stats.unmanagedCount;
+    return `<div class="mtg-widget-grid">${donutWidget('Managed / Unmanaged', segments, total)}</div>`;
+  }
+
+  // Patches installed per device (compareBarsWidget -- there's no natural
+  // 0-100% ceiling here the way there is for disk usage), plus a severity
+  // donut -- by request ("see if there's something you can summarise
+  // there"). Both come straight from data/*.json's own summary.byDevice /
+  // summary.bySeverity, computed once at parse time from the real
+  // per-device patch tables (see that file's own comment on why only
+  // counts are kept, not the full per-patch listing).
+  function patchManagementActivityWidgetsHtml(component) {
+    const s = component.summary || {};
+    const byDevice = compareBarsWidget(
+      'Patches Installed by Device',
+      (s.byDevice || []).map((d) => ({ label: d.device, value: d.count, color: '#2563eb' }))
+    );
+    const severityColors = { Critical: '#dc2626', Important: '#f59e0b', Moderate: '#2563eb', Low: '#9aa3af', Unspecified: '#9aa3af' };
+    const severitySegments = Object.entries(s.bySeverity || {}).map(([label, value]) => ({ label, value, color: severityColors[label] || '#9aa3af' }));
+    const severityTotal = severitySegments.reduce((n, x) => n + x.value, 0);
+    const severityDonut = severityTotal > 0 ? donutWidget('Patches by Severity', severitySegments, severityTotal) : '';
+    return `<div class="mtg-widget-grid">${byDevice}${severityDonut}</div>`;
+  }
+
+  // Top software titles by install count -- the report's own SUMMARY page
+  // is already the whole client's software inventory (up to ~100 distinct
+  // titles for a real client), too many to chart at once, so this caps at
+  // the top 15 by instance count and says so; the full list is still one
+  // click away via "Show full table data".
+  function softwareWidgetsHtml(component) {
+    const titles = ((component.summary || {}).titles || []).slice().sort((a, b) => b.instances - a.instances);
+    const top = titles.slice(0, 15);
+    const bar = compareBarsWidget(
+      `Top ${top.length} Software by Installs${titles.length > top.length ? ` (of ${titles.length} total)` : ''}`,
+      top.map((t) => ({ label: t.name, value: t.instances, color: '#2563eb' }))
+    );
+    return `<div class="mtg-widget-grid">${bar}</div>`;
   }
 
   function deviceStorageWidgetsHtml(component) {
@@ -1153,6 +1339,10 @@ export function mount(container) {
               .join('')}</tbody>
           </table>
         `;
+      } else if (section.kind === 'monitoring') {
+        html += monitoringSectionHtml(section);
+      } else if (section.kind === 'proactive-maintenance') {
+        html += proactiveMaintenanceSectionHtml(section);
       } else {
         // Patch Management / Software Management / Antivirus all share the
         // same Server + Workstation donut shape -- a policy/agent status
@@ -1181,6 +1371,65 @@ export function mount(container) {
     return html;
   }
 
+  // Monitoring's own table shapes (alert priority/device-type breakdowns,
+  // plus the two "Top 5" device tables) -- genuinely missing from this
+  // dashboard until now, across every client, not just a Fairway Capital
+  // gap (see this file's own commit history: Blake Sign Co's original
+  // executive-summary.json never had a "monitoring" section at all,
+  // despite the source PDF always having one). "No data" is shown as its
+  // own row rather than an empty table when a Top 5 list has nothing in
+  // it, matching the PDF's own "No Data" placeholder.
+  function monitoringSectionHtml(section) {
+    const priorityRows = (section.alertsByPriority || [])
+      .map((a) => `<tr><td>${escapeHtml(a.priority)}</td><td>${a.raised}</td><td>${a.resolved}</td><td>${a.unresolved}</td><td>${scoreBadge(a.score)}</td></tr>`)
+      .join('');
+    const deviceTypeRows = (section.alertsByDeviceType || [])
+      .map((d) => `<tr><td>${escapeHtml(d.type)}</td><td>${d.raised}</td><td>${d.resolved}</td><td>${d.unresolved}</td></tr>`)
+      .join('');
+    const deviceAlertRows = (list) =>
+      list.length === 0
+        ? '<tr><td colspan="7" class="status">No data</td></tr>'
+        : list
+            .map(
+              (d) => `<tr><td>${escapeHtml(d.device)}</td><td>${escapeHtml(d.description)}</td><td>${d.critical}</td><td>${d.high}</td><td>${d.moderate}</td><td>${d.low}</td><td>${d.information}</td></tr>`
+            )
+            .join('');
+    return `
+      <table>
+        <thead><tr class="shaded-row"><th>Alert Priority</th><th>Raised</th><th>Resolved</th><th>Unresolved</th><th>Score</th></tr></thead>
+        <tbody>${priorityRows}</tbody>
+      </table>
+      <table>
+        <thead><tr class="shaded-row"><th>Device Type</th><th>Raised</th><th>Resolved</th><th>Unresolved</th></tr></thead>
+        <tbody>${deviceTypeRows}</tbody>
+      </table>
+      <p class="inline-subtext mtg-report-subhead">Top 5 Servers by Alerts</p>
+      <table>
+        <thead><tr class="shaded-row"><th>Device</th><th>Description</th><th>Critical</th><th>High</th><th>Moderate</th><th>Low</th><th>Information</th></tr></thead>
+        <tbody>${deviceAlertRows(section.topServersByAlerts || [])}</tbody>
+      </table>
+      <p class="inline-subtext mtg-report-subhead">Top 5 Other Devices by Alerts</p>
+      <table>
+        <thead><tr class="shaded-row"><th>Device</th><th>Description</th><th>Critical</th><th>High</th><th>Moderate</th><th>Low</th><th>Information</th></tr></thead>
+        <tbody>${deviceAlertRows(section.topOtherDevicesByAlerts || [])}</tbody>
+      </table>
+    `;
+  }
+
+  // Proactive Maintenance -- the PDF's own scheduled-jobs list, no score
+  // (its own description: "No score is calculated based on these
+  // activities"), so scoreBadge(section.score) upstream already renders
+  // nothing for this one rather than needing a special case there too.
+  function proactiveMaintenanceSectionHtml(section) {
+    const rows = (section.scheduledJobs || []).map((j) => `<tr><td>${escapeHtml(j.job)}</td><td>${escapeHtml(j.schedule)}</td><td>${j.components}</td></tr>`).join('');
+    return `
+      <table>
+        <thead><tr class="shaded-row"><th>Scheduled Recurring Job</th><th>Schedule</th><th>Number of Components</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
   function deviceStorageHtml(component) {
     const rows = component.drives
       .map((d) => {
@@ -1200,6 +1449,95 @@ export function mount(container) {
     return `
       <table>
         <thead><tr class="shaded-row"><th>Device</th><th>Drive</th><th>Type</th><th>Size</th><th>Free</th><th>Used</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function networkAuditHtml(component) {
+    const rows = component.devices
+      .map(
+        (d) => `
+      <tr>
+        <td>${escapeHtml(d.device)}</td>
+        <td>${escapeHtml(d.description)}</td>
+        <td>${escapeHtml(d.ipAddress)}</td>
+        <td>${escapeHtml(d.vendor)}</td>
+        <td>${escapeHtml(d.created)}</td>
+      </tr>`
+      )
+      .join('');
+    return `
+      <table>
+        <thead><tr class="shaded-row"><th>Device</th><th>Description</th><th>IP Address</th><th>Vendor</th><th>Created</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  // Nicely formatted, by request -- worst-first ordering (most open alerts
+  // at the top, so the devices worth actually looking at aren't buried
+  // among a page of zeroes), numeric columns centred rather than left-
+  // hung, non-zero counts colour-flagged by the same priority colours the
+  // rest of this page already uses (Critical red, High amber -- no
+  // dashboard-wide .cell-flag-amber utility exists yet, so High gets an
+  // inline colour rather than inventing one for a single caller), and the
+  // device's description folded under its name the same way Device
+  // Storage's own table already does, instead of its own column.
+  function openMonitorAlertsHtml(component) {
+    const sorted = component.devices.slice().sort((a, b) => b.total - a.total);
+    const rows = sorted
+      .map((d) => {
+        const sub = d.description && d.description !== d.device ? ` <span class="inline-subtext">(${escapeHtml(d.description)})</span>` : '';
+        return `
+      <tr>
+        <td>${escapeHtml(d.device)}${sub}</td>
+        <td class="col-center">${d.total ? `<strong>${d.total}</strong>` : d.total}</td>
+        <td class="col-center ${d.critical ? 'cell-flag-red' : ''}">${d.critical}</td>
+        <td class="col-center" style="${d.high ? 'color:#f59e0b;font-weight:700;' : ''}">${d.high}</td>
+        <td class="col-center">${d.moderate}</td>
+        <td class="col-center">${d.low}</td>
+        <td class="col-center">${d.information}</td>
+      </tr>`;
+      })
+      .join('');
+    return `
+      <table>
+        <thead><tr class="shaded-row"><th>Device</th><th class="col-center">Total</th><th class="col-center">Critical</th><th class="col-center">High</th><th class="col-center">Moderate</th><th class="col-center">Low</th><th class="col-center">Info</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  // Site-wide software+instance-count table -- the report's own SUMMARY
+  // page, not the huge per-device version listing that follows it in the
+  // source PDF (deliberately dropped, see buildReportComponent()).
+  function softwareSummaryHtml(component) {
+    const titles = (component.summary || {}).titles || [];
+    const rows = titles.map((t) => `<tr><td>${escapeHtml(t.name)}</td><td>${t.instances}</td></tr>`).join('');
+    return `
+      <table>
+        <thead><tr class="shaded-row"><th>Software</th><th>Instances Found</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  // Flat key/value fallback for the summary-only kinds whose `summary`
+  // shape is just a handful of named counts (Device Activity, Device
+  // Monitor Status, Patch Management Activity/Details) -- one level of
+  // nesting (e.g. `byPriority`/`byStatus`) is flattened into the same
+  // cell rather than needing its own bespoke table per kind.
+  function genericSummaryHtml(summary) {
+    const rows = Object.entries(summary || {})
+      .map(([key, value]) => {
+        const display = value && typeof value === 'object' && !Array.isArray(value) ? Object.entries(value).map(([k, v]) => `${k}: ${v}`).join(', ') : String(value);
+        return `<tr><td>${escapeHtml(key)}</td><td>${escapeHtml(display)}</td></tr>`;
+      })
+      .join('');
+    return `
+      <table>
+        <thead><tr class="shaded-row"><th>Metric</th><th>Value</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     `;

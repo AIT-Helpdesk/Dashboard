@@ -23,8 +23,9 @@ export const label = 'Service Actions';
 // client (see that route's own comment on the Autotask rate-limit
 // incident this deliberately avoids repeating at higher volume).
 
-let lastResult = null; // { asOf, clients: [{ client, components }] } -- last successful fetch, kept so the client-name filter can re-render without a re-fetch
+let lastResult = null; // { asOf, clients: [{ client, components }] } -- last successful fetch, kept so a filter change can re-render without a re-fetch
 let clientFilter = '';
+let titleFilter = '';
 
 const TIER_ORDER = ['action', 'gather', 'watch', 'good'];
 const TIER_META = {
@@ -49,27 +50,34 @@ export function mount(container) {
       team, not a replacement for actually opening a report.
     </p>
     <div class="mtg-sa-filter-row">
-      <label for="sa-filter-input">Filter by client</label>
-      <input type="text" id="sa-filter-input" placeholder="e.g. Kraftur" value="${escapeHtml(clientFilter)}" />
+      <label for="sa-client-filter-input">Filter by client</label>
+      <input type="text" id="sa-client-filter-input" placeholder="e.g. Kraftur* (wildcards with *)" value="${escapeHtml(clientFilter)}" />
+      <label for="sa-title-filter-input">Filter by recommendation</label>
+      <input type="text" id="sa-title-filter-input" placeholder="e.g. *patch* (wildcards with *)" value="${escapeHtml(titleFilter)}" />
     </div>
     <div id="sa-status" class="status"></div>
     <div id="sa-results"></div>
   `;
 
   const refreshButton = container.querySelector('#sa-refresh-button');
-  const filterInput = container.querySelector('#sa-filter-input');
+  const clientFilterInput = container.querySelector('#sa-client-filter-input');
+  const titleFilterInput = container.querySelector('#sa-title-filter-input');
   const statusEl = container.querySelector('#sa-status');
   const resultsEl = container.querySelector('#sa-results');
 
   refreshButton.addEventListener('click', () => load());
-  filterInput.addEventListener('input', () => {
-    clientFilter = filterInput.value;
+  clientFilterInput.addEventListener('input', () => {
+    clientFilter = clientFilterInput.value;
+    render();
+  });
+  titleFilterInput.addEventListener('input', () => {
+    titleFilter = titleFilterInput.value;
     render();
   });
 
   function render() {
     if (!lastResult) return;
-    resultsEl.innerHTML = renderResults(lastResult, clientFilter);
+    resultsEl.innerHTML = renderResults(lastResult, clientFilter, titleFilter);
   }
 
   async function load() {
@@ -93,9 +101,9 @@ export function mount(container) {
   load();
 }
 
-function renderResults(data, filter) {
-  const term = filter.trim().toLowerCase();
-  const clients = term ? data.clients.filter((c) => c.client.toLowerCase().includes(term)) : data.clients;
+function renderResults(data, clientFilterValue, titleFilterValue) {
+  const clientTerm = clientFilterValue.trim();
+  const clients = clientTerm ? data.clients.filter((c) => matchesWildcard(c.client, clientTerm)) : data.clients;
 
   if (data.clients.length === 0) {
     return `<p class="status">No report data found for any client yet.</p>`;
@@ -106,16 +114,20 @@ function renderResults(data, filter) {
   // Meeting Prep's own renderRecommendationsHtml() (which groups a SINGLE
   // client's findings and has no client label to show), since the
   // grouping axis itself is different here.
+  const titleTerm = titleFilterValue.trim();
   const allFindings = [];
   for (const c of clients) {
     for (const f of computeFindings(c.components)) {
+      if (titleTerm && !matchesWildcard(f.title, titleTerm)) continue;
       allFindings.push({ client: c.client, ...f });
     }
   }
 
-  const summary = `<p class="inline-subtext">${clients.length} client${clients.length === 1 ? '' : 's'}${
-    term ? ` matching "${escapeHtml(filter.trim())}"` : ''
-  } loaded, as of ${formatDateTime(data.asOf)}. ${allFindings.length} finding${allFindings.length === 1 ? '' : 's'} total.</p>`;
+  const filterDescriptions = [clientTerm && `client matching "${escapeHtml(clientTerm)}"`, titleTerm && `recommendation matching "${escapeHtml(titleTerm)}"`].filter(Boolean);
+  const filterSuffix = filterDescriptions.length ? ` (filtered by ${filterDescriptions.join(', ')})` : '';
+  const summary = `<p class="inline-subtext">${clients.length} client${clients.length === 1 ? '' : 's'} loaded, as of ${formatDateTime(data.asOf)}. ${allFindings.length} finding${
+    allFindings.length === 1 ? '' : 's'
+  } shown${filterSuffix}.</p>`;
 
   const groups = TIER_ORDER.map((tier) => ({
     tier,
@@ -124,7 +136,7 @@ function renderResults(data, filter) {
   })).filter((g) => g.items.length > 0);
 
   if (groups.length === 0) {
-    return `<div class="mtg-rec-panel">${summary}<p class="status">No notable findings across ${clients.length} client${clients.length === 1 ? '' : 's'}.</p></div>`;
+    return `<div class="mtg-rec-panel">${summary}<p class="status">No matching findings.</p></div>`;
   }
 
   const sections = groups
@@ -146,6 +158,26 @@ function renderResults(data, filter) {
     .join('');
 
   return `<div class="mtg-rec-panel">${summary}${sections}</div>`;
+}
+
+// Browser-side counterpart to @dashboard/autotask-client's own
+// parseWildcard()/matchesWildcard() (a Node package, not loadable here) --
+// same dashboard-wide convention, copied rather than shared since it's a
+// few lines of pure string logic: 'Patch*' -> begins with, '*Patch' ->
+// ends with, '*Patch*' or no stars at all -> contains. Case-insensitive.
+function matchesWildcard(value, term) {
+  if (!term) return true;
+  const startsWithStar = term.startsWith('*');
+  const endsWithStar = term.endsWith('*');
+  let needle = term;
+  if (startsWithStar) needle = needle.slice(1);
+  if (endsWithStar) needle = needle.slice(0, -1);
+  needle = needle.trim().toLowerCase();
+  if (!needle) return true;
+  const v = (value || '').toLowerCase();
+  if (endsWithStar && !startsWithStar) return v.startsWith(needle);
+  if (startsWithStar && !endsWithStar) return v.endsWith(needle);
+  return v.includes(needle);
 }
 
 function formatDateTime(iso) {

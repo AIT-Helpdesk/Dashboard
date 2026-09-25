@@ -3958,6 +3958,25 @@ tr.row-text-highlight-blue td {
   white-space: nowrap;
   max-width: none;
 }
+
+/* Sticky header row, by request -- every generated tracker can run long
+   (rows keep piling up as items get added), so the column headers pin to
+   the top of .page-content's own scroll container (the same overflow-y:
+   auto box .tab-bar's own sticky rule above pins to, hence the matching
+   top: 0) once the table scrolls underneath them. Sticky has to go on the
+   individual <th> cells, not <thead> or the header <tr> itself, with its
+   OWN opaque background -- with border-collapse, a transparent sticky
+   cell would let body rows show straight through as they scroll past
+   underneath it, since the (non-sticky) row's own .shaded-row background
+   no longer reliably paints behind a cell that's been pulled out of
+   normal flow. Same colour .shaded-row already uses, so it reads as the
+   same header it always was, just pinned. */
+.rt-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--section-header-bg);
+}
 .rt-bulk-row-btn,
 .rt-bulk-col-btn {
   border: none;
@@ -7079,14 +7098,34 @@ tr.accrued-time-yellow-row th {
 }
 /* Inside the overview tile specifically, each ticked section's widgets sit
    back-to-back -- a divider between them (skipped on the first) stops
-   adjacent sections' widgets from reading as one continuous block. */
+   adjacent sections' widgets from reading as one continuous block. Sections
+   with no widgets, just a "Show full table data" link, would otherwise
+   still claim the full row width for a single line of text -- flex-wrap
+   the panel itself and let those specific sections size to their content
+   and pack onto the same line, wrapping when they run out of room, same
+   idea as .mtg-widget-grid/.mtg-widget already do for the widgets
+   themselves; sections that DO have widgets keep claiming a full row via
+   flex-basis: 100%, unaffected. */
+.mtg-overview-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
 .mtg-overview-panel .mtg-report-section {
+  flex: 1 1 100%;
   border-top: 1px solid var(--border);
   padding-top: 1rem;
 }
 .mtg-overview-panel .mtg-report-section:first-of-type {
   border-top: none;
   padding-top: 0;
+}
+.mtg-overview-panel .mtg-report-section--compact {
+  flex: 0 1 auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-top: 0;
 }
 .mtg-report-section h3 {
   font-size: 0.95rem;
@@ -7135,6 +7174,15 @@ tr.accrued-time-yellow-row th {
    case a future PDF/PPTX export wants pixel-exact source images again,
    they're just not rendered on this page any more. */
 .mtg-widget-grid {
+  /* Back to flex (grid's auto-fit + 1fr was still stretching columns to
+     fill the row, same complaint as before just via a different
+     mechanism). What's actually wanted -- "use only the required space,
+     but items on the same row match the tallest one's height" -- is
+     plain flexbox's own default cross-axis behaviour: each wrapped line
+     is sized to its tallest item, and every item on that line stretches
+     to match (align-items: stretch, the default -- not overridden here).
+     Width is handled by .mtg-widget below (no grow, no forced basis), so
+     a flex LINE's items only match on height, never on width. */
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
@@ -7145,7 +7193,12 @@ tr.accrued-time-yellow-row th {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1rem;
-  flex: 1 1 260px;
+  /* flex: 0 1 auto -- sized to its own content (flex-basis: auto), never
+     grows to fill leftover row space (flex-grow: 0), by request ("use
+     only the required space rather than [fill] the whole width"). Still
+     shrinks (flex-shrink: 1) so a widget wider than the viewport itself
+     doesn't force horizontal scroll on a narrow screen. */
+  flex: 0 1 auto;
 }
 .mtg-widget-title {
   font-size: 0.82rem;
@@ -7190,13 +7243,33 @@ tr.accrued-time-yellow-row th {
 .mtg-donut-legend {
   flex: 1;
   font-size: 0.8rem;
-  min-width: 0;
+  /* Without a floor here, a nested flex: 1 element's contribution to its
+     shrink-to-fit ancestor (.mtg-widget, now sized to its own content
+     rather than a fixed basis) is ambiguous enough that browsers can
+     compute it close to 0 -- this keeps the donut widget's own natural
+     width sane regardless of that. */
+  min-width: 140px;
 }
 .mtg-donut-legend-row {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.2rem 0;
+}
+/* By request ("don't wrap the descriptions in the legends") -- a long
+   segment label (Hardware Lifecycle's OS Support ones run long) used to
+   wrap onto 2-3 lines as a bare text node with nowhere else to go in a
+   narrow legend column, which also made that one widget's own min-content
+   width balloon past its siblings' (the unevenness the grid change above
+   fixes structurally; this is the same fix for the text itself). One
+   line, ellipsis if it still doesn't fit -- the exact value sits right
+   next to it in .mtg-donut-val, and the full label is always readable in
+   the "Show full table data" section underneath. */
+.mtg-donut-legend-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .mtg-swatch {
   width: 0.65rem;
@@ -7312,24 +7385,28 @@ tr.accrued-time-yellow-row th {
 /* Service Actions -- same .mtg-rec-* panel/group/item as above, plus a
    per-item client-name badge (that page groups by tier across every
    client at once, so each item needs to say which client it's about) and
-   a simple client-name filter row. */
+   simple filter rows. Sized up and given its own colour (by request,
+   "make the client names stand out a bit better... a little bigger too")
+   -- a fixed indigo rather than var(--accent)/var(--muted), deliberately
+   distinct from the red/amber/blue/green already used for the four tier
+   headings just above, so a client badge never reads as a tier colour. */
 .mtg-rec-item-client {
   display: inline-block;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  color: var(--muted);
-  background: var(--surface-alt, rgba(127, 127, 127, 0.12));
+  letter-spacing: 0.01em;
+  color: #4f46e5;
+  background: rgba(79, 70, 229, 0.12);
   border-radius: 5px;
-  padding: 0.1rem 0.4rem;
+  padding: 0.15rem 0.5rem;
   margin-right: 0.5rem;
   vertical-align: middle;
 }
 .mtg-sa-filter-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
   margin: 0.75rem 0;
 }
 .mtg-sa-filter-row label {
