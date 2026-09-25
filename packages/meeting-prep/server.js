@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { matchesWildcard, getClient, listAll, excludeMonitoringAlerts, getPicklistLabels, resolveSingleCompany, todayAestKey, monthKeysWindow, monthLabel } = require('@dashboard/autotask-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
+const { runIngest } = require('./ingest.js');
 
 // Meeting Prep -- pulls every "reportable" chunk of data for one client
 // into independent, selectable components, so a TAM can pick which ones
@@ -37,14 +38,7 @@ const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 // the same component id across searches/refreshes -- that's what lets the
 // client keep a checkbox's "selected" state matched to the right
 // component after a re-fetch.
-function slugify(s) {
-  return (
-    String(s)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'site'
-  );
-}
+const { slugify } = require('./slug.js');
 
 // --------------------------------------------------------------------------
 // File-based report components -- Datto RMM's own Report Center/Analytics
@@ -726,6 +720,22 @@ router.get('/all-file-components', (req, res) => {
   try {
     const byClient = loadAllFileReportComponentsByClient();
     res.json({ asOf: new Date().toISOString(), clients: byClient });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Process Incoming Reports" button, by request -- mirrors Contract
+// Checks' own POST /sync (its own "Check for more Orders in IM" button):
+// runs ingest.js's runIngest() and returns its full result (processed/
+// ignored counts plus the needsAttention list, so a manual click surfaces
+// exactly what a scheduled-task run would only leave in the log). See
+// ingest.js's own top comment for the full pipeline this runs.
+router.post('/ingest', async (req, res) => {
+  try {
+    const result = await runIngest();
+    res.json(result);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

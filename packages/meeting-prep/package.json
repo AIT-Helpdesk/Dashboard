@@ -12,6 +12,7 @@
   "dependencies": {
     "@dashboard/autotask-client": "*",
     "@dashboard/datto-rmm": "*",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "pdf-parse": "^2.4.5"
   }
 }

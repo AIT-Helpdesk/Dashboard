@@ -36,8 +36,10 @@ export function mount(container) {
     <header class="page-header">
       <div class="mtg-title-row">
         <h1>Meeting Prep</h1>
+        <button type="button" id="ingest-button" class="button-link button-link--small">Process Incoming Reports</button>
         <button type="button" id="summary-button" class="button-link button-link--small" hidden>Generate Recommendations Summary</button>
       </div>
+      <p id="ingest-status" class="status" hidden></p>
       <form id="filter-form" class="date-form">
         <label for="site-input">Client / Site</label>
         <input type="text" id="site-input" placeholder="e.g. Acme* (wildcards with *)" required />
@@ -66,6 +68,8 @@ export function mount(container) {
   const form = container.querySelector('#filter-form');
   const siteInput = container.querySelector('#site-input');
   const loadButton = container.querySelector('#load-button');
+  const ingestButton = container.querySelector('#ingest-button');
+  const ingestStatusEl = container.querySelector('#ingest-status');
   const summaryButton = container.querySelector('#summary-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
@@ -135,6 +139,43 @@ export function mount(container) {
     }
     selectedIds = next;
     render(lastData);
+  });
+
+  // "Process Incoming Reports" -- pulls new report PDFs from SharePoint's
+  // Incoming/ folder, parses them into this page's own data/*.json files,
+  // and moves each original into Processed/<Client>/<date>/ once written
+  // (see packages/meeting-prep/ingest.js for the full pipeline). A real,
+  // consequential action against live SharePoint data -- confirm() first,
+  // same as every other real-side-effect action this dashboard gates
+  // behind one. Shows the FULL result (not just a one-line summary) since
+  // the needsAttention list -- a file that couldn't be matched to a client,
+  // an unrecognized report title, a kind with no parser yet -- is exactly
+  // the thing someone running this needs to actually see, not just a
+  // silent count.
+  ingestButton.addEventListener('click', async () => {
+    if (!confirm('This will pull new report PDFs from SharePoint\'s Incoming folder, parse them, and move the originals into Processed/. Continue?')) return;
+    ingestButton.disabled = true;
+    ingestStatusEl.hidden = false;
+    ingestStatusEl.className = 'status';
+    ingestStatusEl.textContent = 'Processing incoming reports -- this can take a little while...';
+    try {
+      const res = await fetch('/api/meeting-prep/ingest', { method: 'POST' });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || `Request failed (${res.status})`);
+      const attentionHtml =
+        result.needsAttention.length > 0
+          ? `<ul class="mtg-ingest-attention">${result.needsAttention
+              .map((n) => `<li><strong>${escapeHtml(n.filename)}</strong> (${escapeHtml(n.source)}) -- ${escapeHtml(n.reason)}</li>`)
+              .join('')}</ul>`
+          : '';
+      ingestStatusEl.className = result.needsAttention.length > 0 ? 'status warn' : 'status';
+      ingestStatusEl.innerHTML = `${escapeHtml(result.message)}${attentionHtml}`;
+    } catch (err) {
+      ingestStatusEl.className = 'status error';
+      ingestStatusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      ingestButton.disabled = false;
+    }
   });
 
   // Which card is currently mid-drag, for the drag-to-reorder handlers

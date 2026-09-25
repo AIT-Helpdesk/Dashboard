@@ -1169,6 +1169,22 @@ h1 {
   color: #dc2626;
 }
 
+/* Meeting Prep's "Process Incoming Reports" result, when it ran fine but
+   left something in needsAttention (an unmatched client, an unrecognized
+   report title, a kind with no parser yet) -- same amber this dashboard
+   already uses for "High" priority elsewhere, distinct from .status.error's
+   red (nothing actually failed, it just needs a look). */
+.status.warn {
+  color: #b45309;
+}
+.mtg-ingest-attention {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}
+.mtg-ingest-attention li {
+  margin: 0.15rem 0;
+}
+
 /* Rewst Webhook Test's own raw-JSON fallback -- shown when a selected
    webhook's real response doesn't have an obvious row list to build a
    table from (see that page's own renderGeneric()). Just a readable
@@ -7299,11 +7315,15 @@ tr.accrued-time-yellow-row th {
   padding: 0.3rem 0;
 }
 .mtg-bar-label {
-  width: 8rem;
+  /* Was a fixed 8rem with ellipsis truncation -- fine for the short device
+     hostnames compareBarsWidget() also renders (e.g. Patch Management
+     Activity's per-device bars), but real software titles routinely run
+     much longer ("Google Workspace Migration for Microsoft Outlook®
+     4.3.29.0") and were silently getting cut off, by request. Wider, and
+     wraps onto a second line instead of truncating -- never hides real
+     text, at the cost of a taller row for a genuinely long title. */
+  width: 15rem;
   flex-shrink: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .mtg-bar-track {
   flex: 1;
