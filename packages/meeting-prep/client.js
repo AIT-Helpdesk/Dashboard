@@ -25,6 +25,17 @@ let activeComponentId = null;
 // than breaking the whole order).
 let componentOrder = [];
 
+// Which per-site tab is showing in Selected Overview, when the current
+// search matched more than one distinct site (e.g. a broad term like
+// "sleepy" matching several clients) -- by request, "have the Selected
+// Overview break the results up into one tab per site" rather than
+// lumping every matched site's ticked components into one combined block.
+// null when there's only one site among what's ticked (the normal case,
+// and every case before this) -- no tab strip shows at all then, same as
+// today. Same "restore on remount, reset on a genuinely new search"
+// convention as componentOrder/selectedIds above.
+let overviewActiveSite = null;
+
 // A fixed sentinel id for the "Selected Overview" tile (see overviewCardEl()
 // below) -- not a real component id from the API, so it can never collide
 // with one, and it's how renderDetail() tells "show the overview" apart
@@ -206,6 +217,7 @@ export function mount(container) {
       selectedIds = new Set();
       activeComponentId = null;
       componentOrder = [];
+      overviewActiveSite = null;
     }
     try {
       const params = new URLSearchParams({ client: site });
@@ -692,6 +704,22 @@ export function mount(container) {
   // the individual card is still there to click for the same thing on its
   // own. Nothing ticked yet is treated as a normal, expected starting
   // state, not an error.
+  function overviewSectionHtml(c) {
+    const table = fullTableHtmlForComponent(c);
+    const widgets = widgetsHtmlForComponent(c);
+    // No widgets means this section is just a header plus (usually) a
+    // "Show full table data" link -- give it the compact, fit-content
+    // treatment (see .mtg-report-section--compact in styles.css) instead
+    // of claiming a full row for one line of text.
+    const compact = !widgets;
+    return `
+        <div class="mtg-report-section${compact ? ' mtg-report-section--compact' : ''}">
+          <h3>${escapeHtml(c.source)} -- ${escapeHtml(c.title)}</h3>
+          ${widgets}
+          ${table ? detailsBlock('Show full table data', table) : ''}
+        </div>`;
+  }
+
   function overviewDetailEl() {
     const group = document.createElement('div');
     group.className = 'resource-group';
@@ -703,27 +731,55 @@ export function mount(container) {
       `;
       return group;
     }
-    const sections = selected
-      .map((c) => {
-        const table = fullTableHtmlForComponent(c);
-        const widgets = widgetsHtmlForComponent(c);
-        // No widgets means this section is just a header plus (usually) a
-        // "Show full table data" link -- give it the compact, fit-content
-        // treatment (see .mtg-report-section--compact in styles.css)
-        // instead of claiming a full row for one line of text.
-        const compact = !widgets;
-        return `
-        <div class="mtg-report-section${compact ? ' mtg-report-section--compact' : ''}">
-          <h3>${escapeHtml(c.source)} -- ${escapeHtml(c.title)}</h3>
-          ${widgets}
-          ${table ? detailsBlock('Show full table data', table) : ''}
-        </div>`;
+
+    // Grouped into one tab per distinct site among what's ticked, by
+    // request -- but ONLY when there actually is more than one (the
+    // ordinary case, a search that matched a single client, shows exactly
+    // what it always has: no tab strip at all). A component with no clear
+    // single site of its own (site === null -- a live Datto devices card
+    // whose own devices span more than one real site) falls into its own
+    // "Other" tab rather than being silently dropped or guessed into one
+    // real site's tab.
+    const siteNames = [...new Set(selected.map((c) => c.site).filter(Boolean))];
+    if (siteNames.length <= 1) {
+      const sections = selected.map(overviewSectionHtml).join('');
+      group.innerHTML = `
+        <div class="resource-group-header"><span>Selected Overview</span><span class="count">${selected.length} of ${lastData.components.length} ticked</span></div>
+        <div class="mtg-overview-panel">${sections}</div>
+      `;
+      return group;
+    }
+
+    const OTHER_TAB = '__other__';
+    const hasOther = selected.some((c) => !c.site);
+    const tabs = [...siteNames, ...(hasOther ? [OTHER_TAB] : [])];
+    if (!overviewActiveSite || !tabs.includes(overviewActiveSite)) overviewActiveSite = tabs[0];
+
+    const tabButtons = tabs
+      .map((site) => {
+        const label = site === OTHER_TAB ? 'Other' : site;
+        const count = selected.filter((c) => (site === OTHER_TAB ? !c.site : c.site === site)).length;
+        const active = site === overviewActiveSite;
+        return `<button type="button" class="mtg-overview-tab${active ? ' mtg-overview-tab--active' : ''}" data-site="${escapeHtml(site)}">${escapeHtml(label)} <span class="inline-subtext">(${count})</span></button>`;
       })
       .join('');
+
+    const activeSections = selected
+      .filter((c) => (overviewActiveSite === OTHER_TAB ? !c.site : c.site === overviewActiveSite))
+      .map(overviewSectionHtml)
+      .join('');
+
     group.innerHTML = `
-      <div class="resource-group-header"><span>Selected Overview</span><span class="count">${selected.length} of ${lastData.components.length} ticked</span></div>
-      <div class="mtg-overview-panel">${sections}</div>
+      <div class="resource-group-header"><span>Selected Overview</span><span class="count">${selected.length} of ${lastData.components.length} ticked, ${siteNames.length} sites</span></div>
+      <div class="mtg-overview-tabs">${tabButtons}</div>
+      <div class="mtg-overview-panel">${activeSections}</div>
     `;
+    group.querySelectorAll('.mtg-overview-tab').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        overviewActiveSite = btn.dataset.site;
+        renderDetail();
+      });
+    });
     return group;
   }
 
@@ -1614,27 +1670,28 @@ export function mount(container) {
     `;
   }
 
-  // Fixed column order for both icon-grid reports, same order Datto prints
-  // them in -- the parser feeding this data preserves whichever columns a
-  // given report actually has data for, so a missing column here just
-  // means that check wasn't applicable on this report, not a bug.
-  const HEALTH_COLS = [
-    'Disk Space',
-    'RAM Quantity',
-    'Software Compliant',
-    'Fully Patched',
-    'Antivirus Up to Date',
-    'Under Warranty',
-    'Online Within Last 30 Days',
-    'No Open Alerts',
-  ];
-  const LIFECYCLE_COLS = ['OS Support', 'Disk Space', 'RAM Quantity', 'Under Warranty', 'Online Within Last 30 Days'];
-
   function checkCell(status) {
     return `<td class="mtg-check-cell">${checkIconSvg(status)}</td>`;
   }
 
+  // Fixed column order for both icon-grid reports, same order Datto prints
+  // them in -- the parser feeding this data preserves whichever columns a
+  // given report actually has data for, so a missing column here just
+  // means that check wasn't applicable on this report, not a bug.
+  //
+  // Declared INSIDE each function that uses it (not once, up in mount()'s
+  // own scope, the way this used to be) -- a real bug this session hit
+  // live: mount()'s own "if (lastData) render(lastData)" re-render, near
+  // the TOP of mount(), can reach all the way into deviceHealthSummaryHtml/
+  // hardwareLifecycleHtml on a remount whose previously-active card was one
+  // of these two kinds, which ran before this file's own outer HEALTH_COLS/
+  // LIFECYCLE_COLS const declarations (further down the file) had actually
+  // executed for THIS mount() call -- "Cannot access 'HEALTH_COLS' before
+  // initialization", a real JS temporal-dead-zone error, not a data
+  // problem. Scoping each array to its own function removes the
+  // cross-call ordering dependency entirely.
   function deviceHealthSummaryHtml(component) {
+    const HEALTH_COLS = ['Disk Space', 'RAM Quantity', 'Software Compliant', 'Fully Patched', 'Antivirus Up to Date', 'Under Warranty', 'Online Within Last 30 Days', 'No Open Alerts'];
     const header = HEALTH_COLS.map((c) => `<th>${escapeHtml(c)}</th>`).join('');
     const rows = component.devices
       .map((d) => `<tr><td>${escapeHtml(d.device)}</td>${HEALTH_COLS.map((c) => checkCell(d.checks[c])).join('')}</tr>`)
@@ -1648,6 +1705,7 @@ export function mount(container) {
   }
 
   function hardwareLifecycleHtml(component) {
+    const LIFECYCLE_COLS = ['OS Support', 'Disk Space', 'RAM Quantity', 'Under Warranty', 'Online Within Last 30 Days'];
     return component.bands
       .filter((band) => band.devices.length > 0)
       .map((band) => {

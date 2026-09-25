@@ -173,6 +173,12 @@ function buildReportComponent(kind, data) {
     source: REPORT_SOURCES[kind] || 'Report',
     kind,
     title,
+    // The real site name this component's own data came from (not the
+    // search term that found it, which can be a wildcard matching more
+    // than one client) -- lets the client group components by site, e.g.
+    // for Selected Overview's own per-site tabs when a broad search
+    // matched several clients at once.
+    site: data.site || null,
     createDate,
     images: loadReportImages(kind, siteSlug),
     // The SharePoint webUrl of the original report PDF this component was
@@ -516,6 +522,11 @@ function buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf) {
     source: 'Datto RMM (live)',
     kind: 'datto-live-devices',
     title,
+    // null when this one component's own devices span more than one real
+    // site (same ambiguous-wildcard case `title` above already calls out)
+    // -- same reasoning as buildReportComponent()'s own `site` field, but
+    // there's no single real value to give here in that case.
+    site: siteNames.length === 1 ? siteNames[0] : null,
     createDate: asOf,
     images: [],
     stats: { total: devices.length, notSeenStale: buckets.stale },

@@ -7131,6 +7131,40 @@ tr.accrued-time-yellow-row th {
    idea as .mtg-widget-grid/.mtg-widget already do for the widgets
    themselves; sections that DO have widgets keep claiming a full row via
    flex-basis: 100%, unaffected. */
+/* Selected Overview's own per-site tab strip, by request -- shows only
+   when a search matched more than one distinct site and more than one of
+   them has a ticked component; a single-site result (every case before
+   this) never shows this strip at all. Underline-style active state, same
+   accent colour convention .button-link--small already uses elsewhere on
+   this page, rather than a filled pill -- reads as "which one's showing",
+   not a separate button per site. */
+.mtg-overview-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0.5rem 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.mtg-overview-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.4rem 0.7rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+.mtg-overview-tab:hover {
+  color: var(--fg);
+}
+.mtg-overview-tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
 .mtg-overview-panel {
   display: flex;
   flex-wrap: wrap;
