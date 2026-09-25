@@ -163,6 +163,27 @@ db.exec(`
     updated_by_email TEXT,
     updated_by_name TEXT
   );
+
+  -- Ingram <-> Microsoft <-> Autotask product mapping reference table --
+  -- staff-supplied lookup data (not sync-driven, not tied to any one
+  -- order/item), for a not-yet-built feature ("we will use it later").
+  -- autotask_contract_server_name/autotask_contract_invoice_name start
+  -- NULL on every row -- the source data had no values for them yet;
+  -- someone fills those in by hand later. A plain CREATE TABLE IF NOT
+  -- EXISTS, same as every table above -- on prod this only ever adds this
+  -- one new table the first time the updated code runs there; it can't
+  -- touch items/audit_log/sync_state/templates or any row already in them.
+  CREATE TABLE IF NOT EXISTS product_mappings (
+    id INTEGER PRIMARY KEY,
+    ingram_product_name TEXT NOT NULL UNIQUE,
+    ms_sku_part_number TEXT,
+    friendly_ms_product_name TEXT,
+    autotask_contract_server_name TEXT,
+    autotask_contract_invoice_name TEXT,
+    free INTEGER,                         -- 1 = Yes, 0 = No, NULL = not specified in the source data
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 // Adds `name` to an already-existing templates table (the 'ticket_note' row
@@ -305,6 +326,109 @@ function seedDefaultTemplates() {
   });
 }
 seedDefaultTemplates();
+
+// [ingramProductName, msSkuPartNumber, friendlyMsProductName, free] --
+// autotask_contract_server_name/autotask_contract_invoice_name are always
+// NULL here (see product_mappings' own CREATE TABLE comment). free: 1 =
+// Yes, 0 = No, null = not specified in the source data (a handful of the
+// "NO INGRAM CODE:" rows).
+const PRODUCT_MAPPINGS = [
+  ["Clipchamp Premium", "Clipchamp_Premium", "Clipchamp Editor Premium", 0],
+  ["Dynamics 365 Sales Enterprise Edition (Non-Profit Pricing)", "DYN365_ENTERPRISE_SALES", "Dynamics 365 Sales Enterprise Editio", 0],
+  ["Exchange Online (Plan 1)", "EXCHANGESTANDARD", "Exchange Online (Plan 1)", 0],
+  ["Exchange Online (Plan 2)", "EXCHANGEENTERPRISE", "Exchange Online (Plan 2)", 0],
+  ["Exchange Online Archiving for Exchange Online", "EXCHANGEARCHIVE_ADDON", "Exchange Online Archiving for Exchange Online", 0],
+  ["Microsoft 365 Apps for business", "O365_BUSINESS", "Microsoft 365 Apps for Business", 0],
+  ["Microsoft 365 Apps for enterprise", "OFFICESUBSCRIPTION", "Microsoft 365 Apps for Enterprise", 0],
+  ["Microsoft 365 Business Basic", "O365_BUSINESS_ESSENTIALS", "Microsoft 365 Business Basic", 0],
+  ["Microsoft 365 Business Basic Donation (Non-Profit Pricing)", "O365_BUSINESS_ESSENTIALS", "Microsoft 365 Business Basic", 0],
+  ["Microsoft 365 Business Premium", "SPB", "Microsoft 365 Business Premium", 0],
+  ["Microsoft 365 Business Premium (no Teams)", "Microsoft_365_ Business_ Premium_(no Teams)", "Microsoft 365 Business Premium (no Teams)", 0],
+  ["Microsoft 365 Business Premium (Nonprofit Staff Pricing)", "SPB", "Microsoft 365 Business Premium", 0],
+  ["Microsoft 365 Business Premium with Copilot", "BUSINESS_PREMIUM_AND_MICROSOFT_365_COPILOT_FOR_BUSINESS", "Microsoft 365 Business Premium with Copilot", 0],
+  ["Microsoft 365 Business Standard", "O365_BUSINESS_PREMIUM", "Microsoft 365 Business Standard", 0],
+  ["Microsoft 365 Business Standard (no Teams) Trial", "O365_BUSINESS_PREMIUM", "Microsoft 365 Business Standard", 1],
+  ["Microsoft 365 Business Standard (no Teams)", "MICROSOFT_365_BUSINESS_STANDARD_NO_TEAMS", "Microsoft 365 Business Standard (no Teams)", 0],
+  ["Microsoft 365 Business Standard (Non-Profit Pricing)", "O365_BUSINESS_PREMIUM", "Microsoft 365 Business Standard", 0],
+  ["Microsoft 365 Copilot", "Microsoft_365_Copilot", "Microsoft 365 Copilot", 0],
+  ["Microsoft 365 Copilot Business", "MICROSOFT_365_COPILOT_FOR_BUSINESS", "Microsoft 365 Copilot Business", 0],
+  ["Microsoft 365 F3", "SPE_F1", "Microsoft 365 F3", 0],
+  ["Microsoft Defender for Business", "MDE_SMB", "Microsoft Defender for Business", 0],
+  ["Microsoft Defender for Office 365 (Plan 1)", "ATP_ENTERPRISE", "Microsoft Defender for Office 365 (Plan 1)", 0],
+  ["Microsoft Defender for Office 365 (Plan 1) (Non-Profit Pricing)", "ATP_ENTERPRISE", "Microsoft Defender for Office 365 (Plan 1)", 0],
+  ["Microsoft Entra ID P1", "AAD_PREMIUM", "Azure Active Directory Premium P1", 0],
+  ["Microsoft Entra ID P2", "AAD_PREMIUM_P2", "Microsoft Entra ID P2", 0],
+  ["Microsoft Teams Phone Standard", "MCOEV", "Microsoft Teams Phone Standard", 0],
+  ["Office 365 E3", "ENTERPRISEPACK", "Office 365 E3", 0],
+  ["Office 365 Extra File Storage", "SHAREPOINTSTORAGE", "Office 365 Extra File Storage", 0],
+  ["Office 365 F3", "DESKLESSPACK", "Office 365 F3", 0],
+  ["Planner and Project Plan 3", "PROJECTPROFESSIONAL", "Planner and Project Plan 3", 0],
+  ["Planner and Project Plan 5", "PROJECT_PLAN3_DEPT", "Planner and Project Plan 5", 0],
+  ["Power BI Pro", "POWER_BI_PRO", "Power BI Pro", 0],
+  ["Power BI Pro (Non-Profit Pricing)", "POWER_BI_PRO_CE", "Power BI Pro", 0],
+  ["Visio Plan 1", "VISIOONLINE_PLAN1", "Visio Plan 1", 0],
+  ["Visio Plan 2", "VISIOCLIENT", "Visio Plan 2", 0],
+  ["Windows 10/11 Enterprise E3", "WIN10_VDA_E3", "Windows 10/11 Enterprise E3", 0],
+  ["Windows 365 Business 2 vCPU, 8 GB, 128 GB", "CPC_B_2C_8RAM_128GB", "Windows 365 Business 2 vCPU 8 GB 128 GB", 0],
+  ["Windows 365 Business 2 vCPU, 8 GB, 256 GB", "CPC_B_2C_8RAM_256GB", "Windows 365 Business 2 vCPU 8 GB 256 GB", 0],
+  ["Windows 365 Enterprise 2 vCPU, 4 GB, 128 GB", "CPC_E_2C_4GB_128GB", "Windows 365 Enterprise 2 vCPU 4 GB 128 GB", 0],
+  ["Windows 365 Enterprise 2 vCPU, 8 GB, 128 GB", "CPC_E_2C_8GB_128GB", "Windows 365 Enterprise 2 vCPU 8 GB 128 GB", 0],
+  ["Windows 365 Enterprise 2 vCPU, 8 GB, 256 GB", "CPC_E_2C_8GB_256GB", "Windows 365 Enterprise 2 vCPU 8 GB 256 GB", 0],
+  ["Microsoft 365 Business Standard with Copilot", "BUSINESS_STANDARD_AND_COPILOT_FOR_BUSINESS/MICROSOFT_365_COPILOT_BUSINESS_DEPT", "Microsoft 365 Business Standard with Copilot", 0],
+  ["OneDrive for business (Plan 2)", "WACONEDRIVEENTERPRISE", "OneDrive for Business (Plan 2)", 0],
+  ["Azure NCE Subscription  / Azure New Commerce Experience (NCE)", null, null, 0],
+  ["Azure RI / Azure NCE Reserved Instances & Savings Plan", null, null, 0],
+  ["SQL Server 2025 - 1 User CAL (NCE COM BAS PER 1TM)", null, null, 0],
+  ["SQL Server 2025 Standard edition Perpetual 1 Server License (NCE COM BAS PER 1TM)", null, null, 0],
+  ["SQL Server Standard 2022- 2 Core License Pack - 1 year", null, null, 0],
+  ["Windows 11 Home to Pro Upgrade for Microsoft 365 Business (NCE COM BAS PER 1TM)", null, null, 0],
+  ["Windows Server 2022 - 1 User CAL (NCE COM BAS PER 1TM)", null, null, 0],
+  ["Windows Server 2022 Remote Desktop Services - 1 User CAL (NCE COM BAS PER 1TM)", null, null, 0],
+  ["Windows Server 2022 Remote Desktop Services - 1 User CAL 3 Year", null, null, 0],
+  ["Windows Server 2022 Standard - 16 Core License Pack (NCE COM BAS PER 1TM)", null, null, 0],
+  ["Windows Server 2025 Remote Desktop Services - 1 User CAL 1 Year", null, null, 0],
+  ["Windows Server 2025 Remote Desktop Services - 1 User CAL 3 Year", null, null, 0],
+  ["Visual Studio Professional 2022 (NCE COM BAS PER 1TM)", null, null, 0],
+  ["NO INGRAM CODE:POWERAPPS_DEV", "POWERAPPS_DEV", "Microsoft Power Apps for Developer", null],
+  ["NO INGRAM CODE:FLOW_FREE", "FLOW_FREE", "Microsoft Power Automate Free", 1],
+  ["NO INGRAM CODE:POWER_BI_STANDARD", "POWER_BI_STANDARD", "Microsoft Fabric (Free)", 1],
+  ["NO INGRAM CODE:Power_Pages_vTrial_for_Makers", "Power_Pages_vTrial_for_Makers", "Power Pages vTrial for Makers", 1],
+  ["NO INGRAM CODE:RIGHTSMANAGEMENT_ADHOC", "RIGHTSMANAGEMENT_ADHOC", "Rights Management Adhoc", 1],
+  ["NO INGRAM CODE:NONPROFIT_PORTAL", "NONPROFIT_PORTAL", "Nonprofit Portal", 1],
+  ["NO INGRAM CODE:Dynamics_365_Sales_Premium_Viral_Trial", "Dynamics_365_Sales_Premium_Viral_Trial", "Dynamics 365 Sales Premium Viral Trial", 1],
+  ["NO INGRAM CODE:DYN365_BUSINESS_MARKETING", "DYN365_BUSINESS_MARKETING", "Dynamics 365 Customer Insights Self-Service", null],
+  ["NO INGRAM CODE:WINDOWS_STORE", "WINDOWS_STORE", "Windows Store for Business", 1],
+  ["NO INGRAM CODE:FORMS_PRO", "FORMS_PRO", null, null],
+  ["NO INGRAM CODE:Microsoft_Teams_Exploratory_Dept", "Microsoft_Teams_Exploratory_Dept", "Microsoft Teams Exploratory Dept", 1],
+  ["NO INGRAM CODE:PROJECTPREMIUM", "PROJECTPREMIUM", "Project Online Premium", 0],
+];
+
+// Seeds the 68-row product mapping list once, keyed on ingram_product_name
+// (confirmed unique across the whole source list) -- INSERT OR IGNORE means
+// a row someone's since hand-edited (e.g. filled in an Autotask Contract
+// Server/Invoice Name) is never touched or reverted by this running again,
+// same "safe to re-run, additive only" reasoning as seedDefaultTemplates()
+// above. This is also what makes the prod migration safe: pulling this code
+// and restarting just adds this table and these rows -- nothing else in the
+// database is read or written by this function.
+function seedProductMappings() {
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO product_mappings
+       (ingram_product_name, ms_sku_part_number, friendly_ms_product_name, free, created_at, updated_at)
+     VALUES ($ingramProductName, $msSku, $friendlyName, $free, $now, $now)`
+  );
+  const now = nowIso();
+  for (const [ingramProductName, msSku, friendlyName, free] of PRODUCT_MAPPINGS) {
+    insert.run({ $ingramProductName: ingramProductName, $msSku: msSku, $friendlyName: friendlyName, $free: free, $now: now });
+  }
+}
+seedProductMappings();
+
+// Everything, alphabetical by Ingram Product Name -- for the not-yet-built
+// feature this reference data is for.
+function listProductMappings() {
+  return db.prepare('SELECT * FROM product_mappings ORDER BY ingram_product_name ASC').all();
+}
 
 // Every template's key/name/last-updated -- not the content itself (kept
 // out deliberately, same "list view stays light" reasoning most list
@@ -754,4 +878,5 @@ module.exports = {
   listTemplates,
   getTemplate,
   setTemplate,
+  listProductMappings,
 };

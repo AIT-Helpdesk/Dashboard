@@ -16,6 +16,7 @@ const {
   getTemplate,
   setTemplate,
   getItem,
+  listProductMappings,
 } = require('./db.js');
 const { runSync, PROCESS_TYPE, resolveTicketAutotaskId } = require('./sync.js');
 
@@ -1013,5 +1014,10 @@ router.buildResponse = buildResponse;
 // (and therefore never running either of these on its own).
 router.attachRewstStageDoneFlags = attachRewstStageDoneFlags;
 router.attachTicketDetails = attachTicketDetails;
+// Lets Check Client's own Microsoft 365 Tenancy section (packages/
+// check-client) match each subscribed SKU against this package's own
+// product_mappings reference table (see db.js) for a friendly product
+// name, same in-process reuse pattern as the two lines above.
+router.listProductMappings = listProductMappings;
 
 module.exports = router;

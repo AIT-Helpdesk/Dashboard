@@ -3453,6 +3453,15 @@ tr.row-no-next-period {
   background: var(--row-warn-bg) !important;
 }
 
+/* Check Client's Microsoft 365 Tenancy table -- a subscribed SKU with no
+   match in Contract Checks' product_mappings table, by request. Same
+   paler --row-warn-bg convention row-no-next-period above already uses for
+   "flagged row, not a hard error" (see .cc-confirm-warning's own comment
+   for why that's a different, solid-fill treatment). */
+tr.row-no-mapping {
+  background: var(--row-warn-bg) !important;
+}
+
 tr.row-units-changed {
   background: var(--row-changed-bg) !important;
 }

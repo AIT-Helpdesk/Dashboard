@@ -794,25 +794,50 @@ export function mount(container) {
     // nth-child column widths are tuned for THAT section's 8 columns, wrong
     // fit for this one's 5), same plain-table-in-a-.resource-group pattern
     // CSP Customers' own client.js uses for its own differently-shaped table.
+    // Product Name is looked up server-side from Contract Checks' own
+    // product_mappings table, matched on its Microsoft SKU column. Falls
+    // back to the raw SKU itself (muted, via .inline-subtext) when nothing
+    // matches -- that reference table doesn't cover every SKU yet, and a
+    // blank cell would read as a bug rather than "not mapped yet". The raw
+    // SKU and the matched row's Ingram Micro Product Name both come back
+    // too but, by request, neither is its own column -- shown only as this
+    // cell's hover title, so they're there to check without taking up
+    // table width.
     const group = document.createElement('div');
     group.className = 'resource-group';
     group.innerHTML = `
       <table>
         <thead>
-          <tr class="shaded-row"><th>SKU</th><th>Status</th><th>Enabled</th><th>Consumed</th><th>Suspended</th></tr>
+          <tr class="shaded-row"><th>Product Name</th><th>Status</th><th>Enabled</th><th>Consumed</th><th>Suspended</th></tr>
         </thead>
         <tbody>
           ${data.skus
-            .map(
-              (s) => `
-            <tr>
-              <td>${escapeHtml(s.sku)}</td>
+            .map((s) => {
+              // The "[N]" ambiguous-match count is its own span (reusing
+              // .cell-flag-red, same red/bold every other mismatch flag on
+              // this dashboard uses) rather than baked into the name text,
+              // by request -- it needs to stand out from the name itself,
+              // not just read as part of it.
+              const matchCountFlag = s.matchCount ? ` <span class="cell-flag-red">[${s.matchCount}]</span>` : '';
+              // SKU column hidden by request -- the raw SKU still shows up
+              // as the fallback text for an unmapped row (it's the only
+              // thing to show there), and as part of a mapped row's hover
+              // title alongside its Ingram Micro name(s), so it's not gone
+              // entirely, just out of the table's own width.
+              const titleParts = [`SKU: ${s.sku}`];
+              if (s.ingramProductName) titleParts.push(`Ingram Micro: ${s.ingramProductName}`);
+              const productCell = s.productName
+                ? `<span title="${escapeHtml(titleParts.join('\n'))}">${escapeHtml(s.productName)}</span>${matchCountFlag}`
+                : `<span class="inline-subtext">${escapeHtml(s.sku)} (no mapping)</span>`;
+              return `
+            <tr${s.productName ? '' : ' class="row-no-mapping"'}>
+              <td>${productCell}</td>
               <td${s.status !== 'Enabled' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(s.status)}</td>
               <td class="ticket-number">${s.enabled ?? ''}</td>
               <td class="ticket-number">${s.consumed ?? ''}</td>
               <td class="ticket-number${s.suspended ? ' cell-flag-red' : ''}">${s.suspended ?? ''}</td>
-            </tr>`
-            )
+            </tr>`;
+            })
             .join('')}
         </tbody>
       </table>

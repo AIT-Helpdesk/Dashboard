@@ -153,6 +153,31 @@ function matchRewstCustomerByName(clientName, rewstCustomers) {
   return null;
 }
 
+// The shared leading text across a set of strings, cut back to the last
+// full word so it never ends mid-word (e.g. two names sharing everything
+// up to "...Business Stan" reports "...Business", not "...Business Stan").
+// Used by /m365-tenancy below for an ambiguous multi-row SKU match --
+// returns the FULL string unchanged when every value is identical (the
+// common real-world case: same product, two Ingram listings), null when
+// nothing at all is shared (falls back to the raw SKU at the call site).
+function commonWordPrefix(strings) {
+  const values = [...new Set(strings.filter(Boolean))];
+  if (values.length === 0) return null;
+  let prefix = values[0];
+  for (const v of values.slice(1)) {
+    let i = 0;
+    while (i < prefix.length && i < v.length && prefix[i] === v[i]) i++;
+    prefix = prefix.slice(0, i);
+  }
+  const atWordBoundary = values.every((v) => v.length === prefix.length || v[prefix.length] === ' ');
+  if (!atWordBoundary) {
+    const lastSpace = prefix.lastIndexOf(' ');
+    prefix = lastSpace >= 0 ? prefix.slice(0, lastSpace) : '';
+  }
+  prefix = prefix.trim();
+  return prefix || null;
+}
+
 router.get('/m365-tenancy', async (req, res) => {
   const subscriptionId = (req.query.subscriptionId || '').trim();
   const clientName = (req.query.clientName || '').trim();
@@ -196,17 +221,73 @@ router.get('/m365-tenancy', async (req, res) => {
     // wraps Microsoft Graph's own GET /subscribedSkus response as
     // { subscribed_skus: { status_code, response, request, data: { value: [...] } } }.
     const skuRows = licensesRes.data?.subscribed_skus?.data?.value || [];
+    // Matched against Contract Checks' own product_mappings reference table
+    // on its "Microsoft SKU" column (ms_sku_part_number), by request --
+    // returns that SKU's Microsoft Friendly Name (productName) plus its
+    // Ingram Micro Product Name(s) (ingramProductName, kept OUT of the
+    // rendered table client-side -- by request, "keep that column
+    // hidden" -- client.js uses it as this row's hover title instead of a
+    // dropped field). Case-insensitive (Graph's own skuPartNumber casing is
+    // consistent in practice, but the reference table was hand-typed from a
+    // spreadsheet, so don't assume it matches case-for-case) and read fresh
+    // every request -- it's a local SQLite read, not an external call.
+    //
+    // The same Microsoft SKU can legitimately sit on more than one
+    // product_mappings row (confirmed real case: O365_BUSINESS_ESSENTIALS
+    // covers both "Microsoft 365 Business Basic" and its Non-Profit-Pricing
+    // Ingram listing) -- grouped by SKU rather than a last-one-wins Map, so
+    // an ambiguous match is never silently dropped down to one arbitrary
+    // row. Rows with no SKU at all (about a dozen NCE/perpetual-license
+    // rows in the source data) are excluded from the index -- grouping them
+    // under a blank key would falsely "match" every one of them together if
+    // a real SKU were ever blank too.
+    const mappingsBySku = new Map();
+    for (const m of contractChecks.listProductMappings()) {
+      const key = (m.ms_sku_part_number || '').trim().toUpperCase();
+      if (!key) continue;
+      if (!mappingsBySku.has(key)) mappingsBySku.set(key, []);
+      mappingsBySku.get(key).push(m);
+    }
     const skus = skuRows
-      .map((s) => ({
+      .map((s) => {
         // Real data carries a trailing zero-width space on some SKU names
         // (a genuine Graph/Rewst quirk, not a parsing bug) -- stripped here
         // so it doesn't render as an invisible stray character.
-        sku: (s.skuPartNumber || '').replace(new RegExp('[\\u200B\\u200C\\u200D\\uFEFF]', 'g'), '').trim(),
-        status: s.capabilityStatus || '',
-        enabled: s.prepaidUnits?.enabled ?? null,
-        consumed: s.consumedUnits ?? null,
-        suspended: s.prepaidUnits?.suspended ?? null,
-      }))
+        const sku = (s.skuPartNumber || '').replace(new RegExp('[\\u200B\\u200C\\u200D\\uFEFF]', 'g'), '').trim();
+        const matches = mappingsBySku.get(sku.toUpperCase()) || [];
+        let productName = null;
+        let ingramProductName = null;
+        // Kept as its own field (rather than baked into productName as
+        // text) so client.js can style the "[N]" count on its own -- by
+        // request, in red -- without having to parse it back out of a
+        // string. null on a clean single match/no match; the real count on
+        // an ambiguous one.
+        let matchCount = null;
+        if (matches.length === 1) {
+          productName = matches[0].friendly_ms_product_name;
+          ingramProductName = matches[0].ingram_product_name;
+        } else if (matches.length > 1) {
+          // By request: "show any Matching portion of the result followed
+          // by [Number of Matches]" -- the shared leading text across every
+          // matched row's Friendly Name (their full name, unchanged, when
+          // they all happen to agree, same as O365_BUSINESS_ESSENTIALS'S
+          // two rows above), so an ambiguous match is visibly different
+          // from a clean single one instead of picking a winner.
+          productName = commonWordPrefix(matches.map((m) => m.friendly_ms_product_name)) || sku;
+          ingramProductName = [...new Set(matches.map((m) => m.ingram_product_name).filter(Boolean))].join('\n');
+          matchCount = matches.length;
+        }
+        return {
+          sku,
+          status: s.capabilityStatus || '',
+          enabled: s.prepaidUnits?.enabled ?? null,
+          consumed: s.consumedUnits ?? null,
+          suspended: s.prepaidUnits?.suspended ?? null,
+          productName,
+          ingramProductName,
+          matchCount,
+        };
+      })
       .sort((a, b) => a.sku.localeCompare(b.sku));
 
     res.json({ matched: true, tenantId, tenantSource, rewstClientName: rewstCustomer.company_name, organisationId: org.id, skus });
