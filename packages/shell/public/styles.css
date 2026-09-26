@@ -2542,12 +2542,36 @@ table {
 .chk-m365-group {
   display: inline-block;
 }
+/* Without this, the free-products group's own `hidden` attribute
+   (renderM365Tenancy() in check-client/client.js, toggled by the "Show/
+   Hide Free Product Table" button) never actually hid anything -- an
+   author stylesheet rule always wins over the browser's own UA
+   `[hidden] { display: none }` rule regardless of specificity, so the
+   unconditional display: inline-block above was silently overriding it
+   on every page load. */
+.chk-m365-group[hidden] {
+  display: none;
+}
 .chk-m365-table {
   width: auto;
 }
 .chk-m365-table th,
 .chk-m365-table td {
   white-space: nowrap;
+}
+/* The "Show/Hide Free Products" toggle between the two M365 Tenancy
+   tables (renderM365Tenancy() in check-client/client.js) -- both
+   .chk-m365-group siblings are inline-block (fit-content), so this needs
+   its own block display to land on its own line at all. 3px top margin
+   (not the usual rem-based spacing elsewhere on this dashboard) and a
+   size a step down from .button-link--small's own already-small
+   padding/font-size, both by request -- sits snug just under the main
+   table rather than reading as a separate section. */
+.chk-m365-free-toggle {
+  display: block;
+  margin: 3px 0 0.5rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.68rem;
 }
 /* Enabled/Consumed/Suspended (columns 3-5) -- by request, centered rather
    than left-hung; header text centered to match. Scoped to this table

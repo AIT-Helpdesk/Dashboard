@@ -273,9 +273,20 @@ router.get('/m365-tenancy', async (req, res) => {
         // string. null on a clean single match/no match; the real count on
         // an ambiguous one.
         let matchCount = null;
+        // product_mappings' own `free` column (1/0/NULL), by request: split
+        // the rendered table into "real" products vs Free ones, so a client
+        // with several free SKUs (Pacgold was the test case) doesn't bury
+        // the products actually worth checking. An unmapped SKU (no matches
+        // at all) always stays in the main table -- there's no `free` value
+        // to go on, and the whole point of that table is surfacing things
+        // that still need a mapping. An ambiguous multi-match only counts as
+        // free when EVERY matched row agrees it's free -- a mixed result is
+        // treated as not-free (kept in the main table) rather than guessing.
+        let isFree = false;
         if (matches.length === 1) {
           productName = matches[0].friendly_ms_product_name;
           ingramProductName = matches[0].ingram_product_name;
+          isFree = matches[0].free === 1;
         } else if (matches.length > 1) {
           // By request: "show any Matching portion of the result followed
           // by [Number of Matches]" -- the shared leading text across every
@@ -286,6 +297,7 @@ router.get('/m365-tenancy', async (req, res) => {
           productName = commonWordPrefix(matches.map((m) => m.friendly_ms_product_name)) || sku;
           ingramProductName = [...new Set(matches.map((m) => m.ingram_product_name).filter(Boolean))].join('\n');
           matchCount = matches.length;
+          isFree = matches.every((m) => m.free === 1);
         }
         return {
           sku,
@@ -296,6 +308,7 @@ router.get('/m365-tenancy', async (req, res) => {
           productName,
           ingramProductName,
           matchCount,
+          isFree,
         };
       })
       .sort((a, b) => a.sku.localeCompare(b.sku));

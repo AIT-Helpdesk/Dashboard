@@ -118,7 +118,7 @@ export function mount(container) {
     <div id="subs-summary" class="summary" hidden></div>
     <div id="subs-results" class="results"></div>
 
-    <h2 class="chk-section-heading">Microsoft 365 Tenancy <span class="inline-subtext">(Ingram tenant ID &rarr; Rewst)</span></h2>
+    <h2 class="chk-section-heading">Microsoft 365 Tenancy <span class="inline-subtext">(Ingram tenant ID &rarr; Rewst &rarr; M365)</span></h2>
     <p id="m365-status" class="status" hidden></p>
     <div id="m365-summary" class="summary" hidden></div>
     <div id="m365-results" class="results"></div>
@@ -797,6 +797,31 @@ export function mount(container) {
       m365ResultsEl.innerHTML = '<p class="status">No subscribed SKUs found.</p>';
       return;
     }
+    // Split into the "Product Table" (everything worth checking -- real
+    // paid products, PLUS anything unmapped, since the whole point of that
+    // half is surfacing rows that still need a mapping) and the "Free
+    // Product Table" (every mapped row product_mappings' own `free` column
+    // marks as free -- Pacgold was the confirmed test case), by request --
+    // a client with several free SKUs was burying the products actually
+    // worth checking. The free table stays out of sight behind a button,
+    // and that button only renders at all when there's at least one free
+    // row to show.
+    // Alphabetical by Product Name, with unmapped rows (no product_mappings
+    // match at all, so no name to sort by) always pushed to the bottom
+    // rather than interleaved by raw SKU -- by request. Client-side, not
+    // server.js's own sort-by-raw-SKU (still there for its own reasons) --
+    // this ordering only makes sense once productName is known and the
+    // Free split has already happened.
+    function sortM365(skus) {
+      return [...skus].sort((a, b) => {
+        if (!a.productName && !b.productName) return a.sku.localeCompare(b.sku);
+        if (!a.productName) return 1;
+        if (!b.productName) return -1;
+        return a.productName.localeCompare(b.productName, undefined, { sensitivity: 'base' });
+      });
+    }
+    const mainSkus = sortM365(data.skus.filter((s) => !s.isFree));
+    const freeSkus = sortM365(data.skus.filter((s) => s.isFree));
     // Bare table (no .ingram-subscriptions-table -- that class's own
     // nth-child column widths are tuned for THAT section's 8 columns, wrong
     // fit for this one's 5), same plain-table-in-a-.resource-group pattern
@@ -815,33 +840,24 @@ export function mount(container) {
     // (table { width: 100% }); it's only 5 narrow columns, so it fits its
     // own content instead, and cells never wrap (see that class's own CSS
     // for both).
-    const group = document.createElement('div');
-    group.className = 'resource-group chk-m365-group';
-    group.innerHTML = `
-      <table class="chk-m365-table">
-        <thead>
-          <tr class="shaded-row"><th>Product Name</th><th>Status</th><th>Enabled</th><th>Consumed</th><th>Suspended</th></tr>
-        </thead>
-        <tbody>
-          ${data.skus
-            .map((s) => {
-              // The "[N]" ambiguous-match count is its own span (reusing
-              // .cell-flag-red, same red/bold every other mismatch flag on
-              // this dashboard uses) rather than baked into the name text,
-              // by request -- it needs to stand out from the name itself,
-              // not just read as part of it.
-              const matchCountFlag = s.matchCount ? ` <span class="cell-flag-red">[${s.matchCount}]</span>` : '';
-              // SKU column hidden by request -- the raw SKU still shows up
-              // as the fallback text for an unmapped row (it's the only
-              // thing to show there), and as part of a mapped row's hover
-              // title alongside its Ingram Micro name(s), so it's not gone
-              // entirely, just out of the table's own width.
-              const titleParts = [`SKU: ${s.sku}`];
-              if (s.ingramProductName) titleParts.push(`Ingram Micro: ${s.ingramProductName}`);
-              const productCell = s.productName
-                ? `<span title="${escapeHtml(titleParts.join('\n'))}">${escapeHtml(s.productName)}</span>${matchCountFlag}`
-                : `<span class="inline-subtext">${escapeHtml(s.sku)} (no mapping)</span>`;
-              return `
+    function m365RowHtml(s) {
+      // The "[N]" ambiguous-match count is its own span (reusing
+      // .cell-flag-red, same red/bold every other mismatch flag on
+      // this dashboard uses) rather than baked into the name text,
+      // by request -- it needs to stand out from the name itself,
+      // not just read as part of it.
+      const matchCountFlag = s.matchCount ? ` <span class="cell-flag-red">[${s.matchCount}]</span>` : '';
+      // SKU column hidden by request -- the raw SKU still shows up
+      // as the fallback text for an unmapped row (it's the only
+      // thing to show there), and as part of a mapped row's hover
+      // title alongside its Ingram Micro name(s), so it's not gone
+      // entirely, just out of the table's own width.
+      const titleParts = [`SKU: ${s.sku}`];
+      if (s.ingramProductName) titleParts.push(`Ingram Micro: ${s.ingramProductName}`);
+      const productCell = s.productName
+        ? `<span title="${escapeHtml(titleParts.join('\n'))}">${escapeHtml(s.productName)}</span>${matchCountFlag}`
+        : `<span class="inline-subtext">${escapeHtml(s.sku)} (no mapping)</span>`;
+      return `
             <tr${s.productName ? '' : ' class="row-no-mapping"'}>
               <td>${productCell}</td>
               <td${s.status !== 'Enabled' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(s.status)}</td>
@@ -849,12 +865,43 @@ export function mount(container) {
               <td class="ticket-number">${s.consumed ?? ''}</td>
               <td class="ticket-number${s.suspended ? ' cell-flag-red' : ''}">${s.suspended ?? ''}</td>
             </tr>`;
-            })
-            .join('')}
+    }
+    function m365TableHtml(skus) {
+      return `
+      <table class="chk-m365-table">
+        <thead>
+          <tr class="shaded-row"><th>Product Name</th><th>Status</th><th>Enabled</th><th>Consumed</th><th>Suspended</th></tr>
+        </thead>
+        <tbody>
+          ${skus.map(m365RowHtml).join('')}
         </tbody>
       </table>
     `;
+    }
+
+    const group = document.createElement('div');
+    group.className = 'resource-group chk-m365-group';
+    group.innerHTML = mainSkus.length ? m365TableHtml(mainSkus) : '<p class="status">No non-Free subscribed SKUs found.</p>';
     m365ResultsEl.appendChild(group);
+
+    if (freeSkus.length) {
+      const freeToggle = document.createElement('button');
+      freeToggle.type = 'button';
+      freeToggle.className = 'button-link button-link--small chk-m365-free-toggle';
+      freeToggle.textContent = `Show Free Products (${freeSkus.length})`;
+      m365ResultsEl.appendChild(freeToggle);
+
+      const freeGroup = document.createElement('div');
+      freeGroup.className = 'resource-group chk-m365-group';
+      freeGroup.hidden = true;
+      freeGroup.innerHTML = m365TableHtml(freeSkus);
+      m365ResultsEl.appendChild(freeGroup);
+
+      freeToggle.addEventListener('click', () => {
+        freeGroup.hidden = !freeGroup.hidden;
+        freeToggle.textContent = freeGroup.hidden ? `Show Free Products (${freeSkus.length})` : `Hide Free Products (${freeSkus.length})`;
+      });
+    }
   }
 
   function m365UnmatchedText(data) {
