@@ -334,6 +334,12 @@ function mapDeviceSummary(device) {
     online: Boolean(device.online),
     patchStatus: patchStatus ?? 'Unknown',
     ipAddress: pick(device.intIpAddress, device.extIpAddress, device.ipAddress),
+    // The external IP specifically, NOT blended with the internal one the
+    // way ipAddress above is -- added for Check Client's own Datto RMM
+    // device list (by request, "last seen external IP address"). Same
+    // confirmed-real field (extIpAddress) ipAddress already reads above,
+    // just exposed on its own rather than folded into that combined value.
+    extIpAddress: device.extIpAddress ?? null,
     model: pick(device.model, device.systemModel, device.chassisType),
     manufacturer: pick(device.manufacturer, device.systemManufacturer),
     serialNumber: device.serialNumber ?? null,

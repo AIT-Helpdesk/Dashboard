@@ -1523,15 +1523,57 @@ export function mount(container) {
     for (const site of data.bySite) {
       const groupEl = document.createElement('div');
       groupEl.className = 'resource-group';
-      groupEl.innerHTML = `
-        <div class="resource-group-header"><span>${escapeHtml(site.site)}</span><span class="count">${site.devices.length} device${site.devices.length === 1 ? '' : 's'}</span></div>
-        <table>
-          <thead>
-            <tr class="shaded-row"><th>Hostname</th><th>Online</th><th>OS</th><th>Patch Status</th><th>Last User</th><th>Last Seen</th></tr>
-          </thead>
-          <tbody>${deviceRowsHtml(site.devices)}</tbody>
-        </table>
-      `;
+      const header = document.createElement('div');
+      header.className = 'resource-group-header';
+      header.innerHTML = `<span>${escapeHtml(site.site)}</span><span class="count">${site.devices.length} device${site.devices.length === 1 ? '' : 's'}</span>`;
+      groupEl.appendChild(header);
+
+      // By request: instead of one long flat device list per site, show
+      // counts by device type (Datto's own deviceType.category/type --
+      // "Desktop"/"Laptop"/"Server"/"Network Device"/etc, see
+      // mapDeviceSummary() in datto-rmm/lib.js), each expandable to that
+      // type's own device list on click. Same real
+      // .resource-group-header--toggle/.toggle-arrow collapsible
+      // convention Completed Tickets/Ticket Times' own resource groups
+      // already use, reused here rather than invented fresh -- collapsed
+      // by default, same as those. deviceType is UNCONFIRMED against this
+      // account's real live payload (see that field's own comment in
+      // datto-rmm/lib.js) -- if it turns out every device falls back to
+      // "Unknown", this still works, just as one bucket, until that's
+      // confirmed/fixed properly.
+      const byType = new Map();
+      for (const d of site.devices) {
+        const type = d.deviceType || 'Unknown';
+        if (!byType.has(type)) byType.set(type, []);
+        byType.get(type).push(d);
+      }
+      const types = [...byType.keys()].sort((a, b) => a.localeCompare(b));
+
+      for (const type of types) {
+        const devices = byType.get(type);
+        const typeHeader = document.createElement('div');
+        typeHeader.className = 'resource-group-header resource-group-header--toggle chk-datto-type-header';
+        typeHeader.innerHTML = `<span><span class="toggle-arrow">▸</span>${escapeHtml(type)}</span><span class="count">${devices.length} device${devices.length === 1 ? '' : 's'}</span>`;
+        groupEl.appendChild(typeHeader);
+
+        const typeContent = document.createElement('div');
+        typeContent.hidden = true;
+        typeContent.innerHTML = `
+          <table>
+            <thead>
+              <tr class="shaded-row"><th>Hostname</th><th>Online</th><th>OS</th><th>Patch Status</th><th>Last User</th><th>External IP</th><th>Last Seen</th></tr>
+            </thead>
+            <tbody>${deviceRowsHtml(devices)}</tbody>
+          </table>
+        `;
+        groupEl.appendChild(typeContent);
+
+        const arrow = typeHeader.querySelector('.toggle-arrow');
+        typeHeader.addEventListener('click', () => {
+          typeContent.hidden = !typeContent.hidden;
+          arrow.textContent = typeContent.hidden ? '▸' : '▾';
+        });
+      }
       dattoResultsEl.appendChild(groupEl);
     }
   }
@@ -1546,6 +1588,7 @@ export function mount(container) {
         <td>${escapeHtml(d.os)}</td>
         <td>${escapeHtml(d.patchStatus)}</td>
         <td>${escapeHtml(d.lastUser)}</td>
+        <td class="ticket-number">${escapeHtml(d.extIpAddress || '')}</td>
         <td class="ticket-number">${formatDateTime(d.lastSeen)}</td>
       </tr>`
       )

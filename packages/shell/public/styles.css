@@ -1302,6 +1302,19 @@ h1 {
   width: 1em;
 }
 
+/* Check Client's Datto RMM device-type breakdown (renderDattoRmm() in
+   check-client/client.js) -- several .resource-group-header--toggle rows
+   stacked directly inside ONE site's own .resource-group card (rather
+   than each type getting its own separate bordered card), so a thin top
+   divider is needed between them; the very first one sits flush under the
+   site's own header instead, no divider needed there. */
+.chk-datto-type-header {
+  border-top: 1px solid var(--border);
+}
+.resource-group-header + .chk-datto-type-header {
+  border-top: none;
+}
+
 .resource-group-header .count {
   color: var(--muted);
   font-weight: 400;
