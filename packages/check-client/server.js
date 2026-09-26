@@ -15,6 +15,7 @@ const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 const contractChecks = require('@dashboard/contract-checks/server.js');
 const ingramSubscriptions = require('@dashboard/ingram-subscriptions/server.js');
 const contractServices = require('@dashboard/contract-services/server.js');
+const { isContractManager } = require('@dashboard/shell/contract-manager-permissions.js');
 
 // The only Contract Process Type that exists today -- same constant value
 // Contract Checks' own sync.js exports as PROCESS_TYPE, kept as a plain
@@ -41,6 +42,15 @@ async function fetchRewstCustomers() {
 }
 
 const router = express.Router();
+// Needed for POST /services/adjust-units below -- every other route on this
+// router is a read-only GET, so this was never wired up until that write
+// route existed (see this file's own top-of-file "read-only" comment).
+// Same router.use(express.json()) convention every other package's server.js
+// with a POST route already uses (contract-checks, rollout-tracker-builder,
+// service-calls, ...), applied here too rather than scoping it to the one
+// route -- Express only parses a body when the request actually sends one,
+// so this is a no-op for every GET route above and below it.
+router.use(express.json());
 
 // Section 1 -- Orders, via Contract Checks' own loadEnrichedItems +
 // buildResponse. "Show everything for this client" (by request -- this is
@@ -313,8 +323,34 @@ router.get('/services', async (req, res) => {
     const filterTerm = (req.query.client || '').trim();
     const exactClient = req.query.exactClient === 'true';
     const data = await contractServices.buildReport(month, '', filterTerm, exactClient);
-    res.json(data);
+    // Lets client.js show/hide the "click a Units cell to adjust it"
+    // affordance without a separate round trip -- same convention
+    // packages/shell/rollout-tracker-server.js's own GET / already uses for
+    // its own isManager flag. The write route below double-checks this
+    // same gate server-side regardless -- this flag only controls the UI.
+    res.json({ ...data, isManager: isContractManager(req) });
   } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Adjust contract units" -- Check Client's own thin delegate to Contract
+// Services' real write (see that package's own adjustUnits() for the full
+// "why", including the Autotask entity involved and its irreversibility),
+// same in-process-delegation shape GET /services above already uses for
+// its own read. Gated here too, not just client-side -- never trust a
+// hidden button alone for a write this consequential.
+router.post('/services/adjust-units', async (req, res) => {
+  if (!isContractManager(req)) {
+    return res.status(403).json({ error: 'Only a Contract Manager can adjust contract units.' });
+  }
+  try {
+    const actor = { email: req.session.user.email, name: req.session.user.name };
+    const result = await contractServices.adjustUnits(req.body || {}, actor);
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: err.message });
   }

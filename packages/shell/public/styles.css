@@ -1169,6 +1169,14 @@ h1 {
   color: #dc2626;
 }
 
+/* A "Loading..."/"Waiting on..." status message, by request -- orange,
+   #f59e0b same as .text-highlight-orange's own shade (chosen previously,
+   by request, specifically because it reads clearly distinct from
+   .status.error's red rather than too close to it). */
+.status.loading {
+  color: #f59e0b;
+}
+
 /* Meeting Prep's "Process Incoming Reports" result, when it ran fine but
    left something in needsAttention (an unmatched client, an unrecognized
    report title, a kind with no parser yet) -- same amber this dashboard
@@ -1770,10 +1778,123 @@ h1 {
   margin: 1.5rem 0 0.5rem;
   font-size: 1.05rem;
   font-weight: 600;
-  color: var(--fg);
+  /* #16a34a -- same green used dashboard-wide (.cell-flag-green,
+     .text-highlight-green), by request. */
+  color: #16a34a;
 }
 .check-client-page .chk-section-heading:first-of-type {
   margin-top: 1rem;
+}
+/* Contract Services' own "adjust units" popups (openAdjustUnitsModal()/
+   openAdjustUnitsConfirmModal() in check-client/client.js) -- narrower than
+   the base .history-modal-panel's own 30rem, same idea as .wsp-qa-modal-panel's
+   own narrower variant, since this one only ever holds a few fields. */
+.chk-adjust-units-modal-panel {
+  width: 22rem;
+  max-width: 90vw;
+}
+/* Shared 4-line heading both adjust-units popups use (adjustModalHeadingHtml()
+   in check-client/client.js) -- Client Name/Contract Name/Service name, plus
+   Effective Date on the confirm popup only. Colors are all reused shades, by
+   request: green matches .chk-section-heading elsewhere on this page,
+   orange matches this page's own "Loading..." status text, red matches
+   .cell-flag-red dashboard-wide -- Contract Name deliberately stays a plain
+   text-color token rather than a literal black, so it still reads in dark
+   mode. Overrides align-items:center on .history-modal-panel-header (that
+   rule vertically centers a single-line title; this block is multi-line). */
+.history-modal-panel-header:has(.chk-adjust-modal-heading) {
+  align-items: flex-start;
+}
+.chk-adjust-modal-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.chk-adjust-modal-client {
+  color: #16a34a;
+}
+.chk-adjust-modal-contract {
+  color: var(--fg);
+}
+.chk-adjust-modal-service {
+  color: #f59e0b;
+  font-weight: 400;
+}
+.chk-adjust-modal-date {
+  margin-top: 0.15rem;
+}
+.chk-adjust-modal-date-label {
+  color: var(--fg);
+  font-weight: 400;
+}
+.chk-adjust-modal-date-value {
+  color: #dc2626;
+  font-weight: 700;
+}
+/* The "(N)" pending-next-period count in the confirm popup's Current Units
+   cell (openAdjustUnitsConfirmModal() in check-client/client.js) -- same
+   muted color as .inline-subtext elsewhere, but deliberately NOT that
+   class's own smaller font-size, by request: this number is what the New
+   column's math actually uses here, not a secondary detail to de-emphasize. */
+.chk-adjust-pending-count {
+  color: var(--muted);
+}
+/* The small pencil-icon button in front of a Units count (unitsCell() in
+   check-client/client.js) that opens the adjust-units popup above -- a
+   plain .wsp-icon-btn (same shell as contract-checks' own ticket-number
+   edit button), just nudged to sit level with the number's own baseline
+   inside a table cell rather than the default inline-button baseline. */
+.chk-units-clickable {
+  vertical-align: -0.15rem;
+  margin-right: 0.15rem;
+}
+.chk-adjust-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+.chk-adjust-sign-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.chk-adjust-sign-button {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.chk-adjust-sign-button--active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.chk-adjust-confirm-table {
+  width: 100%;
+  margin-bottom: 0.75rem;
+}
+.chk-adjust-confirm-table th {
+  text-align: left;
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding-bottom: 0.3rem;
+}
+.chk-adjust-confirm-table td {
+  padding: 0.25rem 0;
+  font-weight: 600;
+}
+.chk-adjust-confirm-table td:first-child {
+  color: var(--muted);
+  font-weight: 400;
+  width: 40%;
 }
 /* Since/Month right-justified, but only up to (not past) where the Search
    button sits on the row below, by request -- see the .chk-search-spacer
@@ -2387,6 +2508,35 @@ a.tt-tag {
 table {
   width: 100%;
   border-collapse: collapse;
+}
+
+/* Check Client's Microsoft 365 Tenancy table -- by request, shouldn't
+   stretch to the full page width the way a plain table does dashboard-wide
+   (only 5 narrow columns, no reason to). The table sizes to its own
+   content (overriding the table { width: 100% } rule above) and its
+   surrounding box shrinks to match rather than leaving a wide bordered
+   card around a narrow table; cells never wrap onto a second line. */
+.chk-m365-group {
+  display: inline-block;
+}
+.chk-m365-table {
+  width: auto;
+}
+.chk-m365-table th,
+.chk-m365-table td {
+  white-space: nowrap;
+}
+/* Enabled/Consumed/Suspended (columns 3-5) -- by request, centered rather
+   than left-hung; header text centered to match. Scoped to this table
+   specifically rather than changing .ticket-number itself, which is used
+   for numeric columns dashboard-wide. */
+.chk-m365-table th:nth-child(3),
+.chk-m365-table th:nth-child(4),
+.chk-m365-table th:nth-child(5),
+.chk-m365-table td:nth-child(3),
+.chk-m365-table td:nth-child(4),
+.chk-m365-table td:nth-child(5) {
+  text-align: center;
 }
 
 /* What's On's scorecard tables (Helpdesk/Personal, Daily/Weekly/Monthly),

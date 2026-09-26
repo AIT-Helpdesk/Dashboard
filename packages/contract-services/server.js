@@ -1,5 +1,8 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getContractUrl, parseWildcard, fetchByFieldIn, aestToUtcIso } = require('@dashboard/autotask-client');
+const { isContractManager } = require('@dashboard/shell/contract-manager-permissions.js');
 
 
 // Pulled out of GET / below into its own function, by request -- so the new
@@ -234,6 +237,12 @@ async function buildReport(month, search, clientSearch, exactClient = false) {
       // The per-contract invoice description override, if set, otherwise the
       // service's own standard invoice description.
       serviceName: contractService?.invoiceDescription || service.invoiceDescription || service.name,
+      // The actual Autotask Service's own name -- NOT an invoice
+      // description, which can be generic/shared across different services
+      // billed the same way. Check Client's "adjust units" popup uses this
+      // one (see adjustModalHeadingHtml() in check-client/client.js) so the
+      // confirmation names the real item being changed, by request.
+      serviceItemName: service.name,
       internalDescription: contractService?.internalDescription || null,
       units: u.units,
       nextPeriodUnits: findNextPeriodUnits(u.contractServiceID, u.endDate),
@@ -245,6 +254,15 @@ async function buildReport(month, search, clientSearch, exactClient = false) {
       // the closest thing Autotask exposes -- when the parent contract record
       // was last changed, not the line item itself.
       contractLastModified: contract.lastModifiedDateTime || null,
+      // Exposed for Check Client's own "adjust units" feature (see
+      // adjustUnits() below) -- this is the unit's own real FK, already read
+      // internally above but not previously returned to any caller. isBundle
+      // tells a caller which of contractServiceID/contractServiceBundleID
+      // (this row's own vs. the sibling block below's) actually applies,
+      // since both blocks feed the same flat `rows` array.
+      contractServiceID: u.contractServiceID ?? null,
+      contractServiceBundleID: null,
+      isBundle: false,
     });
   }
   for (const u of matchedBundleUnits) {
@@ -259,6 +277,7 @@ async function buildReport(month, search, clientSearch, exactClient = false) {
       companyId: contract.companyID,
       serviceId: bundle.id,
       serviceName: contractServiceBundle?.invoiceDescription || bundle.invoiceDescription || bundle.name,
+      serviceItemName: bundle.name,
       internalDescription: contractServiceBundle?.internalDescription || null,
       units: u.units,
       nextPeriodUnits: findNextPeriodBundleUnits(u.contractServiceBundleID, u.endDate),
@@ -267,6 +286,9 @@ async function buildReport(month, search, clientSearch, exactClient = false) {
       startDate: u.startDate,
       endDate: u.endDate,
       contractLastModified: contract.lastModifiedDateTime || null,
+      contractServiceID: null,
+      contractServiceBundleID: u.contractServiceBundleID ?? null,
+      isBundle: true,
     });
   }
 
@@ -301,6 +323,90 @@ async function buildReport(month, search, clientSearch, exactClient = false) {
   };
 }
 
+// Append-only audit trail, one JSON line per attempt (success AND
+// failure) -- the ONLY durable record of what happened here, since
+// Autotask's own ContractServiceAdjustments entity can never be queried
+// back once created (confirmed against Autotask's own REST API docs: "It
+// can only be created; it CANNOT be queried or updated."). logs/ matches
+// this dashboard's existing gitignore convention for per-package runtime
+// logs (see root .gitignore's own `*.log`/`logs/` lines).
+const ADJUSTMENTS_LOG_PATH = path.join(__dirname, 'logs', 'adjustments.log');
+function appendAdjustmentLog(entry) {
+  try {
+    fs.mkdirSync(path.dirname(ADJUSTMENTS_LOG_PATH), { recursive: true });
+    fs.appendFileSync(ADJUSTMENTS_LOG_PATH, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`);
+  } catch (err) {
+    // Never let a logging failure block the real response -- the caller
+    // already has the real outcome regardless of whether this write worked.
+    console.error('contract-services: failed to write adjustments.log:', err.message);
+  }
+}
+
+// Writes a real Autotask ContractServiceAdjustment (ContractServiceBundleAdjustment
+// for a bundle line) -- Autotask's own dedicated entity for exactly this
+// ("adjust a contract line's billed units, effective on a date"), confirmed
+// against Autotask's own REST API docs: POST-only, `unitChange` is a
+// SIGNED delta (not a new absolute total) -- Autotask itself creates/splits
+// the underlying ContractServiceUnits period rows on the given
+// effectiveDate, this function never touches those directly. No existing
+// package in this codebase wrote to any Contract-family entity before this
+// -- see this package's own README for the fuller "why" and the research
+// this was built against. `adjustedUnitPrice`/`adjustedUnitCost` are
+// deliberately never sent -- leaving them unset prices the adjustment at
+// the line's own existing per-unit rate, which is what every real caller
+// of this function wants (Check Client's own popup shows that computed
+// rate to the user beforehand, it never invents a different one here).
+async function adjustUnits({ contractId, serviceId, contractServiceID, contractServiceBundleID, isBundle, effectiveDate, unitChange }, actor) {
+  const delta = Number(unitChange);
+  if (!Number.isInteger(delta) || delta === 0) {
+    throw { status: 400, message: 'unitChange must be a non-zero whole number.' };
+  }
+  if (!effectiveDate || Number.isNaN(new Date(effectiveDate).getTime())) {
+    throw { status: 400, message: 'effectiveDate must be a valid date.' };
+  }
+
+  const client = await getClient();
+  const logBase = {
+    actorEmail: actor.email,
+    actorName: actor.name,
+    contractId,
+    serviceId,
+    contractServiceID,
+    contractServiceBundleID,
+    isBundle: !!isBundle,
+    effectiveDate,
+    unitChange: delta,
+  };
+
+  // contractServiceID/contractServiceBundleID (the unit's own FK) is
+  // preferred when available -- the contractID+serviceID pair is Autotask's
+  // own documented fallback, for the rare row where that FK came back null
+  // (see contract-services/server.js's own buildReport(), which already
+  // guards the same way when looking up next-period units).
+  const idFields = isBundle
+    ? contractServiceBundleID ? { contractServiceBundleID } : { contractID: contractId, serviceID: serviceId }
+    : contractServiceID ? { contractServiceID } : { contractID: contractId, serviceID: serviceId };
+  const body = { effectiveDate, unitChange: delta, ...idFields };
+
+  try {
+    const result = isBundle
+      ? await client.contractServiceBundleAdjustments.create(body)
+      : await client.contractServiceAdjustments.create(body);
+    // Autotask's own real POST response shape is {itemId: <newId>} -- the
+    // SDK's generic {item: ...} unwrapping (base.js) only applies when the
+    // raw response itself carries an `item` key, which a create response
+    // doesn't, so result.data here is Autotask's own raw body. Logged in
+    // full either way so nothing is lost if this guess is ever wrong.
+    const newId = result?.data?.itemId ?? result?.data?.item?.id ?? null;
+    appendAdjustmentLog({ ...logBase, outcome: 'success', adjustmentId: newId, rawResponse: result?.data ?? null });
+    return { id: newId };
+  } catch (err) {
+    const message = err.response ? `Autotask HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
+    appendAdjustmentLog({ ...logBase, outcome: 'failed', error: message });
+    throw { status: 502, message: `Autotask rejected the adjustment: ${message}` };
+  }
+}
+
 const router = express.Router();
 
 router.get('/', async (req, res) => {
@@ -320,12 +426,34 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Gated by Contract Manager (a SEPARATE, narrower list from the dashboard-
+// wide admin gate -- see packages/shell/contract-manager-permissions.js's
+// own comment for why), checked here too even though Check Client's own
+// route already checks it before ever calling this in-process -- never
+// trust a caller's own gate alone for a write this consequential.
+router.post('/adjust-units', async (req, res) => {
+  if (!isContractManager(req)) {
+    return res.status(403).json({ error: 'Only a Contract Manager can adjust contract units.' });
+  }
+  try {
+    const actor = { email: req.session.user.email, name: req.session.user.name };
+    const result = await adjustUnits(req.body || {}, actor);
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Attached to the router (a function, so it can carry extra named
 // properties) rather than changed on module.exports itself -- the shell
 // still needs `require('./server.js')` to BE the router it mounts. Lets the
 // new Check Client page (packages/check-client) call this exact same
 // month-scoped report-building function in-process, instead of duplicating
-// it.
+// it. adjustUnits is exposed the same way, for that same page's own
+// POST /services/adjust-units to delegate to in-process.
 router.buildReport = buildReport;
+router.adjustUnits = adjustUnits;
 
 module.exports = router;

@@ -305,7 +305,7 @@ export function mount(container) {
 
   async function loadOrders(client, since) {
     ordersStatusEl.hidden = false;
-    ordersStatusEl.className = 'status';
+    ordersStatusEl.className = 'status loading';
     ordersStatusEl.textContent = `Loading orders for "${client}"...`;
     ordersSummaryEl.hidden = true;
     ordersResultsEl.innerHTML = '';
@@ -635,7 +635,7 @@ export function mount(container) {
           <span>${escapeHtml(title)}</span>
           <button type="button" class="history-modal-close" aria-label="Close">✕</button>
         </div>
-        <div class="history-modal-body"><p class="status">Loading...</p></div>
+        <div class="history-modal-body"><p class="status loading">Loading...</p></div>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -687,7 +687,7 @@ export function mount(container) {
 
   async function loadSubscriptions(client) {
     subsStatusEl.hidden = false;
-    subsStatusEl.className = 'status';
+    subsStatusEl.className = 'status loading';
     subsStatusEl.textContent = `Loading subscriptions for "${client}"...`;
     subsSummaryEl.hidden = true;
     subsResultsEl.innerHTML = '';
@@ -696,7 +696,7 @@ export function mount(container) {
     // loadM365Tenancy() below), so the previous search's answer shouldn't
     // linger on screen while a new one is in flight.
     m365StatusEl.hidden = false;
-    m365StatusEl.className = 'status';
+    m365StatusEl.className = 'status loading';
     m365StatusEl.textContent = 'Waiting on Subscriptions and Contracts...';
     m365SummaryEl.hidden = true;
     m365ResultsEl.innerHTML = '';
@@ -757,6 +757,7 @@ export function mount(container) {
       return;
     }
 
+    m365StatusEl.className = 'status loading';
     m365StatusEl.textContent = 'Loading Microsoft 365 Tenancy...';
     try {
       const params = new URLSearchParams();
@@ -783,7 +784,13 @@ export function mount(container) {
     m365StatusEl.hidden = true;
     m365SummaryEl.hidden = false;
     const sourceText = data.tenantSource === 'rewst-name-match' ? ' (matched by name via Rewst -- no Ingram Microsoft subscription found)' : '';
-    m365SummaryEl.innerHTML = `<strong>${data.skus.length}</strong> SKU${data.skus.length === 1 ? '' : 's'} for <strong>${escapeHtml(data.rewstClientName)}</strong><span class="inline-subtext"> -- Tenant ID ${escapeHtml(data.tenantId)}${sourceText}</span>`;
+    // The client name was rendering at the line's own normal (larger)
+    // font-size while the Tenant ID right beside it sits in
+    // .inline-subtext's smaller 0.85em -- by request, sized to match
+    // (font-size only, kept bold and at the normal text colour rather than
+    // .inline-subtext's muted grey, so it still reads as the emphasised
+    // "who" of the line, just no longer oversized next to the Tenant ID).
+    m365SummaryEl.innerHTML = `<strong>${data.skus.length}</strong> SKU${data.skus.length === 1 ? '' : 's'} for <strong style="font-size: 0.85em">${escapeHtml(data.rewstClientName)}</strong><span class="inline-subtext"> -- Tenant ID ${escapeHtml(data.tenantId)}${sourceText}</span>`;
 
     m365ResultsEl.innerHTML = '';
     if (data.skus.length === 0) {
@@ -803,10 +810,15 @@ export function mount(container) {
     // too but, by request, neither is its own column -- shown only as this
     // cell's hover title, so they're there to check without taking up
     // table width.
+    // .chk-m365-table -- by request, this table shouldn't stretch to the
+    // page's full width the way a plain table normally does dashboard-wide
+    // (table { width: 100% }); it's only 5 narrow columns, so it fits its
+    // own content instead, and cells never wrap (see that class's own CSS
+    // for both).
     const group = document.createElement('div');
-    group.className = 'resource-group';
+    group.className = 'resource-group chk-m365-group';
     group.innerHTML = `
-      <table>
+      <table class="chk-m365-table">
         <thead>
           <tr class="shaded-row"><th>Product Name</th><th>Status</th><th>Enabled</th><th>Consumed</th><th>Suspended</th></tr>
         </thead>
@@ -963,7 +975,7 @@ export function mount(container) {
 
   async function loadServices(client, exactClient, month) {
     servicesStatusEl.hidden = false;
-    servicesStatusEl.className = 'status';
+    servicesStatusEl.className = 'status loading';
     servicesStatusEl.textContent = `Loading services active in ${formatMonth(month)}...`;
     servicesSummaryEl.hidden = true;
     servicesResultsEl.innerHTML = '';
@@ -1030,7 +1042,23 @@ export function mount(container) {
       `;
       groupEl.appendChild(table);
       servicesResultsEl.appendChild(groupEl);
+      wireServiceRowActions(groupEl, group);
     }
+  }
+
+  // Finds the real row object a click's data-* attributes point at --
+  // `group` is already the exact object rendered (not re-derived from
+  // lastServicesData), same reasoning wireOrderRowActions()'s own
+  // findOrder() has for going straight to what's on screen.
+  function wireServiceRowActions(groupEl, group) {
+    groupEl.querySelectorAll('.chk-units-clickable').forEach((el) => {
+      el.addEventListener('click', () => {
+        const unitId = el.dataset.unitId;
+        const isBundle = el.dataset.isBundle === '1';
+        const row = group.rows.find((r) => String(r.id) === unitId && !!r.isBundle === isBundle);
+        if (row) openAdjustUnitsModal(row);
+      });
+    });
   }
 
   function formatServiceName(name) {
@@ -1047,15 +1075,52 @@ export function mount(container) {
 
   function unitsCell(r) {
     const current = escapeHtml(r.units);
-    if (r.nextPeriodUnits === null) return current;
-    const changeClass = r.nextPeriodUnits < r.units ? ' cell-flag-red' : r.nextPeriodUnits > r.units ? ' cell-flag-green' : '';
-    return `${current} <span class="inline-subtext${changeClass}">(${escapeHtml(r.nextPeriodUnits)})</span>`;
+    const bracket =
+      r.nextPeriodUnits === null
+        ? ''
+        : ` <span class="inline-subtext${r.nextPeriodUnits < r.units ? ' cell-flag-red' : r.nextPeriodUnits > r.units ? ' cell-flag-green' : ''}">(${escapeHtml(r.nextPeriodUnits)})</span>`;
+    const inner = `${current}${bracket}`;
+    // Clickable only for a Contract Manager (server-supplied isManager flag
+    // on lastServicesData, checked here rather than trusting a stale copy)
+    // -- everyone else sees this exact cell unchanged. By request, the
+    // click target is a small pencil icon IN FRONT of the number (not the
+    // number itself); the number stays plain text, no dotted-underline.
+    // Same real pencil-outline SVG path + .wsp-icon-btn shell that
+    // contract-checks/client.js's own ticket-number edit button already
+    // uses (a currentColor SVG recolors with CSS, unlike a colored emoji
+    // glyph, which is why that one moved off emoji too). Identifying
+    // fields for openAdjustUnitsModal() below are on the button itself via
+    // data-* rather than a separate id-lookup helper -- this row's own
+    // `r.id` is a raw Autotask entity id shared across two different
+    // entity types (ContractServiceUnit/ContractServiceBundleUnit in the
+    // same flat rows array), so isBundle travels with it too rather than
+    // relying on `id` alone to stay unique.
+    if (!lastServicesData?.isManager) return inner;
+    const icon = `<button type="button" class="wsp-icon-btn chk-units-clickable" data-company-id="${escapeHtml(String(r.companyId))}" data-unit-id="${escapeHtml(String(r.id))}" data-is-bundle="${r.isBundle ? '1' : '0'}" title="Adjust units"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>`;
+    return `${icon} ${inner}`;
+  }
+
+  // The date-only ISO string (YYYY-MM-DD) for the start of this row's own
+  // NEXT billing period -- one day after the CURRENT period's own
+  // endDate, regardless of whether a real ContractServiceUnits row exists
+  // for it yet (most don't, until either Autotask's own billing run
+  // creates one or an adjustment like this page's own does) --
+  // deterministic from the row's own endDate alone. Shared by the
+  // Contract column's own "(next billing date)" annotation below and the
+  // adjust-units popup's own date default.
+  function nextPeriodStartISO(row) {
+    const d = new Date(row.endDate);
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
   }
 
   function contractLink(r) {
     const label = escapeHtml(r.contractName);
-    if (!r.contractUrl) return label;
-    return `<a href="${escapeHtml(r.contractUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+    // By request -- the contract's own next billing date, so it's visible
+    // without having to open the adjust-units popup just to see it.
+    const nextBilling = ` <span class="inline-subtext">(${formatServiceDate(nextPeriodStartISO(r))})</span>`;
+    if (!r.contractUrl) return `${label}${nextBilling}`;
+    return `<a href="${escapeHtml(r.contractUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>${nextBilling}`;
   }
 
   function formatMonth(month) {
@@ -1090,6 +1155,251 @@ export function mount(container) {
     return total / units;
   }
 
+  // By request: default Effective Date is THIS row's own next billing
+  // period start (nextPeriodStartISO() above) -- UNLESS today (AEST,
+  // same Date.now() + 10h approximation defaultSinceISO() above already
+  // uses elsewhere on this page, not DST-aware) is still within 5 days
+  // after this row's own CURRENT period started (r.startDate -- "the last
+  // effective date"), in which case default to THAT date instead. Same
+  // "just after a period boundary probably means THIS period, not the
+  // next one" intent the original version of this rule had -- that one
+  // was anchored to calendar-month day-of-month (1st-4th); this one's
+  // anchored to the row's own real period dates instead, since a period
+  // only USUALLY starts on the 1st of a month (every monthly service
+  // does, confirmed against real data -- but an annual/quarterly line's
+  // own period boundary can fall on any date).
+  function defaultEffectiveDateForRow(row) {
+    const aestNow = new Date(Date.now() + 10 * 60 * 60 * 1000);
+    // Whole-CALENDAR-DAY difference, not raw millisecond math -- comparing
+    // the AEST-shifted "now" directly against row.startDate's own
+    // unshifted UTC-midnight value produced a real boundary bug (5 days
+    // in read as 5.4 fractional days, wrongly tipping into "next" a whole
+    // day early); both sides are reduced to a plain UTC-midnight
+    // calendar-date key first so only whole days are ever compared.
+    const todayKey = Date.UTC(aestNow.getUTCFullYear(), aestNow.getUTCMonth(), aestNow.getUTCDate());
+    const lastEffective = new Date(row.startDate);
+    const lastKey = Date.UTC(lastEffective.getUTCFullYear(), lastEffective.getUTCMonth(), lastEffective.getUTCDate());
+    const daysSinceLast = Math.round((todayKey - lastKey) / 86400000);
+    if (daysSinceLast >= 0 && daysSinceLast <= 5) return lastEffective.toISOString().slice(0, 10);
+    return nextPeriodStartISO(row);
+  }
+
+  // First popup -- Effective Date / +- / Units, by request. `prefill` is
+  // only passed when returning here via the confirmation popup's own Back
+  // button, so a Back-then-forward round trip never loses what was typed.
+  // Shared 3-line heading for both adjust-units popups -- Client Name
+  // (green, same #16a34a as .chk-section-heading elsewhere on this page),
+  // Contract Name (plain text color, not a literal black, so it still
+  // reads in dark mode), Service/Item name (orange, same #f59e0b this
+  // page's own "Loading..." status text already uses) -- by request.
+  // Service/Item line uses row.serviceItemName (the real Autotask Service's
+  // own name), NOT row.serviceName (an invoice description, which can be
+  // generic/shared across different services billed the same way) -- the
+  // whole point of this popup is confirming exactly which item is being
+  // changed.
+  function adjustModalHeadingHtml(row) {
+    return `
+      <div class="chk-adjust-modal-heading">
+        <div class="chk-adjust-modal-client">${escapeHtml(row.companyName)}</div>
+        <div class="chk-adjust-modal-contract">${escapeHtml(row.contractName)}</div>
+        <div class="chk-adjust-modal-service">${escapeHtml(row.serviceItemName)}</div>
+      </div>`;
+  }
+
+  function openAdjustUnitsModal(row, prefill) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    const sign = prefill?.sign ?? 1;
+    overlay.innerHTML = `
+      <div class="history-modal-panel chk-adjust-units-modal-panel">
+        <div class="history-modal-panel-header">
+          ${adjustModalHeadingHtml(row)}
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <label class="chk-adjust-field-label">
+            Effective Date
+            <input type="date" class="wsp-field chk-adjust-date-input" value="${escapeHtml(prefill?.effectiveDate || defaultEffectiveDateForRow(row))}" />
+          </label>
+          <div class="chk-adjust-sign-row">
+            <button type="button" class="chk-adjust-sign-button${sign === 1 ? ' chk-adjust-sign-button--active' : ''}" data-sign="1">+ Add</button>
+            <button type="button" class="chk-adjust-sign-button${sign === -1 ? ' chk-adjust-sign-button--active' : ''}" data-sign="-1">&minus; Remove</button>
+          </div>
+          <label class="chk-adjust-field-label">
+            Units
+            <input type="number" min="1" step="1" class="wsp-field chk-adjust-units-input" placeholder="0" value="${prefill?.unitsAmount || ''}" />
+          </label>
+          <p class="status error chk-adjust-modal-error" hidden></p>
+          <div class="wsp-form-actions">
+            <button type="button" class="button-link chk-adjust-save-button" disabled>Save</button>
+            <button type="button" class="chk-adjust-exit-button">Exit</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.querySelector('.chk-adjust-exit-button').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    let currentSign = sign;
+    const signButtons = [...overlay.querySelectorAll('.chk-adjust-sign-button')];
+    const dateInput = overlay.querySelector('.chk-adjust-date-input');
+    const unitsInput = overlay.querySelector('.chk-adjust-units-input');
+    const saveButton = overlay.querySelector('.chk-adjust-save-button');
+
+    signButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        currentSign = Number(btn.dataset.sign);
+        signButtons.forEach((b) => b.classList.toggle('chk-adjust-sign-button--active', b === btn));
+      });
+    });
+    // Save greyed out with no units, exactly as specified -- a non-numeric
+    // or zero amount is treated the same as empty, not a parse error.
+    function updateSaveEnabled() {
+      const amount = Number(unitsInput.value);
+      saveButton.disabled = !unitsInput.value || !Number.isFinite(amount) || amount <= 0;
+    }
+    unitsInput.addEventListener('input', updateSaveEnabled);
+    updateSaveEnabled();
+
+    saveButton.addEventListener('click', () => {
+      const effectiveDate = dateInput.value;
+      const unitsAmount = Math.trunc(Number(unitsInput.value));
+      const errorEl = overlay.querySelector('.chk-adjust-modal-error');
+      if (!effectiveDate) {
+        errorEl.hidden = false;
+        errorEl.textContent = 'Effective Date is required.';
+        return;
+      }
+      close();
+      openAdjustUnitsConfirmModal(row, effectiveDate, currentSign, unitsAmount);
+    });
+    unitsInput.focus();
+  }
+
+  // Second popup -- by request, shows current (red) vs new (green) units,
+  // cost, and sell before anything is actually sent, since a real Autotask
+  // ContractServiceAdjustment can never be edited or deleted once created
+  // (only reversed by a later opposite adjustment). New Cost/Sell are
+  // computed from THIS row's own already-known per-unit rate
+  // (perItem(cost/price, units) -- confirmed live against real contract
+  // data that these divide evenly), not a separate fetch -- Autotask itself
+  // prices the real adjustment the same way server-side, since
+  // adjustedUnitPrice/adjustedUnitCost are deliberately never sent (see
+  // contract-services/server.js's own adjustUnits()).
+  function openAdjustUnitsConfirmModal(row, effectiveDate, sign, unitsAmount) {
+    const unitChange = sign * unitsAmount;
+    // By request: when a change is already pending for the next period
+    // (row.nextPeriodUnits -- the same value the main table's own "1 (2)"
+    // bracket already shows), base New on THAT pending count rather than
+    // the currently-billing row.units. The Effective Date defaults to the
+    // start of next period (see defaultEffectiveDateForRow()), so a new
+    // adjustment almost always stacks on top of a change already scheduled
+    // to take effect then, not on top of what's billing right now -- won't
+    // always net out exactly right (a chain of several pending
+    // adjustments, or one effective mid-period), but reads far clearer
+    // than silently basing it on the current period alone.
+    const baseUnits = row.nextPeriodUnits ?? row.units;
+    const newUnits = baseUnits + unitChange;
+    const costRate = perItem(row.cost, row.units);
+    const priceRate = perItem(row.price, row.units);
+    const newCost = costRate === null || costRate === undefined ? null : costRate * newUnits;
+    const newPrice = priceRate === null || priceRate === undefined ? null : priceRate * newUnits;
+    // Same "current (pending)" bracket format unitsCell() already uses on
+    // the main table, so the Current column here reads consistently with
+    // what's already on screen behind this popup -- full size, not
+    // .inline-subtext's smaller size, since on this popup the bracketed
+    // number is the one the New column's own math actually uses, not a
+    // secondary detail.
+    const currentUnitsDisplay =
+      row.nextPeriodUnits === null || row.nextPeriodUnits === row.units
+        ? escapeHtml(row.units)
+        : `${escapeHtml(row.units)} <span class="chk-adjust-pending-count">(${escapeHtml(row.nextPeriodUnits)})</span>`;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel chk-adjust-units-modal-panel">
+        <div class="history-modal-panel-header">
+          <div>
+            ${adjustModalHeadingHtml(row)}
+            <div class="chk-adjust-modal-date"><span class="chk-adjust-modal-date-label">Effective Date:</span> <span class="chk-adjust-modal-date-value">${formatServiceDate(effectiveDate)}</span></div>
+          </div>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <table class="chk-adjust-confirm-table">
+            <thead><tr><th></th><th>Current</th><th>New</th></tr></thead>
+            <tbody>
+              <tr><td>Units</td><td class="cell-flag-red">${currentUnitsDisplay}</td><td class="cell-flag-green">${escapeHtml(newUnits)}</td></tr>
+              <tr><td>Cost</td><td class="cell-flag-red">${formatPrice(row.cost)}</td><td class="cell-flag-green">${formatPrice(newCost)}</td></tr>
+              <tr><td>Sell</td><td class="cell-flag-red">${formatPrice(row.price)}</td><td class="cell-flag-green">${formatPrice(newPrice)}</td></tr>
+            </tbody>
+          </table>
+          <p class="status error chk-adjust-modal-error" hidden></p>
+          <div class="wsp-form-actions">
+            <button type="button" class="button-link chk-adjust-confirm-button">Confirm</button>
+            <button type="button" class="chk-adjust-back-button">Back</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector('.chk-adjust-back-button').addEventListener('click', () => {
+      close();
+      openAdjustUnitsModal(row, { effectiveDate, sign, unitsAmount });
+    });
+
+    const confirmButton = overlay.querySelector('.chk-adjust-confirm-button');
+    confirmButton.addEventListener('click', async () => {
+      const errorEl = overlay.querySelector('.chk-adjust-modal-error');
+      errorEl.hidden = true;
+      confirmButton.disabled = true;
+      confirmButton.textContent = 'Saving...';
+      try {
+        await fetchJson('/api/check-client/services/adjust-units', 'POST', {
+          contractId: row.contractId,
+          serviceId: row.serviceId,
+          contractServiceID: row.contractServiceID,
+          contractServiceBundleID: row.contractServiceBundleID,
+          isBundle: row.isBundle,
+          effectiveDate,
+          unitChange,
+        });
+        close();
+        await loadServices(autotaskClientInput.value.trim(), exactClientInput.checked, monthInput.value);
+      } catch (err) {
+        errorEl.hidden = false;
+        errorEl.textContent = `Error: ${err.message}`;
+        confirmButton.disabled = false;
+        confirmButton.textContent = 'Confirm';
+      }
+    });
+  }
+
   // ---------------------------------------------------------------------
   // Section 5 -- Datto RMM (devices & open alerts), read-only
   // ---------------------------------------------------------------------
@@ -1103,6 +1413,7 @@ export function mount(container) {
       dattoStatusEl.textContent = 'Type a Datto Site above (defaults to Autotask Client) to look up devices.';
       return;
     }
+    dattoStatusEl.className = 'status loading';
     dattoStatusEl.textContent = `Loading Datto RMM devices for "${site}"...`;
     try {
       const params = new URLSearchParams({ site });
