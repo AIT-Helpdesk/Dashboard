@@ -52,7 +52,7 @@ export function mount(container) {
         </label>
         <button type="button" id="add-client-button">Add Client</button>
         <button type="button" id="add-column-button">Add Column</button>
-        <button type="button" id="refresh-button">Refresh</button>
+        <button type="button" id="refresh-button" class="refresh-button--emphasis">Refresh</button>
       </div>
     </header>
     <p id="status" class="status">Loading...</p>

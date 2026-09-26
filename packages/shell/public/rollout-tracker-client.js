@@ -38,7 +38,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
           <button type="button" id="hide-complete-button" class="button-link button-link--small" hidden>Tracking Complete</button>
           <button type="button" id="uncomplete-button" class="button-link button-link--small" hidden>Un-Complete This</button>
           <button type="button" id="delete-tracker-button" class="button-link button-link--small rt-delete-button" hidden>Delete Tracker</button>
-          <button type="button" id="refresh-button" class="button-link button-link--small">Refresh</button>
+          <button type="button" id="refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh</button>
         </div>
       </header>
 

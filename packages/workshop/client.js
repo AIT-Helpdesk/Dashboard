@@ -221,7 +221,7 @@ export function mount(container) {
         </div>
         <div class="date-form date-form--stacked wsp-controls">
           <div class="date-form-row">
-            <button type="button" id="refresh-button">Refresh</button>
+            <button type="button" id="refresh-button" class="refresh-button--emphasis">Refresh</button>
             <button type="button" id="add-job-button" class="button-link">+ Add job</button>
             <button type="button" id="equipment-checklist-button" class="button-link">Equipment Checklist</button>
           </div>

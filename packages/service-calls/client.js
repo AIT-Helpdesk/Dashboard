@@ -65,7 +65,7 @@ export function mount(container) {
         <span id="month-label" class="calendar-month-label"></span>
         <button type="button" id="next-button" aria-label="Next month">&rsaquo;</button>
         <button type="button" id="today-button">Today</button>
-        <button type="button" id="refresh-button">Refresh</button>
+        <button type="button" id="refresh-button" class="refresh-button--emphasis">Refresh</button>
         <button type="button" id="allocation-toggle" class="link-button"></button>
         <label for="show-completed-input" class="inline-checkbox-label">
           <input type="checkbox" id="show-completed-input" /> Show Completed

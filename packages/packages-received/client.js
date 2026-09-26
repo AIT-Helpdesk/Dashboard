@@ -35,7 +35,7 @@ export function mount(container) {
       <header class="page-header">
         <div class="date-form date-form--stacked pgr-controls">
           <div class="date-form-row">
-            <button type="button" id="refresh-button">Refresh</button>
+            <button type="button" id="refresh-button" class="refresh-button--emphasis">Refresh</button>
             <button type="button" id="add-delivery-button" class="button-link">+ Log delivery</button>
           </div>
         </div>

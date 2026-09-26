@@ -70,7 +70,7 @@ export function mount(container) {
         <span id="month-label" class="calendar-month-label"></span>
         <button type="button" id="next-button" aria-label="Next month">&rsaquo;</button>
         <button type="button" id="today-button">Today</button>
-        <button type="button" id="refresh-button">Refresh</button>
+        <button type="button" id="refresh-button" class="refresh-button--emphasis">Refresh</button>
       </div>
     </header>
     <p id="status" class="status">Loading...</p>

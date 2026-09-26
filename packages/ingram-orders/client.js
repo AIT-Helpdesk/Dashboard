@@ -37,7 +37,7 @@ export function mount(container) {
           <input type="text" id="status-input" name="status" placeholder="optional, e.g. complet* (wildcards with *)" />
           <label for="product-input">Product</label>
           <input type="text" id="product-input" name="product" placeholder="optional, e.g. *Business Basic* (wildcards with *)" />
-          <button type="submit" id="refresh-button">Refresh</button>
+          <button type="submit" id="refresh-button" class="refresh-button--emphasis">Refresh</button>
           <button type="button" id="load-all-button" hidden>Load All Products &amp; Licenses</button>
         </div>
         <div class="date-form-row">

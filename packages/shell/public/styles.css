@@ -847,6 +847,29 @@ h1 {
 
 .date-form button:hover { opacity: 0.9; }
 .date-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Refresh button emphasis, by request -- on any page where Refresh sits
+   alongside other real action buttons (Add/Search/Apply/prev-next-Today/
+   etc.), it's green instead of the shared blue every other button on that
+   page uses, so it reads as "the one most worth pressing" when there's a
+   choice. Deliberately left off entirely on pages where Refresh is the
+   ONLY button -- there it stays the default blue, unchanged.
+   !important, not scoped-selector specificity -- #refresh-button is this
+   dashboard's own load-bearing convention (packages/shell/public/app.js's
+   Rotate feature depends on it existing/being queryable by that exact id
+   on every page that has one), but different pages style their Refresh
+   button several different ways (plain .date-form button, .button-link,
+   .button-link--small, a calendar-nav variant, ...), each with its own
+   specificity. A single !important override is the only way to win
+   against all of them at once regardless of source order, without
+   duplicating this rule per variant -- same reasoning this stylesheet's
+   own .cell-flag-red/.cell-flag-green already use !important for an
+   identical "this flag always wins" case. Green is the SAME #16a34a used
+   dashboard-wide (.cell-flag-green, .chk-section-heading, etc.), not a
+   new one-off shade. */
+.refresh-button--emphasis {
+  background: #16a34a !important;
+  color: white !important;
+}
 
 /* Fixes a real, recurring specificity bug: `.date-form button` (1 class +
    1 element = higher specificity than a single plain class) always beats

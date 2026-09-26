@@ -227,7 +227,7 @@ export function mount(container) {
         <div class="section-heading section-heading--nav section-heading-row">
           <span>Service Calls</span>
           <div class="date-form">
-            <button type="button" id="sc-refresh-button" class="button-link button-link--small">Refresh</button>
+            <button type="button" id="sc-refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh</button>
           </div>
         </div>
         <p id="sc-status" class="status">Loading...</p>
@@ -238,7 +238,7 @@ export function mount(container) {
         <div id="summary" class="section-heading section-heading--nav section-heading-row" hidden>
           <span id="summary-text"></span>
           <div class="date-form">
-            <button type="button" id="refresh-button" class="button-link button-link--small">Refresh Scorecards</button>
+            <button type="button" id="refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh Scorecards</button>
           </div>
         </div>
         <div id="results" class="results"></div>
@@ -249,7 +249,7 @@ export function mount(container) {
       <div class="section-heading section-heading--nav section-heading-row">
         <span>Today &amp; Tomorrow</span>
         <div class="date-form">
-          <button type="button" id="tt-refresh-button" class="button-link button-link--small">Refresh</button>
+          <button type="button" id="tt-refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh</button>
         </div>
       </div>
       <p id="tt-status" class="status">Loading...</p>
@@ -264,7 +264,7 @@ export function mount(container) {
           <span id="shifts-week-label" class="calendar-month-label"></span>
           <button type="button" id="shifts-next-button" class="button-link button-link--small" aria-label="Next week">&rsaquo;</button>
           <button type="button" id="shifts-today-button" class="button-link button-link--small">This Week</button>
-          <button type="button" id="shifts-refresh-button" class="button-link button-link--small">Refresh</button>
+          <button type="button" id="shifts-refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh</button>
         </div>
       </div>
       <p id="shifts-status" class="status">Loading...</p>

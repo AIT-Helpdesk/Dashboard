@@ -122,7 +122,7 @@ export function mount(container) {
           <input type="text" id="status-input" name="status" placeholder="optional, e.g. complet* (wildcards with *)" />
           <label for="product-input">Product</label>
           <input type="text" id="product-input" name="product" placeholder="optional, e.g. *Business Basic* (wildcards with *)" />
-          <button type="submit" id="refresh-button" class="button-link button-link--small">Refresh</button>
+          <button type="submit" id="refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh</button>
           <button type="button" id="sync-button" class="button-link button-link--small">Check IM for More</button>
           <button type="button" id="change-report-button" class="button-link button-link--small">Change Report</button>
           <button type="button" id="mark-renewals-button" class="button-link button-link--small cc-mark-renewals-btn">Mark Renewals as Done</button>
