@@ -845,8 +845,18 @@ export function mount(container) {
       // .cell-flag-red, same red/bold every other mismatch flag on
       // this dashboard uses) rather than baked into the name text,
       // by request -- it needs to stand out from the name itself,
-      // not just read as part of it.
-      const matchCountFlag = s.matchCount ? ` <span class="cell-flag-red">[${s.matchCount}]</span>` : '';
+      // not just read as part of it. Its own hover tooltip lists the
+      // shared MS SKU once up top (every matched row has the identical
+      // one -- that's what makes it ambiguous in the first place, so
+      // showing it per-row would just repeat itself) then every matched
+      // row's own Ingram Micro name below it, one per line -- by request.
+      // Separate from the product name span's own SKU/Ingram Micro tooltip
+      // below, since this one is specifically about what the [N] count
+      // actually consists of.
+      const matchListTitle = s.ambiguousMatches
+        ? [`[${s.ambiguousMatches[0].msSku}]`, ...s.ambiguousMatches.map((m) => m.ingramProductName)].join('\n')
+        : '';
+      const matchCountFlag = s.matchCount ? ` <span class="cell-flag-red" title="${escapeHtml(matchListTitle)}">[${s.matchCount}]</span>` : '';
       // SKU column hidden by request -- the raw SKU still shows up
       // as the fallback text for an unmapped row (it's the only
       // thing to show there), and as part of a mapped row's hover

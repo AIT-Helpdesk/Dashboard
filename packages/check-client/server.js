@@ -273,6 +273,14 @@ router.get('/m365-tenancy', async (req, res) => {
         // string. null on a clean single match/no match; the real count on
         // an ambiguous one.
         let matchCount = null;
+        // Per-row breakdown for the ambiguous-match "[N]" tooltip -- by
+        // request, "Ingram Product Name [MS SKU]" per line. Every matched
+        // row shares the identical ms_sku_part_number (that's the grouping
+        // key ambiguity comes from in the first place), so the bracket
+        // repeats the same SKU each line -- still shown per-row rather than
+        // once, since that's the exact format asked for and it's cheap to
+        // build. null except on an ambiguous match.
+        let ambiguousMatches = null;
         // product_mappings' own `free` column (1/0/NULL), by request: split
         // the rendered table into "real" products vs Free ones, so a client
         // with several free SKUs (Pacgold was the test case) doesn't bury
@@ -298,6 +306,7 @@ router.get('/m365-tenancy', async (req, res) => {
           ingramProductName = [...new Set(matches.map((m) => m.ingram_product_name).filter(Boolean))].join('\n');
           matchCount = matches.length;
           isFree = matches.every((m) => m.free === 1);
+          ambiguousMatches = matches.map((m) => ({ ingramProductName: m.ingram_product_name, msSku: m.ms_sku_part_number }));
         }
         return {
           sku,
@@ -308,6 +317,7 @@ router.get('/m365-tenancy', async (req, res) => {
           productName,
           ingramProductName,
           matchCount,
+          ambiguousMatches,
           isFree,
         };
       })
