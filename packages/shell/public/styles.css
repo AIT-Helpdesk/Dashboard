@@ -1310,9 +1310,27 @@ h1 {
    site's own header instead, no divider needed there. */
 .chk-datto-type-header {
   border-top: 1px solid var(--border);
+  /* Left-aligned instead of .resource-group-header's own
+     justify-content: space-between, by request -- the device count sits
+     right after the type name rather than pushed to the far right. */
+  justify-content: flex-start;
 }
 .resource-group-header + .chk-datto-type-header {
   border-top: none;
+}
+/* Fixed width on the title (arrow + type name) so the count that follows
+   lands at a consistent x-position across every type row -- by request,
+   "where column 2 Online starts once unminimized". Both this header and
+   the expanded table below share the same 1rem left padding/inset (this
+   rule's own parent .chk-datto-type-header, and th/td further down), so
+   they start from the same baseline; this width is an estimate tuned to a
+   typical hostname's rendered width, not a guaranteed pixel-for-pixel
+   match against the real Hostname column's own auto-sized width (which
+   varies with actual content, e.g. a longer hostname or the "(reboot
+   required)" suffix widens it) -- nudge this value if it drifts once
+   there's real data to eyeball it against. */
+.chk-datto-type-header > span:first-child {
+  min-width: 12rem;
 }
 
 .resource-group-header .count {
