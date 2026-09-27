@@ -704,8 +704,16 @@ html[data-focus-mode="true"][data-rotate-active="true"] .focus-exit-btn {
 /* The Help popup itself (openHelpModal() in app.js) -- same
    .history-modal-panel shell every other popup on this dashboard uses --
    holds a page name, admin-editable help text, and maybe a README dump.
-   50% wider than its original 34rem, by request. */
-.help-modal-panel {
+   50% wider than its original 34rem, by request.
+   .history-modal-panel.help-modal-panel (both classes, not .help-modal-
+   panel alone) -- confirmed the actual bug the hard way: .history-modal-
+   panel's own width/max-width (further down this file, line ~4132) is an
+   equal-specificity single-class rule that comes LATER in source order,
+   so it was silently winning over this one every time regardless of
+   what width was set here. Two classes on the same element outranks it
+   for real, same specificity-tie fix this file already uses in several
+   other places (e.g. .date-form button.button-link). */
+.history-modal-panel.help-modal-panel {
   width: 51rem;
   max-width: 90vw;
 }
@@ -1898,8 +1906,13 @@ h1 {
 /* Contract Services' own "adjust units" popups (openAdjustUnitsModal()/
    openAdjustUnitsConfirmModal() in check-client/client.js) -- narrower than
    the base .history-modal-panel's own 30rem, same idea as .wsp-qa-modal-panel's
-   own narrower variant, since this one only ever holds a few fields. */
-.chk-adjust-units-modal-panel {
+   own narrower variant, since this one only ever holds a few fields.
+   .history-modal-panel.chk-adjust-units-modal-panel (both classes) --
+   same specificity-tie fix as .help-modal-panel elsewhere in this file:
+   plain .chk-adjust-units-modal-panel alone was an equal-specificity
+   single-class rule losing to .history-modal-panel's own width/max-width
+   (further down this file), which comes later in source order. */
+.history-modal-panel.chk-adjust-units-modal-panel {
   width: 22rem;
   max-width: 90vw;
 }
@@ -3716,8 +3729,14 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
    the opposite direction: this one holds a per-employee table. Widened
    further and paired with white-space: nowrap on its own cells (below),
    by request -- "make the popup window wider so that the data doesn't
-   wrap". */
-.wo-leave-report-modal-panel {
+   wrap".
+   .history-modal-panel.wo-leave-report-modal-panel (both classes) --
+   same specificity-tie fix as .help-modal-panel/.chk-adjust-units-modal-
+   panel elsewhere in this file: plain .wo-leave-report-modal-panel alone
+   was losing to .history-modal-panel's own width/max-width (further down
+   this file, later in source order), so this popup has actually been
+   capped at ~30rem this whole time regardless of the value set here. */
+.history-modal-panel.wo-leave-report-modal-panel {
   width: 50rem;
   max-width: 90vw;
 }
