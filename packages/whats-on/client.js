@@ -1425,9 +1425,17 @@ export function mount(container) {
       }
     }
 
-    const shiftRows = rows.filter((r) => r.rowKind === 'shift');
-    const leaveRows = rows.filter((r) => r.rowKind === 'leave');
-    const holidayRows = rows.filter((r) => r.rowKind === 'holiday');
+    // Autotask's own system/service resource, by request -- shows up as a
+    // real Resource in the same underlying data (leave/shifts/holidays can
+    // all resolve a name from it), but it isn't a real person, so it's
+    // excluded from this report specifically rather than the underlying
+    // calendar data itself.
+    const EXCLUDED_LEAVE_REPORT_NAMES = new Set(['autotask administrator']);
+    const visibleRows = rows.filter((r) => !EXCLUDED_LEAVE_REPORT_NAMES.has(r.name.trim().toLowerCase()));
+
+    const shiftRows = visibleRows.filter((r) => r.rowKind === 'shift');
+    const leaveRows = visibleRows.filter((r) => r.rowKind === 'leave');
+    const holidayRows = visibleRows.filter((r) => r.rowKind === 'holiday');
     const totalHours = leaveRows.reduce((n, r) => n + (r.hours || 0), 0);
     const peopleCount = new Set(leaveRows.map((r) => r.name)).size;
     const summaryParts = [];
@@ -1441,14 +1449,14 @@ export function mount(container) {
     // Grouped by Employee (alphabetical), each group's own rows sorted by
     // date, by request. No Status column -- removed, by request.
     const byName = new Map();
-    for (const r of rows) {
+    for (const r of visibleRows) {
       if (!byName.has(r.name)) byName.set(r.name, []);
       byName.get(r.name).push(r);
     }
     const names = [...byName.keys()].sort((a, b) => a.localeCompare(b));
     for (const name of names) byName.get(name).sort((a, b) => a.dayKey.localeCompare(b.dayKey));
 
-    const bodyHtml = rows.length
+    const bodyHtml = visibleRows.length
       ? names
           .map(
             (name) => `
