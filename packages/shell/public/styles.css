@@ -3827,7 +3827,14 @@ html[data-rotate-active="true"] .tickets-dashboard-pct-grid {
    1rem top margin above was already there, but read as too tight between
    one employee's table and the next employee's heading right below it. */
 .wo-leave-report-group + .wo-leave-report-group {
-  margin-top: 1.25rem;
+  /* padding-top, not margin-top -- margin-top on this element collapses
+     straight through into its own first child (the h4 right below,
+     which has no border/padding of its own to block that), so the
+     previous margin-top: 1.25rem attempt was silently capped at
+     max(1.25rem, the h4's own 1rem) instead of actually adding up,
+     reading as barely any bigger than before. padding never collapses,
+     so this genuinely guarantees the gap. */
+  padding-top: 1.5rem;
 }
 /* Fixed, identical column widths across EVERY employee's own separate
    table, by request ("make the columns line up for all") -- each table

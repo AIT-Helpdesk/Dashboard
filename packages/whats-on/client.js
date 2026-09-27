@@ -1598,8 +1598,19 @@ export function mount(container) {
       const groupsHtml = names.length
         ? names
             .map(
-              (name) => `
-        <h4 style="margin:16px 0 4px; font-family:Arial,Helvetica,sans-serif; font-size:14px;">${escapeHtml(name)}</h4>
+              // A real spacer element with an explicit height, before every
+              // name EXCEPT the first -- not margin on the h4 (the earlier
+              // attempt), by request after that read as no gap at all once
+              // pasted. Outlook's own paste target is Word's rendering
+              // engine underneath, which is well known to ignore/strip
+              // margin on headings and paragraphs on paste; a spacer with
+              // real height (this exact "1px font, explicit height" shape
+              // is a standard email-template technique for exactly this
+              // reason) survives that sanitization instead of relying on
+              // styling Outlook may just drop.
+              (name, i) => `
+        ${i > 0 ? '<div style="height:20px; line-height:20px; font-size:1px;">&nbsp;</div>' : ''}
+        <h4 style="margin:0 0 4px; font-family:Arial,Helvetica,sans-serif; font-size:14px;">${escapeHtml(name)}</h4>
         <table style="border-collapse:collapse;">
           <thead>
             <tr style="background:#f0f0f0;">
