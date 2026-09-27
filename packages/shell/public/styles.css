@@ -3302,19 +3302,20 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
    an earlier version copied that page's own Rotate-hiding rule onto this
    too, without being asked to; removed, by request, since these two
    widgets are real at-a-glance data, not the notes box's own reference
-   material. zoom: 1.3 (not a font-size/padding recalculation) -- "make
-   the widgets about 30% bigger", by request -- same real subtree-scaling
-   technique .today-things-page elsewhere in this file already uses for
-   the same "everything, uniformly" reason: a transform: scale() would
-   leave the original, smaller layout box behind and overlap whatever
-   sits next to it, where zoom genuinely resizes the box these two tiles
-   occupy. */
+   material. zoom (not a font-size/padding recalculation) -- "make the
+   widgets about 30% bigger", then "about 50% bigger" on top of that,
+   then set to an exact 2.25 directly, all by request -- same real
+   subtree-scaling technique .today-things-page elsewhere in this file
+   already uses for the same "everything, uniformly" reason: a
+   transform: scale() would leave the original, smaller layout box
+   behind and overlap whatever sits next to it, where zoom genuinely
+   resizes the box these two tiles occupy. */
 .tickets-dashboard-pct-grid {
   display: flex;
   justify-content: center;
   gap: 1rem;
   margin-top: 1.5rem;
-  zoom: 1.3;
+  zoom: 2.25;
 }
 .tickets-dashboard-pct-number {
   font-size: 1.95rem;

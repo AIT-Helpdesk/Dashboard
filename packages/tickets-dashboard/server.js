@@ -121,7 +121,12 @@ async function fetchWeeklyHoursPct(client) {
     const monday = mondayOf(todayAestKey());
     const weekDays = weekDatesFrom(monday, 7);
     const from = weekDays[0];
-    const to = weekDays[weekDays.length - 1];
+    // Cap at today so totalTechHours (the %% denominator) only counts
+    // scheduled hours for days that have actually happened -- otherwise
+    // early in the week it includes not-yet-worked future days and the
+    // percentage reads artificially low. Full week once today >= Sunday.
+    const today = todayAestKey();
+    const to = today < weekDays[weekDays.length - 1] ? today : weekDays[weekDays.length - 1];
     const { totalTechHours, totalClientHours, totalClientHoursBillable } = await timesRouter.computeOverallTotals(client, from, to, timesRouter.TEAM_SERVICE_DESK);
     const pct = (n) => (totalTechHours > 0 ? (n / totalTechHours) * 100 : 0);
     return {
