@@ -560,8 +560,38 @@ async function fetchPublicHolidayEntries(client, startISO, endISO) {
     listAll(client.holidaySets, [{ op: 'gte', field: 'id', value: 0 }]),
   ]);
   const holidaySetIds = [...new Set(locations.map((l) => l.holidaySetId).filter(Boolean))];
-  if (holidaySetIds.length === 0) return [];
+  if (holidaySetIds.length === 0) return { entries: [], resourceNamesBySet: {} };
   const holidaySetNameById = new Map(holidaySets.map((s) => [s.id, s.holidaySetName]));
+
+  // Real Resources -> Holiday Set name lookup, by request ("assign the
+  // public holidays to the right employees" -- the Leave Report popup,
+  // openLeaveReportModal() in client.js) -- the SAME Resources.locationID
+  // -> InternalLocations.holidaySetId chain this function's own header
+  // comment already documents, just resolved the other direction (which
+  // PEOPLE are in a set, not which DATES that set's holidays fall on).
+  // Active resources only, same convention @dashboard/accrued-time's own
+  // resource fetch already uses. Kept as a separate map (by set NAME, not
+  // folded into each holiday entry itself) so a holiday spanning several
+  // sets on the same real day (the grouping below) can still resolve each
+  // individual set's own people rather than losing that split once their
+  // names get joined into one combined "QLD Holidays, WA" string.
+  const holidaySetByLocation = new Map(locations.map((l) => [l.id, l.holidaySetId]));
+  const resources = await listAll(client.resources, [{ op: 'eq', field: 'isActive', value: true }]);
+  const namesBySetId = new Map();
+  for (const r of resources) {
+    const setId = holidaySetByLocation.get(r.locationID);
+    if (!setId) continue;
+    const name = [r.firstName, r.lastName].filter(Boolean).join(' ').trim();
+    if (!name) continue;
+    if (!namesBySetId.has(setId)) namesBySetId.set(setId, new Set());
+    namesBySetId.get(setId).add(name);
+  }
+  const resourceNamesBySet = {};
+  for (const [setId, names] of namesBySetId) {
+    const setName = holidaySetNameById.get(setId);
+    if (setName) resourceNamesBySet[setName] = [...names].sort();
+  }
+
   const holidays = await fetchByFieldIn(client.holidays, 'holidaySetID', holidaySetIds, [
     { op: 'gte', field: 'holidayDate', value: startISO },
     { op: 'lt', field: 'holidayDate', value: endISO },
@@ -584,7 +614,7 @@ async function fetchPublicHolidayEntries(client, startISO, endISO) {
     if (!grouped.has(key)) grouped.set(key, { dayKey, holidayName: h.holidayName, holidaySetNames: [] });
     grouped.get(key).holidaySetNames.push(holidaySetName);
   }
-  return [...grouped.values()].map((g) => {
+  const entries = [...grouped.values()].map((g) => {
     const holidaySetName = [...new Set(g.holidaySetNames)].sort().join(', ');
     return {
       id: `publicholiday-${g.dayKey}-${g.holidayName}`,
@@ -605,6 +635,7 @@ async function fetchPublicHolidayEntries(client, startISO, endISO) {
       schedulingGroupName: null,
     };
   });
+  return { entries, resourceNamesBySet };
 }
 
 // A rolling TWO-WEEK window (14 real calendar days, Monday-start), not a
@@ -643,26 +674,44 @@ async function buildShiftsWeek(mondayWeekKey) {
     // Surfaced rather than silently dropped -- same convention as
     // HELPDESK_TEAM_NAME's own notFound handling below.
     const byDay = {};
-    const [leaveEntries, publicHolidayEntries] = await Promise.all([leaveEntriesPromise, publicHolidayEntriesPromise]);
-    const extraEntries = [...leaveEntries, ...publicHolidayEntries];
+    const [leaveEntries, publicHolidayResult] = await Promise.all([leaveEntriesPromise, publicHolidayEntriesPromise]);
+    const extraEntries = [...leaveEntries, ...publicHolidayResult.entries];
     for (const row of extraEntries) (byDay[row.dayKey] = byDay[row.dayKey] || []).push(row);
-    return { weekStart: mondayWeekKey, days, todayKey, totalCount: extraEntries.length, byDay, teamName: SHIFTS_TEAM_NAME, notFound: extraEntries.length === 0 };
+    return {
+      weekStart: mondayWeekKey,
+      days,
+      todayKey,
+      totalCount: extraEntries.length,
+      byDay,
+      teamName: SHIFTS_TEAM_NAME,
+      notFound: extraEntries.length === 0,
+      resourceNamesByHolidaySet: publicHolidayResult.resourceNamesBySet,
+    };
   }
 
-  const [{ byDay, totalCount }, leaveEntries, publicHolidayEntries] = await Promise.all([
+  const [{ byDay, totalCount }, leaveEntries, publicHolidayResult] = await Promise.all([
     getShiftsByDay(team.id, mondayWeekKey, endKeyExclusive),
     leaveEntriesPromise,
     publicHolidayEntriesPromise,
   ]);
   let extraCount = 0;
-  for (const row of [...leaveEntries, ...publicHolidayEntries]) {
+  for (const row of [...leaveEntries, ...publicHolidayResult.entries]) {
     (byDay[row.dayKey] = byDay[row.dayKey] || []).push(row);
     extraCount++;
   }
   for (const day of Object.values(byDay)) {
     day.sort((a, b) => (a.startDateTime || '').localeCompare(b.startDateTime || ''));
   }
-  return { weekStart: mondayWeekKey, days, todayKey, totalCount: totalCount + extraCount, byDay, teamName: team.name, notFound: false };
+  return {
+    weekStart: mondayWeekKey,
+    days,
+    todayKey,
+    totalCount: totalCount + extraCount,
+    byDay,
+    teamName: team.name,
+    notFound: false,
+    resourceNamesByHolidaySet: publicHolidayResult.resourceNamesBySet,
+  };
 }
 
 // Same reasoning as service-calls'/teams-shifts' own report caches -- a

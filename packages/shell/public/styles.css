@@ -3710,6 +3710,31 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
   border-radius: 4px;
   flex-shrink: 0;
 }
+/* "Leave Report" popup (openLeaveReportModal() in whats-on/client.js) --
+   wider than the base .history-modal-panel's own 30rem, same idea as
+   .chk-adjust-units-modal-panel's own narrower variant elsewhere, just
+   the opposite direction: this one holds a per-employee table. Widened
+   further and paired with white-space: nowrap on its own cells (below),
+   by request -- "make the popup window wider so that the data doesn't
+   wrap". */
+.wo-leave-report-modal-panel {
+  width: 50rem;
+  max-width: 90vw;
+}
+.wo-leave-report-modal-panel th,
+.wo-leave-report-modal-panel td {
+  white-space: nowrap;
+}
+/* One heading per employee (or Holiday Set) group -- plain, small, not
+   the dashboard's usual .resource-group-header card treatment, since
+   this popup is a quick read, not another resource-group list. */
+.wo-leave-report-group h4 {
+  margin: 1rem 0 0.3rem;
+  font-size: 0.9rem;
+}
+.wo-leave-report-group:first-child h4 {
+  margin-top: 0;
+}
 
 td.ticket-number a {
   color: var(--accent);

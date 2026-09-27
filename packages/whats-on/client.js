@@ -258,12 +258,13 @@ export function mount(container) {
 
     <div class="wo-shifts-section">
       <div class="section-heading section-heading--nav section-heading-row">
-        <span>Team Shifts -- General</span>
+        <span>Team Shifts and Leave</span>
         <div class="date-form calendar-nav">
           <button type="button" id="shifts-prev-button" class="button-link button-link--small" aria-label="Previous week">&lsaquo;</button>
           <span id="shifts-week-label" class="calendar-month-label"></span>
           <button type="button" id="shifts-next-button" class="button-link button-link--small" aria-label="Next week">&rsaquo;</button>
           <button type="button" id="shifts-today-button" class="button-link button-link--small">This Week</button>
+          <button type="button" id="shifts-leave-report-button" class="button-link button-link--small">Leave Report</button>
           <button type="button" id="shifts-refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh</button>
         </div>
       </div>
@@ -293,6 +294,7 @@ export function mount(container) {
   const shiftsPrevButton = container.querySelector('#shifts-prev-button');
   const shiftsNextButton = container.querySelector('#shifts-next-button');
   const shiftsTodayButton = container.querySelector('#shifts-today-button');
+  const shiftsLeaveReportButton = container.querySelector('#shifts-leave-report-button');
   const shiftsRefreshButton = container.querySelector('#shifts-refresh-button');
   const shiftsWeekLabelEl = container.querySelector('#shifts-week-label');
   const shiftsStatusEl = container.querySelector('#shifts-status');
@@ -1087,6 +1089,7 @@ export function mount(container) {
   shiftsPrevButton.addEventListener('click', () => loadShifts(addDaysKey(lastShiftsWeekStart, -7)));
   shiftsNextButton.addEventListener('click', () => loadShifts(addDaysKey(lastShiftsWeekStart, 7)));
   shiftsTodayButton.addEventListener('click', () => loadShifts(null)); // null -- let the server default to the current AEST week, same as the very first load
+  shiftsLeaveReportButton.addEventListener('click', () => openLeaveReportModal());
   shiftsRefreshButton.addEventListener('click', () => loadShifts(lastShiftsWeekStart, true));
 
   if (lastShiftsData) renderShifts(lastShiftsData);
@@ -1127,6 +1130,11 @@ export function mount(container) {
 
   function renderShifts(data) {
     shiftsWeekLabelEl.textContent = shiftsRangeLabel(data.days[0], data.days[data.days.length - 1]);
+    // Button label names the FIRST of the two visible weeks specifically
+    // (data.days[0..6]) -- by request, the report itself is scoped to
+    // that same first week only, not the full two-week window this
+    // calendar shows.
+    shiftsLeaveReportButton.textContent = `Leave Report ${shiftsRangeLabel(data.days[0], data.days[6])}`;
 
     if (data.notFound) {
       shiftsStatusEl.hidden = false;
@@ -1301,6 +1309,17 @@ export function mount(container) {
     return `${d} ${MONTH_ABBR[m - 1]}`;
   }
 
+  // For the Leave Report's own "Day" column, by request -- local Date
+  // components (not a UTC-based construction), since a dayKey is a plain
+  // Y-M-D calendar date with no time-of-day component to shift around;
+  // getDay() against those same components always names the correct
+  // weekday regardless of the browser's own timezone.
+  function shiftsDayOfWeekLabel(dayKey) {
+    const [y, m, d] = dayKey.split('-').map(Number);
+    const DOW_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return DOW_ABBR[new Date(y, m - 1, d).getDay()];
+  }
+
   function shiftsRangeLabel(startKey, endKey) {
     const [sy] = startKey.split('-').map(Number);
     const [ey] = endKey.split('-').map(Number);
@@ -1312,6 +1331,178 @@ export function mount(container) {
     // real year boundary (sy !== ey) or is being viewed well into another year.
     const showYear = sy !== ey || sy !== new Date().getFullYear();
     return showYear ? `${start} ${sy} - ${end} ${ey}` : `${start} - ${end}`;
+  }
+
+  // "Leave Report" popup, by request -- a quick view of every REAL
+  // Teams Shifts duty entry (kind: 'shift' -- On Call/Helpdesk Handler,
+  // etc), personal leave entry (kind: 'leave' -- Vacation/Unpaid/
+  // Sick-Other/RDO-TIL, see SHIFT_CATEGORIES above), and Public Holiday
+  // (kind: 'publicHoliday'), across the two weeks currently on screen.
+  // Same .history-modal-* shell every other popup on this page already
+  // uses. "Just a popup window will do for now", by request -- reads
+  // straight out of lastShiftsData (already loaded for the calendar
+  // above), no separate fetch.
+  //
+  // A Public Holiday entry itself is one per (Holiday Set, date), NOT per
+  // person (see fetchPublicHolidayEntries() in server.js) -- no hours
+  // figure and no approval concept either way. For the report specifically,
+  // by request ("assign the public holidays to the right employees"), each
+  // one is expanded into one row per real active Autotask resource actually
+  // in that Holiday Set (data.resourceNamesByHolidaySet, server.js's own
+  // Resources.locationID -> InternalLocations.holidaySetId chain) rather
+  // than showing the set's own name as if it were a person -- the calendar
+  // cells elsewhere on this page are UNCHANGED (still one entry per set, by
+  // design -- see that function's own comment on why a per-resource entry
+  // there would just be noisy duplication). e.holidaySetName can itself be
+  // several set names joined with ", " (a holiday landing on the same real
+  // day across multiple sets) -- split back apart here so each set's own
+  // people resolve correctly rather than only matching the exact combined
+  // string. Falls back to the set's own name if it resolves to no active
+  // resource at all (a real, currently-empty set in this account, e.g. WA/
+  // Sri Lanka -- see that function's own comment), so the holiday still
+  // shows up somewhere rather than silently vanishing.
+  function openLeaveReportModal() {
+    if (!lastShiftsData) return;
+    const data = lastShiftsData;
+    // First of the two visible weeks only, by request -- data.days is the
+    // full 14-day calendar window; the report itself covers just days 0-6.
+    const reportDays = data.days.slice(0, 7);
+    const rangeLabel = shiftsRangeLabel(reportDays[0], reportDays[reportDays.length - 1]);
+    const resourceNamesByHolidaySet = data.resourceNamesByHolidaySet || {};
+
+    const rows = [];
+    for (const dayKey of reportDays) {
+      for (const e of data.byDay[dayKey] || []) {
+        if (e.kind === 'shift') {
+          // Real Teams Shifts duty entries (On Call/Helpdesk Handler,
+          // etc, see SHIFT_CATEGORIES above), by request -- shown with
+          // the shift's own start/end duration as its "hours" figure,
+          // same computed-from-real-clock-times approach the calendar
+          // cell itself uses for these (shiftEntryHtml() above), rather
+          // than an hoursWorked field, which only real Leave rows have.
+          const cat = categorizeShift(e);
+          const start = e.startDateTime ? new Date(e.startDateTime) : null;
+          const end = e.endDateTime ? new Date(e.endDateTime) : null;
+          rows.push({
+            dayKey,
+            rowKind: 'shift',
+            name: e.userName || '(Open shift)',
+            type: cat ? cat.label : e.displayName || '(unlabeled)',
+            hours: start && end ? (end - start) / 3600000 : null,
+          });
+        } else if (e.kind === 'leave') {
+          const cat = categorizeShift(e);
+          rows.push({
+            dayKey,
+            rowKind: 'leave',
+            name: e.userName || '(unknown)',
+            type: cat ? cat.label : e.displayName || '(unlabeled)',
+            hours: e.hoursWorked,
+          });
+        } else if (e.kind === 'publicHoliday') {
+          // Each resource's own SPECIFIC set (not the combined string) is
+          // tracked per-name here, not just unioned, so the Type column
+          // below can show which one that person's holiday actually came
+          // from -- by request, "Public Holiday: WA, Kings Birthday".
+          const setNames = (e.holidaySetName || '').split(',').map((s) => s.trim()).filter(Boolean);
+          const setNameByResource = new Map();
+          for (const setName of setNames) {
+            for (const name of resourceNamesByHolidaySet[setName] || []) {
+              if (!setNameByResource.has(name)) setNameByResource.set(name, setName);
+            }
+          }
+          const entries = setNameByResource.size > 0 ? [...setNameByResource.entries()] : [[e.userName || '(unknown)', e.holidaySetName || '']];
+          for (const [name, setName] of entries) {
+            rows.push({
+              dayKey,
+              rowKind: 'holiday',
+              name,
+              type: `Public Holiday: ${setName ? `${setName}, ` : ''}${e.holidayName || 'Public Holiday'}`,
+              hours: null,
+            });
+          }
+        }
+      }
+    }
+
+    const shiftRows = rows.filter((r) => r.rowKind === 'shift');
+    const leaveRows = rows.filter((r) => r.rowKind === 'leave');
+    const holidayRows = rows.filter((r) => r.rowKind === 'holiday');
+    const totalHours = leaveRows.reduce((n, r) => n + (r.hours || 0), 0);
+    const peopleCount = new Set(leaveRows.map((r) => r.name)).size;
+    const summaryParts = [];
+    if (shiftRows.length) summaryParts.push(`${shiftRows.length} duty shift${shiftRows.length === 1 ? '' : 's'} (On Call/Helpdesk Handler etc)`);
+    if (leaveRows.length) {
+      summaryParts.push(`${leaveRows.length} leave entr${leaveRows.length === 1 ? 'y' : 'ies'} across ${peopleCount} ${peopleCount === 1 ? 'person' : 'people'}, totaling ${formatHours(totalHours)}h`);
+    }
+    if (holidayRows.length) summaryParts.push(`${holidayRows.length} public holiday${holidayRows.length === 1 ? '' : 's'}`);
+    const summary = summaryParts.length ? `<p class="inline-subtext">${summaryParts.join('; ')}.</p>` : '';
+
+    // Grouped by Employee (alphabetical), each group's own rows sorted by
+    // date, by request. No Status column -- removed, by request.
+    const byName = new Map();
+    for (const r of rows) {
+      if (!byName.has(r.name)) byName.set(r.name, []);
+      byName.get(r.name).push(r);
+    }
+    const names = [...byName.keys()].sort((a, b) => a.localeCompare(b));
+    for (const name of names) byName.get(name).sort((a, b) => a.dayKey.localeCompare(b.dayKey));
+
+    const bodyHtml = rows.length
+      ? names
+          .map(
+            (name) => `
+      <div class="wo-leave-report-group">
+        <h4>${escapeHtml(name)}</h4>
+        <table>
+          <thead><tr class="shaded-row"><th>Day</th><th>Date</th><th>Type</th><th>Hours</th></tr></thead>
+          <tbody>
+            ${byName
+              .get(name)
+              .map(
+                (r) => `
+            <tr>
+              <td>${escapeHtml(shiftsDayOfWeekLabel(r.dayKey))}</td>
+              <td>${escapeHtml(shiftsDayNumLabel(r.dayKey))}</td>
+              <td>${escapeHtml(r.type)}</td>
+              <td class="ticket-number">${r.hours == null ? '--' : `${formatHours(r.hours)}h`}</td>
+            </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>`
+          )
+          .join('')
+      : `<p class="status">No duty shifts, leave, or public holidays recorded for this period.</p>`;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel wo-leave-report-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>Leave Report -- ${escapeHtml(rangeLabel)}</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          ${summary}
+          ${bodyHtml}
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
   }
 
   // Auto-loads on mount only when there's nothing to show yet -- by
