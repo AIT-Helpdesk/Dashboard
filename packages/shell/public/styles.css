@@ -702,11 +702,11 @@ html[data-focus-mode="true"][data-rotate-active="true"] .focus-exit-btn {
   color: var(--accent);
 }
 /* The Help popup itself (openHelpModal() in app.js) -- same
-   .history-modal-panel shell every other popup on this dashboard uses,
-   just narrower (a page name + one button + maybe a README dump, nothing
-   else). */
+   .history-modal-panel shell every other popup on this dashboard uses --
+   holds a page name, admin-editable help text, and maybe a README dump.
+   50% wider than its original 34rem, by request. */
 .help-modal-panel {
-  width: 34rem;
+  width: 51rem;
   max-width: 90vw;
 }
 /* The README text itself -- plain preformatted text (no markdown
