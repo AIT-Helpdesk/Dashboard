@@ -26,6 +26,7 @@ export const label = 'Service Actions';
 let lastResult = null; // { asOf, clients: [{ client, components }] } -- last successful fetch, kept so a filter change can re-render without a re-fetch
 let clientFilter = '';
 let titleFilter = '';
+let phraseFilter = ''; // selected phrase-key from the dropdown below ('' = All)
 
 const TIER_ORDER = ['action', 'gather', 'watch', 'good'];
 const TIER_META = {
@@ -54,6 +55,10 @@ export function mount(container) {
       <input type="text" id="sa-client-filter-input" placeholder="e.g. Kraftur* (wildcards with *)" value="${escapeHtml(clientFilter)}" />
       <label for="sa-title-filter-input">Filter by recommendation</label>
       <input type="text" id="sa-title-filter-input" placeholder="e.g. *patch* (wildcards with *)" value="${escapeHtml(titleFilter)}" />
+      <label for="sa-phrase-filter-select">Filter by phrase</label>
+      <select id="sa-phrase-filter-select">
+        <option value="">All recommendations</option>
+      </select>
     </div>
     <div id="sa-status" class="status"></div>
     <div id="sa-results"></div>
@@ -62,6 +67,7 @@ export function mount(container) {
   const refreshButton = container.querySelector('#sa-refresh-button');
   const clientFilterInput = container.querySelector('#sa-client-filter-input');
   const titleFilterInput = container.querySelector('#sa-title-filter-input');
+  const phraseFilterSelect = container.querySelector('#sa-phrase-filter-select');
   const statusEl = container.querySelector('#sa-status');
   const resultsEl = container.querySelector('#sa-results');
 
@@ -74,10 +80,49 @@ export function mount(container) {
     titleFilter = titleFilterInput.value;
     render();
   });
+  phraseFilterSelect.addEventListener('change', () => {
+    phraseFilter = phraseFilterSelect.value;
+    resultsEl.innerHTML = renderResults(lastResult, clientFilter, titleFilter, phraseFilter);
+  });
+
+  // Rebuilds the phrase dropdown's own OPTIONS from whatever the current
+  // (client-filtered) findings actually say right now -- never a fixed
+  // list scanned once and hard-coded, so it stays correct automatically
+  // if the rules engine's wording changes or a brand-new rule appears.
+  // Ignores the free-text title filter (that's a separate, complementary
+  // filter -- this dropdown's own option set should stay stable while
+  // someone types into that box, not shrink out from under them).
+  // Counts descending (most common issue first, useful for triage), then
+  // alphabetical. Preserves the current selection across a rebuild
+  // (e.g. typing in the client filter) unless that phrase no longer has
+  // any matching findings at all (e.g. after a Refresh resolved it), in
+  // which case it resets to "All".
+  function updatePhraseFilterOptions() {
+    const clientTerm = clientFilter.trim();
+    const clients = clientTerm ? lastResult.clients.filter((c) => matchesWildcard(c.client, clientTerm)) : lastResult.clients;
+    const counts = new Map();
+    for (const c of clients) {
+      for (const f of computeFindings(c.components)) {
+        const key = phraseKeyForTitle(f.title);
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+    }
+    const sortedKeys = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a) || a.localeCompare(b));
+    const previousValue = phraseFilterSelect.value;
+    phraseFilterSelect.innerHTML =
+      '<option value="">All recommendations</option>' + sortedKeys.map((key) => `<option value="${escapeHtml(key)}">${escapeHtml(key)} (${counts.get(key)})</option>`).join('');
+    if (sortedKeys.includes(previousValue)) {
+      phraseFilterSelect.value = previousValue;
+    } else {
+      phraseFilterSelect.value = '';
+      phraseFilter = '';
+    }
+  }
 
   function render() {
     if (!lastResult) return;
-    resultsEl.innerHTML = renderResults(lastResult, clientFilter, titleFilter);
+    updatePhraseFilterOptions();
+    resultsEl.innerHTML = renderResults(lastResult, clientFilter, titleFilter, phraseFilter);
   }
 
   async function load() {
@@ -101,7 +146,7 @@ export function mount(container) {
   load();
 }
 
-function renderResults(data, clientFilterValue, titleFilterValue) {
+function renderResults(data, clientFilterValue, titleFilterValue, phraseFilterValue) {
   const clientTerm = clientFilterValue.trim();
   const clients = clientTerm ? data.clients.filter((c) => matchesWildcard(c.client, clientTerm)) : data.clients;
 
@@ -119,11 +164,16 @@ function renderResults(data, clientFilterValue, titleFilterValue) {
   for (const c of clients) {
     for (const f of computeFindings(c.components)) {
       if (titleTerm && !matchesWildcard(f.title, titleTerm)) continue;
+      if (phraseFilterValue && phraseKeyForTitle(f.title) !== phraseFilterValue) continue;
       allFindings.push({ client: c.client, ...f });
     }
   }
 
-  const filterDescriptions = [clientTerm && `client matching "${escapeHtml(clientTerm)}"`, titleTerm && `recommendation matching "${escapeHtml(titleTerm)}"`].filter(Boolean);
+  const filterDescriptions = [
+    clientTerm && `client matching "${escapeHtml(clientTerm)}"`,
+    titleTerm && `recommendation matching "${escapeHtml(titleTerm)}"`,
+    phraseFilterValue && `phrase "${escapeHtml(phraseFilterValue)}"`,
+  ].filter(Boolean);
   const filterSuffix = filterDescriptions.length ? ` (filtered by ${filterDescriptions.join(', ')})` : '';
   const summary = `<p class="inline-subtext">${clients.length} client${clients.length === 1 ? '' : 's'} loaded, as of ${formatDateTime(data.asOf)}. ${allFindings.length} finding${
     allFindings.length === 1 ? '' : 's'
@@ -158,6 +208,55 @@ function renderResults(data, clientFilterValue, titleFilterValue) {
     .join('');
 
   return `<div class="mtg-rec-panel">${summary}${sections}</div>`;
+}
+
+// Normalizes a finding's raw title (e.g. "7 devices have no patch policy
+// assigned at all") into a short, count-and-tense-independent "phrase key"
+// (e.g. "no patch policy assigned") the dropdown above groups and counts
+// by. By request, this MUST be computed fresh from whatever the current
+// findings actually say, never a fixed list of phrases scanned once and
+// hard-coded -- so it stays correct automatically if
+// meeting-prep-recommendations.js's own wording ever changes, or a
+// brand-new rule appears, with no code change here needed either way.
+//
+// Purely mechanical, and deliberately generic rather than tied to any
+// specific rule's own wording -- three structural passes, each aimed at a
+// different shape of "specific" this rules engine's titles carry, by
+// request ("leave out counts, percentages, and specifics"):
+//
+// 1. Nearly every countable finding title follows the shape "<N>
+//    device(s) [has/have/is/are/hasn't/haven't] <rest>" (subject-verb
+//    agreement varying only with N) -- strips exactly that leading
+//    count+noun, then an immediately-following verb if there is one, so
+//    "1 device has X"/"7 devices have X" and "1 device is X"/"3 devices
+//    are X" all collapse to the same key.
+// 2. A trailing ", and ..." clause is always EXTRA per-instance detail
+//    appended onto an otherwise-plain topic (e.g. hardware-lifecycle's
+//    "...due for replacement within 12 months, and 3 of them are also
+//    currently causing trouble") -- cut at the first one, keeping only
+//    the plain topic before it.
+// 3. A percentage is always a per-instance METRIC in this rules engine's
+//    own titles, never a fixed rule threshold -- unlike a bare number
+//    (e.g. "30 days"/"12 months", a genuinely fixed part of that rule's
+//    own definition, deliberately left alone) -- so "Software Management
+//    is scoring 33%, the weakest category on this report" drops the
+//    short verb phrase leading into the percentage AND everything after
+//    it, leaving just the topic: "Software Management".
+//
+// A short, generic list of trailing filler phrases (currently just "at
+// all") is trimmed too, by request -- confirmed against the real "no
+// patch policy assigned at all" title. A title with none of these shapes
+// (a fully static one, e.g. "No servers, printers, or mobiles show up in
+// any report") has no specifics to strip in the first place and passes
+// through unchanged.
+const TITLE_FILLER_SUFFIXES = [/\s+at all$/i];
+function phraseKeyForTitle(title) {
+  let key = (title || '').replace(/^\d+\s+\S+\s+/, ''); // drop "<N> device(s) "
+  key = key.replace(/^(?:has|have|is|are|hasn't|haven't)\s+/i, ''); // drop an immediately-following verb, if any
+  key = key.replace(/,\s+and\s+.*$/i, ''); // drop a trailing ", and ..." appended clause
+  key = key.replace(/\s+(?:is|are)\s+\S+\s+\d+%.*$/i, ''); // drop "<verb> <word> <N>%" onward (a percentage metric, not a fixed threshold)
+  for (const re of TITLE_FILLER_SUFFIXES) key = key.replace(re, '');
+  return key.trim();
 }
 
 // Browser-side counterpart to @dashboard/autotask-client's own
