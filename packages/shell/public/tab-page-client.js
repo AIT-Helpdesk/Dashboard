@@ -532,6 +532,17 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
 
     async function selectTab(tabId) {
       lastActiveTabId = tabId;
+      // Dashboard-wide Help button (app.js's openHelpModal()) reads this
+      // to know which real page's README to show for a "-tabs" wrapper
+      // page -- the active TAB's own underlying page id, not this
+      // wrapper's own (app.js's loadPage() already set it to the
+      // wrapper's id by default; this overrides it). Guarded to skip
+      // HELP_TAB itself ('help') -- that's this page's own built-in Help
+      // TAB (admin-editable notes, see renderHelpTab() below), a
+      // different, unrelated feature; if it weren't guarded, viewing that
+      // tab would wrongly clobber this with the literal string 'help',
+      // which isn't a real page id anywhere.
+      if (tabId !== HELP_TAB.id) container.dataset.helpPageId = tabId;
       tabBarEl.querySelectorAll('.tab-button').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.tabId === tabId);
       });

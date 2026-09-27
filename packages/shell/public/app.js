@@ -283,6 +283,236 @@ focusExitBtn.addEventListener('click', () => {
   if (rotationActive) stopRotation();
   else setFocusMode(false);
 });
+
+// Dashboard-wide Help button (index.html's #help-btn) -- opens a popup for
+// whichever page is currently showing, with a permission-gated "Show
+// README" button inside it (show-readme-permissions.js's
+// SHOW_README_IN_HELP, checked server-side too -- see /api/help/readme/
+// :pageId in server.js). The allowed/not-allowed check can't change
+// mid-session (a real change needs a real .env edit + a server restart
+// anyway), so it's fetched once and cached rather than re-checked per click.
+let canShowReadmeCache = null;
+async function canShowReadme() {
+  if (canShowReadmeCache !== null) return canShowReadmeCache;
+  try {
+    const res = await fetch('/api/help/can-show-readme');
+    const data = await res.json();
+    canShowReadmeCache = !!data.allowed;
+  } catch {
+    canShowReadmeCache = false;
+  }
+  return canShowReadmeCache;
+}
+
+document.getElementById('help-btn').addEventListener('click', () => openHelpModal());
+
+// Same rich-text toolbar tab-page-client.js's own HELP_TOOLBAR_COMMANDS
+// uses for the six "-tabs" pages' own Help-tab notes editor -- duplicated
+// here rather than imported (no shared-helpers module exists between
+// app.js and tab-page-client.js, and this dashboard's own established
+// convention elsewhere is each module keeps its own small copy of shared
+// boilerplate rather than adding one). Keep both in sync if this ever
+// needs to change.
+const HELP_TOOLBAR_COMMANDS = [
+  { label: 'B', title: 'Bold', command: 'bold', style: 'font-weight:700;' },
+  { label: 'I', title: 'Italic', command: 'italic', style: 'font-style:italic;' },
+  { label: '• List', title: 'Bulleted list', command: 'insertUnorderedList' },
+  { label: '1. List', title: 'Numbered list', command: 'insertOrderedList' },
+  { label: '🔗 Link', title: 'Link', command: 'createLink', promptForUrl: true },
+];
+
+// True once stripped of tags/whitespace -- same reasoning tab-page-
+// client.js's own isHelpTextBlank() already documents (contenteditable's
+// own habit of leaving an empty `<div><br></div>` behind after the last
+// character is deleted would otherwise still count as "has notes").
+function isHelpTextBlank(html) {
+  if (!html) return true;
+  const probe = document.createElement('div');
+  probe.innerHTML = html;
+  return probe.textContent.trim() === '';
+}
+
+// Dashboard-wide Help popup -- by request, TWO separate things stacked in
+// one popup: an admin-editable, END-USER-VISIBLE "help text" section (the
+// SAME editing capability Amber already has for the six "-tabs" pages' own
+// Help tab -- see tab-page-client.js's renderHelpTab(), this is that same
+// idea extended to every other page via registry.js's readPageHelpText()/
+// writePageHelpText()), and, below it, the SHOW_README_IN_HELP-gated
+// "Show README" section for technical detail (unchanged from before).
+async function openHelpModal() {
+  // NOT currentPageId() directly -- on a "-tabs" wrapper page that would
+  // give the WRAPPER's own id (e.g. "ticket-info-tabs"), not whichever
+  // real tab is actually showing right now. #page-content's own
+  // data-help-page-id is kept in sync by loadPage() below and, for a
+  // tabbed page, tab-page-client.js's own selectTab() -- see either's
+  // comment for the full reasoning.
+  const pageId = content.dataset.helpPageId || currentPageId();
+  const page = pagesById.get(pageId);
+  const title = page ? page.label : pageId;
+
+  // Same .history-modal-overlay/.history-modal-panel shell + open/close/
+  // Escape/click-outside wiring every other popup on this dashboard uses
+  // (openInfoModal() in contract-checks/client.js is the direct model) --
+  // reused here even though this lives in the shared shell, not a page's
+  // own client.js, since it's the exact same convention either way.
+  const overlay = document.createElement('div');
+  overlay.className = 'history-modal-overlay';
+  overlay.innerHTML = `
+    <div class="history-modal-panel help-modal-panel">
+      <div class="history-modal-panel-header">
+        <span>Help -- ${escapeHtml(title)}</span>
+        <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="history-modal-body help-modal-body">
+        <p class="status">Loading...</p>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKeydown);
+  };
+  function onKeydown(e) {
+    if (e.key === 'Escape') close();
+  }
+  document.addEventListener('keydown', onKeydown);
+  overlay.querySelector('.history-modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  const bodyEl = overlay.querySelector('.help-modal-body');
+  let helpText = '';
+  let helpEditable = false;
+  let readmeAllowed = false;
+  let editing = false;
+
+  try {
+    const [helpRes, allowed] = await Promise.all([fetch(`/api/help/text/${encodeURIComponent(pageId)}`), canShowReadme()]);
+    const helpData = await helpRes.json();
+    helpText = helpData.text || '';
+    helpEditable = !!helpData.editable;
+    readmeAllowed = allowed;
+  } catch {
+    // Best-effort -- renders with whatever defaults it has (blank/
+    // not-editable/not-allowed) if either fetch fails, same "don't break
+    // the whole popup over one non-essential fetch" reasoning as
+    // renderUserInfo() elsewhere in this file.
+  }
+  renderHelpBody();
+
+  function renderHelpBody() {
+    if (editing) {
+      const toolbarHtml = HELP_TOOLBAR_COMMANDS.map(
+        (c) =>
+          `<button type="button" class="button-link button-link--small" data-help-command="${c.command}" data-help-prompt="${!!c.promptForUrl}" title="${escapeHtml(c.title)}" style="${c.style || ''}">${c.label}</button>`
+      ).join(' ');
+      bodyEl.innerHTML = `
+        <div style="margin-bottom:0.4rem;">${toolbarHtml}</div>
+        <div id="help-modal-text-input" contenteditable="true" style="display:block; width:100%; min-height:8rem; font:inherit; box-sizing:border-box; border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.75rem; background:var(--bg);">${helpText}</div>
+        <div class="date-form" style="margin-top:0.5rem;">
+          <button type="button" class="help-modal-save-btn">Save</button>
+          <button type="button" class="help-modal-cancel-btn">Cancel</button>
+        </div>
+      `;
+      const editableEl = bodyEl.querySelector('#help-modal-text-input');
+      // preventDefault on mousedown (not click) -- same reasoning tab-page-
+      // client.js's own toolbar wiring documents: keeps the contenteditable's
+      // current text selection alive for execCommand to act on, rather than
+      // losing it to the button's own focus/blur first.
+      bodyEl.querySelectorAll('[data-help-command]').forEach((btn) => {
+        btn.addEventListener('mousedown', (e) => e.preventDefault());
+        btn.addEventListener('click', () => {
+          const command = btn.dataset.helpCommand;
+          if (btn.dataset.helpPrompt === 'true') {
+            const url = prompt('Link URL:', 'https://');
+            if (!url) return;
+            document.execCommand(command, false, url);
+          } else {
+            document.execCommand(command, false, null);
+          }
+          editableEl.focus();
+        });
+      });
+      bodyEl.querySelector('.help-modal-cancel-btn').addEventListener('click', () => {
+        editing = false;
+        renderHelpBody();
+      });
+      bodyEl.querySelector('.help-modal-save-btn').addEventListener('click', async () => {
+        const text = editableEl.innerHTML;
+        try {
+          const res = await fetch(`/api/help/text/${encodeURIComponent(pageId)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+          helpText = text;
+          editing = false;
+          renderHelpBody();
+        } catch (err) {
+          alert(`Error: ${err.message}`);
+        }
+      });
+      return;
+    }
+
+    const hasHelp = !isHelpTextBlank(helpText);
+    // customHelpText/helpText holds real admin-authored HTML (a
+    // contenteditable div's own innerHTML), not plain text -- rendered
+    // directly, not escaped, same "server/admin-supplied HTML is trusted"
+    // model tab-page-client.js's own renderHelpTab() already uses (and the
+    // PUT route is admin-gated server-side too, so this isn't reachable by
+    // anyone else regardless).
+    const helpSectionHtml = hasHelp
+      ? `<div style="margin-bottom: 0.75rem;">${helpText}</div>`
+      : helpEditable
+        ? ''
+        : '<p class="status">No help added yet for this page.</p>';
+    const editButtonHtml = helpEditable
+      ? `<button type="button" class="button-link button-link--small help-modal-edit-btn" style="margin-bottom:0.75rem;">${hasHelp ? 'Edit Help' : 'Add Help'}</button>`
+      : '';
+    const readmeSectionHtml = readmeAllowed
+      ? `<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border);">
+           <button type="button" class="button-link button-link--small help-readme-toggle">Show README</button>
+           <div class="help-readme-text" hidden></div>
+         </div>`
+      : '';
+    bodyEl.innerHTML = `${helpSectionHtml}${editButtonHtml}${readmeSectionHtml}`;
+
+    if (helpEditable) {
+      bodyEl.querySelector('.help-modal-edit-btn').addEventListener('click', () => {
+        editing = true;
+        renderHelpBody();
+      });
+    }
+    if (readmeAllowed) {
+      const toggle = bodyEl.querySelector('.help-readme-toggle');
+      const textEl = bodyEl.querySelector('.help-readme-text');
+      let loaded = false;
+      toggle.addEventListener('click', async () => {
+        if (!loaded) {
+          toggle.disabled = true;
+          toggle.textContent = 'Loading...';
+          try {
+            const res = await fetch(`/api/help/readme/${encodeURIComponent(pageId)}`);
+            const data = await res.json();
+            textEl.textContent = res.ok ? data.text : `Error: ${data.error || 'Request failed'}`;
+            loaded = true;
+          } catch (err) {
+            textEl.textContent = `Error: ${err.message}`;
+          }
+          toggle.disabled = false;
+        }
+        textEl.hidden = !textEl.hidden;
+        toggle.textContent = textEl.hidden ? 'Show README' : 'Hide README';
+      });
+    }
+  }
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !isFocusMode()) return;
   // Defer to a currently-open modal's own Escape-to-close (e.g.
@@ -1764,6 +1994,16 @@ async function loadPage(id) {
       content.appendChild(prewarmed.container.firstChild);
     }
     prewarmed.container.remove();
+    // Moving child NODES (above) doesn't carry `content`'s own dataset
+    // forward from the off-screen prewarmed container -- set explicitly
+    // here too, same as the normal mount path below (see
+    // openHelpModal()'s comment in this file for why this exists). Known
+    // limitation: if this prewarmed page is itself a "-tabs" page, this
+    // resolves to the WRAPPER's own id rather than its active tab's id,
+    // since mount()/selectTab() aren't re-run at swap time -- narrow
+    // enough (Rotate + tabbed page + clicking Help specifically) not to
+    // be worth extra plumbing right now.
+    content.dataset.helpPageId = page.id;
     applyAutoMobileView();
     return;
   }
@@ -1777,6 +2017,12 @@ async function loadPage(id) {
   }
 
   content.innerHTML = '';
+  // Default for the dashboard-wide Help button (openHelpModal() above) --
+  // this plain page's own id. A tabbed page's own mount() immediately
+  // overrides this with its active tab's real id (tab-page-client.js's
+  // selectTab()), since that's the README that actually matters there,
+  // not this wrapper page's own.
+  content.dataset.helpPageId = page.id;
   try {
     const mod = await page.module();
     mod.mount(content);

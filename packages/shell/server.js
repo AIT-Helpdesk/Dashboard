@@ -1,6 +1,7 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', '.env') });
 
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const { getClient } = require('@dashboard/autotask-client');
 const { exchangeCodeForTokens, BASE_URL: STRETY_BASE_URL, getPersonalClient } = require('@dashboard/strety-client');
@@ -13,6 +14,7 @@ const { exchangeCodeForTokens, BASE_URL: STRETY_BASE_URL, getPersonalClient } = 
 // STRETY_AUTOMATION_CLIENT_ID below resolve correctly.
 const stretyAutomationClient = require('@dashboard/strety-autotask-sync/client.js');
 const { registerAuthRoutes, requireAuth } = require('./auth');
+const { canShowReadmeInHelp } = require('./show-readme-permissions.js');
 
 const PORT = process.env.PORT || 3000;
 
@@ -22,7 +24,18 @@ const PORT = process.env.PORT || 3000;
 // external-page-builder, ticket-info-tabs) can reach the same shared state
 // and register a brand-new page package at runtime with no process
 // restart. See that module's own comment for the full reasoning.
-const { pages, pageVisibleTo, readNavLayout, writeNavLayout, isDashboardAdmin, categoryAccessFor, setMountPageRouterImpl, mountPageRouter } = require('./registry.js');
+const {
+  pages,
+  pageVisibleTo,
+  readNavLayout,
+  writeNavLayout,
+  readPageHelpText,
+  writePageHelpText,
+  isDashboardAdmin,
+  categoryAccessFor,
+  setMountPageRouterImpl,
+  mountPageRouter,
+} = require('./registry.js');
 
 // The sidebar (drag-and-drop reorder AND right-click hide/unhide, both in
 // app.js) is only editable by the one dashboard-admin account
@@ -478,6 +491,66 @@ app.put('/api/nav-layout', express.json(), (req, res) => {
     return res.status(400).json({ error: 'Body must be { tree: [...] }.' });
   }
   writeNavLayout(req.body.tree);
+  res.json({ ok: true });
+});
+
+// Dashboard-wide Help button (bottom-right "?", every page --
+// packages/shell/public/app.js's openHelpModal()) -- just a boolean, not
+// sensitive on its own, so no gate beyond requireAuth above. Lets the
+// client decide whether to render the "Show README" button at all without
+// guessing from a hidden 403 on the real content route below.
+app.get('/api/help/can-show-readme', (req, res) => {
+  res.json({ allowed: canShowReadmeInHelp(req) });
+});
+
+// The actual README content -- gated here too, not just hidden client-side
+// (same "never trust a client-side hide alone" reasoning CONTRACT_MANAGER's
+// own write route uses), since a page's README can carry internal
+// implementation detail not meant for every signed-in user. `pages` already
+// carries each page's own real absolute `root` path (registry.js's
+// discoverPages()) -- no path-construction guesswork needed. A page with no
+// README.md at all (several real ones don't -- client-info-tabs,
+// ticket-info-tabs, service-actions, ...) 404s with a plain message rather
+// than a 500, since that's an expected, not exceptional, case.
+app.get('/api/help/readme/:pageId', (req, res) => {
+  if (!canShowReadmeInHelp(req)) {
+    return res.status(403).json({ error: 'Only specific people can view a page README from Help.' });
+  }
+  const page = pages.find((p) => p.id === req.params.pageId);
+  if (!page) return res.status(404).json({ error: 'Unknown page.' });
+  fs.readFile(path.join(page.root, 'README.md'), 'utf8', (err, text) => {
+    if (err) {
+      if (err.code === 'ENOENT') return res.status(404).json({ error: 'No README available for this page.' });
+      console.error(err);
+      return res.status(500).json({ error: err.message });
+    }
+    res.json({ text });
+  });
+});
+
+// End-user-visible Help text for a page (app.js's openHelpModal(), shown
+// ABOVE the gated "Show README" section above -- by request, "maintain
+// user help on the help page... Show Readme... only to get to that
+// technical detail"). Visible to everyone signed in (no gate on the GET,
+// same as the six "-tabs" pages' own analogous /help-text GET in
+// tab-page-server.js), editable only by the dashboard admin (same
+// isDashboardAdmin gate /api/nav-layout's own PUT uses above) -- this is
+// the SAME editing capability Amber already has for those six tabbed
+// pages' own Help tab, just extended dashboard-wide via one shared file
+// (registry.js's readPageHelpText()/writePageHelpText()) instead of one
+// per tabbed page.
+app.get('/api/help/text/:pageId', (req, res) => {
+  res.json({ text: readPageHelpText(req.params.pageId), editable: isDashboardAdmin(req) });
+});
+
+app.put('/api/help/text/:pageId', express.json(), (req, res) => {
+  if (!isDashboardAdmin(req)) {
+    return res.status(403).json({ error: 'Only Amber can edit page help text.' });
+  }
+  if (typeof req.body?.text !== 'string') {
+    return res.status(400).json({ error: 'Body must be { text: string }.' });
+  }
+  writePageHelpText(req.params.pageId, req.body.text);
   res.json({ ok: true });
 });
 

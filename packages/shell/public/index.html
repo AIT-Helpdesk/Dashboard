@@ -57,6 +57,15 @@
        out besides the Esc key. -->
   <button id="focus-exit" class="focus-exit-btn" type="button" title="Exit full screen (Esc)">✕ Exit Full Screen</button>
 
+  <!-- Dashboard-wide, every page -- always visible (unlike focus-exit
+       above, which only shows in Focus Mode). Bottom-right so it doesn't
+       collide with focus-exit (top-right) or the Rotate controls group
+       (bottom-centre). Opens openHelpModal() in app.js, which resolves the
+       currently-active page/tab from #page-content's own data-help-page-id
+       (kept in sync by loadPage() and, for a tabbed page, tab-page-
+       client.js's selectTab()). -->
+  <button id="help-btn" class="help-btn" type="button" title="Help">?</button>
+
   <!-- Only shown while a Rotate cycle is actually running (app.js's own
        rotationActive -- toggled via plain .hidden, not a CSS attribute
        selector like focus-exit above, since there's no HTML attribute

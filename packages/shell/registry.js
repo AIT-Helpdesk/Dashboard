@@ -364,6 +364,36 @@ function writeNavLayout(tree) {
   fs.writeFileSync(NAV_LAYOUT_PATH, JSON.stringify(tree, null, 2));
 }
 
+// Admin-editable, end-user-visible help text for the dashboard-wide Help
+// button (app.js's openHelpModal(), one "?" button on every page -- see
+// server.js's /api/help/text/:pageId). One JSON file, keyed by page id,
+// same "single shared file, everyone sees the same content" reasoning as
+// NAV_LAYOUT_PATH above, and the same shape the six "-tabs" pages' own
+// PER-PAGE help-text.json already uses (createTabPageRouter() in
+// tab-page-server.js) -- this is that same idea, just dashboard-wide
+// instead of one file per tabbed page, since every OTHER page has nowhere
+// of its own for it to live.
+const PAGE_HELP_TEXT_PATH = path.join(__dirname, 'page-help-text.json');
+
+function readPageHelpTextMap() {
+  try {
+    const data = JSON.parse(fs.readFileSync(PAGE_HELP_TEXT_PATH, 'utf8'));
+    return data && typeof data === 'object' ? data : {};
+  } catch {
+    return {}; // no file yet, or unreadable -- no page has custom help text yet
+  }
+}
+
+function readPageHelpText(pageId) {
+  return readPageHelpTextMap()[pageId] || '';
+}
+
+function writePageHelpText(pageId, text) {
+  const map = readPageHelpTextMap();
+  map[pageId] = text;
+  fs.writeFileSync(PAGE_HELP_TEXT_PATH, JSON.stringify(map, null, 2));
+}
+
 // Auto-creates/deletes sidebar categories purely from .env's own
 // MENUCATEGORY_<ID> entries -- run ONCE, right here at module load (once
 // per process start, same as every other env-configured thing on this
@@ -421,6 +451,8 @@ module.exports = {
   NAV_LAYOUT_PATH,
   readNavLayout,
   writeNavLayout,
+  readPageHelpText,
+  writePageHelpText,
   isAdminFullAccess,
   isDashboardAdmin,
 };

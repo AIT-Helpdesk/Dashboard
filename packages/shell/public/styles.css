@@ -670,6 +670,62 @@ html[data-focus-mode="true"] .focus-exit-btn {
 html[data-focus-mode="true"][data-rotate-active="true"] .focus-exit-btn {
   display: none;
 }
+/* Dashboard-wide Help button (index.html, wired in app.js's
+   openHelpModal()) -- same fixed-floating-pill shape as .focus-exit-btn
+   above, just ALWAYS visible (no display:none default/attribute-gated
+   override) and bottom-right instead of top-right, so the two never
+   collide, and so it stays clear of the Rotate controls group
+   (bottom-centre, see .rotate-controls elsewhere in this file). Same
+   z-index tier as .focus-exit-btn, for the same reason -- an open modal
+   should cover it, not float underneath. */
+.help-btn {
+  position: fixed;
+  bottom: 0.75rem;
+  right: 0.75rem;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+}
+.help-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* The Help popup itself (openHelpModal() in app.js) -- same
+   .history-modal-panel shell every other popup on this dashboard uses,
+   just narrower (a page name + one button + maybe a README dump, nothing
+   else). */
+.help-modal-panel {
+  width: 34rem;
+  max-width: 90vw;
+}
+/* The README text itself -- plain preformatted text (no markdown
+   rendering anywhere in this codebase, by design, so this is the raw
+   file content), scrollable rather than blowing out the popup's own
+   height for a long README. */
+.help-readme-text {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  max-height: 50vh;
+  overflow-y: auto;
+  overflow-x: auto;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
 /* Every page's own Refresh button, hidden dashboard-wide while a Rotate
    cycle is running, by request ("hide the refresh buttons off all pages
    in rotation view") -- nobody viewing an unattended rotation can click
