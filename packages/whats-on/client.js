@@ -1320,6 +1320,61 @@ export function mount(container) {
     return DOW_ABBR[new Date(y, m - 1, d).getDay()];
   }
 
+  // "Mon" (single day) or "Mon-Sun" (a merged consecutive run, see
+  // mergeConsecutiveRows() below), for the Leave Report's own Day column.
+  function dayRangeLabel(firstDayKey, lastDayKey) {
+    const first = shiftsDayOfWeekLabel(firstDayKey);
+    if (firstDayKey === lastDayKey) return first;
+    return `${first}-${shiftsDayOfWeekLabel(lastDayKey)}`;
+  }
+
+  // "28 Sep" (single day) or "28 Sep - 4 Oct" (a merged consecutive run),
+  // for the Leave Report's own Date column.
+  function dateRangeLabel(firstDayKey, lastDayKey) {
+    const first = shiftsDayNumLabel(firstDayKey);
+    if (firstDayKey === lastDayKey) return first;
+    return `${first} - ${shiftsDayNumLabel(lastDayKey)}`;
+  }
+
+  function isNextDayKey(dayKey, candidateKey) {
+    const [y, m, d] = dayKey.split('-').map(Number);
+    const next = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+    return next === candidateKey;
+  }
+
+  // Sick/Other Leave is never merged into a range, even across
+  // consecutive days -- by request, "don't do the from-to thing for
+  // consecutive sick days ... show sick individually" (each real sick day
+  // is its own event worth seeing on its own line, unlike a planned
+  // Vacation block). Same exact label SHIFT_CATEGORIES' own sickOther
+  // entry uses.
+  const NEVER_MERGE_TYPES = new Set(['Sick/Other Leave']);
+
+  // Merges consecutive-day rows (same Type, immediately-following
+  // calendar date) for one employee's already-sorted-by-date row list
+  // into one entry -- by request, "where entry type and description is
+  // the same and has consecutive days for the same Employee, show these
+  // as one entry ... Mon-Sun 28 Sep to 4 Oct instead of 7 entries" --
+  // except NEVER_MERGE_TYPES above, always shown individually regardless
+  // of how many consecutive days there are. Hours are summed across the
+  // merged run -- stays null only when EVERY merged row's own hours is
+  // null too (e.g. a run of Public Holiday rows, which never carry an
+  // hours figure), same "--" fallback the per-row Hours column already
+  // uses otherwise.
+  function mergeConsecutiveRows(sortedRows) {
+    const merged = [];
+    for (const r of sortedRows) {
+      const prev = merged[merged.length - 1];
+      if (!NEVER_MERGE_TYPES.has(r.type) && prev && prev.type === r.type && isNextDayKey(prev.lastDayKey, r.dayKey)) {
+        prev.lastDayKey = r.dayKey;
+        prev.hours = prev.hours == null && r.hours == null ? null : (prev.hours || 0) + (r.hours || 0);
+      } else {
+        merged.push({ firstDayKey: r.dayKey, lastDayKey: r.dayKey, type: r.type, hours: r.hours });
+      }
+    }
+    return merged;
+  }
+
   function shiftsRangeLabel(startKey, endKey) {
     const [sy] = startKey.split('-').map(Number);
     const [ey] = endKey.split('-').map(Number);
@@ -1465,13 +1520,12 @@ export function mount(container) {
         <table>
           <thead><tr class="shaded-row"><th>Day</th><th>Date</th><th>Type</th><th>Hours</th></tr></thead>
           <tbody>
-            ${byName
-              .get(name)
+            ${mergeConsecutiveRows(byName.get(name))
               .map(
                 (r) => `
             <tr>
-              <td>${escapeHtml(shiftsDayOfWeekLabel(r.dayKey))}</td>
-              <td>${escapeHtml(shiftsDayNumLabel(r.dayKey))}</td>
+              <td>${escapeHtml(dayRangeLabel(r.firstDayKey, r.lastDayKey))}</td>
+              <td>${escapeHtml(dateRangeLabel(r.firstDayKey, r.lastDayKey))}</td>
               <td>${escapeHtml(r.type)}</td>
               <td class="ticket-number">${r.hours == null ? '--' : `${formatHours(r.hours)}h`}</td>
             </tr>`
