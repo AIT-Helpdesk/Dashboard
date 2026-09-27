@@ -121,14 +121,22 @@ export function mount(container) {
       return;
     }
     weeklyHoursPctGridEl.hidden = false;
+    // Small grey date line under each label, by request -- just the dates
+    // (Support Desk stays team-wide/once-only in the criteria box below,
+    // not repeated per tile). .datto-card-sub is this dashboard's own
+    // established "small grey text under a card label" class, reused
+    // as-is rather than a new one-off style.
+    const dateSub = escapeHtml(formatWeekRange(weeklyHoursPct.weekFrom, weeklyHoursPct.weekTo));
     weeklyHoursPctGridEl.innerHTML = `
       <div class="datto-card ${pctColorClass(weeklyHoursPct.clientHoursPct)}">
         <div class="tickets-dashboard-pct-number">${formatPct(weeklyHoursPct.clientHoursPct)}</div>
         <div class="datto-card-label">Client Hours</div>
+        <div class="datto-card-sub">${dateSub}</div>
       </div>
       <div class="datto-card ${pctColorClass(weeklyHoursPct.billableHoursPct)}">
         <div class="tickets-dashboard-pct-number">${formatPct(weeklyHoursPct.billableHoursPct)}</div>
         <div class="datto-card-label">Billable Hours</div>
+        <div class="datto-card-sub">${dateSub}</div>
       </div>
     `;
     hoursPctCriteriaItemEl.hidden = false;
