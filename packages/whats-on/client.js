@@ -218,10 +218,6 @@ function categorizeShift(entry) {
 
 export function mount(container) {
   container.innerHTML = `
-    <header class="page-header">
-      <h1>What's On</h1>
-    </header>
-
     <div class="wo-top-row" id="wo-top-row">
       <div class="wo-sc-section" id="sc-section">
         <div class="section-heading section-heading--nav section-heading-row">
@@ -1548,6 +1544,7 @@ export function mount(container) {
         </div>
         <div class="history-modal-body">
           ${summary}
+          <button type="button" class="button-link button-link--small wo-leave-report-copy-button">Copy for Email</button>
           ${bodyHtml}
         </div>
       </div>
@@ -1565,6 +1562,97 @@ export function mount(container) {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) close();
     });
+
+    // "Copy for Email", by request ("retain formatting when copying to an
+    // email") -- writes BOTH a real text/html payload (inline styles only,
+    // not this page's own CSS classes, which no email client would ever
+    // see -- borders/padding/bold headers all have to travel WITH the
+    // markup itself) and a plain text/plain fallback for a paste target
+    // that only accepts plain text, via the one browser API that can put
+    // more than one representation on the clipboard at once
+    // (ClipboardItem -- ordinary write() only ever writes plain text).
+    // Deliberately a fresh, separate HTML string here, not the already-
+    // rendered `bodyHtml` above -- that one leans on this page's own
+    // .wo-leave-report-group/.shaded-row/.ticket-number classes for all
+    // its actual look, none of which exist once this leaves the page.
+    const copyButton = overlay.querySelector('.wo-leave-report-copy-button');
+    copyButton.addEventListener('click', async () => {
+      try {
+        const htmlBlob = new Blob([leaveReportEmailHtml()], { type: 'text/html' });
+        const textBlob = new Blob([leaveReportEmailText()], { type: 'text/plain' });
+        await navigator.clipboard.write([new ClipboardItem({ 'text/html': htmlBlob, 'text/plain': textBlob })]);
+        const original = copyButton.textContent;
+        copyButton.textContent = 'Copied!';
+        copyButton.disabled = true;
+        setTimeout(() => {
+          copyButton.textContent = original;
+          copyButton.disabled = false;
+        }, 1500);
+      } catch (err) {
+        alert(`Couldn't copy: ${err.message}`);
+      }
+    });
+
+    function leaveReportEmailHtml() {
+      const cellStyle = 'border:1px solid #ccc; padding:4px 8px; font-family:Arial,Helvetica,sans-serif; font-size:13px;';
+      const groupsHtml = names.length
+        ? names
+            .map(
+              (name) => `
+        <h4 style="margin:16px 0 4px; font-family:Arial,Helvetica,sans-serif; font-size:14px;">${escapeHtml(name)}</h4>
+        <table style="border-collapse:collapse;">
+          <thead>
+            <tr style="background:#f0f0f0;">
+              <th style="${cellStyle} text-align:left;">Day</th>
+              <th style="${cellStyle} text-align:left;">Date</th>
+              <th style="${cellStyle} text-align:left;">Type</th>
+              <th style="${cellStyle} text-align:left;">Hours</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${mergeConsecutiveRows(byName.get(name))
+              .map(
+                (r) => `
+            <tr>
+              <td style="${cellStyle}">${escapeHtml(dayRangeLabel(r.firstDayKey, r.lastDayKey))}</td>
+              <td style="${cellStyle}">${escapeHtml(dateRangeLabel(r.firstDayKey, r.lastDayKey))}</td>
+              <td style="${cellStyle}">${escapeHtml(r.type)}</td>
+              <td style="${cellStyle} text-align:right;">${r.hours == null ? '--' : `${formatHours(r.hours)}h`}</td>
+            </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>`
+            )
+            .join('')
+        : '<p style="font-family:Arial,Helvetica,sans-serif;">No duty shifts, leave, or public holidays recorded for this period.</p>';
+      return `
+        <div>
+          <h3 style="margin:0 0 8px; font-family:Arial,Helvetica,sans-serif;">Leave Report -- ${escapeHtml(rangeLabel)}</h3>
+          ${summaryParts.length ? `<p style="margin:0 0 12px; color:#555; font-family:Arial,Helvetica,sans-serif; font-size:13px;">${escapeHtml(summaryParts.join('; '))}.</p>` : ''}
+          ${groupsHtml}
+        </div>
+      `;
+    }
+
+    function leaveReportEmailText() {
+      const lines = [`Leave Report -- ${rangeLabel}`, ''];
+      if (summaryParts.length) lines.push(`${summaryParts.join('; ')}.`, '');
+      if (names.length === 0) {
+        lines.push('No duty shifts, leave, or public holidays recorded for this period.');
+      }
+      for (const name of names) {
+        lines.push(name);
+        for (const r of mergeConsecutiveRows(byName.get(name))) {
+          const day = dayRangeLabel(r.firstDayKey, r.lastDayKey);
+          const date = dateRangeLabel(r.firstDayKey, r.lastDayKey);
+          const hours = r.hours == null ? '--' : `${formatHours(r.hours)}h`;
+          lines.push(`  ${day}  ${date}  ${r.type}  ${hours}`);
+        }
+        lines.push('');
+      }
+      return lines.join('\n');
+    }
   }
 
   // Auto-loads on mount only when there's nothing to show yet -- by

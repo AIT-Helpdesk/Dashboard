@@ -3823,6 +3823,40 @@ html[data-rotate-active="true"] .tickets-dashboard-pct-grid {
 .wo-leave-report-group:first-child h4 {
   margin-top: 0;
 }
+/* Extra gap before each next person's group, by request -- .h4's own
+   1rem top margin above was already there, but read as too tight between
+   one employee's table and the next employee's heading right below it. */
+.wo-leave-report-group + .wo-leave-report-group {
+  margin-top: 1.25rem;
+}
+/* Fixed, identical column widths across EVERY employee's own separate
+   table, by request ("make the columns line up for all") -- each table
+   otherwise auto-sizes its own columns to its own content, so Day/Date/
+   Type/Hours could land at different x-positions from one employee's
+   table to the next. table-layout: fixed + an explicit width on every
+   table (100% of this shared modal's own content width, the same for
+   every group) is what actually makes that guaranteed rather than
+   coincidental. */
+.wo-leave-report-copy-button {
+  display: block;
+  margin: 0.5rem 0 1rem;
+}
+.wo-leave-report-group table {
+  table-layout: fixed;
+  width: 100%;
+}
+.wo-leave-report-group th:nth-child(1),
+.wo-leave-report-group td:nth-child(1) {
+  width: 3rem;
+}
+.wo-leave-report-group th:nth-child(2),
+.wo-leave-report-group td:nth-child(2) {
+  width: 6rem;
+}
+.wo-leave-report-group th:nth-child(4),
+.wo-leave-report-group td:nth-child(4) {
+  width: 5rem;
+}
 
 td.ticket-number a {
   color: var(--accent);
