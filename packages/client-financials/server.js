@@ -150,8 +150,11 @@ router.get('/', async (req, res) => {
         // unpaid. Scoped to invoice NUMBERS starting "INV-" only, by
         // request -- other invoiceNumber prefixes (credit memos etc.)
         // aren't real client invoices and can legitimately have no
-        // paidDate without meaning anything is actually owing.
-        isUnpaid: (inv.invoiceNumber || '').startsWith('INV-') && !inv.paidDate,
+        // paidDate without meaning anything is actually owing. Also
+        // requires a real positive total, by request -- a $0 invoice
+        // (e.g. a fully-credited one) has nothing actually owing either,
+        // even with no paidDate recorded.
+        isUnpaid: (inv.invoiceNumber || '').startsWith('INV-') && !inv.paidDate && (inv.invoiceTotal || 0) > 0,
       });
     }
     invoiceRows.sort((a, b) => new Date(b.invoiceDate) - new Date(a.invoiceDate));

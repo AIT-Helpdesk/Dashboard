@@ -1221,5 +1221,19 @@ router.get('/entries-view', async (req, res) => {
 // services/server.js) -- Tickets Dashboard's own server.js uses both.
 router.computeOverallTotals = computeOverallTotals;
 router.TEAM_SERVICE_DESK = TEAM_SERVICE_DESK;
+// About Me's own Client Hours Utilization/Client Billable Hours cards
+// (that page's own server.js) reuse these two directly rather than
+// re-deriving "is this ticket a real client, and is this entry billable"
+// from scratch -- same real Ambient iT name-prefix rule and ticket/
+// contract/company lookups every Client Contract row on this page's own
+// Overall Summary table already goes through.
+router.fetchClientTicketContext = fetchClientTicketContext;
+router.isAmbientItCompany = isAmbientItCompany;
+// About Me's own Utilization card -- "Available Hours" (Normal Hours
+// minus real Leave, NOT a TimeEntries-billingCode exclusion -- see that
+// page's own fetchUtilizationSection() comment for the real bug that
+// approach caused) needs this same per-resource Normal Hours figure this
+// page's own Overall Summary table already computes.
+router.sumNormalHoursForRange = sumNormalHoursForRange;
 
 module.exports = router;

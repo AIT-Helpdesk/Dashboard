@@ -17,6 +17,10 @@ const {
 } = require('@dashboard/autotask-client');
 const { getPersonalClient, getTodoUrl } = require('@dashboard/strety-client');
 const { getTeams, getShiftsByDay } = require('@dashboard/teams-shifts/lib.js');
+// In-process call into Time Summaries' own real "is this ticket a client
+// ticket, is this entry billable" logic, not a duplicated re-derivation --
+// see fetchUtilizationSection() below for the full "why".
+const timesRouter = require('@dashboard/times/server.js');
 
 // One page pulling together everything real about ONE resource, by request
 // ("finds all the various parts for a Resource"). Everything below is
@@ -405,33 +409,96 @@ async function fetchTicketDueCountsSection(client, resourceId) {
   return { overdueMine: overdueMineRows, dueTodayMine: dueTodayMineRows, dueTodayOthers: dueTodayOthersRows, allOpenMine: allOpenMineRows };
 }
 
-// ---- Utilization, under Ticket Counts, by request. Deliberately the
-// simplest honest definition available from data this page already has --
-// what share of this resource's OWN logged hours (any TimeEntries row,
-// picked date range) went to ticket work specifically, vs internal/admin/
-// AITTIME time with no ticket attached at all. NOT the fuller "Total Tech
-// Hours (at work) / Tech Hours Available / Total Client Hours Billable"
-// picture Time Summaries' own Hours Summary box builds (that needs Normal
-// Hours per day + Leave + Public Holidays layered in too, real complexity
-// that page's own server.js already owns) -- this is a lighter, single-
-// resource slice, not a re-implementation of that page. Same real
-// TimeEntries.dateWorked field/range handling @dashboard/ticket-times and
-// this page's own fetchTicketTimesSection() already use.
-async function fetchUtilizationSection(client, resourceId, fromKey, toKey) {
-  const entries = await listAll(client.timeEntries, [
-    { op: 'gte', field: 'dateWorked', value: `${fromKey}T00:00:00.000Z` },
-    { op: 'lt', field: 'dateWorked', value: `${addDaysToKey(toKey, 1)}T00:00:00.000Z` },
-    { op: 'eq', field: 'resourceID', value: resourceId },
+// ---- Utilization, under Ticket Counts, by request. What share of this
+// resource's own AVAILABLE hours -- Normal (scheduled) Hours for the
+// range, minus real Leave, by request ("You are using the logged hours
+// as the total instead of the available hours (Hours - Leave =
+// Available)") -- went to ticket work specifically. The three
+// NUMERATORS (ticketHours/clientTicketHours/billableClientTicketHours)
+// still come from this resource's real logged TimeEntries; only the
+// DENOMINATOR changed, from a logged-hours total to a schedule-based one.
+//
+// REAL BUG, confirmed and fixed: an earlier version tried "exclude Leave
+// FROM the logged-hours total" via TimeEntries' own billingCodeID
+// (resolveLeaveBillingCodeIds(), the same match Time Summaries' own Leave
+// Hours row uses). For a real confirmed case (Dechen, 21/09-27/09, zero
+// real leave that week) it excluded her ENTIRE non-ticket total as if it
+// were all Leave (28:18 of 28:18, should have read 38:00) -- root cause
+// not fully isolated, so rather than guess again this now matches what
+// was actually asked for: real Leave (fetchLeaveTimeOffRequests(), the
+// TimeOffRequests entity directly, not a TimeEntries billing-code guess)
+// subtracted from Normal Hours (sumNormalHoursForRange(), Time
+// Summaries' own per-resource schedule figure, day-of-week aware,
+// reused via that page's exported router). NOT the FULLER "Total Tech
+// Hours (at work)" picture Time Summaries' own Hours Summary box builds
+// either (that also subtracts Public Holidays) -- worth adding here too
+// if it turns out to matter, not included yet since it wasn't part of
+// what was asked for.
+//
+// Client Hours Utilization/Client Billable Hours (two more cards, by
+// request -- "the same thing... percentage of hours only for client
+// tickets and then... percentage of billable hours on client ticket")
+// are computed in this SAME function/section rather than as separate
+// fetches -- they're just a further breakdown of the same `entries`
+// already pulled for Utilization above. All three percentages share the
+// SAME Available Hours denominator, not each other -- same "% of the one
+// common total" convention Time Summaries' own Overall Summary table
+// already uses for its Client/Billable rows, rather than a chained "% of
+// client hours" ratio. clientTicketHours excludes Ambient iT's own
+// internal tickets (isAmbientItCompany(), Time Summaries' own real
+// name-prefix rule, reused via that page's exported router rather than
+// re-derived here); billableClientTicketHours is the client-hours subset
+// where isNonBillable !== true, same real field/definition Time
+// Summaries' own Billable table uses.
+async function fetchUtilizationSection(client, resourceId, resourceName, fromKey, toKey) {
+  const fromIso = `${fromKey}T00:00:00.000Z`;
+  const toIsoExclusive = `${addDaysToKey(toKey, 1)}T00:00:00.000Z`;
+  const [entries, leaveEntries] = await Promise.all([
+    listAll(client.timeEntries, [
+      { op: 'gte', field: 'dateWorked', value: fromIso },
+      { op: 'lt', field: 'dateWorked', value: toIsoExclusive },
+      { op: 'eq', field: 'resourceID', value: resourceId },
+    ]),
+    fetchLeaveTimeOffRequests(client, fromIso, toIsoExclusive, resourceId),
   ]);
-  let hoursLogged = 0;
+
+  const leaveHours = leaveEntries.reduce((sum, e) => sum + (e.hoursWorked || 0), 0);
+  const normalHours = timesRouter.sumNormalHoursForRange(resourceName, fromKey, toKey);
+  // Floored at 0 -- defensive only, a real resource's real Leave should
+  // never exceed their real Normal Hours for the same range, but a
+  // negative denominator would be a worse failure mode than clamping.
+  const availableHours = Math.max(0, normalHours - leaveHours);
+
+  const ticketIds = [...new Set(entries.map((e) => e.ticketID).filter(Boolean))];
+  const ctx = ticketIds.length > 0 ? await timesRouter.fetchClientTicketContext(client, ticketIds) : null;
+
   let ticketHours = 0;
+  let clientTicketHours = 0;
+  let billableClientTicketHours = 0;
   for (const e of entries) {
     const hours = e.hoursWorked || 0;
-    hoursLogged += hours;
-    if (e.ticketID) ticketHours += hours;
+    if (!e.ticketID) continue;
+    ticketHours += hours;
+    if (!ctx) continue;
+    const ticket = ctx.ticketById.get(e.ticketID);
+    if (!ticket || timesRouter.isAmbientItCompany(ctx.companyNameById, ticket.companyID)) continue; // Ambient iT's own tickets aren't "client" time
+    clientTicketHours += hours;
+    if (e.isNonBillable !== true) billableClientTicketHours += hours;
   }
-  const utilizationPct = hoursLogged > 0 ? (ticketHours / hoursLogged) * 100 : 0;
-  return { hoursLogged, ticketHours, utilizationPct };
+  const utilizationPct = availableHours > 0 ? (ticketHours / availableHours) * 100 : 0;
+  const clientUtilizationPct = availableHours > 0 ? (clientTicketHours / availableHours) * 100 : 0;
+  const billableClientPct = availableHours > 0 ? (billableClientTicketHours / availableHours) * 100 : 0;
+  return {
+    availableHours,
+    normalHours,
+    leaveHours,
+    ticketHours,
+    utilizationPct,
+    clientTicketHours,
+    clientUtilizationPct,
+    billableClientTicketHours,
+    billableClientPct,
+  };
 }
 
 // ---- Strety Tasks -- this resource's own open todos. Uses the VIEWER's
@@ -729,7 +796,7 @@ router.get('/', async (req, res) => {
       settle(() => fetchCompletedTicketsSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchTicketTimesSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchTicketDueCountsSection(client, resourceId)),
-      settle(() => fetchUtilizationSection(client, resourceId, fromKey, toKey)),
+      settle(() => fetchUtilizationSection(client, resourceId, resource.name, fromKey, toKey)),
       settle(() => fetchAccruedTimeSection(client, resourceId, fromKey, toKey)),
       settle(() => fetchStretyTasksSection(viewerEmail, resource.email)),
       settle(() => fetchShiftsSection(client, resourceId, resource.name, resource.locationID, toKey)),

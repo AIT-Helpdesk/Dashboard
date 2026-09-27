@@ -114,11 +114,6 @@ export function mount(container) {
     <header class="page-header">
       <h1>About Me</h1>
     </header>
-    <form id="about-me-form" class="date-form">
-      <label id="resource-label" for="resource-input">Resource</label>
-      <select id="resource-input"></select>
-      <span id="resource-locked-name" class="inline-subtext" hidden></span>
-    </form>
     <form id="about-me-date-form" class="date-form date-form--stacked">
       <div class="date-form-row">
         <label for="am-from-input">From</label>
@@ -141,8 +136,12 @@ export function mount(container) {
         </div>
       </div>
       <div class="date-form-row">
+        <label id="resource-label" for="resource-input">Resource</label>
+        <select id="resource-input"></select>
+        <span id="resource-locked-name" class="inline-subtext" hidden></span>
+      </div>
+      <div class="date-form-row">
         <button type="submit">Load</button>
-        <span class="inline-subtext">Applies to Completed Tickets, Ticket Times, Asked for Review, and Accrued Time only -- Service Calls, Deadlines, and Strety Tasks keep their own fixed windows. Shifts stays "Next 30 days" too, unless the "to" date above reaches further out.</span>
       </div>
     </form>
     <p id="status" class="status">Loading...</p>
@@ -442,12 +441,14 @@ export function mount(container) {
   // later removed too, by request.
   function render(data) {
     statusEl.hidden = true;
+    // Utilization moved to the TOP of this column, by request -- was
+    // last, after Ticket Due Counts.
     const leftHtml = [
+      utilizationCardHtml(data.utilization, data.from, data.to),
       completedTicketsCardHtml(data.completedTickets, data.from, data.to),
       accruedTimeCardHtml(data.accruedTime, data.from, data.to),
       ticketTimesCardHtml(data.ticketTimesToday, data.from, data.to),
       ticketDueCountsCardHtml(data.ticketDueCounts),
-      utilizationCardHtml(data.utilization, data.from, data.to),
     ].join('');
     const rightHtml = [shiftsCardHtml(data.shifts), serviceCallsCardHtml(data.serviceCalls), stretyTasksCardHtml(data.stretyTasks)].join('');
     resultsEl.innerHTML = `
@@ -779,38 +780,54 @@ export function mount(container) {
     return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
   }
 
-  // ---- Utilization, under Ticket Counts, by request -- one donut card
-  // (0-100% real percentage fill, unlike Ticket Counts' own arbitrary-
-  // scale rings above) showing what share of this resource's own logged
-  // hours (picked date range) went to ticket work specifically, vs
-  // internal/admin/AITTIME time with no ticket attached. See server.js's
-  // own fetchUtilizationSection() comment for why this is deliberately a
-  // simpler slice than Time Summaries' own multi-row Hours Summary box,
-  // not a re-implementation of it. Colour thresholds (green 70%+, amber
-  // 40-69%, red under 40%) are a starting point, not a confirmed real
-  // target -- easy to retune once real numbers are actually being looked
-  // at. No minimize toggle, no "<Item> Page" link (no dedicated page
-  // behind this one either) -- same reasoning Ticket Counts above already
-  // gives. ----
+  // ---- Utilization, under Ticket Counts, by request -- ONE card, THREE
+  // donuts side by side (Ticket Time / Client Ticket Time / Billable
+  // Client Time), each with its own description underneath it, by
+  // request ("Put the 3 utilization widgets horizontally in the same box
+  // section named UTILIZATION with their descriptions under the widget")
+  // -- was three separate cards, folded into one. All three read the SAME
+  // section data (server.js's own fetchUtilizationSection() computes all
+  // three percentages together, since they're all just a further
+  // breakdown of the same TimeEntries pull) and share the SAME
+  // denominator (hoursLogged, this resource's total logged time in the
+  // range) -- not a chained "% of client hours" ratio -- same convention
+  // Time Summaries' own Overall Summary table already uses for its
+  // Client/Billable rows. 0-100% real percentage fill (unlike Ticket
+  // Counts' own arbitrary-scale rings above). Colour thresholds (green
+  // 70%+, amber 40-69%, red under 40%) are a starting point, not a
+  // confirmed real target -- easy to retune once real numbers are
+  // actually being looked at (Tickets Dashboard's own similar tiles use a
+  // different 75%/40% split -- that page's own call, not copied here). No
+  // minimize toggle, no "<Item> Page" link (no dedicated page behind this
+  // one either) -- same reasoning Ticket Counts above already gives. ----
   function utilizationCardHtml(section, from, to) {
     const rangeLabel = dateRangeLabel(from, to);
     if (!section.ok) return cardHtml('Utilization', rangeLabel, errorNote(section));
-    const { hoursLogged, ticketHours, utilizationPct } = section.data;
-    if (hoursLogged === 0) return cardHtml('Utilization', rangeLabel, emptyNote('No time logged in this range.'));
-    const pct = Math.round(utilizationPct);
-    const color = pct >= 70 ? '#16a34a' : pct >= 40 ? '#f59e0b' : '#dc2626';
+    const { availableHours, ticketHours, utilizationPct, clientTicketHours, clientUtilizationPct, billableClientTicketHours, billableClientPct } = section.data;
+    if (availableHours === 0) return cardHtml('Utilization', rangeLabel, emptyNote('No available hours in this range.'));
+    const donuts = [
+      { pct: utilizationPct, label: 'Ticket Time', sub: `${formatHoursHM(ticketHours)} of ${formatHoursHM(availableHours)} available` },
+      { pct: clientUtilizationPct, label: 'Client Ticket Time', sub: `${formatHoursHM(clientTicketHours)} of ${formatHoursHM(availableHours)} available` },
+      { pct: billableClientPct, label: 'Billable Client Time', sub: `${formatHoursHM(billableClientTicketHours)} of ${formatHoursHM(availableHours)} available` },
+    ];
     return cardHtml(
       'Utilization',
       rangeLabel,
       `<div class="datto-card-grid">
-        <div class="datto-card">
+        ${donuts
+          .map(({ pct, label, sub }) => {
+            const rounded = Math.round(pct);
+            const color = rounded >= 70 ? '#16a34a' : rounded >= 40 ? '#f59e0b' : '#dc2626';
+            return `<div class="datto-card">
           <div class="datto-donut-wrap">
-            ${donutSvg(pct, 100, color)}
-            <div class="datto-donut-center"><span class="datto-donut-count">${pct}%</span></div>
+            ${donutSvg(rounded, 100, color)}
+            <div class="datto-donut-center"><span class="datto-donut-count">${rounded}%</span></div>
           </div>
-          <div class="datto-card-label">Ticket Time</div>
-          <div class="datto-card-sub">${formatHoursHM(ticketHours)} of ${formatHoursHM(hoursLogged)} logged</div>
-        </div>
+          <div class="datto-card-label">${label}</div>
+          <div class="datto-card-sub">${sub}</div>
+        </div>`;
+          })
+          .join('')}
       </div>`
     );
   }

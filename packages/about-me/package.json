@@ -13,6 +13,7 @@
     "@dashboard/autotask-client": "*",
     "@dashboard/strety-client": "*",
     "@dashboard/teams-shifts": "*",
+    "@dashboard/times": "*",
     "express": "^4.19.2"
   }
 }
