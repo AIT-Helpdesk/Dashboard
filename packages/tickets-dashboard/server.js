@@ -8,7 +8,15 @@ const {
   getPicklistLabels,
   getTicketUrl,
   mapWithConcurrency,
+  todayAestKey,
+  mondayOf,
+  weekDatesFrom,
 } = require('@dashboard/autotask-client');
+// In-process call into Time Summaries' own report, not a duplicated
+// computation -- see that package's own computeOverallTotals() for the
+// full "why" (reused for its exact Total Tech Hours (at work)/Total Tech
+// Client Hours/Total Tech Hours Billable definitions).
+const timesRouter = require('@dashboard/times/server.js');
 
 // A real, generally-available page -- started as just the one widget (see
 // TRIAGE_PRIORITY_VALUE's own comment below for the second one added
@@ -94,12 +102,47 @@ async function shapeTicketRows(client, tickets, statusLabels) {
   return rows;
 }
 
+// Current AEST week (Monday..Sunday), Support Desk team -- by request, two
+// small widgets under the existing Critical (P1)/Triage Now ones showing
+// what % of Total Tech Hours (at work) landed as Total Tech Client Hours,
+// and what % of that was actually Billable, both for the week currently
+// in progress. Reuses Time Summaries' own computeOverallTotals() (see that
+// package's own server.js) rather than recomputing these from scratch --
+// same real figures that page's own Overall Summary table would show for
+// this exact week/team, just as a percentage instead of an hours total.
+// Best-effort -- this pulls in a much bigger chain of real API calls
+// (resources, leave, public holidays, tickets, contracts) than either of
+// this page's own ticket-priority widgets need, so a failure here
+// shouldn't take down the whole page. `null` on failure; client.js hides
+// the two widgets rather than showing an error for a page that's
+// otherwise fine.
+async function fetchWeeklyHoursPct(client) {
+  try {
+    const monday = mondayOf(todayAestKey());
+    const weekDays = weekDatesFrom(monday, 7);
+    const from = weekDays[0];
+    const to = weekDays[weekDays.length - 1];
+    const { totalTechHours, totalClientHours, totalClientHoursBillable } = await timesRouter.computeOverallTotals(client, from, to, timesRouter.TEAM_SERVICE_DESK);
+    const pct = (n) => (totalTechHours > 0 ? (n / totalTechHours) * 100 : 0);
+    return {
+      weekFrom: from,
+      weekTo: to,
+      clientHoursPct: pct(totalClientHours),
+      billableHoursPct: pct(totalClientHoursBillable),
+    };
+  } catch (err) {
+    console.error('tickets-dashboard: weekly hours %% failed:', err);
+    return null;
+  }
+}
+
 router.get('/', async (req, res) => {
   try {
     const client = await getClient();
-    const [criticalTickets, triageTickets] = await Promise.all([
+    const [criticalTickets, triageTickets, weeklyHoursPct] = await Promise.all([
       fetchOpenTicketsByPriority(client, CRITICAL_PRIORITY_VALUE),
       fetchOpenTicketsByPriority(client, TRIAGE_PRIORITY_VALUE),
+      fetchWeeklyHoursPct(client),
     ]);
 
     // Pre-resolves each unique client/resource name once, concurrently,
@@ -128,6 +171,7 @@ router.get('/', async (req, res) => {
       criticalTickets: criticalTicketRows,
       triageOpenCount: triageTickets.length,
       triageTickets: triageTicketRows,
+      weeklyHoursPct,
     });
   } catch (err) {
     console.error(err);

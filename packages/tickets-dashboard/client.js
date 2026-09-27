@@ -28,11 +28,13 @@ export function mount(container) {
     <p id="status" class="status">Loading...</p>
     <div id="critical-chart" class="resource-group" hidden></div>
     <div id="triage-chart" class="resource-group" hidden></div>
+    <div id="weekly-hours-pct-grid" class="tickets-dashboard-pct-grid" hidden></div>
     <div id="widget-notes" class="wsp-usage-box tickets-dashboard-notes" hidden>
       <div class="wsp-usage-box-title">Autotask Selection Criteria</div>
       <ul>
         <li><strong>Critical (P1)</strong> -- open tickets (no Completed Date) with Priority = "P1 - CRITICAL", excluding monitoring alerts.</li>
         <li><strong>Triage Now</strong> -- open tickets (no Completed Date) with Priority = "!! TO BE SCHEDULED", excluding monitoring alerts.</li>
+        <li id="hours-pct-criteria-item" hidden></li>
       </ul>
     </div>
   `;
@@ -42,6 +44,8 @@ export function mount(container) {
   const criticalChartEl = container.querySelector('#critical-chart');
   const triageChartEl = container.querySelector('#triage-chart');
   const notesEl = container.querySelector('#widget-notes');
+  const weeklyHoursPctGridEl = container.querySelector('#weekly-hours-pct-grid');
+  const hoursPctCriteriaItemEl = container.querySelector('#hours-pct-criteria-item');
 
   refreshButton.addEventListener('click', load);
 
@@ -53,6 +57,7 @@ export function mount(container) {
     criticalChartEl.hidden = true;
     triageChartEl.hidden = true;
     notesEl.hidden = true;
+    weeklyHoursPctGridEl.hidden = true;
 
     try {
       const res = await fetch('/api/tickets-dashboard');
@@ -94,6 +99,70 @@ export function mount(container) {
     // needed here, this element just isn't hidden/shown by anything but
     // the normal load()/error flow above.
     notesEl.hidden = false;
+    renderWeeklyHoursPct(data.weeklyHoursPct);
+  }
+
+  // Two small stat tiles, side by side, centered under the widgets above --
+  // by request: what % of this week's Total Tech Hours (at work) landed as
+  // Total Tech Client Hours, and what % of THAT was actually Billable, both
+  // scoped to Team: Support Desk (server.js's own fetchWeeklyHoursPct(),
+  // which reuses Time Summaries' own computeOverallTotals() rather than
+  // recomputing these from scratch). `null` (that fetch failed, or is
+  // still mid-flight the first time this page loads before server.js's own
+  // best-effort computation resolves) hides both tiles entirely rather
+  // than showing a broken widget on a page that's otherwise fine. The
+  // from/to/team criteria itself is shown once, as a 3rd bullet in the
+  // "Autotask Selection Criteria" box above, by request -- NOT repeated
+  // per tile the way it originally was.
+  function renderWeeklyHoursPct(weeklyHoursPct) {
+    if (!weeklyHoursPct) {
+      weeklyHoursPctGridEl.hidden = true;
+      hoursPctCriteriaItemEl.hidden = true;
+      return;
+    }
+    weeklyHoursPctGridEl.hidden = false;
+    weeklyHoursPctGridEl.innerHTML = `
+      <div class="datto-card ${pctColorClass(weeklyHoursPct.clientHoursPct)}">
+        <div class="tickets-dashboard-pct-number">${formatPct(weeklyHoursPct.clientHoursPct)}</div>
+        <div class="datto-card-label">Client Hours</div>
+      </div>
+      <div class="datto-card ${pctColorClass(weeklyHoursPct.billableHoursPct)}">
+        <div class="tickets-dashboard-pct-number">${formatPct(weeklyHoursPct.billableHoursPct)}</div>
+        <div class="datto-card-label">Billable Hours</div>
+      </div>
+    `;
+    hoursPctCriteriaItemEl.hidden = false;
+    hoursPctCriteriaItemEl.innerHTML = `<strong>Hours %</strong> -- ${escapeHtml(formatWeekRange(weeklyHoursPct.weekFrom, weeklyHoursPct.weekTo))} -- Support Desk`;
+  }
+
+  function formatPct(n) {
+    return `${Math.round(n)}%`;
+  }
+
+  // Red by default, Orange 40-74%, Green 75%+ -- by request. Same red/
+  // orange/green already used dashboard-wide (.cell-flag-red's #dc2626,
+  // this page's own "Loading..." orange #f59e0b, .chk-section-heading's
+  // #16a34a), not new one-off shades -- see the matching CSS classes in
+  // styles.css.
+  function pctColorClass(pct) {
+    if (pct >= 75) return 'tickets-dashboard-pct-tile--green';
+    if (pct >= 40) return 'tickets-dashboard-pct-tile--orange';
+    return 'tickets-dashboard-pct-tile--red';
+  }
+
+  // "17 Aug - 23 Aug", same day+month-only shape (no year, unless this
+  // week genuinely straddles a year boundary) other week-range labels on
+  // this dashboard already use (e.g. What's On's own shiftsRangeLabel()) --
+  // duplicated here rather than imported, same "each page keeps its own
+  // small copy of shared boilerplate" convention this dashboard already
+  // follows elsewhere.
+  function formatWeekRange(fromKey, toKey) {
+    const [fy, fm, fd] = fromKey.split('-').map(Number);
+    const [ty, tm, td] = toKey.split('-').map(Number);
+    const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const from = `${fd} ${MONTH_ABBR[fm - 1]}`;
+    const to = `${td} ${MONTH_ABBR[tm - 1]}`;
+    return fy !== ty ? `${from} ${fy} - ${to} ${ty}` : `${from} - ${to}`;
   }
 
   // Originally copied from Ticket Dashboards (Test) as one single-purpose

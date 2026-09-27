@@ -813,6 +813,55 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Reusable aggregate -- just the THREE grand totals the GET / route above
+// builds a full multi-table report around (Total Tech Hours (at work) /
+// Total Tech Client Hours / Total Tech Hours Billable, see
+// overallSummaryRow() in client.js for how this page itself presents
+// them), with none of the per-resource/per-contract breakdown or
+// admin-only $ figures. Added for Tickets Dashboard's own "current week,
+// Support Desk" percentage widgets (that page's own server.js), which
+// want these same real figures without pulling in this whole page's
+// report shape -- same "reuse the sibling's own function, don't
+// duplicate" convention this dashboard already follows elsewhere (see
+// this function's own attachment to `router` below).
+// `roleRatesById`/`workTypeModifiersById`/`billingItemByTeId` are left at
+// buildClientContractSplitHours()'s own defaults (empty maps) -- only
+// `.worked` hours are summed here, never `.dollars`, so those admin-only
+// fetches aren't needed at all for this.
+async function computeOverallTotals(client, from, to, team) {
+  const fromIso = `${from}T00:00:00.000Z`;
+  const toIso = `${to}T00:00:00.000Z`;
+  const { selected, leaveEntries, ticketEntries } = await resolveResourcesWithData(client, fromIso, toIso, team);
+  if (selected.length === 0) return { totalTechHours: 0, totalClientHours: 0, totalClientHoursBillable: 0 };
+
+  const publicHolidayHoursByResource = await fetchPublicHolidayHoursByResource(client, selected, fromIso, toIso);
+  const leaveByResource = new Map();
+  for (const e of leaveEntries) leaveByResource.set(e.resourceID, (leaveByResource.get(e.resourceID) || 0) + (e.hoursWorked || 0));
+
+  let totalTechHours = 0;
+  for (const r of selected) {
+    const leaveHours = leaveByResource.get(r.id) || 0;
+    const publicHolidayHours = publicHolidayHoursByResource.get(r.id) || 0;
+    const totalNormalHours = sumNormalHoursForRange(r.name, from, to);
+    totalTechHours += totalNormalHours - leaveHours - publicHolidayHours;
+  }
+
+  const clientCtx = await fetchClientTicketContext(client, [...new Set(ticketEntries.map((e) => e.ticketID))]);
+  const clientContracts = clientCtx ? buildClientContractHours(clientCtx, ticketEntries) : [];
+  const clientContractsBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, true) : [];
+
+  let totalClientHours = 0;
+  for (const row of clientContracts) {
+    for (const h of Object.values(row.hours)) totalClientHours += h || 0;
+  }
+  let totalClientHoursBillable = 0;
+  for (const row of clientContractsBillable) {
+    for (const cell of Object.values(row.hours)) totalClientHoursBillable += cell?.worked || 0;
+  }
+
+  return { totalTechHours, totalClientHours, totalClientHoursBillable };
+}
+
 // Work-Type Reconciliation -- deliberately NOT fetched as part of the main
 // report above, by request ("we can not retrieve it by default so the
 // page is faster"): it needs its own real TimeEntries fetch (the main
@@ -1166,5 +1215,11 @@ router.get('/entries-view', async (req, res) => {
     res.status(500).send(`<pre>${escapeHtml(err.message)}</pre>`);
   }
 });
+
+// Callable in-process by a sibling page, same "router.buildReport = ..."
+// convention this dashboard already uses elsewhere (e.g. contract-
+// services/server.js) -- Tickets Dashboard's own server.js uses both.
+router.computeOverallTotals = computeOverallTotals;
+router.TEAM_SERVICE_DESK = TEAM_SERVICE_DESK;
 
 module.exports = router;

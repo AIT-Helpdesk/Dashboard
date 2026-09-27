@@ -685,7 +685,7 @@ export function mount(container) {
           <tr><th>${rowLabelHtml(tcEliteRow.label)}</th><td class="col-center">${formatHours(tcEliteRow.hours)}</td><td class="col-center">${formatCurrency(tcEliteRow.dollars)}</td></tr>
         </tbody>
       </table>
-      <p class="tm-footnote">Each entry's own real rate (posted/invoiced $, or an estimate from its role + work type for time still awaiting Approve and Post) -- not one flat rate.</p>
+      <p class="tm-footnote">Real Rates Shown</p>
       </div>`
       : '';
 

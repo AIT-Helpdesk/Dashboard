@@ -5,6 +5,7 @@
   "main": "client.js",
   "dependencies": {
     "@dashboard/autotask-client": "*",
+    "@dashboard/times": "*",
     "express": "^4.19.2"
   },
   "dashboardPage": {
