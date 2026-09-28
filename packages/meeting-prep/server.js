@@ -105,6 +105,7 @@ const REPORT_TITLES = {
   'patch-management-summary': 'Patch Management Summary Report',
   software: 'Software Report',
   'dark-web-monitoring': 'Dark Web Monitoring Report',
+  'email-security': 'Email Security Report',
 };
 
 // Which system each report kind's data/*.json actually comes from -- shown
@@ -128,6 +129,11 @@ const REPORT_SOURCES = {
   'patch-management-summary': 'Datto RMM Report',
   software: 'Datto RMM Report',
   'dark-web-monitoring': 'Dark Web Monitoring',
+  // INKY's own report email (a .msg, not a bare PDF -- see ingest.js's own
+  // extractMsgPdfAttachment()) -- the third distinct vendor this data/
+  // pipeline has onboarded, same "additive lookup entries only" pattern
+  // Dark Web Monitoring's own addition already proved out.
+  'email-security': 'INKY',
 };
 
 // Fixed display order (Executive Summary first as the overview, the other
@@ -157,6 +163,7 @@ const REPORT_ORDER = [
   'patch-management-summary',
   'software',
   'dark-web-monitoring',
+  'email-security',
 ];
 
 function buildReportComponent(kind, data) {
@@ -269,6 +276,18 @@ function buildReportComponent(kind, data) {
       monitoring: data.monitoring || {},
       organizationalCompromises: data.organizationalCompromises || [],
       breaches: data.breaches || { totalCompromises: 0, breaches: [] },
+    };
+  }
+  if (kind === 'email-security') {
+    const threat = data.threatSummary || {};
+    return {
+      ...base,
+      stats: { messagesProcessed: (data.overview || {}).messagesProcessed || 0, dangerCount: threat.danger || 0 },
+      overview: data.overview || {},
+      threatSummary: threat,
+      topThreatCategories: data.topThreatCategories || [],
+      messageReportSummary: data.messageReportSummary || {},
+      linkClickBreakdown: data.linkClickBreakdown || {},
     };
   }
   return null;
@@ -527,6 +546,12 @@ function buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf) {
     // -- same reasoning as buildReportComponent()'s own `site` field, but
     // there's no single real value to give here in that case.
     site: siteNames.length === 1 ? siteNames[0] : null,
+    // Every real site name the search actually matched, in every case (not
+    // just the ambiguous one) -- lets the client show the full list in a
+    // tooltip when it puts up its "N sites matched" warning below, by
+    // request ("Tooltip showing list ot sites found"). Unused (but
+    // harmless) when there's only one, same as `site` above in that case.
+    matchedSites: siteNames,
     createDate: asOf,
     images: [],
     stats: { total: devices.length, notSeenStale: buckets.stale },

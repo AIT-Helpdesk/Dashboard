@@ -347,7 +347,20 @@
     "type": "category",
     "id": "present-to-client",
     "label": "Present To Client",
-    "children": []
+    "children": [
+      {
+        "type": "page",
+        "id": "meeting-prep"
+      },
+      {
+        "type": "page",
+        "id": "report"
+      },
+      {
+        "type": "page",
+        "id": "service-actions"
+      }
+    ]
   },
   {
     "type": "category",

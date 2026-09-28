@@ -616,6 +616,51 @@ a.nav-link.active[href="#start-here"] {
   overflow-y: auto;
 }
 
+/* Printing/Export to PDF (window.print(), first wired up for Make Report --
+   packages/report -- but written dashboard-wide since nothing here is
+   Report-specific) -- the sidebar and every floating dashboard-wide button
+   (Full Screen exit, Help, Rotate controls) have no business on a printed
+   page, and .layout's own height: 100vh / .page-content's own overflow-y:
+   auto (both above) would otherwise clip printed content to a single
+   screen-sized box instead of letting it flow across as many printed pages
+   as it needs. `.no-print` is a plain dashboard-wide utility class -- any
+   page can put it on an element (a button, a toolbar) it doesn't want to
+   show up in a printout, same as Make Report's own Export to PDF button
+   does. */
+@media print {
+  .sidebar,
+  .focus-exit-btn,
+  .help-btn,
+  .rotate-controls,
+  .no-print {
+    display: none !important;
+  }
+  .layout {
+    height: auto;
+    display: block;
+  }
+  .page-content {
+    overflow: visible;
+  }
+  /* Chrome (and most other browsers) drops background colors/images from
+     a printout by default, to save ink, unless told otherwise -- confirmed
+     the real cause of a real bug ("colour bars aren't showing on the PDF
+     for Disk Usage") -- .mtg-bar-fill (barWidget(), meeting-prep-report-
+     render.js) colors its bar via a plain CSS background, which is exactly
+     what this default strips. print-color-adjust: exact (the current
+     property; -webkit-print-color-adjust is the same thing under its
+     older, WebKit-prefixed name, kept alongside for browsers that still
+     only recognise that one) tells the browser to keep colors/backgrounds
+     as authored -- applied dashboard-wide on html so every other
+     background-colored element (donut legends' .mtg-swatch chips, score
+     badges, status pills, etc.) prints correctly too, not just this one
+     bar. */
+  html {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
 /* Full screen / focus mode -- hides the sidebar entirely so the current
    page's own content fills the whole window, by request. Driven by a
    data-focus-mode attribute on <html> (app.js toggles it; Esc also
@@ -7555,6 +7600,35 @@ tr.accrued-time-yellow-row th {
   outline: 2px dashed var(--accent);
   outline-offset: 2px;
 }
+/* Datto RMM (Live)'s own "N sites matched" warning state, by request -- a
+   wildcard search whose matched devices span more than one real site (see
+   cardEl()'s own multiSiteWarning, client.js) shades the whole tile red
+   rather than presenting a live, unfiltered device list as if it were
+   safely scoped to one client. Same #dc2626 red already used dashboard-
+   wide for an overdue/critical state (.tt-tag--overdue etc.), not a new
+   one-off colour. */
+.mtg-card--warning {
+  border-color: #dc2626;
+  background: color-mix(in srgb, #dc2626 8%, var(--card));
+}
+.mtg-card--warning:hover {
+  border-color: #dc2626;
+}
+/* "WARNING", above the "N sites matched" title text -- by request. Native
+   title attribute (set in cardEl()) carries the actual list of matched
+   site names as a hover tooltip, so this label only needs to say that
+   something needs a closer look, not what. */
+.mtg-card-warning-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #dc2626;
+}
+.mtg-card-label--warning {
+  color: #dc2626;
+  font-weight: 700;
+}
 /* Tick All / Invert Ticks / Untick All, by request -- a small row of bulk-
    selection buttons above the card grid. Reuses .button-link/.button-link--small
    (the same small-pill style every other secondary action on this page
@@ -7691,6 +7765,99 @@ tr.accrued-time-yellow-row th {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* Make Report's own Ambient IT letterhead, by request -- shown both on
+   screen and in the exported PDF (no .no-print/@media print override), a
+   real page header rather than dashboard chrome. Full width of the page
+   content column, height auto so the source image's own aspect ratio is
+   preserved regardless of how wide that column actually is. */
+.mtg-report-letterhead {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-bottom: 1.5rem;
+}
+
+/* Make Report (packages/report) -- the top-right "As of" date (page title
+   removed entirely, by request) plus the Export to PDF button beside it.
+   margin-left: auto on .mtg-report-asof, not justify-content: space-between
+   on the row -- keeps the date pinned right even once the button itself is
+   gone (display: none in print, further down), where space-between would
+   otherwise snap the one remaining child back to the left. */
+.mtg-report-topbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.mtg-report-asof {
+  margin: 0 0 0 auto;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+/* "Report Notes" -- the Worth-mentioning-only recommendations section, by
+   request ("Place this section at the beginning"). h2, same weight as the
+   appendix headings further down, not .mtg-report-section's own smaller
+   h3 -- this is a top-level, page-spanning section, not one more per-
+   component subsection. Reuses .mtg-rec-group/.mtg-rec-item* as-is (same
+   amber "watch" look Meeting Prep's own Recommendations Summary already
+   established), just without that panel's other 3 tiers or its own intro
+   line about how many components were loaded.  */
+.mtg-report-notes {
+  margin-bottom: 1.5rem;
+}
+.mtg-report-notes h2 {
+  font-size: 1.1rem;
+  margin: 0 0 0.75rem;
+}
+/* "Show full table data (Appendix N)" -- a real #anchor link to that
+   section's own appendix (see report/client.js's own reportSectionHtml()).
+   Print only, by request ("keep the sections that will become the
+   Appendices minimised [on screen]. Expand in place when clicked and
+   create as Appendices only when making the PDF") -- on screen, the
+   section's own inline <details> toggle (same .no-print div this link
+   sits beside in the markup) already gives direct access, so this link
+   only switches on once printing turns that toggle off instead. */
+.mtg-report-appendix-link {
+  display: none;
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+@media print {
+  .mtg-report-appendix-link {
+    display: block;
+  }
+}
+/* The appendix itself -- hidden on screen (by the same request as the
+   link above: minimised inline on screen, only exists as a separate
+   Appendix when printing), shown and starting on its own printed page
+   only inside @media print. break-before is the modern property,
+   page-break-before the older alias some print engines still look for,
+   kept alongside it for the same reason. */
+.mtg-report-appendix {
+  display: none;
+}
+@media print {
+  .mtg-report-appendix {
+    display: block;
+    break-before: page;
+    page-break-before: always;
+  }
+}
+.mtg-report-appendix h2 {
+  font-size: 1.1rem;
+  margin: 0 0 0.75rem;
+}
+/* Back-link at BOTH the top and bottom of every appendix, by request -- a
+   long appendix (a full device list, say) can run to several printed pages
+   of its own, so the link back to where this appendix was linked FROM
+   matters as much at the end as at the start. */
+.mtg-report-appendix-nav {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+.mtg-report-appendix-nav:last-child {
+  margin: 0.75rem 0 0;
 }
 .mtg-report-subhead {
   margin: 0.6rem 0 0.3rem;
@@ -7874,6 +8041,28 @@ tr.accrued-time-yellow-row th {
   text-align: right;
   font-weight: 700;
   flex-shrink: 0;
+}
+/* Device Storage's "Disk Usage (highest first)" list, by request -- caps
+   the visible list to about 18 rows (.mtg-bar-row's own 0.3rem top+bottom
+   padding plus its ~0.82rem line-height comes to roughly 1.6rem per row;
+   18 x that is about 28rem) with a scrollbar down the right side on
+   screen, rather than an unbounded list a client with many drives could
+   run to dozens of rows long. Unclipped again in print -- "Print full
+   list in place without moving to an Appendix for PDF Mode", so a PDF
+   export always shows every drive right where the section already is,
+   never scrolled/cut off, and deliberately never turned into a separate
+   Appendix the way other kinds' full tables are. */
+.mtg-disk-usage-list {
+  max-height: 28rem;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+@media print {
+  .mtg-disk-usage-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
 }
 .mtg-check-icon {
   width: 1.05rem;
@@ -8123,6 +8312,17 @@ tr.accrued-time-yellow-row th {
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+/* Unclipped in print -- same "show the full list in place, not just
+   whatever fit the on-screen scroll box" reasoning as .mtg-disk-usage-list
+   just below. Covers both Meeting Prep's own always-visible device table
+   and Make Report's copies of it (inline on screen, the print-only
+   Appendix 1 -- report/client.js). */
+@media print {
+  .mtg-device-table-wrap {
+    max-height: none;
+    overflow: visible;
+  }
 }
 .mtg-device-table-empty {
   padding: 0.75rem;

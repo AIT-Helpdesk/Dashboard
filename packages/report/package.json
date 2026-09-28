@@ -1,0 +1,11 @@
+{
+  "name": "@dashboard/report",
+  "version": "1.0.0",
+  "private": true,
+  "main": "client.js",
+  "dashboardPage": {
+    "id": "report",
+    "label": "Make Report",
+    "client": "client.js"
+  }
+}

@@ -1,19 +1,23 @@
-// Report Ingest -- pulls new report PDFs from SharePoint's Incoming/<Source>/
-// folders, parses each into this package's own data/<client-slug>/<date>/
-// <kind>.json shape, and moves the original to Processed/<Client Name>/
-// <date>/ once written -- see this package's README.md ("Not yet built")
-// and data/README.md (the SharePoint layout this was always meant to plug
-// into) for the plan this implements. Same runSync()-shaped job contract
-// Contract Checks' own sync.js already establishes: POST /ingest (server.js)
-// for the manual button, `node packages\meeting-prep\ingest.js` standalone
-// for a later Task Scheduler entry.
+// Report Ingest -- pulls new report files from SharePoint's Incoming/<Source>/
+// folders (a bare report PDF for every Datto/Dark Web ID source; INKY's own
+// report .msg EMAILS instead, whose real report is a PDF attachment --
+// see extractMsgPdfAttachment() below), parses each into this package's own
+// data/<client-slug>/<date>/<kind>.json shape, and moves the original to
+// Processed/<Client Name>/<date>/ once written -- see this package's
+// README.md ("Not yet built") and data/README.md (the SharePoint layout
+// this was always meant to plug into) for the plan this implements. Same
+// runSync()-shaped job contract Contract Checks' own sync.js already
+// establishes: POST /ingest (server.js) for the manual button, `node
+// packages\meeting-prep\ingest.js` standalone for a later Task Scheduler
+// entry.
 const fs = require('fs');
 const path = require('path');
 const { getClient, listAll } = require('@dashboard/autotask-client');
 const { PDFParse } = require('pdf-parse');
+const CFB = require('cfb');
 
 const sp = require('./sharepoint-client.js');
-const { resolveTitleAndClient } = require('./ingest-title-map.js');
+const { resolveTitleAndClient, resolveInkyClientAndKind } = require('./ingest-title-map.js');
 const { slugify } = require('./slug.js');
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -122,6 +126,46 @@ async function extractPdfText(buffer) {
   }
 }
 
+// INKY delivers its own report as an EMAIL (a .msg file, not a bare PDF
+// dropped straight in Incoming/ the way every Datto/Dark Web ID report
+// is) -- the actual report is a PDF attachment on that email (confirmed
+// against 4 real samples: each one carries exactly one .pdf attachment,
+// named "report_<yyyy>_<mm>_<dd>.pdf", alongside 1-2 small .png logo
+// images INKY inlines into the email body itself, never the report). A
+// .msg file is an OLE Compound File (the same container format .xls
+// used before .xlsx) -- `cfb` (SheetJS's CFB reader, already a real
+// dependency of this workspace via @dashboard/tc-elite-rollout's own
+// xlsx dependency, added here explicitly rather than relied on as a
+// phantom transitive one -- see package.json) parses that container
+// without needing a dedicated .msg-parsing library at all. Each MAPI
+// attachment lives under its own `__attach_version1.0_#<index>` storage;
+// `__substg1.0_3707001F` is that attachment's own long filename (PT_UNICODE,
+// hence the utf16le decode), `__substg1.0_37010102` is its raw binary
+// content (PT_BINARY). Throws if no .pdf attachment is found, rather than
+// returning null -- ingest.js's own needsAttention handling below turns
+// that into a per-file "Parse failed" entry, same as any other parser
+// error.
+function extractMsgPdfAttachment(buffer) {
+  const container = CFB.parse(buffer);
+  const findByPath = (pred) => {
+    const idx = container.FileIndex.findIndex((entry, i) => entry.type === 2 && pred(container.FullPaths[i]));
+    return idx === -1 ? null : container.FileIndex[idx];
+  };
+  const utf16 = (entry) => (entry && entry.content ? Buffer.from(entry.content).toString('utf16le') : null);
+
+  for (let i = 0; i < 20; i++) {
+    const attachPrefix = `__attach_version1.0_#${String(i).padStart(8, '0')}`;
+    const nameEntry = findByPath((p) => p.includes(attachPrefix) && p.endsWith('__substg1.0_3707001F'));
+    if (!nameEntry) break; // no more attachments at this index -- stop scanning
+    const filename = utf16(nameEntry);
+    if (!filename || !/\.pdf$/i.test(filename)) continue;
+    const dataEntry = findByPath((p) => p.includes(attachPrefix) && p.endsWith('__substg1.0_37010102'));
+    if (!dataEntry || !dataEntry.content) continue;
+    return Buffer.from(dataEntry.content);
+  }
+  throw new Error('No .pdf attachment found inside this .msg file');
+}
+
 function writeReportJson(clientSlug, isoDate, kind, data) {
   const dir = path.join(DATA_DIR, clientSlug, isoDate);
   fs.mkdirSync(dir, { recursive: true });
@@ -138,7 +182,7 @@ async function runIngest() {
 
   let processedCount = 0;
   let ignoredCount = 0;
-  let skippedNonPdfCount = 0;
+  let skippedUnhandledExtCount = 0;
   const needsAttention = []; // { filename, source, reason }
 
   for (const source of sourceFolders) {
@@ -147,18 +191,33 @@ async function runIngest() {
       if (!item.file) continue; // a nested folder inside a source -- not expected, but never treated as a report
       if (state.processedItemIds[item.id]) continue; // already handled in a prior run
 
-      if (!/\.pdf$/i.test(item.name)) {
-        // Non-PDF files (e.g. the real "SiteDeviceCountExport - <Client>.csv"
-        // exports sitting alongside the PDFs) are a different kind of export
-        // entirely, by request -- left untouched in Incoming, not even
-        // recorded in state, so nothing here claims to have "handled" them.
-        skippedNonPdfCount++;
+      // Two source shapes: a bare report PDF (every Datto/Dark Web ID
+      // report), or INKY's own report EMAIL (.msg, the actual PDF report
+      // sitting inside it as an attachment -- see extractMsgPdfAttachment()
+      // above). Each gets its own filename resolver (INKY's is "<Client
+      // Name> - Email Security Report.msg", client name FIRST -- the
+      // opposite order from every PDF source's "<Title> - <Client Name>",
+      // so it needs its own matcher, not a variant of
+      // resolveTitleAndClient()) and its own text-extraction step, then
+      // converge on the same { kind, clientName } / parsed-text shape for
+      // everything after this. Anything else (e.g. the real
+      // "SiteDeviceCountExport - <Client>.csv" exports sitting alongside
+      // the Datto PDFs) is a different kind of export entirely, by
+      // request -- left untouched in Incoming, not even recorded in
+      // state, so nothing here claims to have "handled" it.
+      const isPdf = /\.pdf$/i.test(item.name);
+      const isMsg = /\.msg$/i.test(item.name);
+      if (!isPdf && !isMsg) {
+        skippedUnhandledExtCount++;
         continue;
       }
 
-      const resolved = resolveTitleAndClient(item.name);
+      const resolved = isPdf ? resolveTitleAndClient(item.name) : resolveInkyClientAndKind(item.name);
       if (!resolved) {
-        needsAttention.push({ filename: item.name, source: source.name, reason: 'Unrecognized report title -- no TITLE_TO_KIND entry (ingest-title-map.js)' });
+        const reason = isPdf
+          ? 'Unrecognized report title -- no TITLE_TO_KIND entry (ingest-title-map.js)'
+          : 'Unrecognized filename shape for an INKY report -- expected "<Client Name> - Email Security Report.msg" (ingest-title-map.js\'s resolveInkyClientAndKind())';
+        needsAttention.push({ filename: item.name, source: source.name, reason });
         continue;
       }
       if (resolved.ignored) {
@@ -188,7 +247,8 @@ async function runIngest() {
       let data;
       try {
         const buffer = await sp.downloadFileContent(driveId, item.id);
-        const text = await extractPdfText(buffer);
+        const pdfBuffer = isPdf ? buffer : extractMsgPdfAttachment(buffer);
+        const text = await extractPdfText(pdfBuffer);
         data = parser.parse(text);
         if (!data || typeof data !== 'object') throw new Error('parser returned no data');
       } catch (err) {
@@ -240,7 +300,7 @@ async function runIngest() {
   const message = `Processed ${processedCount}, ignored ${ignoredCount}, ${needsAttention.length} needing attention.`;
   state.lastRun = { at: new Date().toISOString(), ok: true, message, processedCount, ignoredCount, needsAttention };
   saveState(state);
-  return { ok: true, processedCount, ignoredCount, skippedNonPdfCount, needsAttention, message };
+  return { ok: true, processedCount, ignoredCount, skippedUnhandledExtCount, needsAttention, message };
 }
 
 module.exports = { runIngest, isoDateFromCreateDate, matchCompanyByName, normalizeClientName };

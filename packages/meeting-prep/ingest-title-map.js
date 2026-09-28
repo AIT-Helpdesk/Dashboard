@@ -64,4 +64,25 @@ function resolveTitleAndClient(filename) {
   return null;
 }
 
-module.exports = { TITLE_TO_KIND, IGNORED_TITLES, resolveTitleAndClient };
+// INKY's own report emails (ingest.js pulls the PDF attachment out of the
+// .msg first -- see that file's own extractMsgPdfAttachment()) follow a
+// completely different filename shape from every PDF source above:
+// "<Client Name> - Email Security Report.msg", client name FIRST (confirmed
+// against 4 real samples: "Kraftur Pty Ltd - Email Security Report.msg",
+// "G and H Civil Contractors - ...", "SEQ Mortgage Brokers - ...", "Sleepys
+// - ..."). A suffix match, not the title-prefix match resolveTitleAndClient()
+// above uses -- there's only one INKY report kind today, so no lookup table
+// is needed yet, just the one fixed suffix. Returns { kind, title,
+// clientName } on a match, null otherwise (an unrecognised .msg filename --
+// left unprocessed and flagged in needsAttention, same "never guess"
+// convention as resolveTitleAndClient() above).
+const INKY_TITLE_SUFFIX = ' - Email Security Report';
+function resolveInkyClientAndKind(filename) {
+  const base = filename.replace(/\.msg$/i, '');
+  if (!base.endsWith(INKY_TITLE_SUFFIX)) return null;
+  const clientName = base.slice(0, -INKY_TITLE_SUFFIX.length).trim();
+  if (!clientName) return null;
+  return { kind: 'email-security', title: 'Email Security Report', clientName };
+}
+
+module.exports = { TITLE_TO_KIND, IGNORED_TITLES, resolveTitleAndClient, resolveInkyClientAndKind };
