@@ -57,8 +57,20 @@ function normalizeAmpersand(s) {
     .replace(/\s+/g, ' ')
     .trim();
 }
-function siteMatches(value, term) {
-  return matchesWildcard(normalizeAmpersand(value), normalizeAmpersand(term));
+// `exact`, by request ("a checkbox ... which will make the filter not use
+// the wildcards") -- checked, this bypasses matchesWildcard() (a plain
+// substring/prefix/suffix matcher even with no literal `*` in the term --
+// see its own file for the beginsWith/endsWith/includes fallback) entirely
+// in favour of a real case-insensitive equality check, for a search term
+// that's a substring of more than one real client name (e.g. a short
+// term unintentionally also matching an unrelated, longer client name).
+// Still &/and-normalized on both sides either way -- "exact" is about the
+// wildcard/substring behaviour, not about undoing that separate fix.
+function siteMatches(value, term, exact) {
+  const v = normalizeAmpersand(value);
+  const t = normalizeAmpersand(term);
+  if (exact) return v.toLowerCase() === t.toLowerCase();
+  return matchesWildcard(v, t);
 }
 
 // --------------------------------------------------------------------------
@@ -324,7 +336,7 @@ function buildReportComponent(kind, data) {
 // unrelated flat naming scheme, untouched by this) -- skipped here by
 // name, not by "is it a real client", since a client could in principle
 // be named something that only coincidentally isn't "images".
-function loadFileReportComponents(siteTerm) {
+function loadFileReportComponents(siteTerm, exact) {
   let clientDirs;
   try {
     clientDirs = fs
@@ -373,7 +385,7 @@ function loadFileReportComponents(siteTerm) {
         // so if its newest run doesn't match the search term, no older
         // run of the same kind should surface either.
         seenKinds.add(kind);
-        if (!data.site || !siteMatches(data.site, siteTerm)) continue;
+        if (!data.site || !siteMatches(data.site, siteTerm, exact)) continue;
         const component = buildReportComponent(kind, data);
         if (component) components.push(component);
       }
@@ -501,8 +513,8 @@ function classifyFreshness(lastSeenIso) {
   return 'stale';
 }
 
-function buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf) {
-  const devices = allDevices.filter((d) => siteMatches(d.site, siteTerm));
+function buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exact) {
+  const devices = allDevices.filter((d) => siteMatches(d.site, siteTerm, exact));
   // No matching devices -- omit the card entirely rather than show an
   // empty one, same convention loadFileReportComponents() already follows
   // for a site with no report files.
@@ -726,13 +738,18 @@ router.get('/components', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const siteTerm = (req.query.client || '').trim();
   if (!siteTerm) return res.status(400).json({ error: 'Query param "client" is required.' });
+  // The "exact match" checkbox next to the Client / Site field, by
+  // request -- see siteMatches()'s own comment for what this actually
+  // changes (skips matchesWildcard()'s substring/prefix/suffix behaviour
+  // entirely in favour of a real equality check).
+  const exact = req.query.exact === 'true';
   try {
     const asOf = new Date().toISOString();
     // File-based report components are read from disk synchronously, right
     // here, before any live source is even touched -- nothing below this
     // line can ever prevent these from being computed. withTimeout() above
     // is what guarantees they also can't be prevented from being SENT.
-    const components = loadFileReportComponents(siteTerm);
+    const components = loadFileReportComponents(siteTerm, exact);
 
     // TEMPORARILY DISABLED (2026-09-23): the live Autotask ticket-counts
     // component was hitting Autotask's own API rate limit (repeated 429s
@@ -746,7 +763,7 @@ router.get('/components', async (req, res) => {
       if (!dattoRmm.hasDattoCredentials()) return null;
       try {
         const allDevices = await withTimeout(getCachedDattoDevices(req.query.refresh === 'true'), 'Datto RMM devices');
-        return buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf);
+        return buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exact);
       } catch (err) {
         console.error('Meeting Prep: Datto RMM live devices failed:', err.message);
         return null;

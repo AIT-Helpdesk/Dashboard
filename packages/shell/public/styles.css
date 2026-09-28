@@ -659,6 +659,30 @@ a.nav-link.active[href="#start-here"] {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
+  /* Always light in print/PDF, by request ("always do that in light mode
+     even if the screen view is currently in dark mode") -- dashboard-wide,
+     not just Make Report. !important on every one of :root's own theme
+     variables is what actually wins here: an explicit dark choice
+     (:root[data-theme="dark"]) and the system-preference dark block
+     (:root:not([data-theme="light"]) under @media (prefers-color-scheme:
+     dark), both above) each carry higher selector specificity than a bare
+     `:root` rule, so without !important this would lose to either of them
+     rather than override them. Same light values :root's own base
+     (unthemed) block already uses, just restated here so print always
+     gets them regardless of which theme is actually active on screen. */
+  :root {
+    color-scheme: light !important;
+    --bg: #ffffff !important;
+    --fg: #1a1a1a !important;
+    --muted: #6b7280 !important;
+    --border: #e5e7eb !important;
+    --card: #f9fafb !important;
+    --accent: #2563eb !important;
+    --section-header-bg: #eff6ff !important;
+    --row-alt-bg: #fafafb !important;
+    --row-warn-bg: #fef2f3 !important;
+    --row-changed-bg: #f2faf3 !important;
+  }
 }
 
 /* Full screen / focus mode -- hides the sidebar entirely so the current
@@ -7676,6 +7700,27 @@ tr.accrued-time-yellow-row th {
 .mtg-card-original-link:hover {
   color: var(--accent);
   text-decoration: underline;
+}
+/* The "Exact" checkbox next to Client / Site, by request ("nice and
+   close, maybe just 2 or 3 pixels away") -- wrapped in its own span
+   alongside #site-input so this tiny gap is independent of .date-form's
+   own (much larger) 0.5rem gap between its direct children. */
+.mtg-exact-match-wrap {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.mtg-exact-match-label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mtg-exact-match-label input[type="checkbox"] {
+  cursor: pointer;
 }
 /* The intro paragraph under the page header, by request -- explains the
    "cards + pick + preview" model and that Datto RMM is the only source

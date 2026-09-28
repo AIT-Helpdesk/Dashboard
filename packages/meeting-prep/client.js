@@ -50,6 +50,9 @@ export const label = 'Meeting Prep';
 // client/site is searched -- a pick is scoped to whichever client you
 // just searched for, not carried over to a different one.
 let lastSite = '';
+// The "exact match" checkbox next to Client / Site, by request -- same
+// restore-on-remount scope as lastSite above.
+let lastExactMatch = false;
 let lastData = null;
 let selectedIds = new Set();
 let activeComponentId = null;
@@ -94,7 +97,13 @@ export function mount(container) {
       <p id="ingest-status" class="status" hidden></p>
       <form id="filter-form" class="date-form">
         <label for="site-input">Client / Site</label>
-        <input type="text" id="site-input" placeholder="e.g. Acme* (wildcards with *)" required />
+        <span class="mtg-exact-match-wrap">
+          <input type="text" id="site-input" placeholder="e.g. Acme* (wildcards with *)" required />
+          <label for="exact-match-checkbox" class="mtg-exact-match-label" title="Match the site name exactly, instead of a wildcard/substring search">
+            <input type="checkbox" id="exact-match-checkbox" />
+            Exact
+          </label>
+        </span>
         <button type="submit" id="load-button">Find Report Components</button>
       </form>
     </header>
@@ -119,6 +128,7 @@ export function mount(container) {
 
   const form = container.querySelector('#filter-form');
   const siteInput = container.querySelector('#site-input');
+  const exactMatchCheckbox = container.querySelector('#exact-match-checkbox');
   const loadButton = container.querySelector('#load-button');
   const ingestButton = container.querySelector('#ingest-button');
   const ingestStatusEl = container.querySelector('#ingest-status');
@@ -134,10 +144,11 @@ export function mount(container) {
   const detailEl = container.querySelector('#detail');
 
   siteInput.value = lastSite;
+  exactMatchCheckbox.checked = lastExactMatch;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(siteInput.value.trim());
+    load(siteInput.value.trim(), exactMatchCheckbox.checked);
   });
 
   // A toggle, not a one-shot generator -- clicking again while it's showing
@@ -240,7 +251,7 @@ export function mount(container) {
 
   if (lastData) render(lastData);
 
-  async function load(site) {
+  async function load(site, exact) {
     if (!site) return;
     loadButton.disabled = true;
     statusEl.hidden = false;
@@ -253,15 +264,16 @@ export function mount(container) {
     gridEl.innerHTML = '';
     detailEl.innerHTML = '';
     // A genuinely new search -- previous picks don't carry over to a
-    // different client, by design.
-    if (site !== lastSite) {
+    // different client (or a different exact-match setting, which can
+    // just as easily change which components come back), by design.
+    if (site !== lastSite || exact !== lastExactMatch) {
       selectedIds = new Set();
       activeComponentId = null;
       componentOrder = [];
       overviewActiveSite = null;
     }
     try {
-      const params = new URLSearchParams({ client: site });
+      const params = new URLSearchParams({ client: site, exact: exact ? 'true' : 'false' });
       // no-store -- this data is live (device check-ins, ticket counts,
       // whatever's newest in data/), so a repeated search for the same
       // client must always hit the network again rather than risk the
@@ -271,6 +283,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastSite = site;
+      lastExactMatch = exact;
       lastData = data;
       render(data);
     } catch (err) {
