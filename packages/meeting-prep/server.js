@@ -40,6 +40,27 @@ const { runIngest } = require('./ingest.js');
 // component after a re-fetch.
 const { slugify } = require('./slug.js');
 
+// Site-field/search-term matching, tolerant of "&" vs "and" -- confirmed
+// the hard way (INKY's own report text spells the client's name out in
+// full, "G and H Civil Contractors", but the natural habit is to search
+// "G & H" -- matchesWildcard() itself found neither in the other, since
+// it's a plain substring/prefix/suffix matcher with no punctuation
+// normalization at all). matchesWildcard() (@dashboard/autotask-client) is
+// used dashboard-wide for many unrelated kinds of searches, so this
+// normalization is deliberately scoped to Meeting Prep's own site
+// matching (both call sites below) rather than changing that shared
+// utility for every consumer. Applied to BOTH sides -- a real site field
+// can use either spelling just as easily as a search term can.
+function normalizeAmpersand(s) {
+  return (s || '')
+    .replace(/\s*&\s*/g, ' and ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function siteMatches(value, term) {
+  return matchesWildcard(normalizeAmpersand(value), normalizeAmpersand(term));
+}
+
 // --------------------------------------------------------------------------
 // File-based report components -- Datto RMM's own Report Center/Analytics
 // has no REST API at all (confirmed against Datto's own docs), so these
@@ -352,7 +373,7 @@ function loadFileReportComponents(siteTerm) {
         // so if its newest run doesn't match the search term, no older
         // run of the same kind should surface either.
         seenKinds.add(kind);
-        if (!data.site || !matchesWildcard(data.site, siteTerm)) continue;
+        if (!data.site || !siteMatches(data.site, siteTerm)) continue;
         const component = buildReportComponent(kind, data);
         if (component) components.push(component);
       }
@@ -481,7 +502,7 @@ function classifyFreshness(lastSeenIso) {
 }
 
 function buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf) {
-  const devices = allDevices.filter((d) => matchesWildcard(d.site, siteTerm));
+  const devices = allDevices.filter((d) => siteMatches(d.site, siteTerm));
   // No matching devices -- omit the card entirely rather than show an
   // empty one, same convention loadFileReportComponents() already follows
   // for a site with no report files.
