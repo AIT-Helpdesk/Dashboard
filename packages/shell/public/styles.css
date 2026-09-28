@@ -2245,15 +2245,24 @@ h1 {
   letter-spacing: normal;
 }
 
-/* What's On's "Today & Tomorrow" section -- Subscriptions Expiring and My
-   Strety Tasks, each its own .resource-group card, stacking to one column
-   on narrow viewports same as this dashboard's other multi-column
-   layouts. Two columns, not three -- Service Calls moved out to its own
-   top-level section above (.wo-top-row, by request), so this class'
-   own grid only ever needs to fit the two remaining columns now. */
+/* What's On's "Today & Tomorrow" section -- three columns, each its own
+   .resource-group card, stacking to one column on narrow viewports same
+   as this dashboard's other multi-column layouts. Back to three, by
+   request ("go back to a 3 column layout") -- Service Calls stays in its
+   own top-level section above (.wo-top-row), and this third column is a
+   new one (Time Zones' digital clocks, client.js's own clockColumnHtml())
+   rather than Service Calls returning. Time Zones is `max-content`, by
+   request ("make the clock width fit and the column width fit the
+   clocks") -- sized to its own widest tile's natural width (see
+   .wo-clock-tile/.wo-clock-list, styles.css below) rather than a forced
+   fraction of the row, so it never carries empty padding wider than its
+   digital clocks actually need. Subscriptions Expiring/My Strety Tasks
+   are `1fr 1fr`, by request ("use 50% each of the remaining space for
+   cols 2 & 3") -- an even split of whatever width Time Zones didn't
+   claim. */
 .tt-columns {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: max-content 1fr 1fr;
   gap: 1rem;
 }
 @media (max-width: 900px) {
@@ -2454,6 +2463,55 @@ h1 {
 .tt-time {
   color: var(--muted);
   font-size: 0.85rem;
+}
+/* Today & Tomorrow's Time Zones column (client.js's own clockColumnHtml()) --
+   not .tt-list (no "today/tomorrow" tags, no 15rem scroll cap needed for a
+   fixed 5-tile list); each <li> is its own "digital clock widget", by
+   request -- a small dark LED-style screen, deliberately the same look in
+   both light and dark dashboard theme (a real bedside digital clock
+   doesn't re-skin itself either), not tied to --card/--border. */
+.wo-clock-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.wo-clock-tile {
+  background: #0b1210;
+  border: 1px solid #1e3a2c;
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.6rem 0.5rem;
+  text-align: center;
+}
+/* Monospace + tabular-nums so HH:MM lines up digit-for-digit as it ticks,
+   rather than the digits jittering left/right every few seconds in a
+   proportional font. Green LED glow (text-shadow), the classic digital-
+   clock face colour. */
+.wo-clock-time {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #3ef07f;
+  text-shadow: 0 0 6px rgba(62, 240, 127, 0.55);
+}
+/* The zone's own label ("QLD"/"NSW"/etc.) plus its live TZ variance from
+   QLD (client.js's own tzOffsetMinutes()/formatVariance()), by request --
+   dimmer than the time itself so the HH:MM stays the visual focus of each
+   tile. */
+.wo-clock-meta {
+  margin-top: 0.15rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6fa382;
+}
+.wo-clock-variance {
+  font-variant-numeric: tabular-nums;
 }
 /* By request: My Strety Tasks' own title text sized to match .cell-subtext
    (the muted allocation/subscription-detail line the other two columns

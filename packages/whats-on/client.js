@@ -23,6 +23,39 @@ let lastShiftsData = null;
 // shifts excerpt.
 let lastTodayTomorrowData = null;
 
+// Today & Tomorrow's column 1, by request ("go back to a 3 column layout
+// ... Add into column 1: digital clocks: Timezones: QLD, NSW, WA,
+// Phillipines, Sri Lanka"). Static (no fetch involved) -- rendered fresh by
+// clockColumnHtml() and ticked live by mount()'s own self-cleaning
+// setInterval below.
+const CLOCK_TIMEZONES = [
+  { label: 'QLD', timeZone: 'Australia/Brisbane' },
+  { label: 'NSW', timeZone: 'Australia/Sydney' },
+  { label: 'WA', timeZone: 'Australia/Perth' },
+  { label: 'PHL', timeZone: 'Asia/Manila' },
+  { label: 'SRI', timeZone: 'Asia/Colombo' },
+];
+// QLD (Australia/Brisbane) never runs DST, so it's the fixed reference
+// point every other clock's own "TZ variance from QLD" line
+// (clockColumnHtml()/mount()'s own tick below) is computed against --
+// reads via Intl's own 'shortOffset' (e.g. "GMT+10", "GMT+5:30") rather
+// than a hardcoded UTC offset per zone, so a variance stays correct
+// through any zone's own DST transition without needing its own
+// special-case here.
+function tzOffsetMinutes(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'shortOffset' }).formatToParts(date);
+  const tzName = parts.find((p) => p.type === 'timeZoneName')?.value || 'GMT+0';
+  const m = tzName.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+  if (!m) return 0;
+  const sign = m[1] === '-' ? -1 : 1;
+  return sign * (Number(m[2]) * 60 + Number(m[3] || 0));
+}
+function formatVariance(diffMinutes) {
+  const sign = diffMinutes < 0 ? '-' : '+';
+  const abs = Math.abs(diffMinutes);
+  return `${sign}${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, '0')}`;
+}
+
 // The real ServiceCalls.status picklist (see GET /api/service-calls/statuses
 // in that page's own server.js for the full "why"/live-vs-stale story),
 // fetched ONCE per page load (see fetchServiceCallStatusOptions() below)
@@ -287,6 +320,33 @@ export function mount(container) {
   const ttStatusEl = container.querySelector('#tt-status');
   const ttColumnsEl = container.querySelector('#tt-columns');
 
+  // Ticks every few seconds, updating each clock's displayed HH:MM and its
+  // "variance from QLD" line in place. Self-cleaning (stops itself the
+  // moment this page's own container leaves the DOM -- navigating away, or
+  // a Rotate swap) rather than needing an explicit unmount hook, which this
+  // dashboard's page lifecycle doesn't have. Re-queries the DOM every tick
+  // rather than caching the elements, since renderTodayTomorrow() below
+  // tears down and rebuilds #tt-columns (and this clock column with it) on
+  // every load/refresh. No seconds shown, by request, so a 5s tick is
+  // frequent enough to always be within a minute of correct.
+  const clockTickInterval = setInterval(() => {
+    if (!container.isConnected) {
+      clearInterval(clockTickInterval);
+      return;
+    }
+    const now = new Date();
+    const qldOffset = tzOffsetMinutes(now, 'Australia/Brisbane');
+    container.querySelectorAll('.wo-clock-tile').forEach((tile) => {
+      const tz = tile.dataset.tz;
+      const timeEl = tile.querySelector('.wo-clock-time');
+      if (timeEl) {
+        timeEl.textContent = now.toLocaleTimeString('en-AU', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+      }
+      const varianceEl = tile.querySelector('.wo-clock-variance');
+      if (varianceEl) varianceEl.textContent = formatVariance(tzOffsetMinutes(now, tz) - qldOffset);
+    });
+  }, 5000);
+
   const shiftsPrevButton = container.querySelector('#shifts-prev-button');
   const shiftsNextButton = container.querySelector('#shifts-next-button');
   const shiftsTodayButton = container.querySelector('#shifts-today-button');
@@ -529,6 +589,11 @@ export function mount(container) {
     // very first paint, where Service Calls renders its real content
     // before any scorecards resize event has necessarily fired yet.
     syncServiceCallsHeight();
+    // Column 1 -- static digital clocks, by request ("go back to a 3
+    // column layout ... Add into column 1: digital clocks"). Appended
+    // first so it lands leftmost; Subscriptions Expiring/My Strety Tasks
+    // (columns 2 & 3) follow below exactly as before.
+    ttColumnsEl.appendChild(clockColumnHtml());
     ttColumnsEl.appendChild(
       ttColumn(
         'Subscriptions Expiring',
@@ -564,6 +629,29 @@ export function mount(container) {
         { href: '#my-strety-tasks', label: 'Show All of My Strety Tasks' }
       )
     );
+  }
+
+  // Column 1's card -- static, no fetch/error/empty states to account for
+  // (unlike ttColumn() below), just CLOCK_TIMEZONES rendered once per
+  // render and ticked live by mount()'s own setInterval, which updates
+  // each .wo-clock-time span in place by its data-tz attribute.
+  function clockColumnHtml() {
+    // Each <li> is its own digital-clock-widget tile (styles.css's own
+    // .wo-clock-tile), by request -- big HH:MM "display", then the
+    // zone's own label + its live TZ variance from QLD underneath (both
+    // filled in immediately below by mount()'s own tick, not left at
+    // these placeholders).
+    const tiles = CLOCK_TIMEZONES.map(
+      (tz) => `
+        <li class="wo-clock-tile" data-tz="${escapeHtml(tz.timeZone)}">
+          <div class="wo-clock-time">--:--</div>
+          <div class="wo-clock-meta">${escapeHtml(tz.label)} <span class="wo-clock-variance">+0:00</span></div>
+        </li>`
+    ).join('');
+    const div = document.createElement('div');
+    div.className = 'resource-group tt-column';
+    div.innerHTML = `<div class="section-heading tt-column-heading"><span>Time Zones</span></div><div class="tt-column-body"><ul class="wo-clock-list">${tiles}</ul></div>`;
+    return div;
   }
 
   // One column's card -- shared shell for all three (heading, then either
