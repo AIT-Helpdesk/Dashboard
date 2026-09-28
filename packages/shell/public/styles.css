@@ -7752,6 +7752,25 @@ tr.accrued-time-yellow-row th {
   border-top: none;
   padding-top: 0;
 }
+/* Make Report's own Tab Mode (report/client.js's own applyMode()) -- only
+   one section is ever visible at a time there, so the divider line
+   .mtg-report-section's own border-top/padding-top adds between STACKED
+   sections (Page Mode) would otherwise show above whichever section
+   happens to be the current tab, not just the first one. */
+.mtg-overview-panel--tabs .mtg-report-section {
+  border-top: none;
+  padding-top: 0;
+}
+/* Printing always shows every section regardless of which one Tab Mode
+   currently has open on screen, by request ("Page Mode will be as the
+   report is now" -- i.e. the PDF itself never changes based on which
+   screen mode was active when Export to PDF was clicked). Beats the
+   browser's own default `[hidden] { display: none }` rule. */
+@media print {
+  .mtg-report-section[hidden] {
+    display: block !important;
+  }
+}
 .mtg-overview-panel .mtg-report-section--compact {
   flex: 0 1 auto;
   border: 1px solid var(--border);
@@ -7767,31 +7786,37 @@ tr.accrued-time-yellow-row th {
   gap: 0.5rem;
 }
 
-/* Make Report's own Ambient IT letterhead, by request -- shown both on
-   screen and in the exported PDF (no .no-print/@media print override), a
-   real page header rather than dashboard chrome. Full width of the page
-   content column, height auto so the source image's own aspect ratio is
-   preserved regardless of how wide that column actually is. */
-.mtg-report-letterhead {
-  display: block;
-  width: 100%;
-  height: auto;
-  margin-bottom: 1.5rem;
-}
-
-/* Make Report (packages/report) -- the top-right "As of" date (page title
-   removed entirely, by request) plus the Export to PDF button beside it.
-   margin-left: auto on .mtg-report-asof, not justify-content: space-between
-   on the row -- keeps the date pinned right even once the button itself is
+/* Make Report (packages/report) -- Export to PDF/mode-toggle buttons on
+   the left, the Ambient IT logo + "As of" date grouped top-right, by
+   request ("can you put the Ambient IT Logo top right?"). margin-left:
+   auto on .mtg-report-topbar-right, not justify-content: space-between on
+   the row -- keeps that group pinned right even once both buttons are
    gone (display: none in print, further down), where space-between would
-   otherwise snap the one remaining child back to the left. */
+   otherwise snap the one remaining child back to the left. The logo
+   itself shows in print too, by request ("let's do that on the pdf as
+   well") -- the only Ambient IT branding on the exported PDF now that
+   the separate letterhead banner is gone (by later request, "remove the
+   image at the top of the pdf"), same as on screen. */
 .mtg-report-topbar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 1rem;
 }
+.mtg-report-topbar-right {
+  margin-left: auto;
+  text-align: right;
+}
+.mtg-report-logo {
+  display: block;
+  /* 100% bigger than its original 2rem, by request -- logo.png is 600x137
+     natively, so even at 4rem tall (~280px wide) this is still well
+     within its real resolution, not upscaled past source quality. */
+  height: 4rem;
+  width: auto;
+  margin-left: auto;
+}
 .mtg-report-asof {
-  margin: 0 0 0 auto;
+  margin: 0.35rem 0 0;
   color: var(--muted);
   font-size: 0.85rem;
 }
@@ -7809,6 +7834,53 @@ tr.accrued-time-yellow-row th {
 .mtg-report-notes h2 {
   font-size: 1.1rem;
   margin: 0 0 0.75rem;
+}
+/* Make Report's own Tab Mode strip (report/client.js's own buildTabStrip()),
+   by request ("make the tabs look more like tabs, particularly more
+   noticeable") -- a bolder, bordered tab-bar look rather than Meeting
+   Prep's own subtler underline-style .mtg-overview-tab (that page's per-
+   site tabs are a secondary, occasional affordance; here the tab strip IS
+   the page's main navigation, so it earns more visual weight). Own
+   dedicated classes, not a reuse/override of .mtg-overview-tab -- changing
+   that shared class would also change Meeting Prep's own tabs, not asked
+   for. The strip's own border-bottom is grey (var(--border)), not the
+   accent blue, and no tab overlaps it (no negative margin-bottom trick,
+   removed after "the blue line under the tabs is partly covered by the
+   tabs and looks weird") -- every tab sits cleanly ABOVE the line, so it
+   reads as one unbroken rule all the way across, active tab included. */
+.mtg-report-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.3rem;
+  border-bottom: 2px solid var(--border);
+  margin: 0.5rem 0 1.25rem;
+}
+.mtg-report-tab {
+  appearance: none;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 0.55rem 1rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.mtg-report-tab:hover {
+  color: var(--fg);
+  background: var(--section-header-bg);
+}
+.mtg-report-tab--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.mtg-report-tab--active:hover {
+  background: var(--accent);
+  color: #fff;
 }
 /* "Show full table data (Appendix N)" -- a real #anchor link to that
    section's own appendix (see report/client.js's own reportSectionHtml()).

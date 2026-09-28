@@ -50,34 +50,61 @@ import { computeFindings } from '/meeting-prep-recommendations.js';
 import { loadSelection, onSelectionChange } from '/meeting-prep-selection.js';
 
 // Client-facing labels only, by request ("Remove the mentions of Datto on
-// headings and links eg. RMM Report and RMM Live") -- Meeting Prep's own
-// cards/headings keep their real component.source values ("Datto RMM
-// Report", "Datto RMM (live)" -- meeting-prep/server.js's own
+// headings and links eg. RMM Report and RMM Live", then "leave the word
+// INKY out of the report, screen and pdf") -- Meeting Prep's own cards/
+// headings keep their real component.source values ("Datto RMM Report",
+// "Datto RMM (live)", "INKY" -- meeting-prep/server.js's own
 // REPORT_SOURCES/buildDattoLiveDevicesComponent()), scoped to this page
 // only since Amber's own working view has no reason to hide which vendor
-// system a report came from.
+// system a report came from. INKY's own source value is the WHOLE string
+// (not a prefix like "Datto "), so stripping it can leave nothing at all
+// -- reportHeading() below drops the "<source> -- " part entirely rather
+// than showing a bare " -- " when that happens.
 function clientFacingSource(source) {
-  return (source || '').replace(/^Datto\s+/i, '').replace(/\(live\)/i, 'Live');
+  return (source || '')
+    .replace(/^Datto\s+/i, '')
+    .replace(/\(live\)/i, 'Live')
+    .replace(/^INKY$/i, '')
+    .trim();
+}
+
+// "<source> -- <title>" everywhere on this page a component gets a
+// heading/back-link label -- built in one place so the "no source left
+// after stripping" case (INKY) only has to be handled once.
+function reportHeading(c) {
+  const source = clientFacingSource(c.source);
+  return source ? `${escapeHtml(source)} -- ${escapeHtml(c.title)}` : escapeHtml(c.title);
 }
 
 export const id = 'report';
 export const label = 'Make Report';
 
 export function mount(container) {
-  // Ambient IT letterhead, by request ("use this image as a page header
-  // for the report ... On the Make Report page and on the PDF") --
-  // served from shell/public (same convention as logo.png/favicon.png), a
-  // straight copy of Amber's own supplied file, not regenerated or
-  // resized. Outside #report-content, not rebuilt by render() -- a page
-  // header, shown regardless of whether there's a selection to display
-  // yet.
+  // The Ambient IT letterhead banner that used to sit here (first shown
+  // on both screen and PDF, then PDF-only) is gone entirely, by request
+  // ("remove the image at the top of the pdf") -- the plain logo in
+  // render()'s own topbar (top-right, both screen and print) is the only
+  // Ambient IT branding on this page now.
   container.innerHTML = `
-    <img src="/report-letterhead.png" alt="Ambient IT" class="mtg-report-letterhead" />
     <p id="report-status" class="status">Nothing selected yet. Tick components on Meeting Prep to have them appear here.</p>
     <div id="report-content"></div>
   `;
   const statusEl = container.querySelector('#report-status');
   const contentEl = container.querySelector('#report-content');
+
+  // Tab Mode (one section visible at a time, a tab strip under Report
+  // Notes) vs Page Mode (everything flowing down, unchanged from before
+  // this feature) -- by request. Default Tab Mode on every fresh open of
+  // this page; switching to Page Mode mid-session sticks across a live
+  // selection update (see onSelectionChange() below) but resets back to
+  // Tab Mode the next time this page is mounted, same "in-memory only,
+  // nothing persisted" scope Meeting Prep's own tick/order state uses.
+  // Printing/exporting is NOT affected by either mode -- styles.css's own
+  // @media print rules force every section visible regardless, so the PDF
+  // always reads like Page Mode, by request ("Page Mode will be as the
+  // report is now").
+  let reportMode = 'tabs';
+  let activeSectionIndex = 0;
 
   // A section's own on-page id (jumped to FROM its appendix's back-links),
   // index-based since a component's own `id` field can contain characters
@@ -100,7 +127,7 @@ export function mount(container) {
     const widgets = widgetsHtmlForComponent(c);
     const table = fullTableHtmlForComponent(c);
     const compact = !widgets;
-    const heading = `${escapeHtml(clientFacingSource(c.source))} -- ${escapeHtml(c.title)}`;
+    const heading = reportHeading(c);
     let tableBlock = '';
     if (table) {
       const appendixNum = appendixNumberById.get(c.id);
@@ -115,7 +142,7 @@ export function mount(container) {
         <p class="mtg-report-appendix-link"><a href="#${appendixAnchorId(appendixNum)}">Show full table data (Appendix ${appendixNum})</a></p>`;
     }
     return `
-      <div id="${sectionAnchorId(i)}" class="mtg-report-section${compact ? ' mtg-report-section--compact' : ''}">
+      <div id="${sectionAnchorId(i)}" class="mtg-report-section${compact ? ' mtg-report-section--compact' : ''}" data-section-index="${i}">
         <h3>${heading}</h3>
         ${widgets}
         ${tableBlock}
@@ -133,7 +160,7 @@ export function mount(container) {
   // where you were.
   function reportAppendixHtml(c, appendixNum, sectionAnchorById) {
     const table = fullTableHtmlForComponent(c);
-    const sourceTitle = `${escapeHtml(clientFacingSource(c.source))} -- ${escapeHtml(c.title)}`;
+    const sourceTitle = reportHeading(c);
     const heading = `Appendix ${appendixNum}: ${sourceTitle}`;
     const backLink = `<p class="mtg-report-appendix-nav"><a href="#${sectionAnchorById.get(c.id)}">&uarr; Back to ${sourceTitle}</a></p>`;
     return `
@@ -172,6 +199,64 @@ export function mount(container) {
       </div>`;
   }
 
+  // One tab per ticked section, by request. Own dedicated classes
+  // (.mtg-report-tab*, styles.css), not Meeting Prep's own subtler
+  // .mtg-overview-tab site-tabs -- by request ("make the tabs look more
+  // like tabs, particularly more noticeable"), a bolder tab-bar look that
+  // would be too heavy for Meeting Prep's own smaller per-site strip, so
+  // this page gets its own look rather than reusing/changing that shared
+  // class. Tab label is just the title -- NOT reportHeading()'s own
+  // "<source> -- <title>" the section's on-page heading uses, by request
+  // ("remove the '<something> --' from the tab names. The part following
+  // is enough").
+  function reportTabLabel(c) {
+    return escapeHtml(c.title);
+  }
+
+  function buildTabStrip(selected) {
+    const tabsEl = contentEl.querySelector('#report-tabs');
+    if (!tabsEl) return;
+    if (activeSectionIndex >= selected.length) activeSectionIndex = 0;
+    tabsEl.innerHTML = selected
+      .map(
+        (c, i) =>
+          `<button type="button" class="mtg-report-tab${i === activeSectionIndex ? ' mtg-report-tab--active' : ''}" data-section-index="${i}">${reportTabLabel(c)}</button>`
+      )
+      .join('');
+    tabsEl.querySelectorAll('.mtg-report-tab').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        activeSectionIndex = Number(btn.dataset.sectionIndex);
+        applyMode();
+      });
+    });
+  }
+
+  // Shows/hides sections per the current mode -- plain `hidden` on each
+  // section element (not a CSS class), same "toggle via el.hidden, not
+  // style.display" convention this dashboard uses everywhere else. Print
+  // ignores this entirely (styles.css's own @media print rule un-hides
+  // every section), so switching modes never changes what a PDF export
+  // looks like.
+  function applyMode() {
+    const tabsEl = contentEl.querySelector('#report-tabs');
+    const sectionsEl = contentEl.querySelector('#report-sections');
+    const modeToggle = contentEl.querySelector('#report-mode-toggle');
+    if (!sectionsEl) return;
+    const sectionEls = [...sectionsEl.querySelectorAll('.mtg-report-section')];
+    const inTabs = reportMode === 'tabs';
+    if (tabsEl) tabsEl.hidden = !inTabs;
+    sectionsEl.classList.toggle('mtg-overview-panel--tabs', inTabs);
+    sectionEls.forEach((el) => {
+      el.hidden = inTabs && Number(el.dataset.sectionIndex) !== activeSectionIndex;
+    });
+    if (tabsEl) {
+      tabsEl.querySelectorAll('.mtg-report-tab').forEach((btn) => {
+        btn.classList.toggle('mtg-report-tab--active', Number(btn.dataset.sectionIndex) === activeSectionIndex);
+      });
+    }
+    if (modeToggle) modeToggle.textContent = inTabs ? 'Page Mode' : 'Tab Mode';
+  }
+
   function render(selection) {
     const selected = (selection && selection.selectedComponents) || [];
     if (selected.length === 0) {
@@ -202,10 +287,15 @@ export function mount(container) {
     contentEl.innerHTML = `
       <div class="mtg-report-topbar">
         <button type="button" id="report-print-button" class="button-link button-link--small no-print">Export to PDF</button>
-        <p class="mtg-report-asof">As of ${escapeHtml(formatDateTime(selection.asOf))}</p>
+        <button type="button" id="report-mode-toggle" class="button-link button-link--small no-print"></button>
+        <div class="mtg-report-topbar-right">
+          <img src="/logo.png" alt="Ambient IT" class="mtg-report-logo" />
+          <p class="mtg-report-asof">As of ${escapeHtml(formatDateTime(selection.asOf))}</p>
+        </div>
       </div>
       ${reportNotes}
-      <div class="mtg-overview-panel">${sections}</div>
+      <div class="mtg-report-tabs no-print" id="report-tabs"></div>
+      <div class="mtg-overview-panel" id="report-sections">${sections}</div>
       ${appendices}
     `;
     wireDeviceFilters(contentEl);
@@ -215,6 +305,12 @@ export function mount(container) {
     // .no-print button included) handle what the resulting document looks
     // like.
     contentEl.querySelector('#report-print-button').addEventListener('click', () => window.print());
+    contentEl.querySelector('#report-mode-toggle').addEventListener('click', () => {
+      reportMode = reportMode === 'tabs' ? 'page' : 'tabs';
+      applyMode();
+    });
+    buildTabStrip(selected);
+    applyMode();
   }
 
   render(loadSelection());
