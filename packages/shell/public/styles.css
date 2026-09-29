@@ -7722,6 +7722,53 @@ tr.accrued-time-yellow-row th {
 .mtg-exact-match-label input[type="checkbox"] {
   cursor: pointer;
 }
+/* Classification selector's own <select>, by request -- same look as
+   every other .date-form control (border/radius/background from the theme
+   vars), just given its own class so it isn't accidentally caught by a
+   more specific selector meant for one of this page's other inputs. */
+#classification-select {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.9rem;
+}
+/* The client-picker dropdown and the free-text Client / Site field, boxed
+   together with a bold OR between them, by request ("Put a box around the
+   client selector dropdown and the Client Site filter... with a bold OR
+   between them") -- makes it visually obvious the two are alternatives for
+   the same thing, not two separate filters applied together. */
+.mtg-client-picker-box {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mtg-client-picker-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.mtg-client-picker-field label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.mtg-client-picker-field input[type="text"] {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.95rem;
+}
+.mtg-client-picker-or {
+  font-weight: 700;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
 /* The intro paragraph under the page header, by request -- explains the
    "cards + pick + preview" model and that Datto RMM is the only source
    wired in so far, right where a first-time visitor will actually read it. */
@@ -7816,6 +7863,58 @@ tr.accrued-time-yellow-row th {
     display: block !important;
   }
 }
+/* "Original File" on Make Report -- Tab Mode only, by request ("Display
+   this in Tab View only and do not include in the PDF"): hidden by
+   default (covers Page Mode), shown only while #report-sections carries
+   the Tab Mode class below, forced hidden again in print regardless of
+   which screen mode was active when Export to PDF was clicked (the class
+   itself is a plain DOM class, not reset for printing, so without this
+   override it would still show up in an exported PDF taken while Tab
+   Mode was active on screen). Same understated look as Meeting Prep's own
+   .mtg-card-original-link, not a literal reuse of that class (page-
+   specific display rules on top of it here). */
+.mtg-report-original-link {
+  display: none;
+  margin-top: 0.5rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-decoration: none;
+}
+.mtg-overview-panel--tabs .mtg-report-original-link {
+  display: block;
+}
+.mtg-report-original-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+@media print {
+  .mtg-report-original-link {
+    display: none !important;
+  }
+}
+/* Original File sits on the same line as "Show full table data" (the
+   <details> toggle, or the raw RMM Live device list, whichever
+   reportSectionHtml() put in .mtg-report-table-row-content), by request
+   ("on the same line next to the 'Show full table data' instead of below
+   it") -- align-items: flex-start keeps Original File pinned to the top
+   of the row rather than stretching/centering against however tall an
+   EXPANDED <details> body happens to be. .mtg-report-table-row-content
+   gets flex: 1 so a wide expanded table still gets the row's full width
+   to work with (Original File itself stays a fixed-width link, never
+   shrinking to make room). */
+.mtg-report-table-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+.mtg-report-table-row-content {
+  flex: 1;
+  min-width: 0;
+}
+.mtg-report-table-row .mtg-report-original-link {
+  flex: 0 0 auto;
+  margin-top: 0.3rem;
+}
 .mtg-overview-panel .mtg-report-section--compact {
   flex: 0 1 auto;
   border: 1px solid var(--border);
@@ -7900,6 +7999,32 @@ tr.accrued-time-yellow-row th {
   gap: 0.3rem;
   border-bottom: 2px solid var(--border);
   margin: 0.5rem 0 1.25rem;
+}
+/* Beats this class' own display: flex above -- confirmed the real cause
+   of a real bug ("Remove the tabs when in Page Mode" not actually doing
+   anything): the browser's default [hidden] { display: none } rule loses
+   to ANY author stylesheet rule of equal-or-lower specificity, so setting
+   .hidden = true on this element in JS (report/client.js's own
+   applyMode()) had no visible effect at all without this override. */
+.mtg-report-tabs[hidden] {
+  display: none;
+}
+/* The plain grey rule shown in Page Mode where the tab strip sits in Tab
+   Mode, by request -- exactly the inverse visibility of .mtg-report-tabs
+   above (report/client.js's own applyMode() toggles each one's `hidden`
+   opposite to the other), so that seam between Report Notes and the
+   sections below always has something marking it. Explicit [hidden]
+   override kept here too even though nothing above sets display on the
+   bare selector (an <hr> already defaults to block, unlike
+   .mtg-report-tabs's own display: flex) -- cheap insurance against the
+   exact bug that rule needed fixing for. */
+.mtg-report-page-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.5rem 0 1.25rem;
+}
+.mtg-report-page-divider[hidden] {
+  display: none;
 }
 .mtg-report-tab {
   appearance: none;

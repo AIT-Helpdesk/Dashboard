@@ -94,13 +94,19 @@ export function overviewSectionHtml(c) {
 
 // Same 4-tier colour scale on every score in these reports (>=90 good,
 // 70-89 ok, 50-69 warn, below that bad) so a TAM can tell at a glance
-// which section of which report actually needs discussing.
-export function scoreBadge(score) {
+// which section of which report actually needs discussing. `capAtWarn`
+// (opt-in, by request) never lets the tier reach "bad" (red) -- used only
+// for Patch Management/Software Management on Executive Summary's own
+// gauge widget, where a low score reads as "still being worked through"
+// rather than a hard failure, same reasoning execSummaryStatusLabel()
+// below applies to that report's "Not Compliant" donut-legend label.
+export function scoreBadge(score, { capAtWarn = false } = {}) {
   if (score === null || score === undefined) return '';
   let tier = 'bad';
   if (score >= 90) tier = 'good';
   else if (score >= 70) tier = 'ok';
   else if (score >= 50) tier = 'warn';
+  if (capAtWarn && tier === 'bad') tier = 'warn';
   return `<span class="mtg-score-badge mtg-score-badge--${tier}">${score}%</span>`;
 }
 
@@ -283,21 +289,45 @@ export function compareBarsWidget(title, items) {
 // different ones in different places") -- whichever shape actually suits
 // that report's own numbers, not one uniform layout forced onto all 6.
 
+// Executive Summary's own "Not Compliant"/"Non Compliant" agent-status
+// label, by request -- reworded to "In Progress" (a low Patch/Software
+// Management score reads as something actively being remediated, not a
+// fixed hard failure) wherever it shows as a donut-legend or table-row
+// label. Purely a display-layer rename -- the underlying parsed data
+// (executive-summary.json's own legend keys) is untouched, so this has to
+// run at every point that data gets rendered as text (both
+// executiveSummaryWidgetsHtml's donut legends below and
+// executiveSummaryHtml's own plain-table legend rows).
+function execSummaryStatusLabel(label) {
+  return /^(not|non)\s*compliant$/i.test((label || '').trim()) ? 'In Progress' : label;
+}
+
 export function executiveSummaryWidgetsHtml(component) {
   const summarySection = component.sections.find((s) => s.kind === 'summary') || { overallScore: null, services: {} };
+  // Patch Management/Software Management never show red on the gauge (1st
+  // widget) here, by request -- capped at orange (scoreBadge's own "warn"
+  // tier) instead, same "reads as in-progress, not a hard failure"
+  // reasoning as execSummaryStatusLabel() above. Every other service in
+  // this list (Antivirus, Monitoring, Asset Management, ...) keeps the
+  // normal red-for-a-genuinely-bad-score behaviour, unchanged.
+  const CAP_AT_WARN_SERVICES = new Set(['Patch Management', 'Software Management']);
   const gauge = `
     <div class="mtg-widget mtg-widget--gauge">
       ${gaugeSvg(summarySection.overallScore)}
       <div class="mtg-gauge-services">
         ${Object.entries(summarySection.services || {})
-          .map(([name, score]) => `<span class="mtg-mini-score">${escapeHtml(name)} ${scoreBadge(score)}</span>`)
+          .map(([name, score]) => `<span class="mtg-mini-score">${escapeHtml(name)} ${scoreBadge(score, { capAtWarn: CAP_AT_WARN_SERVICES.has(name) })}</span>`)
           .join('')}
       </div>
     </div>
   `;
   // Same legend labels genuinely repeat across Patch/Software/Antivirus
   // (validated against the real report -- see executiveSummaryHtml's own
-  // comment on this), so one colour map covers all three donuts.
+  // comment on this), so one colour map covers all three donuts. Keyed by
+  // the ORIGINAL "Not Compliant" label (not the renamed "In Progress" --
+  // see execSummaryStatusLabel(), applied separately below only to what's
+  // actually displayed) since this is also how d.legend's own real keys
+  // read.
   const donutColors = {
     'Fully Patched': '#16a34a',
     'Running and Up to Date': '#16a34a',
@@ -307,7 +337,10 @@ export function executiveSummaryWidgetsHtml(component) {
     'Not up to date': '#f59e0b',
     'Reboot Required': '#dc2626',
     'Not Running': '#dc2626',
-    'Not Compliant': '#dc2626',
+    // Orange, not red, by request -- reads as "still being worked
+    // through" (paired with the "In Progress" rename above), not a fixed
+    // hard failure the way Reboot Required/Not Running still are.
+    'Not Compliant': '#f59e0b',
     'No Data': '#7f1d1d',
     'Not Detected': '#7f1d1d',
     'No Policy': '#9aa3af',
@@ -333,7 +366,7 @@ export function executiveSummaryWidgetsHtml(component) {
     for (const who of ['server', 'workstation']) {
       const d = section[who];
       if (!d || d.total === 0) continue;
-      const segments = Object.entries(d.legend || {}).map(([label, value]) => ({ label, value, color: donutColors[label] || '#9aa3af' }));
+      const segments = Object.entries(d.legend || {}).map(([label, value]) => ({ label: execSummaryStatusLabel(label), value, color: donutColors[label] || '#9aa3af' }));
       const whoLabel = who === 'server' ? 'Server' : 'Workstation';
       donuts.push(donutWidget(`${escapeHtml(section.title)} (${whoLabel}, ${d.score}%)`, segments, d.total));
     }
@@ -818,7 +851,7 @@ export function executiveSummaryHtml(component) {
           const d = section[who];
           if (!d || d.total === 0) return '';
           const legendRows = Object.entries(d.legend || {})
-            .map(([label, count]) => `<tr><td>${escapeHtml(label)}</td><td>${count}</td></tr>`)
+            .map(([label, count]) => `<tr><td>${escapeHtml(execSummaryStatusLabel(label))}</td><td>${count}</td></tr>`)
             .join('');
           return `
             <p class="inline-subtext mtg-report-subhead">${who === 'server' ? 'Server' : 'Workstation'} (${d.total} device${d.total === 1 ? '' : 's'}, ${scoreBadge(d.score)})</p>

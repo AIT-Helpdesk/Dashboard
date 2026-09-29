@@ -1891,10 +1891,41 @@ function renderRootDropZone() {
   return li;
 }
 
+// A page's own URL directives (e.g. "?fullscreen") can ride along AFTER
+// the hash ("#report?fullscreen"), not just before it the way ?rotate=on
+// already does (that one reads window.location.search, which only ever
+// covers the part BEFORE the hash) -- by request ("/#report?fullscreen").
+// Splits "<pageId>?<query>" on the first "?"; a hash with no "?" at all
+// (the normal case) just gets an empty query back.
+function parseHashRoute() {
+  const raw = window.location.hash.replace(/^#/, '');
+  const qIndex = raw.indexOf('?');
+  if (qIndex === -1) return { pageId: raw, query: new URLSearchParams() };
+  return { pageId: raw.slice(0, qIndex), query: new URLSearchParams(raw.slice(qIndex + 1)) };
+}
+
 function currentPageId() {
-  const hash = window.location.hash.replace(/^#/, '');
+  const { pageId } = parseHashRoute();
   const ids = flattenPageIds();
-  return ids.includes(hash) ? hash : ids[0];
+  return ids.includes(pageId) ? pageId : ids[0];
+}
+
+// Auto-enters Full Screen (Focus Mode -- hides the sidebar, same as the
+// button) on load, dashboard-wide (any page, same "not page-specific"
+// scope ?rotate=on already has), by request. Bare presence is enough
+// ("?fullscreen", no "=value" needed, matching the exact form asked for)
+// -- checked in BOTH the query-before-hash form (?fullscreen#report,
+// window.location.search, same convention ?rotate=on uses) and the
+// query-after-hash form (#report?fullscreen, parseHashRoute()'s own
+// query above) since either is a reasonable way to write this and
+// there's no reason to force just one. Real browser Fullscreen (the
+// F11-equivalent) has the exact same "can't be triggered without a user
+// gesture" limitation maybeAutoStartRotation() already documents -- this
+// only ever gets the sidebar-hidden half, same as that one does.
+function maybeAutoEnterFullScreen() {
+  const { query: hashQuery } = parseHashRoute();
+  const searchQuery = new URLSearchParams(window.location.search);
+  if (hashQuery.has('fullscreen') || searchQuery.has('fullscreen')) setFocusMode(true);
 }
 
 // Auto-enters Mobile View + Full Screen whenever a page that HAS a Mobile
@@ -2085,6 +2116,7 @@ async function init() {
   await loadPage(currentPageId());
   renderUserInfo();
   maybeAutoStartRotation();
+  maybeAutoEnterFullScreen();
   maybeResumeRotationAfterWatchdogReload();
 }
 init();

@@ -1,7 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const { matchesWildcard, getClient, listAll, excludeMonitoringAlerts, getPicklistLabels, resolveSingleCompany, todayAestKey, monthKeysWindow, monthLabel } = require('@dashboard/autotask-client');
+const { matchesWildcard, getClient, listAll, excludeMonitoringAlerts, getPicklistLabels, resolveSingleCompany, resolveCompanyName, todayAestKey, monthKeysWindow, monthLabel } = require('@dashboard/autotask-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 const { runIngest } = require('./ingest.js');
 
@@ -71,6 +71,77 @@ function siteMatches(value, term, exact) {
   const t = normalizeAmpersand(term);
   if (exact) return v.toLowerCase() === t.toLowerCase();
   return matchesWildcard(v, t);
+}
+
+// -- Classification selector -----------------------------------------------
+// Companies.classification (a real Autotask picklist field -- same one
+// @dashboard/classification-summary's own page already reads) -- by
+// request, a selector on this page's own search form narrows both the
+// client-picker dropdown and (see siteInClassification() below) whatever
+// free-text/wildcard search is run, to just companies of one
+// classification. Codes confirmed live against this account
+// (getPicklistLabels(client.companies, 'classification')): 15 = "Tech
+// Cover Elite", 17 = "Tech Cover Essentials" -- hardcoded rather than
+// resolved fresh on every request, since client.js's own selector is
+// built around these exact two values already; a renumbering on the real
+// account would need a code update here regardless of whether the codes
+// were looked up live or not. "Others" means neither of those two
+// (everything else this account's real classification list has --
+// Block Hour Client, Bronze/Platinum Managed Service, T&M, Target,
+// Residential, etc. -- plus Unclassified companies with no classification
+// set at all); "All" (or no classification param) applies no constraint,
+// skipping this whole lookup entirely.
+const TECH_COVER_ELITE_CODE = 15;
+const TECH_COVER_ESSENTIALS_CODE = 17;
+
+// Same CUSTOMER_OR_PROSPECT_TYPES definition classification-summary's own
+// server.js already uses ("clients", not prospects-only or vendors).
+const CUSTOMER_OR_PROSPECT_TYPES = [1, 3];
+const CLASSIFICATION_COMPANIES_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min, same short-lived-external-list convention as this dashboard's other Autotask/Datto caches
+let classificationCompaniesCache = null; // { data: Company[], expiresAt }
+async function fetchActiveCompaniesForClassification(client) {
+  if (classificationCompaniesCache && Date.now() < classificationCompaniesCache.expiresAt) return classificationCompaniesCache.data;
+  const companies = await listAll(client.companies, [
+    { op: 'eq', field: 'isActive', value: true },
+    { op: 'in', field: 'companyType', value: CUSTOMER_OR_PROSPECT_TYPES },
+  ]);
+  classificationCompaniesCache = { data: companies, expiresAt: Date.now() + CLASSIFICATION_COMPANIES_CACHE_TTL_MS };
+  return companies;
+}
+
+// `classification`: '15' | '17' | 'others' -- callers skip this entirely
+// for 'all' (see the /components and /clients routes below), so that
+// value is never passed in here.
+async function getCompaniesForClassification(client, classification) {
+  const companies = await fetchActiveCompaniesForClassification(client);
+  if (classification === 'others') {
+    return companies.filter((c) => c.classification !== TECH_COVER_ELITE_CODE && c.classification !== TECH_COVER_ESSENTIALS_CODE);
+  }
+  const code = Number(classification);
+  return companies.filter((c) => c.classification === code);
+}
+
+// Cross-references a matched report's own `site` (or a live device's
+// `siteName`) against the classification-filtered company name list, by
+// request ("Do honour the Classification Selector" -- applies even when
+// searching by free text/wildcard, not just when a client was picked from
+// the classification-filtered dropdown). `allowedNames` is null when no
+// classification constraint is active ("All") -- every site matches then,
+// same as today. Otherwise this is the SAME normalized substring-both-
+// directions comparison siteMatches() already uses for the free-text
+// field itself -- a real, KNOWN limitation (see this page's own README on
+// "three different naming systems assumed to line up well enough"), not a
+// definitive company-id resolution; good enough to roughly narrow to a
+// classification, not guaranteed airtight against every real naming
+// mismatch across systems.
+function siteInClassification(site, allowedNames) {
+  if (!allowedNames) return true;
+  const normSite = normalizeAmpersand(site || '').toLowerCase();
+  if (!normSite) return false;
+  return allowedNames.some((name) => {
+    const normName = normalizeAmpersand(name).toLowerCase();
+    return normSite === normName || normSite.includes(normName) || normName.includes(normSite);
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -336,7 +407,7 @@ function buildReportComponent(kind, data) {
 // unrelated flat naming scheme, untouched by this) -- skipped here by
 // name, not by "is it a real client", since a client could in principle
 // be named something that only coincidentally isn't "images".
-function loadFileReportComponents(siteTerm, exact) {
+function loadFileReportComponents(siteTerm, exact, allowedNames) {
   let clientDirs;
   try {
     clientDirs = fs
@@ -386,6 +457,7 @@ function loadFileReportComponents(siteTerm, exact) {
         // run of the same kind should surface either.
         seenKinds.add(kind);
         if (!data.site || !siteMatches(data.site, siteTerm, exact)) continue;
+        if (!siteInClassification(data.site, allowedNames)) continue;
         const component = buildReportComponent(kind, data);
         if (component) components.push(component);
       }
@@ -513,8 +585,8 @@ function classifyFreshness(lastSeenIso) {
   return 'stale';
 }
 
-function buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exact) {
-  const devices = allDevices.filter((d) => siteMatches(d.site, siteTerm, exact));
+function buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exact, allowedNames) {
+  const devices = allDevices.filter((d) => siteMatches(d.site, siteTerm, exact) && siteInClassification(d.site, allowedNames));
   // No matching devices -- omit the card entirely rather than show an
   // empty one, same convention loadFileReportComponents() already follows
   // for a site with no report files.
@@ -736,8 +808,12 @@ router.get('/components', async (req, res) => {
   // instead of hitting the network again. Belt-and-braces with the
   // matching `cache: 'no-store'` on the client's own fetch() call.
   res.set('Cache-Control', 'no-store');
-  const siteTerm = (req.query.client || '').trim();
-  if (!siteTerm) return res.status(400).json({ error: 'Query param "client" is required.' });
+  const freeTextSite = (req.query.client || '').trim();
+  const clientId = (req.query.clientId || '').trim();
+  const classification = (req.query.classification || '').trim();
+  if (!freeTextSite && !clientId) {
+    return res.status(400).json({ error: 'Query param "client" or "clientId" is required.' });
+  }
   // The "exact match" checkbox next to the Client / Site field, by
   // request -- see siteMatches()'s own comment for what this actually
   // changes (skips matchesWildcard()'s substring/prefix/suffix behaviour
@@ -745,11 +821,32 @@ router.get('/components', async (req, res) => {
   const exact = req.query.exact === 'true';
   try {
     const asOf = new Date().toISOString();
+    let autotaskClient = null;
+    // Free text wins over the classification-filtered client-picker dropdown
+    // when both are present, by request ("If the existing Client / Site
+    // wildcard selector is entered, use this and ignore the dropdown client
+    // field").
+    let siteTerm = freeTextSite;
+    if (!siteTerm) {
+      autotaskClient = await getClient();
+      siteTerm = await resolveCompanyName(autotaskClient, Number(clientId));
+      if (!siteTerm) return res.status(400).json({ error: 'Unknown clientId.' });
+    }
+
+    // "Do honour the Classification Selector" -- applies to BOTH the
+    // dropdown-picked client and a free-text/wildcard search, per request.
+    let allowedNames = null;
+    if (classification && classification !== 'all') {
+      autotaskClient = autotaskClient || (await getClient());
+      const companies = await getCompaniesForClassification(autotaskClient, classification);
+      allowedNames = companies.map((c) => c.companyName);
+    }
+
     // File-based report components are read from disk synchronously, right
     // here, before any live source is even touched -- nothing below this
     // line can ever prevent these from being computed. withTimeout() above
     // is what guarantees they also can't be prevented from being SENT.
-    const components = loadFileReportComponents(siteTerm, exact);
+    const components = loadFileReportComponents(siteTerm, exact, allowedNames);
 
     // TEMPORARILY DISABLED (2026-09-23): the live Autotask ticket-counts
     // component was hitting Autotask's own API rate limit (repeated 429s
@@ -763,7 +860,7 @@ router.get('/components', async (req, res) => {
       if (!dattoRmm.hasDattoCredentials()) return null;
       try {
         const allDevices = await withTimeout(getCachedDattoDevices(req.query.refresh === 'true'), 'Datto RMM devices');
-        return buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exact);
+        return buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exact, allowedNames);
       } catch (err) {
         console.error('Meeting Prep: Datto RMM live devices failed:', err.message);
         return null;
@@ -773,6 +870,30 @@ router.get('/components', async (req, res) => {
     // const ticketsComponent = ... -- see comment above; disabled for now.
 
     res.json({ connected: true, asOf, siteTerm, components });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Feeds the searchable client-picker dropdown next to the free-text
+// Client / Site field -- names only (no ids the UI doesn't need), sorted,
+// filtered by the same Classification codes /components itself honours.
+// `classification` absent or 'all' returns every active customer/prospect
+// company, matching /components' own "no constraint" behaviour for 'all'.
+router.get('/clients', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const classification = (req.query.classification || '').trim();
+    const client = await getClient();
+    const companies =
+      classification && classification !== 'all'
+        ? await getCompaniesForClassification(client, classification)
+        : await fetchActiveCompaniesForClassification(client);
+    const clients = companies
+      .map((c) => ({ id: c.id, companyName: c.companyName }))
+      .sort((a, b) => a.companyName.localeCompare(b.companyName));
+    res.json({ clients });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

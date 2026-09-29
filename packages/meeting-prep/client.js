@@ -53,6 +53,16 @@ let lastSite = '';
 // The "exact match" checkbox next to Client / Site, by request -- same
 // restore-on-remount scope as lastSite above.
 let lastExactMatch = false;
+// Classification selector + searchable client dropdown, by request ("add a
+// selector for Classification... Next add a searchable dropdown selector
+// of Clients with that Classification"). Codes match server.js's own
+// TECH_COVER_ELITE_CODE/TECH_COVER_ESSENTIALS_CODE ('15'/'17'), plus
+// 'others'/'all' -- default 'TC Elite' ('15'), by request. lastClientId/
+// lastClientName restore the dropdown's own pick on remount, same
+// "restore instantly, reset on a genuinely new search" scope as lastSite.
+let lastClassification = '15';
+let lastClientId = '';
+let lastClientName = '';
 let lastData = null;
 let selectedIds = new Set();
 let activeComponentId = null;
@@ -96,24 +106,34 @@ export function mount(container) {
       </div>
       <p id="ingest-status" class="status" hidden></p>
       <form id="filter-form" class="date-form">
-        <label for="site-input">Client / Site</label>
-        <span class="mtg-exact-match-wrap">
-          <input type="text" id="site-input" placeholder="e.g. Acme* (wildcards with *)" required />
-          <label for="exact-match-checkbox" class="mtg-exact-match-label" title="Match the site name exactly, instead of a wildcard/substring search">
-            <input type="checkbox" id="exact-match-checkbox" />
-            Exact
-          </label>
-        </span>
+        <label for="classification-select">Classification</label>
+        <select id="classification-select">
+          <option value="15">TC Elite</option>
+          <option value="17">TC Essentials</option>
+          <option value="others">Others</option>
+          <option value="all">All</option>
+        </select>
+        <div class="mtg-client-picker-box">
+          <div class="mtg-client-picker-field">
+            <label for="client-dropdown-input">Client</label>
+            <input type="text" id="client-dropdown-input" list="client-datalist" placeholder="Search clients..." autocomplete="off" />
+            <datalist id="client-datalist"></datalist>
+          </div>
+          <div class="mtg-client-picker-or">OR</div>
+          <div class="mtg-client-picker-field">
+            <label for="site-input">Client / Site</label>
+            <span class="mtg-exact-match-wrap">
+              <input type="text" id="site-input" placeholder="e.g. Acme* (wildcards with *)" />
+              <label for="exact-match-checkbox" class="mtg-exact-match-label" title="Match the site name exactly, instead of a wildcard/substring search">
+                <input type="checkbox" id="exact-match-checkbox" />
+                Exact
+              </label>
+            </span>
+          </div>
+        </div>
         <button type="submit" id="load-button">Find Report Components</button>
       </form>
     </header>
-    <p class="inline-subtext mtg-intro">
-      Pulls every reportable chunk of data for one client into selectable cards, so you can pick what to actually
-      bring into the meeting. Built from parsed report files (Datto RMM's Report Center reports, Dark Web
-      Monitoring) matched against the site name in each file, plus a couple of live sources (Datto RMM devices,
-      Autotask ticket counts) fetched fresh on every search -- more systems (SaaS Alerts, INKY) get added the
-      same way as they're wired in.
-    </p>
     <p id="status" class="status">Type a client or site name above to get started.</p>
     <div id="summary" class="summary" hidden></div>
     <div id="recommendations" hidden></div>
@@ -127,6 +147,9 @@ export function mount(container) {
   `;
 
   const form = container.querySelector('#filter-form');
+  const classificationSelect = container.querySelector('#classification-select');
+  const clientDropdownInput = container.querySelector('#client-dropdown-input');
+  const clientDatalist = container.querySelector('#client-datalist');
   const siteInput = container.querySelector('#site-input');
   const exactMatchCheckbox = container.querySelector('#exact-match-checkbox');
   const loadButton = container.querySelector('#load-button');
@@ -145,10 +168,60 @@ export function mount(container) {
 
   siteInput.value = lastSite;
   exactMatchCheckbox.checked = lastExactMatch;
+  classificationSelect.value = lastClassification;
+  clientDropdownInput.value = lastClientName;
+
+  // Name -> id, for whatever the current Classification's client list holds
+  // -- rebuilt every time refreshClientOptions() runs (mount, and again on
+  // every Classification change). The dropdown itself is a plain
+  // <input list> against a <datalist> (no existing searchable-dropdown/
+  // combobox pattern exists anywhere else on this dashboard to reuse --
+  // checked first), which gives free-text-with-suggestions natively; this
+  // map is what turns whatever text ends up in the box back into a real
+  // Autotask company id on submit.
+  let clientNameToId = new Map();
+  async function refreshClientOptions() {
+    try {
+      const params = new URLSearchParams({ classification: classificationSelect.value });
+      const res = await fetch(`/api/meeting-prep/clients?${params.toString()}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      clientNameToId = new Map(data.clients.map((c) => [c.companyName, c.id]));
+      clientDatalist.innerHTML = data.clients.map((c) => `<option value="${escapeHtml(c.companyName)}"></option>`).join('');
+    } catch (err) {
+      console.error('Meeting Prep: failed to load the classification-filtered client list:', err);
+    }
+  }
+  refreshClientOptions();
+  // A new Classification invalidates whatever was picked from the OLD
+  // list (that company may not even belong to the new one) -- cleared
+  // rather than left showing a name that no longer matches its own
+  // dropdown's own options.
+  classificationSelect.addEventListener('change', () => {
+    clientDropdownInput.value = '';
+    refreshClientOptions();
+  });
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(siteInput.value.trim(), exactMatchCheckbox.checked);
+    const siteText = siteInput.value.trim();
+    const classification = classificationSelect.value;
+    // Free text wins over the dropdown when both are present, by request
+    // ("If the existing Client / Site wildcard selector is entered, use
+    // this and ignore the dropdown client field").
+    if (siteText) {
+      load({ site: siteText, exact: exactMatchCheckbox.checked, clientId: '', clientName: '', classification });
+      return;
+    }
+    const pickedName = clientDropdownInput.value.trim();
+    const pickedId = clientNameToId.get(pickedName);
+    if (!pickedName || !pickedId) {
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.textContent = 'Pick a client from the dropdown, or type a Client / Site search term.';
+      return;
+    }
+    load({ site: '', exact: exactMatchCheckbox.checked, clientId: String(pickedId), clientName: pickedName, classification });
   });
 
   // A toggle, not a one-shot generator -- clicking again while it's showing
@@ -251,12 +324,13 @@ export function mount(container) {
 
   if (lastData) render(lastData);
 
-  async function load(site, exact) {
-    if (!site) return;
+  async function load({ site, exact, clientId, clientName, classification }) {
+    if (!site && !clientId) return;
+    const displayTerm = site || clientName;
     loadButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
-    statusEl.textContent = `Loading report components for "${site}"...`;
+    statusEl.textContent = `Loading report components for "${displayTerm}"...`;
     summaryEl.hidden = true;
     summaryButton.hidden = true;
     recommendationsEl.hidden = true;
@@ -264,16 +338,19 @@ export function mount(container) {
     gridEl.innerHTML = '';
     detailEl.innerHTML = '';
     // A genuinely new search -- previous picks don't carry over to a
-    // different client (or a different exact-match setting, which can
-    // just as easily change which components come back), by design.
-    if (site !== lastSite || exact !== lastExactMatch) {
+    // different client, a different exact-match setting, or a different
+    // Classification (any of which can just as easily change which
+    // components come back), by design.
+    if (site !== lastSite || exact !== lastExactMatch || clientId !== lastClientId || classification !== lastClassification) {
       selectedIds = new Set();
       activeComponentId = null;
       componentOrder = [];
       overviewActiveSite = null;
     }
     try {
-      const params = new URLSearchParams({ client: site, exact: exact ? 'true' : 'false' });
+      const params = new URLSearchParams({ exact: exact ? 'true' : 'false', classification });
+      if (site) params.set('client', site);
+      if (clientId) params.set('clientId', clientId);
       // no-store -- this data is live (device check-ins, ticket counts,
       // whatever's newest in data/), so a repeated search for the same
       // client must always hit the network again rather than risk the
@@ -284,6 +361,9 @@ export function mount(container) {
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastSite = site;
       lastExactMatch = exact;
+      lastClientId = clientId;
+      lastClientName = clientName;
+      lastClassification = classification;
       lastData = data;
       render(data);
     } catch (err) {
@@ -294,11 +374,23 @@ export function mount(container) {
     }
   }
 
+  // Display label for whatever Classification the search that produced
+  // `data` actually ran with -- lastClassification (set in load(), right
+  // before render() is called) rather than reading classificationSelect's
+  // live value, so this can never drift out of sync if the selector's been
+  // changed again since the search that's currently on screen. Reuses the
+  // <select>'s own option text ("TC Elite" etc.) rather than a second
+  // hardcoded label list.
+  function classificationLabel(code) {
+    const option = classificationSelect.querySelector(`option[value="${CSS.escape(code)}"]`);
+    return option ? option.textContent : code;
+  }
+
   function render(data) {
     if (data.components.length === 0) {
       statusEl.hidden = false;
       statusEl.className = 'status';
-      statusEl.textContent = `No report components matched "${data.siteTerm}".`;
+      statusEl.textContent = `No report components matched "${data.siteTerm}" in Classification "${classificationLabel(lastClassification)}".`;
       summaryEl.hidden = true;
       summaryButton.hidden = true;
       recommendationsEl.hidden = true;

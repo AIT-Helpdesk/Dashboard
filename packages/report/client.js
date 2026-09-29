@@ -128,17 +128,35 @@ export function mount(container) {
     const table = fullTableHtmlForComponent(c);
     const compact = !widgets;
     const heading = reportHeading(c);
+    // Tab Mode only, by request ("Display this in Tab View only and do
+    // not include in the PDF") -- styles.css's own .mtg-report-original-link
+    // rules handle both halves of that: hidden by default (covers Page
+    // Mode), shown only while #report-sections carries the Tab Mode class
+    // (mtg-overview-panel--tabs, toggled by applyMode()), and forced
+    // hidden again in print regardless of which screen mode was active
+    // when Export to PDF was clicked.
+    const originalFileLink = c.sourceUrl
+      ? `<a class="mtg-report-original-link" href="${escapeHtml(c.sourceUrl)}" target="_blank" rel="noopener noreferrer">Original File</a>`
+      : '';
     let tableBlock = '';
     if (table) {
       const appendixNum = appendixNumberById.get(c.id);
       const inlineOnScreen = c.kind === 'datto-live-devices' ? table : detailsBlock('Show full table data', table);
-      // Screen: the inline copy above (wrapped .no-print so it never
-      // shows up in the printed/exported output too, alongside the
-      // appendix). Print: a link down to that section's own Appendix
-      // (mtg-report-appendix-link starts hidden, switched on only inside
-      // @media print -- see styles.css).
+      // Screen: the inline copy above, alongside Original File on the
+      // same line, by request ("on the same line next to the 'Show full
+      // table data' instead of below it") -- .mtg-report-table-row is
+      // what actually lines them up (styles.css), wrapped in .no-print so
+      // neither shows up in the printed/exported output (Original File
+      // never prints at all -- see above -- and this inline copy is
+      // replaced by the real Appendix link below it when printing). Print:
+      // a link down to that section's own Appendix (mtg-report-appendix-
+      // link starts hidden, switched on only inside @media print -- see
+      // styles.css).
       tableBlock = `
-        <div class="no-print">${inlineOnScreen}</div>
+        <div class="no-print mtg-report-table-row">
+          <div class="mtg-report-table-row-content">${inlineOnScreen}</div>
+          ${originalFileLink}
+        </div>
         <p class="mtg-report-appendix-link"><a href="#${appendixAnchorId(appendixNum)}">Show full table data (Appendix ${appendixNum})</a></p>`;
     }
     return `
@@ -146,6 +164,7 @@ export function mount(container) {
         <h3>${heading}</h3>
         ${widgets}
         ${tableBlock}
+        ${!table ? originalFileLink : ''}
       </div>`;
   }
 
@@ -239,12 +258,19 @@ export function mount(container) {
   // looks like.
   function applyMode() {
     const tabsEl = contentEl.querySelector('#report-tabs');
+    const dividerEl = contentEl.querySelector('#report-page-divider');
     const sectionsEl = contentEl.querySelector('#report-sections');
     const modeToggle = contentEl.querySelector('#report-mode-toggle');
     if (!sectionsEl) return;
     const sectionEls = [...sectionsEl.querySelectorAll('.mtg-report-section')];
     const inTabs = reportMode === 'tabs';
     if (tabsEl) tabsEl.hidden = !inTabs;
+    // A plain grey rule in the tab strip's own spot, by request ("add a
+    // grey horizontal line in Page Mode where the Tabs used to be") --
+    // exactly inverted from the tabs' own visibility (shown in Page Mode,
+    // hidden in Tab Mode), so there's always something marking that seam
+    // between Report Notes and the sections below, whichever mode is on.
+    if (dividerEl) dividerEl.hidden = inTabs;
     sectionsEl.classList.toggle('mtg-overview-panel--tabs', inTabs);
     sectionEls.forEach((el) => {
       el.hidden = inTabs && Number(el.dataset.sectionIndex) !== activeSectionIndex;
@@ -295,6 +321,7 @@ export function mount(container) {
       </div>
       ${reportNotes}
       <div class="mtg-report-tabs no-print" id="report-tabs"></div>
+      <hr class="mtg-report-page-divider no-print" id="report-page-divider" />
       <div class="mtg-overview-panel" id="report-sections">${sections}</div>
       ${appendices}
     `;
