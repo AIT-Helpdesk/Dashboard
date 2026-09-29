@@ -32,12 +32,14 @@ const timesRouter = require('@dashboard/times/server.js');
 // status, not general urgency) and why priority is the right one.
 const CRITICAL_PRIORITY_VALUE = 4;
 
-// "!! TO BE SCHEDULED" -- confirmed live against the same priority
-// picklist as CRITICAL_PRIORITY_VALUE above (a fresh GET against Tickets'
-// own priority field, not guessed/reused from anywhere else -- this
-// account's picklist has several superficially similar values, e.g. "P3 -
-// SCHEDULED" (7) and plain "Scheduled" (6), neither of which is this one).
-const TRIAGE_PRIORITY_VALUE = 12;
+// "!! SET PRIORITY" -- confirmed live against the same priority picklist
+// as CRITICAL_PRIORITY_VALUE above (a fresh GET against Tickets' own
+// priority field, not guessed/reused from anywhere else -- this account's
+// picklist has several superficially similar values, e.g. "!! TO BE
+// SCHEDULED" (12, this widget's original value, by request changed to this
+// one instead), "P3 - SCHEDULED" (7), and plain "Scheduled" (6), none of
+// which is this one).
+const TRIAGE_PRIORITY_VALUE = 2;
 
 // "Open" here is simply "has no completedDate yet" -- same definition (and
 // same caveat -- a status-20 "Billing - Contract" ticket sitting in

@@ -33,7 +33,7 @@ export function mount(container) {
       <div class="wsp-usage-box-title">Autotask Selection Criteria</div>
       <ul>
         <li><strong>Critical (P1)</strong> -- open tickets (no Completed Date) with Priority = "P1 - CRITICAL", excluding monitoring alerts.</li>
-        <li><strong>Triage Now</strong> -- open tickets (no Completed Date) with Priority = "!! TO BE SCHEDULED", excluding monitoring alerts.</li>
+        <li><strong>Triage Now</strong> -- open tickets (no Completed Date) with Priority = "!! SET PRIORITY", excluding monitoring alerts.</li>
         <li id="hours-pct-criteria-item" hidden></li>
       </ul>
     </div>
@@ -83,7 +83,7 @@ export function mount(container) {
     renderTicketWidget(triageChartEl, data.triageOpenCount, data.triageTickets, {
       label: 'Triage Now',
       // Display text only, by request -- the real Autotask priority name
-      // ("!! TO BE SCHEDULED") stays exactly as-is in the Notes area's own
+      // ("!! SET PRIORITY") stays exactly as-is in the Notes area's own
       // selection-criteria text below and in TRIAGE_PRIORITY_VALUE's own
       // comment in server.js; this is purely the human-friendlier sub-line
       // shown under the widget's own label, same role Critical (P1)'s own
