@@ -38,6 +38,24 @@ let lastM365Data = null;
 let lastServicesData = null;
 let lastDattoData = null;
 
+// Whichever mount() is CURRENTLY on screen registers its own five section
+// render functions here, overwriting whatever the previous mount left
+// behind. Fixes a real bug (by request, "if i change pages in the
+// dashboard while something is running it stops"): each load*() function
+// below is a closure over ITS OWN mount()'s local DOM elements, so if you
+// navigate away before a search finishes and come back before it actually
+// resolves, the in-flight fetch's own render call was writing into the
+// OLD, torn-down mount's detached elements -- invisible, so nothing ever
+// seemed to happen, and lastXxxData (which IS module-scope and did update
+// correctly) only got picked up by the NEW mount's own one-time "restore
+// on remount" check below, which already ran BEFORE that late result came
+// in. Routing every load*()'s render call through this dispatch table
+// instead of calling its own closed-over render function directly means
+// whichever mount is actually visible always receives the update, even
+// when the fetch that produced it was kicked off by a mount that no
+// longer exists.
+let activeRenderers = {};
+
 // Same six checkbox-style fields Contract Checks itself carries -- see
 // packages/contract-checks/db.js/README for the schema. Duplicated here
 // (not imported -- this is a browser module, contract-checks' db.js is
@@ -313,7 +331,7 @@ export function mount(container) {
       const params = new URLSearchParams({ client, since });
       const data = await fetchJson(`/api/check-client/orders?${params.toString()}`, 'GET');
       lastOrdersData = data;
-      renderOrders(data);
+      activeRenderers.renderOrders(data);
     } catch (err) {
       ordersStatusEl.className = 'status error';
       ordersStatusEl.textContent = `Error: ${err.message}`;
@@ -704,7 +722,7 @@ export function mount(container) {
       const params = new URLSearchParams({ client });
       const data = await fetchJson(`/api/check-client/subscriptions?${params.toString()}`, 'GET');
       lastSubscriptionsData = data;
-      renderSubscriptions(data);
+      activeRenderers.renderSubscriptions(data);
     } catch (err) {
       subsStatusEl.className = 'status error';
       subsStatusEl.textContent = `Error: ${err.message}`;
@@ -765,7 +783,7 @@ export function mount(container) {
       if (clientName) params.set('clientName', clientName);
       const data = await fetchJson(`/api/check-client/m365-tenancy?${params.toString()}`, 'GET');
       lastM365Data = data;
-      renderM365Tenancy(data);
+      activeRenderers.renderM365Tenancy(data);
     } catch (err) {
       m365StatusEl.className = 'status error';
       m365StatusEl.textContent = `Error: ${err.message}`;
@@ -1050,7 +1068,7 @@ export function mount(container) {
       if (exactClient) params.set('exactClient', 'true');
       const data = await fetchJson(`/api/check-client/services?${params.toString()}`, 'GET');
       lastServicesData = data;
-      renderServices(data);
+      activeRenderers.renderServices(data);
     } catch (err) {
       servicesStatusEl.className = 'status error';
       servicesStatusEl.textContent = `Error: ${err.message}`;
@@ -1486,7 +1504,7 @@ export function mount(container) {
       if (force) params.set('force', 'true');
       const data = await fetchJson(`/api/check-client/datto-rmm?${params.toString()}`, 'GET');
       lastDattoData = data;
-      renderDattoRmm(data);
+      activeRenderers.renderDattoRmm(data);
     } catch (err) {
       dattoStatusEl.className = 'status error';
       dattoStatusEl.textContent = `Error: ${err.message}`;
@@ -1624,6 +1642,12 @@ export function mount(container) {
   // page keeps its own copy), so this is copied from Contract Checks'
   // own client.js.
   // ---------------------------------------------------------------------
+
+  // This mount is now the active one -- see activeRenderers' own comment
+  // up top. Registered before the restore calls below (though it wouldn't
+  // matter either way -- these are hoisted function declarations, already
+  // callable from the top of mount()).
+  activeRenderers = { renderOrders, renderSubscriptions, renderM365Tenancy, renderServices, renderDattoRmm };
 
   if (lastOrdersData) renderOrders(lastOrdersData);
   if (lastSubscriptionsData) renderSubscriptions(lastSubscriptionsData);
