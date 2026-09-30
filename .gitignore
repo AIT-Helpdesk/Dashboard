@@ -73,7 +73,19 @@ packages/*-tracker/data.db-shm
 packages/*-tracker/data.db-wal
 packages/*-tracker/notes.json
 
-# Meeting Prep's own report data (packages/meeting-prep/data/) -- real,
+# Dashboard-wide Help button's own admin-authored text (registry.js's
+# readPageHelpText()/writePageHelpText(), packages/shell/server.js's
+# /api/help/text/:pageId) -- real, live content typed by whoever's editing
+# a page's Help popup on whichever environment they're using, same as the
+# six "-tabs" pages' own PER-PAGE help-text.json already correctly is (see
+# DEPLOYMENT.md's "Updating later" section) -- NOT source, and was wrongly
+# committed for a while before this line existed, which is exactly how a
+# `git pull` on production ended up silently discarding everything Amber
+# had typed there beyond whatever happened to be committed from a dev
+# machine at the time. Never committed from here on.
+packages/shell/page-help-text.json
+
+# Same reasoning, for Meeting Prep's own report data (packages/meeting-prep/data/) -- real,
 # live client report content (parsed Datto RMM/Dark Web ID PDFs), not
 # source, and not expected to live in git long-term: once the automated
 # SharePoint pickup job (see data/README.md) exists, each environment

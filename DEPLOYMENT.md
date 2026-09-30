@@ -282,6 +282,18 @@ Fix, once you've confirmed (open that page's Help tab on the live site) whether 
 
 Running `git checkout -- <path>` on both first always resolves this ahead of time (a no-op if there are no local changes, a clean discard if there are), so `git pull` never has anything to fail on. Deliberate for `nav-layout.json`, by request -- git is the source of truth for that file, any layout change made only on the server and never committed is expected to be lost on the next deploy. Just a practical necessity for `package-lock.json` -- its local drift is never a real deliberate edit worth keeping.
 
+**A real incident from this exact gotcha, and the one-time fix**: `packages/shell/page-help-text.json` (the dashboard-wide Help button's own admin-authored text, `registry.js`'s `readPageHelpText()`/`writePageHelpText()`) was, for a while, a TRACKED file -- unlike the per-tab `help-text.json` files above, which correctly never got committed. Every notes edit made directly on production's own Help popup put this file in the exact same state as `nav-layout.json` above (local changes to a tracked file), and following the same `git checkout -- ... ; git pull` habit documented here discarded real, un-backed-up production content -- everything Amber had typed into several pages' Help popups, gone, with no copy in git (since it was never committed from anywhere) and no copy anywhere else. It's now in `.gitignore`, so this exact loss can't happen again -- but landing that fix on a production box that still has real local content in the tracked file needs one careful one-time pull, not the usual `git checkout -- ...` reflex (which would just repeat the same loss one last time):
+
+```powershell
+cd C:\apps\autotask-dashboard-git
+Copy-Item packages/shell/page-help-text.json packages/shell/page-help-text.json.server-backup   # back up whatever's really there FIRST
+git checkout -- packages/shell/nav-layout.json package-lock.json packages/shell/page-help-text.json   # discard the OLD tracked copy so `git pull` can proceed -- safe now, it's backed up
+git pull                                                                                              # brings in the .gitignore entry + removes the file from tracking
+Copy-Item packages/shell/page-help-text.json.server-backup packages/shell/page-help-text.json -Force  # restore the real content -- now untracked, so this is final, no future pull will touch it again
+npm install
+Restart-Service AmbientDashboard
+```
+
 ## Deploying TC Elite Rollout (first-time)
 
 A separate one-time step, additional to the "Updating later" routine above, needed the first time `packages/tc-elite-rollout` lands on production. Two things about this page don't fall out of the ordinary update flow:

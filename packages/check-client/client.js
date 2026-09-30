@@ -840,7 +840,12 @@ export function mount(container) {
     // (table { width: 100% }); it's only 5 narrow columns, so it fits its
     // own content instead, and cells never wrap (see that class's own CSS
     // for both).
-    function m365RowHtml(s) {
+    // highlightMismatch -- Enabled vs Consumed flagged red/bold when they
+    // differ, by request, but ONLY in the main (non-Free) table; the Free
+    // Products table below reuses this exact same row renderer, so the
+    // check is gated behind a param rather than baked into the row markup
+    // itself.
+    function m365RowHtml(s, highlightMismatch) {
       // The "[N]" ambiguous-match count is its own span (reusing
       // .cell-flag-red, same red/bold every other mismatch flag on
       // this dashboard uses) rather than baked into the name text,
@@ -867,23 +872,26 @@ export function mount(container) {
       const productCell = s.productName
         ? `<span title="${escapeHtml(titleParts.join('\n'))}">${escapeHtml(s.productName)}</span>${matchCountFlag}`
         : `<span class="inline-subtext">${escapeHtml(s.sku)} (no mapping)</span>`;
+      // Only flagged when both counts are actually known (neither null) --
+      // an unresolved count isn't a real mismatch, just missing data.
+      const countsMismatch = highlightMismatch && s.enabled !== null && s.consumed !== null && s.enabled !== s.consumed;
       return `
             <tr${s.productName ? '' : ' class="row-no-mapping"'}>
               <td>${productCell}</td>
               <td${s.status !== 'Enabled' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(s.status)}</td>
-              <td class="ticket-number">${s.enabled ?? ''}</td>
-              <td class="ticket-number">${s.consumed ?? ''}</td>
+              <td class="ticket-number${countsMismatch ? ' cell-flag-red' : ''}">${s.enabled ?? ''}</td>
+              <td class="ticket-number${countsMismatch ? ' cell-flag-red' : ''}">${s.consumed ?? ''}</td>
               <td class="ticket-number${s.suspended ? ' cell-flag-red' : ''}">${s.suspended ?? ''}</td>
             </tr>`;
     }
-    function m365TableHtml(skus) {
+    function m365TableHtml(skus, highlightMismatch) {
       return `
       <table class="chk-m365-table">
         <thead>
           <tr class="shaded-row"><th>Product Name</th><th>Status</th><th>Enabled</th><th>Consumed</th><th>Suspended</th></tr>
         </thead>
         <tbody>
-          ${skus.map(m365RowHtml).join('')}
+          ${skus.map((s) => m365RowHtml(s, highlightMismatch)).join('')}
         </tbody>
       </table>
     `;
@@ -891,7 +899,7 @@ export function mount(container) {
 
     const group = document.createElement('div');
     group.className = 'resource-group chk-m365-group';
-    group.innerHTML = mainSkus.length ? m365TableHtml(mainSkus) : '<p class="status">No non-Free subscribed SKUs found.</p>';
+    group.innerHTML = mainSkus.length ? m365TableHtml(mainSkus, true) : '<p class="status">No non-Free subscribed SKUs found.</p>';
     m365ResultsEl.appendChild(group);
 
     if (freeSkus.length) {
@@ -904,7 +912,7 @@ export function mount(container) {
       const freeGroup = document.createElement('div');
       freeGroup.className = 'resource-group chk-m365-group';
       freeGroup.hidden = true;
-      freeGroup.innerHTML = m365TableHtml(freeSkus);
+      freeGroup.innerHTML = m365TableHtml(freeSkus, false);
       m365ResultsEl.appendChild(freeGroup);
 
       freeToggle.addEventListener('click', () => {
