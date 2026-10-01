@@ -2864,6 +2864,24 @@ table {
 .chk-m365-table td {
   white-space: nowrap;
 }
+/* M365 Users table's own per-column filter row (buildM365UsersTable() in
+   client.js), by request -- a plain text input filling its own <th>,
+   small enough not to blow out the header row's own height. */
+.chk-m365-users-filter-row th {
+  padding-top: 0.25rem;
+  padding-bottom: 0.4rem;
+}
+.chk-m365-users-filter-row input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
 /* The "Show/Hide Free Products" toggle between the two M365 Tenancy
    tables (renderM365Tenancy() in check-client/client.js) -- both
    .chk-m365-group siblings are inline-block (fit-content), so this needs
@@ -3581,45 +3599,62 @@ html[data-rotate-active="true"] .check-up-notes {
 :root[data-theme="dark"] .check-up-pct-tile--red {
   background: color-mix(in srgb, #dc2626 55%, var(--card));
 }
-/* Check Up's own Helpdesk Handler box, above the hours tiles -- by
-   request, "a similarly styled box" -- same .datto-card look and
-   centered layout as the pct tiles just above, so the two sit together
-   as one visual family, though NOT zoomed to the same 2.25 (a native
-   <select> stretched that large renders awkwardly) -- only the current
-   handler's own name gets the large, TV-readable treatment. */
-.check-up-handler-section {
-  display: flex;
-  justify-content: center;
-  margin-top: 1.5rem;
-}
-.check-up-handler-card {
-  width: 18rem;
+/* Check Up's own Helpdesk Handler banner, by request ("a single banner
+   across the top") -- full-width bar: bold GREEN "Helpdesk Handler:"
+   label plus the dropdown selector (same green text) on one row (the
+   dropdown's own selected option IS the name display now -- see
+   renderHandler()'s own comment -- no second "Not yet set"/name element
+   duplicating it), Last Changed small print directly below, tight,
+   inside the same box, left-aligned to match where "Helpdesk Handler:"
+   starts -- Last Changed stays the ordinary muted colour, by request,
+   not green like the rest. No background shading (removed, by request --
+   an earlier version tinted this green; just the plain --card background
+   every other bordered box on this dashboard already uses). Same #16a34a
+   green used dashboard-wide (.chk-section-heading, .cell-flag-green),
+   not a new one-off shade. */
+.check-up-handler-banner {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
+  align-items: flex-start;
+  gap: 0.25rem;
+  margin-top: 1.5rem;
+  padding: 1.25rem 1.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
 }
-.check-up-handler-name {
-  font-size: 1.95rem;
+.check-up-handler-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 2.25rem;
+  flex-wrap: wrap;
+}
+.check-up-handler-banner-text {
+  font-size: 1.5rem;
   font-weight: 700;
+  color: #16a34a;
 }
 .check-up-handler-select {
-  width: 100%;
+  min-width: 14rem;
   padding: 0.4rem 0.6rem;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg);
-  color: var(--fg);
-  font-size: 0.95rem;
+  color: #16a34a;
+  font-size: 1.5rem;
+  font-weight: 700;
 }
 /* Professional Services/Leadership Team options, by request ("should be
-   shown greyed out to discourage selection") -- browsers already render
-   a disabled <option> greyed out by default; this just nudges the colour
-   a little further for clarity in both themes (the default UA grey reads
-   close enough to a normal enabled option's own text color in dark mode
-   to be easy to miss otherwise). */
-.check-up-handler-select option:disabled {
+   shown greyed out ... I want them still clickable") -- a plain CSS class
+   instead of `disabled` (see buildHandlerSelectOptionsHtml()'s own
+   comment), so the colour has to be set explicitly rather than relying on
+   a disabled <option>'s own default UA greying. */
+.check-up-handler-select option.check-up-handler-option--other {
   color: var(--muted);
+}
+.check-up-handler-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 /* 50% bigger than Datto RMM's own default donut (7.5rem -> 11.25rem, size
    120 -> 180 passed to donutSvg() on the JS side), by request. A compound

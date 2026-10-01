@@ -32,19 +32,18 @@ export function mount(container) {
       </div>
     </header>
     <p id="status" class="status">Loading...</p>
-    <div id="handler-section" class="check-up-handler-section" hidden>
-      <div class="datto-card check-up-handler-card">
-        <div class="datto-card-label">Helpdesk Handler</div>
-        <div id="handler-name" class="check-up-handler-name">Not yet set</div>
+    <div id="handler-section" class="check-up-handler-banner" hidden>
+      <div class="check-up-handler-banner-row">
+        <span class="check-up-handler-banner-text">Helpdesk Handler:</span>
         <select id="handler-select" class="check-up-handler-select"></select>
-        <div id="handler-meta" class="datto-card-sub"></div>
       </div>
+      <div id="handler-meta" class="check-up-handler-meta"></div>
     </div>
     <div id="weekly-hours-pct-grid" class="check-up-pct-grid" hidden></div>
     <div id="widget-notes" class="wsp-usage-box check-up-notes" hidden>
       <div class="wsp-usage-box-title">About This Page</div>
       <ul>
-        <li><strong>Helpdesk Handler</strong> -- who's fielding the helpdesk right now. Chosen from Support Desk; Professional Services and Leadership Team are shown but greyed out. Shared with everyone who opens this page, and survives a server restart, until someone changes it.</li>
+        <li><strong>Helpdesk Handler</strong> -- who's fielding the helpdesk right now. Chosen from Support Desk; Professional Services and Leadership Team are shown but greyed out (still selectable, just discouraged). Shared with everyone who opens this page, and survives a server restart, until someone changes it.</li>
         <li id="hours-pct-criteria-item" hidden></li>
       </ul>
     </div>
@@ -53,7 +52,6 @@ export function mount(container) {
   const refreshButton = container.querySelector('#refresh-button');
   const statusEl = container.querySelector('#status');
   const handlerSectionEl = container.querySelector('#handler-section');
-  const handlerNameEl = container.querySelector('#handler-name');
   const handlerSelectEl = container.querySelector('#handler-select');
   const handlerMetaEl = container.querySelector('#handler-meta');
   const notesEl = container.querySelector('#widget-notes');
@@ -130,18 +128,15 @@ export function mount(container) {
     handlerSelectEl.innerHTML = buildHandlerSelectOptionsHtml(options, lastHandler?.resourceId ?? null);
   }
 
-  // Professional Services/Leadership options are `disabled`, by request
-  // ("should be shown greyed out to discourage selection, making it clear
-  // that the Helpdesk Handler should be selected from the Service Team") --
-  // a native <option disabled> is the only reliably cross-browser way to
-  // grey out one option without greying out the whole control, and it
-  // still displays correctly as the current value if the Handler ever
-  // genuinely is someone from one of those two groups (set, say, directly
-  // via the API) -- a disabled option can still be the one marked
-  // `selected`, it just can't be clicked INTO from the dropdown itself.
+  // Professional Services/Leadership options are greyed out via a plain
+  // CSS class (.check-up-handler-option--other, styles.css), NOT
+  // `disabled` -- by request ("I want them still clickable"), so they
+  // read as discouraged without actually blocking a genuine pick from
+  // either group.
   function buildHandlerSelectOptionsHtml(options, currentId) {
-    const optionHtml = (r, disabled) => `<option value="${r.id}"${disabled ? ' disabled' : ''}${r.id === currentId ? ' selected' : ''}>${escapeHtml(r.name)}</option>`;
-    const placeholder = `<option value="" disabled${currentId ? '' : ' selected'}>-- Select --</option>`;
+    const optionHtml = (r, discouraged) =>
+      `<option value="${r.id}"${discouraged ? ' class="check-up-handler-option--other"' : ''}${r.id === currentId ? ' selected' : ''}>${escapeHtml(r.name)}</option>`;
+    const placeholder = `<option value="" disabled${currentId ? '' : ' selected'}>Not yet set</option>`;
     return `
       ${placeholder}
       <optgroup label="Support Desk">${options.serviceDesk.map((r) => optionHtml(r, false)).join('')}</optgroup>
@@ -151,12 +146,13 @@ export function mount(container) {
   }
 
   function renderHandler(handler) {
-    handlerNameEl.textContent = handler ? handler.resourceName : 'Not yet set';
-    // Keeps the <select> itself in sync too (not just the big name display)
-    // -- rebuilding its options' own `selected` flags rather than just
-    // setting .value, since a disabled <option> can't be selected via
-    // .value alone in every browser the same way a plain assignment to a
-    // normal option can.
+    // The dropdown's own selected option IS the name display now, by
+    // request ("can the content of the dropdown be used as the display of
+    // the name instead of having it twice?") -- no separate name element
+    // to keep in sync any more. Rebuilding the <select>'s own options
+    // (rather than just setting .value) is what actually moves the
+    // visible "selected" text, same "one place builds this markup"
+    // reasoning renderHandlerOptions() above already follows.
     if (lastHandlerOptions) handlerSelectEl.innerHTML = buildHandlerSelectOptionsHtml(lastHandlerOptions, handler?.resourceId ?? null);
     handlerMetaEl.textContent =
       handler && handler.updatedAt ? `Last changed ${formatDateTime(handler.updatedAt)}${handler.updatedByName ? ` by ${handler.updatedByName}` : ''}` : '';
