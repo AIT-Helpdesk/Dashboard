@@ -331,6 +331,76 @@ router.get('/m365-tenancy', async (req, res) => {
   }
 });
 
+// M365 Tenancy's own "Show Users" button, by request -- only called on
+// click (a second, separate Rewst call from /m365-tenancy's own, not
+// folded into that route, since most searches never need the user list
+// at all). Takes the SAME real Rewst Organisation ID /m365-tenancy's own
+// response already resolved (data.organisationId) -- client.js passes it
+// straight through rather than this route re-resolving the Rewst customer
+// a second time.
+router.get('/m365-users', async (req, res) => {
+  const organisationId = (req.query.organisationId || '').trim();
+  if (!organisationId) return res.status(400).json({ error: 'organisationId is required.' });
+  try {
+    const webhookUrl = process.env.REWST_WEBHOOK_M365_Users_URL;
+    if (!webhookUrl) throw new Error('REWST_WEBHOOK_M365_Users_URL is not configured in .env.');
+    const usersRes = await axios.post(webhookUrl, { org_id: organisationId }, { headers: { 'Content-Type': 'application/json' } });
+    // Real confirmed shape (live-checked this session) -- same Rewst raw-
+    // HTTP-action envelope Customer_M365_Licenses above uses, just under
+    // its own "get_users" key: { get_users: { status_code, response,
+    // request, data: { value: [...] } } }.
+    //
+    // CONFIRMED LIVE: the underlying Graph query this Rewst workflow runs
+    // does NOT currently $select officeLocation (only displayName, mail,
+    // userPrincipalName, assignedLicenses, department, accountEnabled) --
+    // every row's Office comes back blank here until that field is added
+    // to the Rewst workflow itself (a Rewst Engine change, outside this
+    // codebase). Still returned as its own field/column rather than
+    // dropped, so it starts working with no code change here the moment
+    // that's added Rewst-side.
+    // Enabled accounts, plus disabled accounts that STILL hold a license
+    // (worth seeing -- a disabled account whose license was never cleaned
+    // up), by request -- drops the bulk of real noise this tenant actually
+    // has (dozens of disabled, unlicensed guest/ex-staff accounts, see
+    // this route's own live test this session: 73 total users, 11
+    // licensed).
+    const userRows = (usersRes.data?.get_users?.data?.value || []).filter((u) => u.accountEnabled || (u.assignedLicenses || []).length > 0);
+
+    // Licenses shown as friendly names, not raw GUIDs, by request -- same
+    // product_mappings reference table /m365-tenancy matches against
+    // above, just keyed on its own ms_sku_id column (the real Microsoft
+    // SKU GUID Graph's own assignedLicenses[].skuId already is) instead of
+    // ms_sku_part_number. Falls back to the raw skuId (still better than
+    // dropping it silently) for anything product_mappings has no
+    // ms_sku_id filled in for yet.
+    const nameBySkuId = new Map();
+    for (const m of contractChecks.listProductMappings()) {
+      const key = (m.ms_sku_id || '').trim().toLowerCase();
+      if (key) nameBySkuId.set(key, m.friendly_ms_product_name || m.ms_sku_part_number || m.ms_sku_id);
+    }
+
+    const users = userRows
+      .map((u) => ({
+        displayName: u.displayName || '',
+        // mail is null for some real accounts (shared mailboxes/rooms,
+        // confirmed live) -- userPrincipalName is always present and is
+        // still a real sign-in address, so it's the fallback rather than
+        // leaving the cell blank.
+        email: u.mail || u.userPrincipalName || '',
+        department: u.department || '',
+        office: u.officeLocation || '',
+        licenses: (u.assignedLicenses || []).map((l) => nameBySkuId.get((l.skuId || '').trim().toLowerCase()) || l.skuId).filter(Boolean),
+      }))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+    res.json({ users });
+  } catch (err) {
+    console.error(err);
+    const detail = err.response ? `Request failed: HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
+    res.status(500).json({ error: detail });
+  }
+});
+
 // Section 4 -- Contract Services, via Contract Services' own buildReport().
 // No service-name search -- just the client + month, by request. exactClient
 // (by request -- the blank-label checkbox right after Autotask Client)

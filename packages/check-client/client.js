@@ -297,6 +297,16 @@ export function mount(container) {
     const since = sinceInput.value;
     const month = monthInput.value;
     searchButton.disabled = true;
+    // Clears the Client Check Summary immediately, by request -- otherwise
+    // the PREVIOUS client's own comparison rows keep showing right through
+    // the loads below (Subscriptions and M365 Tenancy both take a real
+    // moment), which reads as this new search's own data until it isn't.
+    // Subscriptions'/M365's own section tables clear themselves the same
+    // way already (their own loadXxx()'s first few lines), this is just
+    // the one section with no single load() of its own to do it from.
+    lastSubscriptionsData = null;
+    lastM365Data = null;
+    activeRenderers.renderClientCheckSummary();
     try {
       // Datto RMM has no dependency on the other sections' own results
       // (unlike Microsoft 365 Tenancy below), so it runs alongside the
@@ -474,6 +484,12 @@ export function mount(container) {
       </tr>`;
   }
 
+  // Matched against the row's own RENDERED text (every column, tags
+  // stripped) rather than re-deriving a separate searchable string from
+  // row's raw fields -- guarantees the filter can never drift out of sync
+  // with what's actually shown (a new column added to
+  // clientCheckSummaryRowHtml() later is automatically filterable too,
+  // with no second place to update).
   function renderClientCheckSummary() {
     const rows = buildClientCheckSummaryRows();
     if (rows.length === 0) {
@@ -1101,10 +1117,119 @@ export function mount(container) {
     `;
     }
 
+    // Display Name/Email/Department/Office/Licenses, by request -- Office
+    // is always blank right now (see server.js's own comment on this --
+    // the underlying Rewst workflow doesn't $select officeLocation yet),
+    // shown as its own column regardless so it starts working with no
+    // client-side change the moment that's added. Licenses already comes
+    // back as friendly product names (server.js's own ms_sku_id match),
+    // joined onto one line, comma-separated -- a wrapping <td>, not
+    // .ticket-number's nowrap, since a well-licensed user can easily have
+    // 4-5 products listed.
+    const M365_USERS_COLUMNS = [
+      { key: 'displayName', label: 'Display Name' },
+      { key: 'email', label: 'Email' },
+      { key: 'department', label: 'Department' },
+      { key: 'office', label: 'Office' },
+      { key: 'licenses', label: 'Licenses' },
+    ];
+    function m365UserCellText(u, key) {
+      return key === 'licenses' ? u.licenses.join(', ') : u[key] || '';
+    }
+    // Per-column filters, by request ("filters on the column headings"),
+    // not one combined box -- a second header row, one plain text input
+    // per column, each ANDed together (every active filter has to match
+    // for a row to show). Built as a real DOM element (not an HTML
+    // string, unlike this page's other small table builders) since the
+    // filter inputs need live 'input' listeners wired directly to it, not
+    // just a static render.
+    function buildM365UsersTable(users) {
+      const wrap = document.createElement('div');
+      if (users.length === 0) {
+        wrap.innerHTML = '<p class="status">No users returned.</p>';
+        return wrap;
+      }
+      const filters = {};
+      const table = document.createElement('table');
+      table.className = 'chk-m365-users-table';
+      table.innerHTML = `
+        <thead>
+          <tr class="shaded-row">${M365_USERS_COLUMNS.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('')}</tr>
+          <tr class="chk-m365-users-filter-row">${M365_USERS_COLUMNS.map((c) => `<th><input type="text" data-filter-key="${c.key}" placeholder="Filter..." /></th>`).join('')}</tr>
+        </thead>
+        <tbody></tbody>
+      `;
+      const tbody = table.querySelector('tbody');
+      function renderRows() {
+        const filtered = users.filter((u) =>
+          M365_USERS_COLUMNS.every((c) => {
+            const f = filters[c.key];
+            return !f || m365UserCellText(u, c.key).toLowerCase().includes(f);
+          })
+        );
+        tbody.innerHTML =
+          filtered.length > 0
+            ? filtered.map((u) => `<tr>${M365_USERS_COLUMNS.map((c) => `<td>${escapeHtml(m365UserCellText(u, c.key))}</td>`).join('')}</tr>`).join('')
+            : `<tr><td colspan="${M365_USERS_COLUMNS.length}" class="status">No users matching these filters.</td></tr>`;
+      }
+      table.querySelectorAll('[data-filter-key]').forEach((input) => {
+        input.addEventListener('input', () => {
+          filters[input.dataset.filterKey] = input.value.trim().toLowerCase();
+          renderRows();
+        });
+      });
+      renderRows();
+      wrap.appendChild(table);
+      return wrap;
+    }
+
     const group = document.createElement('div');
     group.className = 'resource-group chk-m365-group';
     group.innerHTML = mainSkus.length ? m365TableHtml(mainSkus, true) : '<p class="status">No non-Free subscribed SKUs found.</p>';
     m365ResultsEl.appendChild(group);
+
+    // "Show Users" -- a second, separate Rewst call (REWST_WEBHOOK_M365_
+    // Users_URL via /api/check-client/m365-users), by request, only fired
+    // the first time this button is actually clicked (not on every
+    // search) -- most searches never need the user list. Toggles after
+    // that first fetch, same show/hide-without-refetching convention
+    // chk-m365-free-toggle below already uses. data.organisationId is the
+    // SAME real Rewst Organisation ID this M365 Tenancy search already
+    // resolved -- no second customer lookup needed.
+    const usersToggle = document.createElement('button');
+    usersToggle.type = 'button';
+    usersToggle.className = 'button-link button-link--small chk-m365-users-toggle';
+    usersToggle.textContent = 'Show Users';
+    m365ResultsEl.appendChild(usersToggle);
+
+    const usersGroup = document.createElement('div');
+    usersGroup.className = 'resource-group chk-m365-group';
+    usersGroup.hidden = true;
+    m365ResultsEl.appendChild(usersGroup);
+
+    let usersLoaded = false;
+    usersToggle.addEventListener('click', async () => {
+      if (!usersLoaded) {
+        usersToggle.disabled = true;
+        usersGroup.hidden = false;
+        usersGroup.innerHTML = '<p class="status">Loading users...</p>';
+        try {
+          const params = new URLSearchParams({ organisationId: data.organisationId });
+          const usersData = await fetchJson(`/api/check-client/m365-users?${params.toString()}`, 'GET');
+          usersLoaded = true;
+          usersGroup.innerHTML = '';
+          usersGroup.appendChild(buildM365UsersTable(usersData.users));
+          usersToggle.textContent = `Hide Users (${usersData.users.length})`;
+        } catch (err) {
+          usersGroup.innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
+        } finally {
+          usersToggle.disabled = false;
+        }
+        return;
+      }
+      usersGroup.hidden = !usersGroup.hidden;
+      usersToggle.textContent = usersGroup.hidden ? usersToggle.textContent.replace('Hide', 'Show') : usersToggle.textContent.replace('Show', 'Hide');
+    });
 
     if (freeSkus.length) {
       const freeToggle = document.createElement('button');
