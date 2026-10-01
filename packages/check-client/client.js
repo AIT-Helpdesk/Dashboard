@@ -38,7 +38,7 @@ let lastM365Data = null;
 let lastServicesData = null;
 let lastDattoData = null;
 
-// Whichever mount() is CURRENTLY on screen registers its own five section
+// Whichever mount() is CURRENTLY on screen registers its own section
 // render functions here, overwriting whatever the previous mount left
 // behind. Fixes a real bug (by request, "if i change pages in the
 // dashboard while something is running it stops"): each load*() function
@@ -126,6 +126,12 @@ export function mount(container) {
         </div>
       </form>
     </header>
+    <div class="chk-summary-box">
+      <h2 class="chk-section-heading">Client Check Summary</h2>
+      <p id="summary-status" class="status" hidden>Search above to see a combined Ingram Subscriptions / Microsoft 365 Tenancy comparison.</p>
+      <div id="summary-results" class="results"></div>
+    </div>
+
     <h2 class="chk-section-heading">Orders <span class="inline-subtext">(Ingram Micro)</span></h2>
     <p id="orders-status" class="status" hidden></p>
     <div id="orders-summary" class="summary" hidden></div>
@@ -163,6 +169,8 @@ export function mount(container) {
   const monthInput = container.querySelector('#month-input');
   const searchButton = container.querySelector('#search-button');
 
+  const summaryStatusEl = container.querySelector('#summary-status');
+  const summaryResultsEl = container.querySelector('#summary-results');
   const ordersStatusEl = container.querySelector('#orders-status');
   const ordersSummaryEl = container.querySelector('#orders-summary');
   const ordersResultsEl = container.querySelector('#orders-results');
@@ -315,6 +323,181 @@ export function mount(container) {
       lastMonth = month;
       searchButton.disabled = false;
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // Client Check Summary -- a combined view at the top of the page, by
+  // request ("a comparison of Ingram Subscriptions and Microsoft 365
+  // Tenancy ... Later we will also add Contracts into the line"). Pure
+  // client-side join of two sections' own already-fetched data (Section 2
+  // -- Subscriptions, Section 4 -- Microsoft 365 Tenancy) -- no new API
+  // call of its own, so it's re-rendered (via activeRenderers, same
+  // staleness protection every other section here already has) every time
+  // either underlying section's data changes, from whichever side arrives
+  // last. Grouped by the Microsoft FRIENDLY product name (Section 4's own
+  // `productName`, resolved server-side from product_mappings'
+  // friendly_ms_product_name) rather than the raw Ingram Micro product
+  // name -- by request, "so that matching items appear on one line": the
+  // same real Microsoft product can legitimately be listed under more than
+  // one Ingram Micro name (e.g. "Microsoft 365 Business Basic" and its own
+  // "... Donation (Non-Profit Pricing)" twin both map to the one real SKU),
+  // and grouping on the Ingram-side name alone (the previous approach)
+  // split those into separate rows repeating the identical M365 numbers.
+  // A full comparison, not just "Ingram subscriptions that happen to have
+  // M365 data" -- an M365 SKU with no matching Ingram subscription, and an
+  // Ingram subscription with no matching M365 SKU, both still get their
+  // own row (blank on whichever side didn't match) rather than being
+  // silently dropped, since a missing match on either side is exactly the
+  // kind of discrepancy this section exists to surface.
+  // ---------------------------------------------------------------------
+
+  function buildClientCheckSummaryRows() {
+    const subscriptions = (lastSubscriptionsData?.byClient || []).flatMap((c) => c.subscriptions);
+    const skus = lastM365Data?.matched ? lastM365Data.skus.filter((s) => !s.isFree && s.ingramProductName) : [];
+
+    // Every Ingram Micro name a SKU's own product_mappings match(es) claim,
+    // pointing back at that SKU -- '\n'-joined when ambiguous (see
+    // server.js's own comment on this), same split the hover tooltip
+    // already does.
+    const ingramNameToSku = new Map();
+    for (const sku of skus) {
+      for (const name of sku.ingramProductName.split('\n')) {
+        const trimmed = name.trim();
+        if (trimmed) ingramNameToSku.set(trimmed.toLowerCase(), sku);
+      }
+    }
+
+    // Ingram's own NCE naming convention appends a billing-term suffix onto
+    // the base product name -- real example that didn't merge before this:
+    // "Exchange Online (Plan 1) (NCE COM MTH)", when product_mappings only
+    // has a row for the bare "Exchange Online (Plan 1)" (no row exists, or
+    // ever reasonably could, for every NCE/billing-term suffix combination
+    // Ingram generates). By request ("match using the friendly_ms_product_
+    // name so that matching items appear on one line"): when a
+    // subscription's name isn't a KNOWN ingram_product_name, it still
+    // matches a SKU when its name simply STARTS WITH that SKU's own
+    // Microsoft friendly product name (`productName`) -- true for both the
+    // NCE-suffix case above and for a hand-typed ingram_product_name that's
+    // itself just the friendly name plus a trailing qualifier (e.g.
+    // "Microsoft 365 Business Basic Donation (Non-Profit Pricing)" still
+    // starts with "Microsoft 365 Business Basic"). Only applied when
+    // exactly one SKU's friendly name prefix-matches -- an ambiguous clash
+    // (more than one candidate) is left unmatched rather than guessed,
+    // same "don't guess" convention server.js's own SKU matching already
+    // follows for a genuinely ambiguous case.
+    function matchSkuByFriendlyNamePrefix(subName) {
+      const lower = subName.trim().toLowerCase();
+      const candidates = skus.filter((s) => s.productName && lower.startsWith(s.productName.toLowerCase()));
+      return candidates.length === 1 ? candidates[0] : null;
+    }
+
+    // Strips that same trailing "(NCE ...)" qualifier back off again for
+    // display -- by request, it's useful for matching but just clutter in
+    // the table itself.
+    function stripNceSuffix(name) {
+      return (name || '').replace(/\s*\(NCE[^)]*\)\s*$/i, '').trim();
+    }
+
+    // groupKey -> { sku, subscriptions: [] } -- one entry per real
+    // Microsoft product this client either has an M365 SKU for, an Ingram
+    // subscription for, or both. Seeded with every SKU first (so an
+    // unmatched SKU still gets its own group), then every subscription is
+    // filed into the SAME group as whichever SKU its own name maps to
+    // (falling back to its own raw name -- its own standalone group -- when
+    // nothing claims it, i.e. not a recognised Microsoft product at all).
+    const groups = new Map();
+    function groupFor(key, sku) {
+      if (!groups.has(key)) groups.set(key, { sku: sku || null, subscriptions: [] });
+      return groups.get(key);
+    }
+    for (const sku of skus) groupFor(sku.productName || sku.sku, sku);
+    for (const sub of subscriptions) {
+      const key = (sub.name || '').trim().toLowerCase();
+      if (!key) continue;
+      const matchedSku = ingramNameToSku.get(key) || matchSkuByFriendlyNamePrefix(sub.name);
+      const groupKey = matchedSku ? matchedSku.productName || matchedSku.sku : sub.name;
+      groupFor(groupKey, matchedSku).subscriptions.push(sub);
+    }
+
+    const rows = [...groups.entries()].map(([groupKey, g]) => ({
+      // Still the real Ingram subscription name(s) when there's a match
+      // (joined, on the rare chance more than one real subscription landed
+      // in the same group) -- only falls back to the Microsoft product
+      // name itself when there's no Ingram side to show at all. The
+      // trailing "(NCE ...)" billing-term qualifier (see
+      // matchSkuByFriendlyNamePrefix()'s own comment on it) is stripped
+      // here for DISPLAY only, by request -- the real sub.name used for
+      // matching above is never touched.
+      name: g.subscriptions.length > 0 ? g.subscriptions.map((s) => stripNceSuffix(s.name)).join(' + ') : groupKey,
+      subscriptions: g.subscriptions,
+      sku: g.sku,
+    }));
+    rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    return rows;
+  }
+
+  function clientCheckSummaryRowHtml(row) {
+    const subs = row.subscriptions;
+    // The one subscription whose own Term/Auto-Renewal/Renews/Expires
+    // represents this row -- prefers an active one; arbitrary beyond that
+    // (the rare case of more than one REAL subscription sharing one
+    // Microsoft product, see buildClientCheckSummaryRows()'s own comment).
+    const primarySub = subs.find((s) => s.status === 'active') || subs[0] || null;
+    const sku = row.sku;
+    const licenseTotal = subs.some((s) => s.licenseCount != null) ? subs.reduce((n, s) => n + (s.licenseCount || 0), 0) : null;
+    // Two comparisons against M365 Licenses (sku.enabled), by request:
+    // IM Licenses vs M365 Licenses, and M365 Licenses vs Consumed. IM
+    // Licenses' own red state comes ONLY from the first; Consumed's ONLY
+    // from the second -- but M365 Licenses itself is red when EITHER one
+    // doesn't match ("if they do match but M365 is already RED ... don't
+    // change it back to not red" -- i.e. its red state is the two checks
+    // OR'd together, never reset by the other one separately passing).
+    const imVsM365Mismatch = sku && sku.enabled !== null && licenseTotal !== null && licenseTotal !== sku.enabled;
+    const consumedVsM365Mismatch = sku && sku.enabled !== null && sku.consumed !== null && sku.enabled !== sku.consumed;
+    const m365Mismatch = imVsM365Mismatch || consumedVsM365Mismatch;
+    // Suspended deliberately NOT part of this -- "If any of the 3 (ignore
+    // suspended) don't match... shade the row red", same --row-warn-bg
+    // paler-red row shading this page's own M365 table already uses
+    // (tr.row-no-mapping, for an unmapped SKU -- "flagged row, not a hard
+    // error").
+    return `
+      <tr${m365Mismatch ? ' class="chk-summary-row-mismatch"' : ''}>
+        <td>${escapeHtml(row.name || '')}</td>
+        <td class="ticket-number${imVsM365Mismatch ? ' cell-flag-red' : ''}">${licenseTotal ?? ''}</td>
+        <td class="ticket-number${m365Mismatch ? ' cell-flag-red' : ''}">${sku ? (sku.enabled ?? '') : ''}</td>
+        <td class="ticket-number${consumedVsM365Mismatch ? ' cell-flag-red' : ''}">${sku ? (sku.consumed ?? '') : ''}</td>
+        <td class="ticket-number${sku && sku.suspended ? ' cell-flag-red' : ''}">${sku ? (sku.suspended ?? '') : ''}</td>
+        <td class="ticket-number">${primarySub ? `${formatPeriod(primarySub.term)} / ${formatPeriod(primarySub.billingPeriod)}` : ''}</td>
+        <td class="${primarySub ? (primarySub.autoRenews ? 'cell-flag-green' : 'cell-flag-red') : ''}">${primarySub ? (primarySub.autoRenews ? 'Yes' : 'No') : ''}</td>
+        <td class="ticket-number">${primarySub ? formatDate(primarySub.renewalDate) : ''}</td>
+        <td class="ticket-number">${primarySub ? formatDate(primarySub.expirationDate) : ''}</td>
+      </tr>`;
+  }
+
+  function renderClientCheckSummary() {
+    const rows = buildClientCheckSummaryRows();
+    if (rows.length === 0) {
+      summaryResultsEl.innerHTML = '';
+      summaryStatusEl.hidden = false;
+      summaryStatusEl.className = 'status';
+      summaryStatusEl.textContent =
+        lastSubscriptionsData || lastM365Data
+          ? 'No comparable Ingram Subscriptions / Microsoft 365 Tenancy data found.'
+          : 'Search above to see a combined Ingram Subscriptions / Microsoft 365 Tenancy comparison.';
+      return;
+    }
+    summaryStatusEl.hidden = true;
+    summaryResultsEl.innerHTML = `
+      <table class="chk-summary-table">
+        <thead>
+          <tr>
+            <th>Subscription</th><th>IM Licenses</th><th>M365 Licenses</th><th>Consumed</th><th>Suspended</th>
+            <th>Term / Billing Period</th><th>Auto-Renewal</th><th>Renews</th><th>Expires</th>
+          </tr>
+        </thead>
+        <tbody>${rows.map(clientCheckSummaryRowHtml).join('')}</tbody>
+      </table>
+    `;
   }
 
   // ---------------------------------------------------------------------
@@ -723,6 +906,7 @@ export function mount(container) {
       const data = await fetchJson(`/api/check-client/subscriptions?${params.toString()}`, 'GET');
       lastSubscriptionsData = data;
       activeRenderers.renderSubscriptions(data);
+      activeRenderers.renderClientCheckSummary();
     } catch (err) {
       subsStatusEl.className = 'status error';
       subsStatusEl.textContent = `Error: ${err.message}`;
@@ -784,6 +968,7 @@ export function mount(container) {
       const data = await fetchJson(`/api/check-client/m365-tenancy?${params.toString()}`, 'GET');
       lastM365Data = data;
       activeRenderers.renderM365Tenancy(data);
+      activeRenderers.renderClientCheckSummary();
     } catch (err) {
       m365StatusEl.className = 'status error';
       m365StatusEl.textContent = `Error: ${err.message}`;
@@ -1034,6 +1219,12 @@ export function mount(container) {
       client.licensesLoaded = true;
       groupEl.querySelector('tbody').innerHTML = subscriptionRowsHtml(client.subscriptions);
       nameButton.textContent = client.clientName;
+      // IM Licenses on the Client Check Summary above comes from this same
+      // client.subscriptions data -- refresh it now that licenseCount has
+      // actually arrived (it's still null/blank at the time
+      // renderClientCheckSummary() first ran, right after Subscriptions
+      // itself loaded).
+      activeRenderers.renderClientCheckSummary();
     } catch (err) {
       nameButton.textContent = `${client.clientName} (failed to load licenses -- click to retry)`;
     } finally {
@@ -1647,13 +1838,14 @@ export function mount(container) {
   // up top. Registered before the restore calls below (though it wouldn't
   // matter either way -- these are hoisted function declarations, already
   // callable from the top of mount()).
-  activeRenderers = { renderOrders, renderSubscriptions, renderM365Tenancy, renderServices, renderDattoRmm };
+  activeRenderers = { renderOrders, renderSubscriptions, renderM365Tenancy, renderServices, renderDattoRmm, renderClientCheckSummary };
 
   if (lastOrdersData) renderOrders(lastOrdersData);
   if (lastSubscriptionsData) renderSubscriptions(lastSubscriptionsData);
   if (lastM365Data) renderM365Tenancy(lastM365Data);
   if (lastServicesData) renderServices(lastServicesData);
   if (lastDattoData) renderDattoRmm(lastDattoData);
+  renderClientCheckSummary();
 
   async function fetchJson(url, method, body) {
     const res = await fetch(url, {

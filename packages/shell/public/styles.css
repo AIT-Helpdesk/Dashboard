@@ -1693,6 +1693,79 @@ h1 {
   font-size: 0.68rem;
 }
 
+/* Client Check Summary's own table (Check Client, the new top-of-page
+   section) -- 9 columns in a different order from .ingram-subscriptions-
+   table's own 8, so it gets its own width rules rather than reusing that
+   class and having its nth-child widths land on the wrong columns.
+   Compact sizing (font-size/padding) still comes for free from
+   .check-client-page table th/td further down -- no need to duplicate
+   that part here. */
+.chk-summary-table {
+  table-layout: fixed;
+}
+.chk-summary-table th:nth-child(1),
+.chk-summary-table td:nth-child(1) {
+  width: 28%;
+}
+/* IM Licenses/M365 Licenses/Consumed/Suspended -- the four count columns,
+   by request ("centre the count columns data under the headers"). Applied
+   to both th and td so the header label sits centred over its own column
+   too, not just the data under a left-aligned heading. */
+.chk-summary-table th:nth-child(2),
+.chk-summary-table td:nth-child(2),
+.chk-summary-table th:nth-child(3),
+.chk-summary-table td:nth-child(3),
+.chk-summary-table th:nth-child(4),
+.chk-summary-table td:nth-child(4),
+.chk-summary-table th:nth-child(5),
+.chk-summary-table td:nth-child(5) {
+  text-align: center;
+}
+.chk-summary-table th:nth-child(2),
+.chk-summary-table td:nth-child(2) {
+  width: 7%;
+}
+.chk-summary-table th:nth-child(3),
+.chk-summary-table td:nth-child(3),
+.chk-summary-table th:nth-child(4),
+.chk-summary-table td:nth-child(4),
+.chk-summary-table th:nth-child(5),
+.chk-summary-table td:nth-child(5) {
+  width: 8%;
+}
+.chk-summary-table th:nth-child(6),
+.chk-summary-table td:nth-child(6) {
+  width: 15%;
+}
+.chk-summary-table th:nth-child(7),
+.chk-summary-table td:nth-child(7) {
+  width: 8%;
+}
+.chk-summary-table th:nth-child(8),
+.chk-summary-table td:nth-child(8),
+.chk-summary-table th:nth-child(9),
+.chk-summary-table td:nth-child(9) {
+  width: 9%;
+}
+
+/* Wraps the whole Client Check Summary section (heading, status line, and
+   table), by request ("Put the whole Client Check Summary in a green box
+   with a 2 pixels border") -- same #16a34a green used dashboard-wide
+   (.chk-section-heading, .cell-flag-green), not a new one-off shade. The
+   section's own <h2> loses its top margin inside the box (that 1.5rem gap
+   was meant to separate it from whatever's above it on the page -- the
+   page header here, not the inside of this box) and gets side/top padding
+   instead so it doesn't sit flush against the border. */
+.chk-summary-box {
+  border: 2px solid #16a34a;
+  border-radius: 8px;
+  padding: 0 1rem 1rem;
+  margin: 1.5rem 0;
+}
+.chk-summary-box .chk-section-heading {
+  margin-top: 1rem;
+}
+
 .ingram-orders-table {
   table-layout: fixed;
 }
@@ -4043,6 +4116,14 @@ tr.row-no-next-period {
    "flagged row, not a hard error" (see .cc-confirm-warning's own comment
    for why that's a different, solid-fill treatment). */
 tr.row-no-mapping {
+  background: var(--row-warn-bg) !important;
+}
+
+/* Client Check Summary -- IM Licenses, M365 Licenses, or Consumed don't
+   all agree (ignoring Suspended), by request ("shade the row red as we've
+   done in other places"). Same paler --row-warn-bg convention as
+   row-no-mapping above. */
+tr.chk-summary-row-mismatch {
   background: var(--row-warn-bg) !important;
 }
 
