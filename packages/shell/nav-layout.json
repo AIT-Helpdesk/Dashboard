@@ -16,10 +16,6 @@
     "id": "about-me"
   },
   {
-    "type": "page",
-    "id": "tickets-dashboard"
-  },
-  {
     "type": "category",
     "id": "daily-dashboards",
     "label": "Daily Dashboards",
@@ -300,6 +296,14 @@
     "id": "tv-boards",
     "label": "TV Boards",
     "children": [
+      {
+        "type": "page",
+        "id": "tickets-dashboard"
+      },
+      {
+        "type": "page",
+        "id": "check-up"
+      },
       {
         "type": "page",
         "id": "today-things"

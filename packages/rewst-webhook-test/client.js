@@ -326,16 +326,43 @@ export function mount(container) {
     `;
   }
 
+  // Finds the real row list inside an arbitrary Rewst response, two ways:
+  // a top-level array-of-objects field directly (Rewst's own convention
+  // for a plain action result, e.g. "Customers" above), OR one level
+  // deeper inside Rewst's own raw-HTTP-action envelope -- confirmed real,
+  // not hypothetical, the SAME `{ <key>: { status_code, response, request,
+  // data: { value: [...] } } }` shape both the dedicated subscribed_skus
+  // table above and a plain "get_users"-style webhook both actually
+  // return. Checking for that envelope generically here (rather than
+  // hardcoding another dedicated case per webhook, the way
+  // subscribed_skus/Customers above do) means any FUTURE webhook built the
+  // same way -- Rewst's own standard shape for "call a raw HTTP action and
+  // return its result" -- gets table treatment automatically too, with no
+  // code change needed when it's added to .env.
+  function findRowArray(data) {
+    const isNonEmptyObjectArray = (v) => Array.isArray(v) && v.length > 0 && typeof v[0] === 'object' && v[0] !== null;
+    // A top-level array (the whole response IS the row list, not nested
+    // under a field like "Customers") is treated the same as finding that
+    // field directly, rather than searching its own numeric indices for
+    // ANOTHER nested array (which would never match either check below).
+    if (Array.isArray(data)) return isNonEmptyObjectArray(data) ? ['(response)', data] : null;
+    for (const [key, v] of Object.entries(data)) {
+      if (isNonEmptyObjectArray(v)) return [key, v];
+    }
+    for (const [key, v] of Object.entries(data)) {
+      if (isNonEmptyObjectArray(v?.data?.value)) return [key, v.data.value];
+    }
+    return null;
+  }
+
   // Shape-agnostic fallback for any webhook whose real response hasn't
   // been confirmed/built a dedicated table for yet -- this page's whole
   // point is testing a webhook, so "show something readable" beats
   // "crash because the field names don't match a table built for a
-  // different workflow." Finds the first top-level array-of-objects field
-  // (whatever it's called -- Rewst's own convention so far, per
-  // "Customers" above, is one capitalized key holding the real rows) and
-  // builds a generic table from the UNION of keys across all its rows (not
-  // just the first row's own keys, in case row shapes vary); anything that
-  // isn't an array of objects at all just gets pretty-printed as raw JSON.
+  // different workflow." Builds a generic table from the UNION of keys
+  // across all its rows (not just the first row's own keys, in case row
+  // shapes vary); anything findRowArray() can't find a row list in at all
+  // just gets pretty-printed as raw JSON.
   function renderGeneric(data) {
     // A real, confirmed case, not a hypothetical -- a Rewst workflow with
     // "Wait for results" now enabled but no real `return`/output step of
@@ -354,16 +381,7 @@ export function mount(container) {
       return;
     }
 
-    // A top-level array (the whole response IS the row list, not nested
-    // under a field like "Customers") is treated the same as finding that
-    // field directly, rather than searching its own numeric indices for
-    // ANOTHER nested array (which would never match and always fall
-    // through to the raw-JSON case below for this shape).
-    const arrayEntry = Array.isArray(data)
-      ? data.length > 0 && typeof data[0] === 'object' && data[0] !== null
-        ? ['(response)', data]
-        : null
-      : Object.entries(data).find(([, v]) => Array.isArray(v) && v.length > 0 && typeof v[0] === 'object' && v[0] !== null);
+    const arrayEntry = findRowArray(data);
 
     if (!arrayEntry) {
       statusEl.hidden = false;

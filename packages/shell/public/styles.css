@@ -1282,6 +1282,11 @@ h1 {
 .today-things-header {
   justify-content: flex-end;
 }
+/* Check Up (TV Boards) -- same no-<h1> reasoning as Tickets Dashboard/
+   Today Things above. */
+.check-up-header {
+  justify-content: flex-end;
+}
 
 /* Fills essentially the whole page -- no page-header on this page at all
    (see technician-forms/client.js), so this only needs to account for
@@ -3493,31 +3498,42 @@ ul.start-here-checklist-other {
 html[data-rotate-active="true"] .tickets-dashboard-notes {
   display: none;
 }
-/* Client Hours %/Billable Hours % stat tiles (renderWeeklyHoursPct() in
-   client.js), by request -- two .datto-card tiles, side by side, CENTERED
-   (not .datto-card-grid's own auto-fill grid, which is built for many
-   cards, not exactly two centered ones) under the widgets above.
-   Deliberately stays visible during Rotate too (unlike
-   .tickets-dashboard-notes just above, which really does hide there) --
-   an earlier version copied that page's own Rotate-hiding rule onto this
-   too, without being asked to; removed, by request, since these two
-   widgets are real at-a-glance data, not the notes box's own reference
-   material. zoom (not a font-size/padding recalculation) -- "make the
-   widgets about 30% bigger", then "about 50% bigger" on top of that,
-   then set to an exact 2.25 directly, all by request -- same real
+/* Check Up's own "About This Page" notes box -- same reference-material/
+   hide-during-Rotate treatment as Tickets Dashboard's own notes box
+   above. */
+.check-up-notes {
+  margin-top: 1.5rem;
+}
+html[data-rotate-active="true"] .check-up-notes {
+  display: none;
+}
+/* Check Up (TV Boards) -- Client Hours %/Billable Hours % stat tiles
+   (renderWeeklyHoursPct() in client.js), moved here from Tickets
+   Dashboard's own client.js, by request ("Move the 2 Client Hours and
+   Billable hours over to the new page from Tickets Dashboard") -- classes
+   renamed check-up-* to match (was tickets-dashboard-pct-*), styling
+   itself unchanged. Two .datto-card tiles, side by side, CENTERED (not
+   .datto-card-grid's own auto-fill grid, which is built for many cards,
+   not exactly two centered ones). Deliberately stays visible during
+   Rotate (unlike .tickets-dashboard-notes above, which really does hide
+   there) -- these two widgets are real at-a-glance data, not the notes
+   box's own reference material. zoom (not a font-size/padding
+   recalculation) -- "make the widgets about 30% bigger", then "about 50%
+   bigger" on top of that, then set to an exact 2.25 directly, all by
+   request on the original Tickets Dashboard widget -- same real
    subtree-scaling technique .today-things-page elsewhere in this file
    already uses for the same "everything, uniformly" reason: a
-   transform: scale() would leave the original, smaller layout box
-   behind and overlap whatever sits next to it, where zoom genuinely
-   resizes the box these two tiles occupy. */
-.tickets-dashboard-pct-grid {
+   transform: scale() would leave the original, smaller layout box behind
+   and overlap whatever sits next to it, where zoom genuinely resizes the
+   box these two tiles occupy. */
+.check-up-pct-grid {
   display: flex;
   justify-content: center;
   gap: 1rem;
   margin-top: 1.5rem;
   zoom: 2.25;
 }
-.tickets-dashboard-pct-number {
+.check-up-pct-number {
   font-size: 1.95rem;
   font-weight: 700;
 }
@@ -3528,7 +3544,7 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
    visibly different widths. Scoped to just this grid, not a change to
    .datto-card itself (used by other widgets on this page/dashboard that
    still want their own content-sized width). */
-.tickets-dashboard-pct-grid .datto-card {
+.check-up-pct-grid .datto-card {
   width: 10rem;
 }
 /* Red by default, Orange 40-74%, Green 75%+ (pctColorClass() in
@@ -3541,13 +3557,13 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
    uses), not the flat solid fill a text-status pill elsewhere on this
    dashboard uses, since this is a whole CARD's background, not a small
    badge. */
-.tickets-dashboard-pct-tile--red {
+.check-up-pct-tile--red {
   background: color-mix(in srgb, #dc2626 18%, var(--card));
 }
-.tickets-dashboard-pct-tile--orange {
+.check-up-pct-tile--orange {
   background: color-mix(in srgb, #f59e0b 18%, var(--card));
 }
-.tickets-dashboard-pct-tile--green {
+.check-up-pct-tile--green {
   background: color-mix(in srgb, #16a34a 18%, var(--card));
 }
 /* Dark mode ONLY, by request -- "too dull in dark mode": var(--card) is
@@ -3558,12 +3574,52 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
    uses. Orange/Green weren't reported as a problem, so only Red is
    touched here. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .tickets-dashboard-pct-tile--red {
+  :root:not([data-theme="light"]) .check-up-pct-tile--red {
     background: color-mix(in srgb, #dc2626 55%, var(--card));
   }
 }
-:root[data-theme="dark"] .tickets-dashboard-pct-tile--red {
+:root[data-theme="dark"] .check-up-pct-tile--red {
   background: color-mix(in srgb, #dc2626 55%, var(--card));
+}
+/* Check Up's own Helpdesk Handler box, above the hours tiles -- by
+   request, "a similarly styled box" -- same .datto-card look and
+   centered layout as the pct tiles just above, so the two sit together
+   as one visual family, though NOT zoomed to the same 2.25 (a native
+   <select> stretched that large renders awkwardly) -- only the current
+   handler's own name gets the large, TV-readable treatment. */
+.check-up-handler-section {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.5rem;
+}
+.check-up-handler-card {
+  width: 18rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+.check-up-handler-name {
+  font-size: 1.95rem;
+  font-weight: 700;
+}
+.check-up-handler-select {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.95rem;
+}
+/* Professional Services/Leadership Team options, by request ("should be
+   shown greyed out to discourage selection") -- browsers already render
+   a disabled <option> greyed out by default; this just nudges the colour
+   a little further for clarity in both themes (the default UA grey reads
+   close enough to a normal enabled option's own text color in dark mode
+   to be easy to miss otherwise). */
+.check-up-handler-select option:disabled {
+  color: var(--muted);
 }
 /* 50% bigger than Datto RMM's own default donut (7.5rem -> 11.25rem, size
    120 -> 180 passed to donutSvg() on the JS side), by request. A compound

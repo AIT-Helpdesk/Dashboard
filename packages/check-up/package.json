@@ -1,15 +1,16 @@
 {
-  "name": "@dashboard/tickets-dashboard",
+  "name": "@dashboard/check-up",
   "version": "1.0.0",
   "private": true,
   "main": "client.js",
   "dependencies": {
     "@dashboard/autotask-client": "*",
+    "@dashboard/times": "*",
     "express": "^4.19.2"
   },
   "dashboardPage": {
-    "id": "tickets-dashboard",
-    "label": "Tickets Dashboard",
+    "id": "check-up",
+    "label": "Check Up",
     "client": "client.js",
     "server": "server.js"
   }
