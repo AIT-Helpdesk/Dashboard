@@ -45,14 +45,21 @@ const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 // this page's own previous THEME_COLORS (Microsoft Teams' raw theme enum
 // mapped to hex, with no real-world meaning attached), by request ("Apply
 // this colouring also to the 'Shifts and Schedules' page") -- the same
-// meaningful On Call/Helpdesk Handler/Vacation/etc. categories now colour
+// meaningful On Call/Special O-of-O/Vacation/etc. categories now colour
 // entries here too, not just What's On's own excerpt.
 const SHIFT_CATEGORIES = [
   { key: 'onCall', label: 'On Call', color: '#eab308', match: (dn) => /^on\s*call/i.test(dn) },
-  { key: 'helpdesk', label: 'Helpdesk Handler', color: '#3b82f6', match: (dn) => /helpdesk\s*handler/i.test(dn) },
+  // Was "Helpdesk Handler" (key `helpdesk`) -- renamed, by request, both
+  // the label AND the real /shifts entry name this matches against.
+  { key: 'specialOOO', label: 'Special O-of-O', color: '#3b82f6', match: (dn) => /special[\s-]*o[\s-]*of[\s-]*o/i.test(dn) },
   { key: 'vacation', label: 'Vacation', color: '#22c55e', match: (dn) => /vacation/i.test(dn) },
   { key: 'unpaidLeave', label: 'Unpaid leave', color: '#dc2626', match: (dn) => /unpaid/i.test(dn) },
   { key: 'sickOther', label: 'Sick/Other Leave', color: '#8b5cf6', match: (dn) => /\bsick\b|other\s*leave/i.test(dn) },
+  // Pink, by request -- matches the three real spellings people actually
+  // enter for this ("TIL Accrual", "Accruing TIL", "ACCR-TIL"), tolerant
+  // of a space or hyphen between ACCR and TIL since that one's an
+  // abbreviation someone's more likely to type inconsistently.
+  { key: 'accruingTil', label: 'Accruing TIL', color: '#ec4899', match: (dn) => /til\s*accrual|accruing\s*til|accr[\s-]*til/i.test(dn) },
   // "floating holiday" folded in here, not into publicHoliday below --
   // confirmed against real data this tenant's real Autotask Leave billing
   // code is spelled literally "Floating Holiday" (see fetchLeaveEntries()

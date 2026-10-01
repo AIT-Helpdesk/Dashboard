@@ -215,7 +215,9 @@ const STRETY_TEXT_FONT_SIZE = '10px'; // 12px tried first, shrunk further by req
 // both without the caller needing to know which `kind` it's looking at).
 //
 // Order here is the order the legend renders in. Confirmed against real
-// data: "On Call" and "Helpdesk Handler" are exact real /shifts labels; the
+// data: "On Call" and "Helpdesk Handler" (since renamed to "Special O-of-O",
+// both the label and the real /shifts entry name, by request) are exact real
+// /shifts labels; the
 // holiday patterns cover 7 real label variants seen across 2026's real
 // shifts ("Public Holiday", "Pub Hol", "Sri Lanka - Pub Hol", "Australia
 // Day", "Good Friday", "Easter Monday", "Labour Day" -- Graph's own `theme`
@@ -232,7 +234,9 @@ const STRETY_TEXT_FONT_SIZE = '10px'; // 12px tried first, shrunk further by req
 // only ever queried /shifts; not a matching-logic bug at all.
 const SHIFT_CATEGORIES = [
   { key: 'onCall', label: 'On Call', color: '#eab308', match: (dn) => /^on\s*call/i.test(dn) },
-  { key: 'helpdesk', label: 'Helpdesk Handler', color: '#3b82f6', match: (dn) => /helpdesk\s*handler/i.test(dn) },
+  // Was "Helpdesk Handler" (key `helpdesk`) -- renamed, by request, both
+  // the label AND the real /shifts entry name this matches against.
+  { key: 'specialOOO', label: 'Special O-of-O', color: '#3b82f6', match: (dn) => /special[\s-]*o[\s-]*of[\s-]*o/i.test(dn) },
   { key: 'vacation', label: 'Vacation', color: '#22c55e', match: (dn) => /vacation/i.test(dn) },
   // "leave" is NOT required in the match -- confirmed against real data the
   // actual timeOffReason is spelled literally "Unpaid" (see
@@ -252,6 +256,11 @@ const SHIFT_CATEGORIES = [
   // earned day off) than to an actual gazetted, company-wide Public
   // Holiday, so it's bucketed here rather than guessed into that one.
   { key: 'rdoTil', label: 'RDO/Time in Lieu', color: '#9ca3af', match: (dn) => /\brdo\b|time\s*in\s*lieu|floating\s*holiday/i.test(dn) },
+  // Pink, by request -- matches the three real spellings people actually
+  // enter for this ("TIL Accrual", "Accruing TIL", "ACCR-TIL"), tolerant
+  // of a space or hyphen between ACCR and TIL since that one's an
+  // abbreviation someone's more likely to type inconsistently.
+  { key: 'accruingTil', label: 'Accruing TIL', color: '#ec4899', match: (dn) => /til\s*accrual|accruing\s*til|accr[\s-]*til/i.test(dn) },
   {
     key: 'publicHoliday',
     label: 'Public Holiday',
@@ -1500,7 +1509,7 @@ export function mount(container) {
   }
 
   // "Leave Report" popup, by request -- a quick view of every REAL
-  // Teams Shifts duty entry (kind: 'shift' -- On Call/Helpdesk Handler,
+  // Teams Shifts duty entry (kind: 'shift' -- On Call/Special O-of-O,
   // etc), personal leave entry (kind: 'leave' -- Vacation/Unpaid/
   // Sick-Other/RDO-TIL, see SHIFT_CATEGORIES above), and Public Holiday
   // (kind: 'publicHoliday'), across the two weeks currently on screen.
@@ -1540,7 +1549,7 @@ export function mount(container) {
     for (const dayKey of reportDays) {
       for (const e of data.byDay[dayKey] || []) {
         if (e.kind === 'shift') {
-          // Real Teams Shifts duty entries (On Call/Helpdesk Handler,
+          // Real Teams Shifts duty entries (On Call/Special O-of-O,
           // etc, see SHIFT_CATEGORIES above), by request -- shown with
           // the shift's own start/end duration as its "hours" figure,
           // same computed-from-real-clock-times approach the calendar
@@ -1605,7 +1614,7 @@ export function mount(container) {
     const totalHours = leaveRows.reduce((n, r) => n + (r.hours || 0), 0);
     const peopleCount = new Set(leaveRows.map((r) => r.name)).size;
     const summaryParts = [];
-    if (shiftRows.length) summaryParts.push(`${shiftRows.length} duty shift${shiftRows.length === 1 ? '' : 's'} (On Call/Helpdesk Handler etc)`);
+    if (shiftRows.length) summaryParts.push(`${shiftRows.length} duty shift${shiftRows.length === 1 ? '' : 's'} (On Call/Special O-of-O etc)`);
     if (leaveRows.length) {
       summaryParts.push(`${leaveRows.length} leave entr${leaveRows.length === 1 ? 'y' : 'ies'} across ${peopleCount} ${peopleCount === 1 ? 'person' : 'people'}, totaling ${formatHours(totalHours)}h`);
     }
