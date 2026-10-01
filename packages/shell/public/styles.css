@@ -3630,7 +3630,7 @@ html[data-rotate-active="true"] .check-up-notes {
   flex-wrap: wrap;
 }
 .check-up-handler-banner-text {
-  font-size: 1.5rem;
+  font-size: 1.95rem;
   font-weight: 700;
   color: #16a34a;
 }
@@ -3641,7 +3641,7 @@ html[data-rotate-active="true"] .check-up-notes {
   border-radius: 6px;
   background: var(--bg);
   color: #16a34a;
-  font-size: 1.5rem;
+  font-size: 1.95rem;
   font-weight: 700;
 }
 /* Professional Services/Leadership Team options, by request ("should be
