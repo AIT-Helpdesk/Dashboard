@@ -15,6 +15,20 @@ let lastData = null;
 // navigate-away-and-back the same way the date values themselves do.
 let lastActiveQuickButtonId = 'quick-today-button';
 
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// function here, overwriting whatever the previous mount left behind.
+// Fixes a real bug (see check-client/client.js's own activeRenderers for
+// the fuller writeup): load() below is a closure over ITS OWN mount()'s
+// local DOM elements, so if you navigate away before a load finishes and
+// come back before it actually resolves, the in-flight fetch's own render
+// call was writing into the OLD, torn-down mount's detached elements --
+// invisible, so nothing ever seemed to happen. Routing load()'s render
+// call through this instead of calling its own closed-over render()
+// directly means whichever mount is actually visible always receives the
+// update, even when the fetch that produced it was kicked off by a mount
+// that no longer exists.
+let activeRender = null;
+
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
@@ -202,6 +216,10 @@ export function mount(container) {
     setActiveQuickButton('quick-today-button');
   }
 
+  // This mount is now the active one -- see activeRender's own comment up
+  // top.
+  activeRender = render;
+
   if (lastData) render(lastData);
 
   form.addEventListener('submit', (e) => {
@@ -234,7 +252,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;

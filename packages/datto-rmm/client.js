@@ -5,6 +5,16 @@ export const label = 'Datto RMM';
 // pattern as CSP Customers/Teams Shifts.
 let lastData = null;
 
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// here. Fixes a real bug: load()'s render(data) call is a closure over
+// THAT mount's own statusEl/cardsEl -- if you navigate away before the
+// load resolves and come back before it actually finishes, the old
+// mount's load() still runs to completion and would otherwise call its
+// own (now detached, invisible) render(), so the currently-visible new
+// mount never shows the result. Routing load()'s render call through this
+// instead means whichever mount is actually visible always receives it.
+let activeRender = null;
+
 // Same status-color palette as the original app this was ported from
 // (C:\Code\Improved-Dashboards), by request, for visual continuity with
 // what technicians are already used to seeing there.
@@ -35,6 +45,10 @@ export function mount(container) {
 
   refreshButton.addEventListener('click', () => load(true));
 
+  // This mount is now the active one -- see activeRender's own comment
+  // up top.
+  activeRender = render;
+
   if (lastData) render(lastData);
   else load(false);
 
@@ -51,7 +65,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;

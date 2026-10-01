@@ -13,6 +13,20 @@ let lastData = null; // { completeRows } from the main load -- the Not Complete 
 let lastIncompleteData = null; // { otherRows } from GET /api/accrued-time/incomplete, or null if never fetched for the current lastParams
 let incompleteVisible = false; // whether the Not Complete table is currently shown (independent of whether it's been fetched)
 let allResources = null; // [{id, name}], fetched once, reused across remounts
+
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// function here, overwriting whatever the previous mount left behind.
+// Fixes a real bug (see check-client/client.js's own activeRenderers for
+// the fuller writeup): load()/toggleIncomplete() below are each a closure
+// over THEIR OWN mount()'s local DOM elements, so if you navigate away
+// before one finishes and come back before it actually resolves, the
+// in-flight fetch's own render call was writing into the OLD, torn-down
+// mount's detached elements -- invisible, so nothing ever seemed to
+// happen. Routing each's render call through this instead of calling its
+// own closed-over render() directly means whichever mount is actually
+// visible always receives the update, even when the fetch that produced
+// it was kicked off by a mount that no longer exists.
+let activeRender = null;
 // id of the quick-date button that currently matches From/To exactly, or
 // null once either field's been hand-edited -- see setActiveQuickButton()
 // in mount(), same convention @dashboard/times' own client.js uses.
@@ -254,7 +268,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
@@ -302,6 +316,10 @@ export function mount(container) {
   // navigating away and back with lastData already populated from an
   // earlier Load) -- a real "Cannot access 'VARIANCE_HOURS' before
   // initialization" ReferenceError, not just a hypothetical one.
+  // This mount is now the active one -- see activeRender's own comment up
+  // top.
+  activeRender = render;
+
   if (lastData) render(lastData);
 
   function render(data) {
@@ -378,7 +396,7 @@ export function mount(container) {
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastIncompleteData = data;
       incompleteVisible = true;
-      render(lastData);
+      activeRender(lastData);
     } catch (err) {
       const container = resultsEl.querySelector('#incomplete-container');
       if (container) container.innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;

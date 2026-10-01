@@ -8,6 +8,17 @@ export const label = "My Strety Tasks";
 // restore instantly instead of coming back blank.
 let lastData = null;
 
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// here (see mount()'s own comment where it's assigned). Fixes a real bug:
+// load()'s render(data) call is a closure over THAT mount's own statusEl/
+// resultsEl -- if you navigate away before the load resolves and come
+// back before it actually finishes, the old mount's load() still runs to
+// completion and would otherwise call its own (now detached, invisible)
+// render(), so the currently-visible new mount never shows the result.
+// Routing load()'s render call through this instead means whichever mount
+// is actually visible always receives it.
+let activeRender = null;
+
 // Used by formatShortDate() (below, inside mount()) -- a fixed 3-letter
 // table, not toLocaleDateString's own month: 'short' (that option's actual
 // output length isn't guaranteed 3 characters across every locale/browser).
@@ -47,6 +58,10 @@ export function mount(container) {
 
   refreshButton.addEventListener('click', load);
 
+  // This mount is now the active one -- see activeRender's own comment
+  // up top.
+  activeRender = render;
+
   // Auto-loads on mount, by request -- this is "my" tasks, there's no
   // search/filter input to wait for, same convention as SaaS Alerts
   // Customers' cheap auto-loading list.
@@ -65,7 +80,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;

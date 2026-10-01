@@ -8,6 +8,20 @@ export const label = "Rewst Webhook Test";
 // one doesn't need a re-fetch either.
 let lastDataByWebhook = {};
 let lastWebhookKey = null;
+
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// function here, overwriting whatever the previous mount left behind.
+// Fixes a real bug (see check-client/client.js's own activeRenderers for
+// the fuller writeup): load()/init() below are each a closure over THEIR
+// OWN mount()'s local DOM elements, so if you navigate away before a call
+// finishes and come back before it actually resolves, the in-flight
+// fetch's own render call was writing into the OLD, torn-down mount's
+// detached elements -- invisible, so nothing ever seemed to happen.
+// Routing each render call through this instead of calling its own
+// closed-over render() directly means whichever mount is actually visible
+// always receives the update, even when the fetch that produced it was
+// kicked off by a mount that no longer exists.
+let activeRender = null;
 // Field VALUES typed in, kept per webhook key so switching the dropdown
 // away and back doesn't lose what was already typed (webhook key ->
 // {jsonFieldKey: value}). Never sent anywhere until Load is clicked.
@@ -61,6 +75,10 @@ export function mount(container) {
     if (cached) render(cached, webhookSelect.value);
   });
 
+  // This mount is now the active one -- see activeRender's own comment up
+  // top.
+  activeRender = render;
+
   init();
 
   // The dropdown's own options -- and now each webhook's own required
@@ -88,7 +106,7 @@ export function mount(container) {
       // the page no longer fires a real Rewst call on its own; only Load
       // does. An already-loaded webhook's own cached result still shows
       // right away (no new network call), same as switching the dropdown.
-      if (lastDataByWebhook[webhookSelect.value]) render(lastDataByWebhook[webhookSelect.value], webhookSelect.value);
+      if (lastDataByWebhook[webhookSelect.value]) activeRender(lastDataByWebhook[webhookSelect.value], webhookSelect.value);
       else {
         statusEl.hidden = false;
         statusEl.className = 'status';
@@ -154,7 +172,7 @@ export function mount(container) {
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastDataByWebhook[webhookKey] = data;
       lastWebhookKey = webhookKey;
-      render(data, webhookKey);
+      activeRender(data, webhookKey);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;

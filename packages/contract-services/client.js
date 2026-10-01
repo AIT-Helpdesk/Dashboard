@@ -10,6 +10,16 @@ export const label = "Contract Services";
 let lastQuery = null; // { month, search, client }
 let lastData = null;
 
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// here. Fixes a real bug: load()'s render(data) call is a closure over
+// THAT mount's own statusEl/resultsEl -- if you navigate away before a
+// search resolves and come back before it actually finishes, the old
+// mount's load() still runs to completion and would otherwise call its
+// own (now detached, invisible) render(), so the currently-visible new
+// mount never shows the result. Routing load()'s render call through this
+// instead means whichever mount is actually visible always receives it.
+let activeRender = null;
+
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
@@ -52,6 +62,10 @@ export function mount(container) {
     clientInput.value = lastQuery.client;
   }
 
+  // This mount is now the active one -- see activeRender's own comment
+  // up top.
+  activeRender = render;
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     load(monthInput.value, searchInput.value, clientInput.value);
@@ -75,7 +89,7 @@ export function mount(container) {
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastQuery = { month, search, client: clientName };
       lastData = data;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;

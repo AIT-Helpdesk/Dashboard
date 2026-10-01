@@ -5,6 +5,20 @@ export const label = "Ticket Dashboards (Test)";
 // own comment for why this survives the shell's teardown/re-mount cycle.
 let lastData = null;
 
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// function here, overwriting whatever the previous mount left behind.
+// Fixes a real bug (see check-client/client.js's own activeRenderers for
+// the fuller writeup): load() below is a closure over ITS OWN mount()'s
+// local DOM elements, so if you navigate away before a refresh finishes
+// and come back before it actually resolves, the in-flight fetch's own
+// render call was writing into the OLD, torn-down mount's detached
+// elements -- invisible, so nothing ever seemed to happen. Routing load()'s
+// render call through this instead of calling its own closed-over render()
+// directly means whichever mount is actually visible always receives the
+// update, even when the fetch that produced it was kicked off by a mount
+// that no longer exists.
+let activeRender = null;
+
 const TREND_TRACK_HEIGHT_PX = 140;
 
 // Same palette Datto RMM's own donut cards use (STATUS_COLORS there) --
@@ -66,7 +80,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
@@ -305,6 +319,10 @@ export function mount(container) {
     const largeArc = endAngle - startAngle <= 180 ? '0' : '1';
     return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
   }
+
+  // This mount is now the active one -- see activeRender's own comment up
+  // top.
+  activeRender = render;
 
   if (lastData) {
     render(lastData);

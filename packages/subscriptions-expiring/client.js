@@ -10,6 +10,16 @@ let lastWindow = "7";
 let lastFilter = "";
 let lastData = null;
 
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// here. Fixes a real bug: load()'s render(data) call is a closure over
+// THAT mount's own statusEl/resultsEl -- if you navigate away before a
+// load resolves and come back before it actually finishes, the old
+// mount's load() still runs to completion and would otherwise call its
+// own (now detached, invisible) render(), so the currently-visible new
+// mount never shows the result. Routing load()'s render call through this
+// instead means whichever mount is actually visible always receives it.
+let activeRender = null;
+
 // Keys and labels mirror WINDOWS in server.js exactly -- kept in sync
 // manually (same pattern as CRITERIA/CRITERIA_OPTIONS on Client Details),
 // since the dropdown needs to render before any request to the server.
@@ -53,6 +63,10 @@ export function mount(container) {
   windowInput.value = lastWindow;
   clientInput.value = lastFilter;
 
+  // This mount is now the active one -- see activeRender's own comment
+  // up top.
+  activeRender = render;
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     load(windowInput.value, clientInput.value);
@@ -79,7 +93,7 @@ export function mount(container) {
       lastWindow = windowKey;
       lastFilter = clientFilter;
       lastData = data;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;

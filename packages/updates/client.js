@@ -8,6 +8,17 @@ export const label = 'Updates';
 // dashboard already uses.
 let lastData = null; // { entries, editable }
 
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// here (see mount()'s own comment where it's assigned). Fixes a real bug:
+// load()'s render() call is a closure over THAT mount's own statusEl/
+// listEl -- if you navigate away before the initial GET resolves and come
+// back before it actually finishes, the old mount's load() still runs to
+// completion and would otherwise call its own (now detached, invisible)
+// render(), so the currently-visible new mount never shows the result.
+// Routing load()'s render call through this instead means whichever mount
+// is actually visible always receives it.
+let activeRender = null;
+
 // Every constant below is deliberately at true MODULE scope, not declared
 // inside mount() -- a real, twice-confirmed bug class in this codebase
 // (see What's On's own client.js, MONTH_SHORT/TEAM_ICON_HTML): a `const`
@@ -78,6 +89,10 @@ export function mount(container) {
     row.querySelector('.updates-rich-editor').focus();
   });
 
+  // This mount is now the active one -- see activeRender's own comment
+  // up top.
+  activeRender = render;
+
   if (lastData) render();
   else load();
 
@@ -90,7 +105,7 @@ export function mount(container) {
     try {
       const data = await fetchJson('/api/updates', 'GET');
       lastData = data;
-      render();
+      activeRender();
     } catch (err) {
       statusEl.hidden = false;
       statusEl.className = 'status error';

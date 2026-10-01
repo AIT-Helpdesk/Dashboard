@@ -6,6 +6,23 @@ export const label = "Workshop Board";
 // alive for the session, same "restore instantly instead of a blank
 // flash on revisit" convention every other page here uses.
 let lastJobs = null;
+
+// Whichever mount() is CURRENTLY on screen registers its own renderResults()
+// and deliveries-preview render functions here, overwriting whatever the
+// previous mount left behind. Fixes a real bug (see check-client/client.js's
+// own activeRenderers for the fuller writeup): loadJobs()/
+// loadDeliveriesPreview() below are each a closure over THEIR OWN mount()'s
+// local DOM elements, so if you navigate away before one finishes and come
+// back before it actually resolves, the in-flight fetch's own render call
+// was writing into the OLD, torn-down mount's detached elements --
+// invisible, so nothing ever seemed to happen. Routing each load's render
+// call through these instead of calling its own closed-over render
+// function directly means whichever mount is actually visible always
+// receives the update, even when the fetch that produced it was kicked off
+// by a mount that no longer exists.
+let activeRenderResults = null;
+let activeRenderDeliveriesPreview = null;
+
 // Usage Instructions box content + the Extended Help page reached via its
 // own small help button, both admin-editable (see openHelpModal() below)
 // -- restored instantly from here on a remount, then refreshed, same
@@ -423,7 +440,7 @@ export function mount(container) {
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastJobs = data.jobs;
       statusEl.hidden = true;
-      renderResults(data.jobs);
+      activeRenderResults(data.jobs);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
@@ -2113,13 +2130,17 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastDeliveriesPreview = data.deliveries.slice(0, 5);
-      deliveriesPreviewEl.innerHTML = deliveriesPreviewHtml(lastDeliveriesPreview);
+      activeRenderDeliveriesPreview(lastDeliveriesPreview);
     } catch (err) {
       // Degrade gracefully -- a failed lookup (e.g. Goods Received's own
       // router not loaded) just leaves this one panel showing an error,
       // never breaks the rest of the board.
       deliveriesPreviewEl.innerHTML = `<p class="status error wsp-deliveries-placeholder">Error: ${escapeHtml(err.message)}</p>`;
     }
+  }
+
+  function renderDeliveriesPreview(deliveries) {
+    deliveriesPreviewEl.innerHTML = deliveriesPreviewHtml(deliveries);
   }
 
   function deliveriesPreviewHtml(deliveries) {
@@ -2176,6 +2197,11 @@ export function mount(container) {
     return `<span class="wsp-delivery-tag wsp-delivery-tag--older">${escapeHtml(dayMonth)}</span>`;
   }
 
+  // This mount is now the active one -- see activeRenderResults'/
+  // activeRenderDeliveriesPreview's own comment up top.
+  activeRenderResults = renderResults;
+  activeRenderDeliveriesPreview = renderDeliveriesPreview;
+
   if (lastJobs) {
     statusEl.hidden = true;
     renderResults(lastJobs);
@@ -2184,7 +2210,7 @@ export function mount(container) {
   }
 
   if (lastDeliveriesPreview) {
-    deliveriesPreviewEl.innerHTML = deliveriesPreviewHtml(lastDeliveriesPreview);
+    renderDeliveriesPreview(lastDeliveriesPreview);
   } else {
     loadDeliveriesPreview();
   }

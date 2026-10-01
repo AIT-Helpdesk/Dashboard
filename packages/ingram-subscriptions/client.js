@@ -11,6 +11,17 @@ let lastFilter = '';
 let lastSubscriptionFilter = '';
 let lastAllStatuses = false; // default: active & pending only, by request
 
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// here. Fixes a real bug: load()'s render(data) call is a closure over
+// THAT mount's own statusEl/resultsEl -- and a cold load here can take a
+// couple of minutes with no filter, so navigating away and back before it
+// resolves is a genuinely likely thing to do. The old mount's load() still
+// runs to completion and would otherwise call its own (now detached,
+// invisible) render(), so the currently-visible new mount never shows the
+// result. Routing load()'s render call through this instead means
+// whichever mount is actually visible always receives it.
+let activeRender = null;
+
 // Fixed display order/labels for Ingram's 5 subscription statuses -- used to
 // build the summary's status breakdown generically (works whether the
 // server returned just active/pending, or all 5 when the toggle is checked)
@@ -51,6 +62,10 @@ export function mount(container) {
   subscriptionInput.value = lastSubscriptionFilter;
   allStatusesInput.checked = lastAllStatuses;
 
+  // This mount is now the active one -- see activeRender's own comment
+  // up top.
+  activeRender = render;
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     load(clientInput.value, subscriptionInput.value, allStatusesInput.checked);
@@ -84,7 +99,7 @@ export function mount(container) {
       lastFilter = clientFilter;
       lastSubscriptionFilter = subscriptionFilter;
       lastAllStatuses = allStatuses;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;

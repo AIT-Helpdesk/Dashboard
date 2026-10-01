@@ -13,6 +13,16 @@ let lastFilter = '';
 // server's own default order (name, ascending -- see server.js).
 let sortState = { key: null, direction: 'asc' };
 
+// Whichever mount() is CURRENTLY on screen registers its own render()
+// here. Fixes a real bug: load()'s render(data) call is a closure over
+// THAT mount's own statusEl/resultsEl -- if you navigate away before the
+// load resolves and come back before it actually finishes, the old
+// mount's load() still runs to completion and would otherwise call its
+// own (now detached, invisible) render(), so the currently-visible new
+// mount never shows the result. Routing load()'s render call through this
+// instead means whichever mount is actually visible always receives it.
+let activeRender = null;
+
 const SORTABLE_COLUMNS = [
   { key: 'name', label: 'Customer' },
   { key: 'domain', label: 'Domain' },
@@ -67,7 +77,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
@@ -171,6 +181,10 @@ export function mount(container) {
         : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
     return direction === 'asc' ? cmp : -cmp;
   }
+
+  // This mount is now the active one -- see activeRender's own comment
+  // up top.
+  activeRender = render;
 
   if (lastData) render(lastData);
   else load(false);

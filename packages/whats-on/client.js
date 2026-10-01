@@ -23,6 +23,23 @@ let lastShiftsData = null;
 // shifts excerpt.
 let lastTodayTomorrowData = null;
 
+// Whichever mount() is CURRENTLY on screen registers its own render(),
+// renderShifts(), and renderTodayTomorrow() here, overwriting whatever the
+// previous mount left behind. Fixes a real bug (see check-client/client.js's
+// own activeRenderers for the fuller writeup): load()/loadShifts()/
+// loadTodayTomorrow() below are each a closure over THEIR OWN mount()'s
+// local DOM elements, so if you navigate away before one finishes and come
+// back before it actually resolves, the in-flight fetch's own render call
+// was writing into the OLD, torn-down mount's detached elements --
+// invisible, so nothing ever seemed to happen. Routing each load's render
+// call through these instead of calling its own closed-over render
+// function directly means whichever mount is actually visible always
+// receives the update, even when the fetch that produced it was kicked off
+// by a mount that no longer exists.
+let activeRender = null;
+let activeRenderShifts = null;
+let activeRenderTodayTomorrow = null;
+
 // Today & Tomorrow's column 1, by request ("go back to a 3 column layout
 // ... Add into column 1: digital clocks: Timezones: QLD, NSW, WA,
 // Phillipines, Sri Lanka"). Static (no fetch involved) -- rendered fresh by
@@ -484,6 +501,10 @@ export function mount(container) {
   new ResizeObserver(syncScorecardsMinHeight).observe(ttSectionEl);
   window.addEventListener('resize', syncScorecardsMinHeight);
 
+  // This mount is now the active one -- see activeRenderTodayTomorrow's own
+  // comment up top.
+  activeRenderTodayTomorrow = renderTodayTomorrow;
+
   if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
   else loadTodayTomorrow(justConnectedStrety);
   // Fire-and-forget, not awaited -- primes cachedServiceCallStatusOptions
@@ -513,7 +534,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastTodayTomorrowData = data;
-      renderTodayTomorrow(data);
+      activeRenderTodayTomorrow(data);
     } catch (err) {
       ttStatusEl.hidden = false;
       ttStatusEl.className = 'status error';
@@ -1176,6 +1197,10 @@ export function mount(container) {
   shiftsLeaveReportButton.addEventListener('click', () => openLeaveReportModal());
   shiftsRefreshButton.addEventListener('click', () => loadShifts(lastShiftsWeekStart, true));
 
+  // This mount is now the active one -- see activeRenderShifts's own
+  // comment up top.
+  activeRenderShifts = renderShifts;
+
   if (lastShiftsData) renderShifts(lastShiftsData);
   else loadShifts(null);
 
@@ -1199,7 +1224,7 @@ export function mount(container) {
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastShiftsWeekStart = data.weekStart;
       lastShiftsData = data;
-      renderShifts(data);
+      activeRenderShifts(data);
     } catch (err) {
       shiftsStatusEl.hidden = false;
       shiftsStatusEl.className = 'status error';
@@ -1760,6 +1785,10 @@ export function mount(container) {
   // already has real scorecard data just restores it instantly with no
   // new request at all; only a genuinely first visit this tab session, or
   // an explicit click of Refresh, hits the API.
+  // This mount is now the active one -- see activeRender's own comment up
+  // top.
+  activeRender = render;
+
   if (lastData) {
     render(lastData);
   } else {
@@ -1779,7 +1808,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
-      render(data);
+      activeRender(data);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
