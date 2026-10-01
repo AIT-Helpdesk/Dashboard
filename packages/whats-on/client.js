@@ -1301,8 +1301,10 @@ export function mount(container) {
         // Day+month, not a bare day number -- unlike a single-month
         // calendar, this 14-day window routinely spans two different
         // months (sometimes two different years), so the month has to be
-        // shown on every cell, not just implied by a shared header.
-        const dayLabel = shiftsDayNumLabel(dayKey);
+        // shown on every cell, not just implied by a shared header. Day of
+        // week ("Mon") appended too, by request -- same shiftsDayOfWeekLabel()
+        // the Leave Report's own Day column already uses.
+        const dayLabel = `${shiftsDayNumLabel(dayKey)} <span class="calendar-cell-dow">${shiftsDayOfWeekLabel(dayKey)}</span>`;
         td.innerHTML = `
           <span class="calendar-cell-daynum" style="cursor: default;">${dayLabel}</span>
           <div class="calendar-cell-entries">${entries.map((e) => shiftEntryHtml(e)).join('')}</div>

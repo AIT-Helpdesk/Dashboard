@@ -3770,6 +3770,11 @@ html[data-rotate-active="true"] .tickets-dashboard-notes {
   margin-bottom: 0.25rem;
   cursor: pointer;
 }
+/* The appended day-of-week ("Mon"), by request -- not bold like the date
+   itself, which keeps .calendar-cell-daynum's own font-weight: 700. */
+.calendar-cell-dow {
+  font-weight: 400;
+}
 .calendar-cell-daynum:hover:not(:disabled) {
   color: var(--accent);
   text-decoration: underline;
