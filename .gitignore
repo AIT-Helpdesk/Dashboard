@@ -85,6 +85,12 @@ packages/*-tracker/notes.json
 # machine at the time. Never committed from here on.
 packages/shell/page-help-text.json
 
+# Same reasoning, learned from that exact incident -- Check Up's own
+# currently-set Helpdesk Handler (packages/check-up/server.js's
+# readHandler()/writeHandler()) is live operational state set by whoever's
+# using the page, not source. Never committed.
+packages/check-up/helpdesk-handler.json
+
 # Same reasoning, for Meeting Prep's own report data (packages/meeting-prep/data/) -- real,
 # live client report content (parsed Datto RMM/Dark Web ID PDFs), not
 # source, and not expected to live in git long-term: once the automated

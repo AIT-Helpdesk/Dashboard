@@ -248,6 +248,17 @@ Get-ScheduledTaskInfo -TaskName "AmbientStretyAutotaskSync"   # LastTaskResult: 
 Get-Content C:\apps\autotask-dashboard-git\logs\strety-autotask-sync.log
 ```
 
+## One-time data sync -- product_mappings' real Microsoft SKU GUIDs
+
+Needed once, the first deploy after this was added (not part of the normal "Updating later" flow below -- `git pull` brings the CODE change, `db.js`'s own `migrateAddMsSkuId()` adds the empty COLUMN automatically on next start, but the real per-row DATA (every SKU's actual `ms_sku_id`, a few corrected/new rows) only exists in this chat session and has to be applied by hand, same reasoning as every other real per-environment `data.db` on this dashboard):
+
+```powershell
+cd C:\apps\autotask-dashboard-git\packages\contract-checks
+node apply-product-mapping-sku-updates.js
+```
+
+Safe to run more than once (every step is idempotent -- see the script's own header comment). Restart `AmbientDashboard` afterward if it was already running.
+
 ## Updating later
 
 The project now has a real git remote (`AIT-Helpdesk/Dashboard` on GitHub, cloned at `C:\apps\autotask-dashboard-git` on the server), so updates are just:

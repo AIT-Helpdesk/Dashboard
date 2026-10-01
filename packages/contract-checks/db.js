@@ -177,6 +177,7 @@ db.exec(`
     id INTEGER PRIMARY KEY,
     ingram_product_name TEXT NOT NULL UNIQUE,
     ms_sku_part_number TEXT,
+    ms_sku_id TEXT,
     friendly_ms_product_name TEXT,
     autotask_contract_server_name TEXT,
     autotask_contract_invoice_name TEXT,
@@ -185,6 +186,20 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 `);
+
+// Adds ms_sku_id to an already-existing product_mappings table -- a plain
+// nullable ADD COLUMN (no CHECK constraint involved, so no recreate-table
+// dance needed), same direct approach every other ADD COLUMN migration in
+// this file uses. Real Microsoft SKU GUID (distinct from
+// ms_sku_part_number's own human-readable code, e.g. "SPB") -- every
+// pre-existing row starts NULL, filled in by hand later the same way
+// autotask_contract_server_name/autotask_contract_invoice_name already are.
+function migrateAddMsSkuId() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('product_mappings')`).all();
+  if (columns.some((c) => c.name === 'ms_sku_id')) return;
+  db.exec(`ALTER TABLE product_mappings ADD COLUMN ms_sku_id TEXT`);
+}
+migrateAddMsSkuId();
 
 // Adds `name` to an already-existing templates table (the 'ticket_note' row
 // created before this concept existed) -- a plain nullable ADD COLUMN, same
