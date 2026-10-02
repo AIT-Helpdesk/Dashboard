@@ -220,6 +220,10 @@
       {
         "type": "page",
         "id": "ingram-orders-update-contracts"
+      },
+      {
+        "type": "page",
+        "id": "product-mappings"
       }
     ],
     "hidden": true

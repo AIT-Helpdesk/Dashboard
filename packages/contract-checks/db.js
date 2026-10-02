@@ -445,6 +445,87 @@ function listProductMappings() {
   return db.prepare('SELECT * FROM product_mappings ORDER BY ingram_product_name ASC').all();
 }
 
+// View/edit UI for product_mappings, by request -- the "not-yet-built
+// feature" comment above finally gets one. ingram_product_name is the
+// table's own real key (UNIQUE NOT NULL, see CREATE TABLE above), so both
+// create and update check for a real collision first and throw a plain
+// Error with a clean message -- server.js's own route catches this and
+// responds 400, rather than ever surfacing a raw SQLite constraint
+// message to the UI. free stored as 1/0/NULL (Yes/No/not specified),
+// same convention the table's own CREATE TABLE comment documents --
+// normalized here from whatever truthy/falsy/null the client sent.
+function normalizeFree(free) {
+  return free === null || free === undefined || free === '' ? null : free ? 1 : 0;
+}
+
+function assertNoDuplicateIngramName(ingramProductName, excludeId) {
+  const existing = db.prepare('SELECT id FROM product_mappings WHERE ingram_product_name = ?').get(ingramProductName);
+  if (existing && existing.id !== excludeId) {
+    throw new Error(`A row already exists for Ingram Product Name "${ingramProductName}".`);
+  }
+}
+
+function createProductMapping(data) {
+  const ingramProductName = (data.ingramProductName || '').trim();
+  if (!ingramProductName) throw new Error('Ingram Product Name is required.');
+  assertNoDuplicateIngramName(ingramProductName, null);
+  const now = nowIso();
+  const info = db
+    .prepare(
+      `INSERT INTO product_mappings
+         (ingram_product_name, ms_sku_part_number, ms_sku_id, friendly_ms_product_name, autotask_contract_server_name, autotask_contract_invoice_name, free, created_at, updated_at)
+       VALUES ($ingramProductName, $msSkuPartNumber, $msSkuId, $friendlyMsProductName, $autotaskContractServerName, $autotaskContractInvoiceName, $free, $now, $now)`
+    )
+    .run({
+      $ingramProductName: ingramProductName,
+      $msSkuPartNumber: data.msSkuPartNumber || null,
+      $msSkuId: data.msSkuId || null,
+      $friendlyMsProductName: data.friendlyMsProductName || null,
+      $autotaskContractServerName: data.autotaskContractServerName || null,
+      $autotaskContractInvoiceName: data.autotaskContractInvoiceName || null,
+      $free: normalizeFree(data.free),
+      $now: now,
+    });
+  return db.prepare('SELECT * FROM product_mappings WHERE id = ?').get(Number(info.lastInsertRowid));
+}
+
+function updateProductMapping(id, data) {
+  const existing = db.prepare('SELECT id FROM product_mappings WHERE id = ?').get(id);
+  if (!existing) throw new Error('No such product mapping row.');
+  const ingramProductName = (data.ingramProductName || '').trim();
+  if (!ingramProductName) throw new Error('Ingram Product Name is required.');
+  assertNoDuplicateIngramName(ingramProductName, id);
+  db.prepare(
+    `UPDATE product_mappings SET
+       ingram_product_name = $ingramProductName,
+       ms_sku_part_number = $msSkuPartNumber,
+       ms_sku_id = $msSkuId,
+       friendly_ms_product_name = $friendlyMsProductName,
+       autotask_contract_server_name = $autotaskContractServerName,
+       autotask_contract_invoice_name = $autotaskContractInvoiceName,
+       free = $free,
+       updated_at = $now
+     WHERE id = $id`
+  ).run({
+    $id: id,
+    $ingramProductName: ingramProductName,
+    $msSkuPartNumber: data.msSkuPartNumber || null,
+    $msSkuId: data.msSkuId || null,
+    $friendlyMsProductName: data.friendlyMsProductName || null,
+    $autotaskContractServerName: data.autotaskContractServerName || null,
+    $autotaskContractInvoiceName: data.autotaskContractInvoiceName || null,
+    $free: normalizeFree(data.free),
+    $now: nowIso(),
+  });
+  return db.prepare('SELECT * FROM product_mappings WHERE id = ?').get(id);
+}
+
+function deleteProductMapping(id) {
+  const existing = db.prepare('SELECT id FROM product_mappings WHERE id = ?').get(id);
+  if (!existing) throw new Error('No such product mapping row.');
+  db.prepare('DELETE FROM product_mappings WHERE id = ?').run(id);
+}
+
 // Every template's key/name/last-updated -- not the content itself (kept
 // out deliberately, same "list view stays light" reasoning most list
 // endpoints on this dashboard already follow), for a future picker UI once
@@ -894,4 +975,7 @@ module.exports = {
   getTemplate,
   setTemplate,
   listProductMappings,
+  createProductMapping,
+  updateProductMapping,
+  deleteProductMapping,
 };

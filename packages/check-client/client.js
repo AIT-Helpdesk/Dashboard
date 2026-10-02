@@ -185,7 +185,7 @@ export function mount(container) {
   // errored). ANY message m365StatusEl shows mirrors here now, not just
   // whichever one a specific call site remembered to toggle -- by
   // request ("show any message... not just the last one", after
-  // "Waiting on Subscriptions and Contracts..." -- set from
+  // "Waiting for Subscriptions and Contracts..." -- set from
   // loadSubscriptions(), not loadM365Tenancy() itself -- didn't show).
   // syncSummaryM365Pending() below is called right after every single
   // place this file touches m365StatusEl, so this can't drift out of
@@ -932,7 +932,7 @@ export function mount(container) {
     // linger on screen while a new one is in flight.
     m365StatusEl.hidden = false;
     m365StatusEl.className = 'status loading';
-    m365StatusEl.textContent = 'Waiting on Subscriptions and Contracts...';
+    m365StatusEl.textContent = 'Waiting for Subscriptions and Contracts...';
     m365SummaryEl.hidden = true;
     m365ResultsEl.innerHTML = '';
     syncSummaryM365Pending();
@@ -1132,7 +1132,7 @@ export function mount(container) {
       return `
       <table class="chk-m365-table">
         <thead>
-          <tr class="shaded-row"><th>Product Name</th><th>Status</th><th>Enabled</th><th>Consumed</th><th>Suspended</th></tr>
+          <tr class="shaded-row"><th>Product Name</th><th>Status</th><th>Licenses</th><th>Consumed</th><th>Suspended</th></tr>
         </thead>
         <tbody>
           ${skus.map((s) => m365RowHtml(s, highlightMismatch)).join('')}
@@ -1141,27 +1141,51 @@ export function mount(container) {
     `;
     }
 
-    // Display Name/Email/User Type/Department/Office/Licenses, by request
-    // -- Office is always blank right now (see server.js's own comment on
-    // this -- the underlying Rewst workflow doesn't $select officeLocation
-    // yet), shown as its own column regardless so it starts working with
-    // no client-side change the moment that's added. Licenses already
-    // comes back as friendly product names (server.js's own ms_sku_id
-    // match), joined onto one line, comma-separated -- a wrapping <td>,
-    // not .ticket-number's nowrap, since a well-licensed user can easily
-    // have 4-5 products listed. User Type ("Member"/"Guest", Graph's own
-    // real distinction) added by request, confirmed live against real
-    // data (one real tenant: 84 Member, 28 Guest).
+    // Display Name/Email/User Type/Status/Department/Office/Licenses, by
+    // request -- Office is always blank right now (see server.js's own
+    // comment on this -- the underlying Rewst workflow doesn't $select
+    // officeLocation yet), shown as its own column regardless so it starts
+    // working with no client-side change the moment that's added. Licenses
+    // already comes back as friendly product names (server.js's own
+    // ms_sku_id match), joined onto one line, comma-separated -- a
+    // wrapping <td>, not .ticket-number's nowrap, since a well-licensed
+    // user can easily have 4-5 products listed. User Type ("Member"/
+    // "Guest", Graph's own real distinction) and Status (accountEnabled,
+    // as "Enabled"/"Disabled") both added by request, confirmed live
+    // against real data.
     const M365_USERS_COLUMNS = [
       { key: 'displayName', label: 'Display Name' },
       { key: 'email', label: 'Email' },
       { key: 'userType', label: 'User Type' },
+      { key: 'status', label: 'Status' },
       { key: 'department', label: 'Department' },
       { key: 'office', label: 'Office' },
       { key: 'licenses', label: 'Licenses' },
     ];
     function m365UserCellText(u, key) {
-      return key === 'licenses' ? u.licenses.join(', ') : u[key] || '';
+      if (key === 'licenses') return u.licenses.join(', ');
+      if (key === 'status') return u.accountEnabled ? 'Enabled' : 'Disabled';
+      return u[key] || '';
+    }
+    // Red row+text for a Disabled account that STILL holds a license
+    // (wasting a paid seat), orange/yellow row+text for an Enabled
+    // account with NO license (a possible provisioning gap) -- by
+    // request ("the red and yellow thing"). Same --row-warn-bg red tint
+    // this dashboard already uses elsewhere (chk-summary-row-mismatch
+    // etc.) for the red case; a parallel amber tint, new to this table,
+    // for the yellow/orange case -- there's no existing dashboard-wide
+    // "whole row amber" convention to reuse, only cell-level .status.warn
+    // (#b45309), which this borrows for the text color.
+    function m365UserRowClass(u) {
+      const hasLicense = u.licenses.length > 0;
+      if (!u.accountEnabled && hasLicense) return ' class="chk-m365-user-disabled-licensed"';
+      // Any unlicensed row still showing here is already Enabled (the
+      // server's own filter drops a Disabled+unlicensed row entirely), so
+      // this plain !hasLicense check already covers Guests too -- by
+      // request ("have Guest rows with no license yellow"), no separate
+      // userType check needed.
+      if (!hasLicense) return ' class="chk-m365-user-enabled-unlicensed"';
+      return '';
     }
     // Per-column filters, by request ("filters on the column headings"),
     // not one combined box -- a second header row, one plain text input
@@ -1208,7 +1232,7 @@ export function mount(container) {
         countEl.textContent = anyFilterActive ? `[${filtered.length}]` : '';
         tbody.innerHTML =
           filtered.length > 0
-            ? filtered.map((u) => `<tr>${M365_USERS_COLUMNS.map((c) => `<td>${escapeHtml(m365UserCellText(u, c.key))}</td>`).join('')}</tr>`).join('')
+            ? filtered.map((u) => `<tr${m365UserRowClass(u)}>${M365_USERS_COLUMNS.map((c) => `<td>${escapeHtml(m365UserCellText(u, c.key))}</td>`).join('')}</tr>`).join('')
             : `<tr><td colspan="${M365_USERS_COLUMNS.length}" class="status">No users matching these filters.</td></tr>`;
       }
       table.querySelectorAll('[data-filter-key]').forEach((input) => {

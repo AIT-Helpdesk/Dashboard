@@ -17,5 +17,6 @@ export const mount = createTabbedPageMount({
     { id: 'ingram-subscriptions-update-contracts', label: 'Ingram Subscriptions' },
     { id: 'ingram-orders-update-contracts', label: 'Ingram Orders' },
     { id: 'match-ids', label: 'Match IDs' },
+    { id: 'product-mappings', label: 'Product Mappings' },
   ],
 });

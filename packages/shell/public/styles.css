@@ -4343,6 +4343,24 @@ tr.chk-summary-row-mismatch {
   background: var(--row-warn-bg) !important;
 }
 
+/* M365 Users table (buildM365UsersTable() in check-client/client.js), by
+   request ("the red and yellow thing") -- a Disabled account that still
+   holds a license wastes a paid seat (red: same --row-warn-bg tint as
+   chk-summary-row-mismatch above, plus red text, since this is both a
+   row shade AND a text color by request, not just the usual bg-only
+   tint); an Enabled account with NO license is a possible provisioning
+   gap (amber -- a parallel tint new to this table, there's no existing
+   dashboard-wide "whole row amber" to reuse, text color matches
+   .status.warn's own #b45309). */
+tr.chk-m365-user-disabled-licensed {
+  background: var(--row-warn-bg) !important;
+  color: #dc2626 !important;
+}
+tr.chk-m365-user-enabled-unlicensed {
+  background: color-mix(in srgb, #f59e0b 12%, var(--card)) !important;
+  color: #b45309 !important;
+}
+
 tr.row-units-changed {
   background: var(--row-changed-bg) !important;
 }
@@ -8871,4 +8889,57 @@ tr.accrued-time-yellow-row th {
 }
 .mtg-devicetype-caveat {
   margin-top: 0.6rem;
+}
+
+/* Product Mappings (view/edit product_mappings) -- new page, by request.
+   Compact table cells, same "lots of columns, keep it readable" reasoning
+   Check Client/Contract Checks' own tables already use, just scoped to
+   this page's own table class rather than a shared page-wrapper rule. */
+.pm-table th,
+.pm-table td {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.5rem;
+}
+.pm-filter-row th {
+  padding-top: 0.25rem;
+  padding-bottom: 0.4rem;
+}
+.pm-filter-row input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.78rem;
+}
+.pm-actions-cell {
+  white-space: nowrap;
+}
+.pm-actions-cell .pm-delete-button {
+  margin-left: 0.5rem;
+  color: #dc2626;
+}
+/* Wider than the default .history-modal-panel (30rem) -- this form has 7
+   fields, by request ("view and edit the product_mapping table").
+   Compound selector (.history-modal-panel.pm-modal-panel), not a bare
+   .pm-modal-panel alone -- same same-specificity-single-class footgun
+   documented elsewhere in this file (.datto-donut-wrap.critical-donut-
+   wrap--large's own comment) -- a bare single-class rule here would be
+   one source-order accident away from silently losing to
+   .history-modal-panel's own width/max-width again. */
+.history-modal-panel.pm-modal-panel {
+  width: 34rem;
+  max-width: 92vw;
+}
+.pm-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.6rem;
+}
+.pm-form-field label {
+  font-size: 0.8rem;
+  color: var(--muted);
 }

@@ -363,7 +363,10 @@ router.get('/m365-users', async (req, res) => {
     // up), by request -- drops the bulk of real noise this tenant actually
     // has (dozens of disabled, unlicensed guest/ex-staff accounts, see
     // this route's own live test this session: 73 total users, 11
-    // licensed).
+    // licensed). accountEnabled briefly vanished from this Rewst workflow's
+    // own output (confirmed live, a separate session finding) -- this
+    // filter quietly degraded to "has a license" only for a while; back to
+    // its original intended behaviour now that the field has returned.
     const userRows = (usersRes.data?.get_users?.data?.value || []).filter((u) => u.accountEnabled || (u.assignedLicenses || []).length > 0);
 
     // Licenses shown as friendly names, not raw GUIDs, by request -- same
@@ -390,11 +393,23 @@ router.get('/m365-users', async (req, res) => {
         // Real field, confirmed live this session (Kraftur: 84 Member, 28
         // Guest) -- Graph's own "Member"/"Guest" distinction, by request.
         userType: u.userType || '',
+        // Shown as a "Status" column (Enabled/Disabled) client-side, and
+        // also drives the red/orange row-highlight there -- by request.
+        accountEnabled: Boolean(u.accountEnabled),
         department: u.department || '',
         office: u.officeLocation || '',
         licenses: (u.assignedLicenses || []).map((l) => nameBySkuId.get((l.skuId || '').trim().toLowerCase()) || l.skuId).filter(Boolean),
       }))
-      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+      // All Members before any Guest (or other/blank userType), by
+      // request ("Show all Members first, then guest users") -- same
+      // table, just grouped; alphabetical by displayName within each
+      // group, same as before.
+      .sort((a, b) => {
+        const aMember = a.userType === 'Member' ? 0 : 1;
+        const bMember = b.userType === 'Member' ? 0 : 1;
+        if (aMember !== bMember) return aMember - bMember;
+        return a.displayName.localeCompare(b.displayName);
+      });
 
     res.json({ users });
   } catch (err) {
