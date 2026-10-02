@@ -1891,8 +1891,11 @@ export function mount(container) {
   // consecutive sick days ... show sick individually" (each real sick day
   // is its own event worth seeing on its own line, unlike a planned
   // Vacation block). Same exact label SHIFT_CATEGORIES' own sickOther
-  // entry uses.
-  const NEVER_MERGE_TYPES = new Set(['Sick/Other Leave']);
+  // entry uses. Accruing TIL added the same way, by request ("don't run
+  // the times into one item for Accrue TIL... leave them as individual
+  // entries like we do for Sick Leave") -- same exact label
+  // SHIFT_CATEGORIES' own accruingTil entry uses.
+  const NEVER_MERGE_TYPES = new Set(['Sick/Other Leave', 'Accruing TIL']);
 
   // Merges consecutive-day rows (same Type, immediately-following
   // calendar date) for one employee's already-sorted-by-date row list
