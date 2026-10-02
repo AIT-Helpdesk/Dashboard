@@ -4259,11 +4259,15 @@ html[data-rotate-active="true"] .check-up-notes {
 }
 .wo-leave-report-group th:nth-child(1),
 .wo-leave-report-group td:nth-child(1) {
-  width: 3rem;
+  /* Widened from 3rem, by request -- too narrow for a merged-run Day
+     label like "Mon-Thu", not just a single "Mon". */
+  width: 4.5rem;
 }
 .wo-leave-report-group th:nth-child(2),
 .wo-leave-report-group td:nth-child(2) {
-  width: 6rem;
+  /* Widened from 6rem, by request -- too narrow for a merged-run Date
+     label like "2 Oct - 4 Oct", not just a single "28 Sep". */
+  width: 8rem;
 }
 .wo-leave-report-group th:nth-child(4),
 .wo-leave-report-group td:nth-child(4) {

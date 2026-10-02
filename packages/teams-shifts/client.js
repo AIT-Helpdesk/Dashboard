@@ -336,7 +336,8 @@ export function mount(container) {
     // part after "--" previously), not the raw displayName too -- by
     // request, that was repeating the same information twice.
     if (e.kind !== 'publicHoliday' && e.displayName) titleLines.push(`Label: ${cat ? cat.label : e.displayName}`);
-    if (e.schedulingGroupName) titleLines.push(`Group: ${e.schedulingGroupName}`);
+    // Group (the scheduling group name, e.g. "On Call") dropped from the
+    // tooltip, by request -- redundant with the Label line above.
     if (e.notes) titleLines.push(`Notes: ${e.notes}`);
     if (!e.published) titleLines.push('Not yet published (draft)');
     const isUnapprovedLeave = e.kind === 'leave' && e.approved === false;
