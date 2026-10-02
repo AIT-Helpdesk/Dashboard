@@ -127,7 +127,7 @@ export function mount(container) {
       </form>
     </header>
     <div class="chk-summary-box">
-      <h2 class="chk-section-heading">Client Check Summary</h2>
+      <h2 class="chk-section-heading">Client Check Summary <span id="summary-m365-pending" class="status loading" hidden>Loading Microsoft 365 Tenancy...</span></h2>
       <p id="summary-status" class="status" hidden>Search above to see a combined Ingram Subscriptions / Microsoft 365 Tenancy comparison.</p>
       <div id="summary-results" class="results"></div>
     </div>
@@ -178,6 +178,24 @@ export function mount(container) {
   const subsSummaryEl = container.querySelector('#subs-summary');
   const subsResultsEl = container.querySelector('#subs-results');
   const m365StatusEl = container.querySelector('#m365-status');
+  // Mirrors m365StatusEl's own current message next to the Client Check
+  // Summary heading, by request -- the Summary combines Ingram
+  // Subscriptions AND Microsoft 365 Tenancy, so it's otherwise not
+  // obvious up there that M365 hasn't finished (or hasn't matched, or
+  // errored). ANY message m365StatusEl shows mirrors here now, not just
+  // whichever one a specific call site remembered to toggle -- by
+  // request ("show any message... not just the last one", after
+  // "Waiting on Subscriptions and Contracts..." -- set from
+  // loadSubscriptions(), not loadM365Tenancy() itself -- didn't show).
+  // syncSummaryM365Pending() below is called right after every single
+  // place this file touches m365StatusEl, so this can't drift out of
+  // sync with a future call site the way the old hard-coded toggles did.
+  const summaryM365PendingEl = container.querySelector('#summary-m365-pending');
+  function syncSummaryM365Pending() {
+    summaryM365PendingEl.hidden = m365StatusEl.hidden;
+    summaryM365PendingEl.className = m365StatusEl.className;
+    summaryM365PendingEl.textContent = m365StatusEl.textContent;
+  }
   const m365SummaryEl = container.querySelector('#m365-summary');
   const m365ResultsEl = container.querySelector('#m365-results');
   const servicesStatusEl = container.querySelector('#services-status');
@@ -917,6 +935,7 @@ export function mount(container) {
     m365StatusEl.textContent = 'Waiting on Subscriptions and Contracts...';
     m365SummaryEl.hidden = true;
     m365ResultsEl.innerHTML = '';
+    syncSummaryM365Pending();
     try {
       const params = new URLSearchParams({ client });
       const data = await fetchJson(`/api/check-client/subscriptions?${params.toString()}`, 'GET');
@@ -972,11 +991,13 @@ export function mount(container) {
 
     if (!subscriptionId && !clientName) {
       m365StatusEl.textContent = 'No single client resolved above -- narrow the search to look up Microsoft 365 Tenancy.';
+      syncSummaryM365Pending();
       return;
     }
 
     m365StatusEl.className = 'status loading';
     m365StatusEl.textContent = 'Loading Microsoft 365 Tenancy...';
+    syncSummaryM365Pending();
     try {
       const params = new URLSearchParams();
       if (subscriptionId) params.set('subscriptionId', subscriptionId);
@@ -988,6 +1009,7 @@ export function mount(container) {
     } catch (err) {
       m365StatusEl.className = 'status error';
       m365StatusEl.textContent = `Error: ${err.message}`;
+      syncSummaryM365Pending();
     }
   }
 
@@ -998,9 +1020,11 @@ export function mount(container) {
       m365StatusEl.textContent = m365UnmatchedText(data);
       m365SummaryEl.hidden = true;
       m365ResultsEl.innerHTML = '';
+      syncSummaryM365Pending();
       return;
     }
     m365StatusEl.hidden = true;
+    syncSummaryM365Pending();
     m365SummaryEl.hidden = false;
     const sourceText = data.tenantSource === 'rewst-name-match' ? ' (matched by name via Rewst -- no Ingram Microsoft subscription found)' : '';
     // The client name was rendering at the line's own normal (larger)
@@ -1152,21 +1176,33 @@ export function mount(container) {
       const filters = {};
       const table = document.createElement('table');
       table.className = 'chk-m365-users-table';
+      // The header row's own far-right edge carries the live filtered
+      // match count, by request ("when the user table filters are used,
+      // show a row count match in the column header like [N]", "make
+      // that row count ... the same size and style as the column headers
+      // and put it on the far right") -- same plain <th> text as every
+      // other header (no separate color/size override), just floated to
+      // the right within the LAST column's own header cell. Empty/hidden
+      // until at least one filter is actually narrowing the list, see
+      // renderRows() below.
       table.innerHTML = `
         <thead>
-          <tr class="shaded-row">${M365_USERS_COLUMNS.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('')}</tr>
+          <tr class="shaded-row">${M365_USERS_COLUMNS.map((c, i) => `<th>${escapeHtml(c.label)}${i === M365_USERS_COLUMNS.length - 1 ? ' <span class="chk-m365-users-count"></span>' : ''}</th>`).join('')}</tr>
           <tr class="chk-m365-users-filter-row">${M365_USERS_COLUMNS.map((c) => `<th><input type="text" data-filter-key="${c.key}" placeholder="Filter..." /></th>`).join('')}</tr>
         </thead>
         <tbody></tbody>
       `;
       const tbody = table.querySelector('tbody');
+      const countEl = table.querySelector('.chk-m365-users-count');
       function renderRows() {
+        const anyFilterActive = Object.values(filters).some(Boolean);
         const filtered = users.filter((u) =>
           M365_USERS_COLUMNS.every((c) => {
             const f = filters[c.key];
             return !f || m365UserCellText(u, c.key).toLowerCase().includes(f);
           })
         );
+        countEl.textContent = anyFilterActive ? `[${filtered.length}]` : '';
         tbody.innerHTML =
           filtered.length > 0
             ? filtered.map((u) => `<tr>${M365_USERS_COLUMNS.map((c) => `<td>${escapeHtml(m365UserCellText(u, c.key))}</td>`).join('')}</tr>`).join('')
@@ -1188,6 +1224,15 @@ export function mount(container) {
     group.innerHTML = mainSkus.length ? m365TableHtml(mainSkus, true) : '<p class="status">No non-Free subscribed SKUs found.</p>';
     m365ResultsEl.appendChild(group);
 
+    // Both toggle buttons sit together in one row now, by request ("put
+    // the Show Users button next to the Show Free Products button" --
+    // previously Show Users sat above its own users table, ahead of Show
+    // Free Products, which read oddly). Same .date-form flex-row-with-gap
+    // class this dashboard already uses elsewhere to group small buttons.
+    const buttonRow = document.createElement('div');
+    buttonRow.className = 'date-form';
+    m365ResultsEl.appendChild(buttonRow);
+
     // "Show Users" -- a second, separate Rewst call (REWST_WEBHOOK_M365_
     // Users_URL via /api/check-client/m365-users), by request, only fired
     // the first time this button is actually clicked (not on every
@@ -1200,7 +1245,8 @@ export function mount(container) {
     usersToggle.type = 'button';
     usersToggle.className = 'button-link button-link--small chk-m365-users-toggle';
     usersToggle.textContent = 'Show Users';
-    m365ResultsEl.appendChild(usersToggle);
+    // Appended to buttonRow further down, AFTER Show Free Products -- by
+    // request, Show Users goes second.
 
     const usersGroup = document.createElement('div');
     usersGroup.className = 'resource-group chk-m365-group';
@@ -1236,7 +1282,7 @@ export function mount(container) {
       freeToggle.type = 'button';
       freeToggle.className = 'button-link button-link--small chk-m365-free-toggle';
       freeToggle.textContent = `Show Free Products (${freeSkus.length})`;
-      m365ResultsEl.appendChild(freeToggle);
+      buttonRow.appendChild(freeToggle);
 
       const freeGroup = document.createElement('div');
       freeGroup.className = 'resource-group chk-m365-group';
@@ -1249,6 +1295,8 @@ export function mount(container) {
         freeToggle.textContent = freeGroup.hidden ? `Show Free Products (${freeSkus.length})` : `Hide Free Products (${freeSkus.length})`;
       });
     }
+
+    buttonRow.appendChild(usersToggle);
   }
 
   function m365UnmatchedText(data) {

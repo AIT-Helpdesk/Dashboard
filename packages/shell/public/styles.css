@@ -2047,6 +2047,15 @@ h1 {
      .text-highlight-green), by request. */
   color: #16a34a;
 }
+/* "Loading Microsoft 365 Tenancy..." mirrored next to the Client Check
+   Summary heading while it's in flight (#summary-m365-pending), by
+   request -- .status.loading's own orange color already wins on
+   specificity over the heading's green, this just backs off the
+   heading's own bold/larger size so the note doesn't read as loudly. */
+.check-client-page .chk-section-heading #summary-m365-pending {
+  font-size: 0.85rem;
+  font-weight: 400;
+}
 .check-client-page .chk-section-heading:first-of-type {
   margin-top: 1rem;
 }
@@ -2882,19 +2891,20 @@ table {
   font-size: 0.8rem;
   font-weight: 400;
 }
-/* The "Show/Hide Free Products" toggle between the two M365 Tenancy
-   tables (renderM365Tenancy() in check-client/client.js) -- both
-   .chk-m365-group siblings are inline-block (fit-content), so this needs
-   its own block display to land on its own line at all. 3px top margin
-   (not the usual rem-based spacing elsewhere on this dashboard) and a
-   size a step down from .button-link--small's own already-small
-   padding/font-size, both by request -- sits snug just under the main
-   table rather than reading as a separate section. */
-.chk-m365-free-toggle {
-  display: block;
-  margin: 3px 0 0.5rem;
-  padding: 0.15rem 0.5rem;
-  font-size: 0.68rem;
+/* Show Free Products now sits in the same .date-form button row as Show
+   Users (renderM365Tenancy() in check-client/client.js), by request --
+   its own standalone block/margin/smaller-size overrides from when it sat
+   alone on its own line below the main table are gone; it now shares
+   plain .button-link--small sizing with Show Users so the two line up. */
+/* Live filtered-row-count badge, in the M365 Users table's LAST column
+   header (buildM365UsersTable() in check-client/client.js), by request --
+   same size/weight as every other column header (no size/weight
+   override -- plain <th> inheritance), just floated to the far right of
+   that header cell and colored red (.cell-flag-red's own #dc2626, same
+   red used dashboard-wide) instead of the header's own muted grey. */
+.chk-m365-users-count {
+  float: right;
+  color: #dc2626;
 }
 /* Enabled/Consumed/Suspended (columns 3-5) -- by request, centered rather
    than left-hung; header text centered to match. Scoped to this table
