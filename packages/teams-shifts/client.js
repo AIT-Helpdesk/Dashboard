@@ -51,15 +51,31 @@ const SHIFT_CATEGORIES = [
   { key: 'onCall', label: 'On Call', color: '#eab308', match: (dn) => /^on\s*call/i.test(dn) },
   // Was "Helpdesk Handler" (key `helpdesk`) -- renamed, by request, both
   // the label AND the real /shifts entry name this matches against.
-  { key: 'specialOOO', label: 'Special O-of-O', color: '#3b82f6', match: (dn) => /special[\s-]*o[\s-]*of[\s-]*o/i.test(dn) },
+  // Lightened from #ec4899, then lightened again, by request -- the
+  // calendar renders every category as a pale color-mix() tint
+  // (categoryBackground() below), and the original pink read too close to
+  // Unpaid leave's red at that tint strength. Pink lighter, red darker/
+  // more saturated (see unpaidLeave below) -- more separation between the
+  // two pale tints, confirmed enough on its own that a grey border (tried,
+  // then explicitly removed again) wasn't needed after all.
+  { key: 'specialOOO', label: 'Special O-of-O', color: '#f9a8d4', match: (dn) => /special[\s-]*o[\s-]*of[\s-]*o/i.test(dn) },
+  // Real /timesOff reason "Unavailable" (confirmed real data, see this
+  // package's own README) previously fell through uncategorized -- by
+  // request, colored the same pink as Special O-of-O (both are real
+  // Shifts entries). "DND" folded into the same match/label since it's
+  // the same real concept under a different real spelling.
+  { key: 'unavailableDnd', label: 'Unavailable / DND', color: '#f9a8d4', match: (dn) => /\bunavailable\b|\bdnd\b/i.test(dn) },
   { key: 'vacation', label: 'Vacation', color: '#22c55e', match: (dn) => /vacation/i.test(dn) },
-  { key: 'unpaidLeave', label: 'Unpaid leave', color: '#dc2626', match: (dn) => /unpaid/i.test(dn) },
+  // Darkened from #dc2626, by request ("make the red more red") -- more
+  // visually distinct from Special O-of-O's own pink (lightened above) at
+  // the same pale tint strength.
+  { key: 'unpaidLeave', label: 'Unpaid leave', color: '#b91c1c', match: (dn) => /unpaid/i.test(dn) },
   { key: 'sickOther', label: 'Sick/Other Leave', color: '#8b5cf6', match: (dn) => /\bsick\b|other\s*leave/i.test(dn) },
-  // Pink, by request -- matches the three real spellings people actually
+  // Blue, by request -- matches the three real spellings people actually
   // enter for this ("TIL Accrual", "Accruing TIL", "ACCR-TIL"), tolerant
   // of a space or hyphen between ACCR and TIL since that one's an
   // abbreviation someone's more likely to type inconsistently.
-  { key: 'accruingTil', label: 'Accruing TIL', color: '#ec4899', match: (dn) => /til\s*accrual|accruing\s*til|accr[\s-]*til/i.test(dn) },
+  { key: 'accruingTil', label: 'Accruing TIL', color: '#3b82f6', match: (dn) => /til\s*accrual|accruing\s*til|accr[\s-]*til/i.test(dn) },
   // "floating holiday" folded in here, not into publicHoliday below --
   // confirmed against real data this tenant's real Autotask Leave billing
   // code is spelled literally "Floating Holiday" (see fetchLeaveEntries()

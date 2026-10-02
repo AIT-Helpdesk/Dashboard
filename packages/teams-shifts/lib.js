@@ -318,7 +318,18 @@ async function getShiftsByDay(teamId, aestStartKey, aestEndKeyExclusive) {
     if (r.kind === 'timeOff' && r.endDateTime) {
       const spanStart = isoDateAest(r.startDateTime);
       const spanEndExclusive = isoDateAest(r.endDateTime);
-      for (let dk = spanStart; dk < spanEndExclusive; dk = nextDayKey(dk)) place(dk, r);
+      // Real bug: a time-off entry entered with a SPECIFIC time (e.g.
+      // "1pm-5pm" on a single day) has endDateTime still on the SAME AEST
+      // day as startDateTime -- unlike a real "all day" entry, whose
+      // endDateTime is midnight the FOLLOWING day. spanEndExclusive then
+      // equals spanStart, so the old `dk < spanEndExclusive` loop never
+      // ran even once and the entry silently never got placed on the
+      // calendar at all (confirmed: "all day" entries came over fine,
+      // timed ones didn't). `dk <= spanStart` guarantees the start day
+      // always gets placed at least once; the exclusive-end comparison
+      // still applies for any REAL further days a genuine multi-day span
+      // covers, unchanged from before.
+      for (let dk = spanStart; dk <= spanStart || dk < spanEndExclusive; dk = nextDayKey(dk)) place(dk, r);
     } else if (r.dayKey) {
       place(r.dayKey, r);
     }

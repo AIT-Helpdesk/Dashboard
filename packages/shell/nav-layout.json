@@ -1,10 +1,6 @@
 [
   {
     "type": "page",
-    "id": "start-here"
-  },
-  {
-    "type": "page",
     "id": "whats-on"
   },
   {
@@ -345,7 +341,12 @@
     "type": "category",
     "id": "amber-only",
     "label": "Amber Only",
-    "children": []
+    "children": [
+      {
+        "type": "page",
+        "id": "start-here"
+      }
+    ]
   },
   {
     "type": "category",
@@ -370,6 +371,12 @@
     "type": "category",
     "id": "damon-special",
     "label": "Damon Special",
+    "children": []
+  },
+  {
+    "type": "category",
+    "id": "start-here",
+    "label": "Start Here",
     "children": []
   }
 ]

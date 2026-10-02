@@ -3188,24 +3188,25 @@ td.ticket-number {
   font-weight: normal;
 }
 
-/* Start Here -- a wider left column listing this dashboard's own pages
-   beside a narrow right column of external-system buttons. Stacks (page
-   list above links) on narrow screens, same breakpoint convention as
-   .client-summary-header-grid. */
+/* Start Here -- was a wider left column beside a narrow right column of
+   external-system buttons; that right column moved to the bottom of
+   What's On (by request, "Move the Systems, Monitoring, etc buttons
+   boxes to the bottom of the What's On page"), so this is just the one
+   column now. .start-here-layout itself kept (rather than removed from
+   client.js's own markup) purely so this rule still has a hook -- a
+   single-column grid is a no-op layout-wise but costs nothing to leave
+   as-is either. */
 .start-here-layout {
   display: grid;
-  grid-template-columns: 1fr 220px;
-  gap: 1.5rem;
-  align-items: start;
+  grid-template-columns: 1fr;
 }
 /* The live page-groups list (Daily Dashboards downward) -- two flowing
    newspaper-style columns rather than one long single-column stack, by
-   request, within the same middle area between the sidebar and the
-   right-hand quick-links panel. CSS multi-column (not grid) so groups
-   just flow top-to-bottom filling the left column before starting the
-   right one, without needing to manually split the list in half in
-   client.js. break-inside: avoid on each .resource-group keeps a single
-   category card from being split awkwardly across the column gap. */
+   request. CSS multi-column (not grid) so groups just flow top-to-bottom
+   filling the left column before starting the right one, without needing
+   to manually split the list in half in client.js. break-inside: avoid
+   on each .resource-group keeps a single category card from being split
+   awkwardly across the column gap. */
 #page-groups {
   columns: 2;
   column-gap: 1.5rem;
@@ -3215,9 +3216,6 @@ td.ticket-number {
   -webkit-column-break-inside: avoid;
 }
 @media (max-width: 720px) {
-  .start-here-layout {
-    grid-template-columns: 1fr;
-  }
   #page-groups {
     columns: 1;
   }
@@ -3625,7 +3623,11 @@ html[data-rotate-active="true"] .check-up-notes {
 }
 .check-up-handler-banner-row {
   display: flex;
-  align-items: center;
+  /* baseline, not center -- by request ("the bottom of the text needs to
+     line up with the label") -- a <label> and a <select> don't share the
+     same line-box metrics, so centering their boxes left the two text
+     baselines visibly offset even though the boxes themselves lined up. */
+  align-items: baseline;
   gap: 2.25rem;
   flex-wrap: wrap;
 }
@@ -3636,13 +3638,29 @@ html[data-rotate-active="true"] .check-up-notes {
 }
 .check-up-handler-select {
   min-width: 14rem;
-  padding: 0.4rem 0.6rem;
+  padding: 0.4rem 0.6rem 0.4rem 2rem;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg);
+  /* Same background as the box itself, by request. */
+  background-color: var(--card);
   color: #16a34a;
   font-size: 1.95rem;
   font-weight: 700;
+  /* Native arrow moved to the left, by request -- appearance: none drops
+     the browser's own (right-side, unmovable) arrow; this draws a plain
+     green chevron instead, positioned left, with padding-left above
+     widened to clear it ("Is it possible for the dropdown arrow to be on
+     the left?"). */
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%2316a34a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 0.6rem center;
+  background-size: 0.75rem;
+}
+.check-up-handler-select:disabled {
+  opacity: 0.6;
 }
 /* Professional Services/Leadership Team options, by request ("should be
    shown greyed out ... I want them still clickable") -- a plain CSS class
@@ -3655,6 +3673,94 @@ html[data-rotate-active="true"] .check-up-notes {
 .check-up-handler-meta {
   color: var(--muted);
   font-size: 0.85rem;
+}
+/* What's On's own copy of the Helpdesk Handler banner, by request --
+   wraps the label/dropdown/Last-Changed block (unchanged, see
+   .check-up-handler-banner-main below) and adds small Client Hours %/
+   Billable Hours % tiles on the right (.wo-handler-pct-grid). A SECOND
+   class alongside the shared .check-up-handler-banner, not a change to
+   that rule itself -- Check Up's own banner (which already shows these
+   same two tiles full-size, separately, below its own banner) must stay
+   exactly as it was. Compound selector (.check-up-handler-banner.wo-
+   handler-banner), not a bare .wo-handler-banner alone -- same same-
+   specificity-single-class footgun .datto-donut-wrap.critical-donut-
+   wrap--large's own comment above already documents; a compound
+   selector's higher specificity wins on its own merits regardless of
+   file order. */
+.check-up-handler-banner.wo-handler-banner {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  /* Top/bottom/right padding reduced to almost nothing, by request --
+     left kept at the shared .check-up-handler-banner's own 1.75rem so
+     the Handler label/dropdown don't shift. Compound selector (not a
+     bare .wo-handler-banner) so Check Up's own banner is untouched. */
+  padding: 0.15rem 0.15rem 0.15rem 1.75rem;
+}
+.check-up-handler-banner-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+/* Small copies of Check Up's own Client Hours %/Billable Hours % tiles,
+   by request ("Smaller copies so that they don't enlarge the helpdesk
+   handler banner box") -- same .datto-card + .check-up-pct-tile--*
+   colour classes, just no zoom (Check Up's own .check-up-pct-grid uses
+   zoom: 2.25 -- deliberately not applied here) and a much smaller fixed
+   width. */
+.wo-handler-pct-grid {
+  display: flex;
+  gap: 0.75rem;
+}
+/* Widened to whatever fits "Billable Hours"/the date-range sub-line on
+   one line each -- by request ("allow... to be wider just to fit don't
+   wrap the text lines"); still fixed (not auto), so both tiles stay the
+   same size regardless of which label is longer. */
+.wo-handler-pct-grid .datto-card {
+  width: 8.5rem;
+  padding: 0.4rem 0.6rem;
+}
+.wo-handler-pct-grid .datto-card-label,
+.wo-handler-pct-grid .datto-card-sub {
+  white-space: nowrap;
+}
+/* ~50% of the tile's own width, by request. */
+.wo-handler-pct-number {
+  font-size: 2.4rem;
+  font-weight: 700;
+}
+/* The external-system quick-link boxes (Systems/Monitoring/etc), moved
+   here from Start Here's own right-hand sidebar column, by request
+   ("Move the Systems, Monitoring, etc buttons boxes to the bottom of the
+   What's On page... put them horizontally across only wrapping when the
+   current row is full"). Each category keeps its own existing
+   .resource-group box/.start-here-buttons vertical button stack
+   unchanged -- only the ARRANGEMENT of the boxes themselves changes, from
+   Start Here's vertical sidebar stack to a horizontal, wrapping flex row
+   here. flex: 0 0 auto on each box -- sized to its own content, not
+   stretched to fill the row. */
+.wo-links-section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+.wo-links-section .resource-group {
+  flex: 0 0 auto;
+}
+/* Special Staff Hours button, by request moved inside the Helpdesk
+   Handler banner itself, on the right, just before the Client/Billable
+   Hours % tiles -- grouped with .wo-handler-pct-grid in one wrapper so
+   the banner's own space-between (.wo-handler-banner) keeps this whole
+   group pinned to the right of the Handler dropdown, with the button
+   sitting immediately left of the tiles via this wrapper's own gap. */
+.wo-handler-right {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
 }
 /* 50% bigger than Datto RMM's own default donut (7.5rem -> 11.25rem, size
    120 -> 180 passed to donutSvg() on the JS side), by request. A compound

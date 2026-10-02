@@ -34,7 +34,7 @@ export function mount(container) {
     <p id="status" class="status">Loading...</p>
     <div id="handler-section" class="check-up-handler-banner" hidden>
       <div class="check-up-handler-banner-row">
-        <span class="check-up-handler-banner-text">Helpdesk Handler:</span>
+        <label for="handler-select" class="check-up-handler-banner-text">Helpdesk Handler:</label>
         <select id="handler-select" class="check-up-handler-select"></select>
       </div>
       <div id="handler-meta" class="check-up-handler-meta"></div>
@@ -84,6 +84,11 @@ export function mount(container) {
 
   async function load() {
     refreshButton.disabled = true;
+    // By request -- the Handler shown mid-refresh is still the OLD value
+    // (lastHandler doesn't update until the fetch below resolves), so
+    // picking a new one before then would be changing it based on stale
+    // context. Re-enabled in `finally`, same as refreshButton itself.
+    handlerSelectEl.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
     statusEl.textContent = 'Loading...';
@@ -116,6 +121,7 @@ export function mount(container) {
       statusEl.textContent = `Error: ${err.message}`;
     } finally {
       refreshButton.disabled = false;
+      handlerSelectEl.disabled = false;
     }
   }
 

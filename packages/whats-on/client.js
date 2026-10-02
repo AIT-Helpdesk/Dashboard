@@ -40,6 +40,29 @@ let activeRender = null;
 let activeRenderShifts = null;
 let activeRenderTodayTomorrow = null;
 
+// Helpdesk Handler banner -- copied here from @dashboard/check-up's own
+// client.js verbatim (by request, "Copy the whole Helpdesk handler
+// section from the Check Up page to the top of the What's On page
+// retaining the same selected content"), hitting the SAME
+// /api/check-up/handler(-options) routes and the SAME persisted
+// helpdesk-handler.json Check Up itself reads/writes -- this is the one
+// real shared piece of state, not a separate copy, so picking a new
+// Handler from either page updates the other (next time it loads/
+// reloads -- see check-up/server.js's own comment on this, no live push
+// between open tabs). hasLoadedHandlerOnce/lastHandler/lastHandlerOptions
+// mirror Check Up's own module-scope names and "restore instantly, then
+// still refresh in the background" pattern exactly (see this section's
+// own call site further down) -- deliberately NOT this file's simpler
+// "restore OR load" convention its other three sections use, since those
+// aren't genuinely shared across pages/tabs the way this is.
+let lastHandlerOptions = null;
+let lastHandler = null;
+let lastHandlerPct = null;
+let hasLoadedHandlerOnce = false;
+let activeRenderHandlerOptions = null;
+let activeRenderHandler = null;
+let activeRenderHandlerPct = null;
+
 // Today & Tomorrow's column 1, by request ("go back to a 3 column layout
 // ... Add into column 1: digital clocks: Timezones: QLD, NSW, WA,
 // Phillipines, Sri Lanka"). Static (no fetch involved) -- rendered fresh by
@@ -236,7 +259,20 @@ const SHIFT_CATEGORIES = [
   { key: 'onCall', label: 'On Call', color: '#eab308', match: (dn) => /^on\s*call/i.test(dn) },
   // Was "Helpdesk Handler" (key `helpdesk`) -- renamed, by request, both
   // the label AND the real /shifts entry name this matches against.
-  { key: 'specialOOO', label: 'Special O-of-O', color: '#3b82f6', match: (dn) => /special[\s-]*o[\s-]*of[\s-]*o/i.test(dn) },
+  // Lightened from #ec4899, then lightened again, by request -- the
+  // calendar renders every category as a pale color-mix() tint, and the
+  // original pink read too close to Unpaid leave's red at that tint
+  // strength. Pink lighter, red darker/more saturated (see unpaidLeave
+  // below) -- more separation between the two pale tints, confirmed
+  // enough on its own that a grey border (tried, then explicitly removed
+  // again) wasn't needed after all.
+  { key: 'specialOOO', label: 'Special O-of-O', color: '#f9a8d4', match: (dn) => /special[\s-]*o[\s-]*of[\s-]*o/i.test(dn) },
+  // Real /timesOff reason "Unavailable" previously fell through
+  // uncategorized -- by request, colored the same pink as Special O-of-O
+  // (both are real Shifts entries). "DND" folded into the same match/
+  // label since it's the same real concept under a different real
+  // spelling.
+  { key: 'unavailableDnd', label: 'Unavailable / DND', color: '#f9a8d4', match: (dn) => /\bunavailable\b|\bdnd\b/i.test(dn) },
   { key: 'vacation', label: 'Vacation', color: '#22c55e', match: (dn) => /vacation/i.test(dn) },
   // "leave" is NOT required in the match -- confirmed against real data the
   // actual timeOffReason is spelled literally "Unpaid" (see
@@ -245,7 +281,10 @@ const SHIFT_CATEGORIES = [
   // categories, not a shift's own displayName; matching stays on
   // displayName either way since both shifts and time-off entries share
   // that field name in the resolved row shape).
-  { key: 'unpaidLeave', label: 'Unpaid leave', color: '#dc2626', match: (dn) => /unpaid/i.test(dn) },
+  // Darkened from #dc2626, by request ("make the red more red") -- more
+  // visually distinct from Special O-of-O's own pink (lightened above) at
+  // the same pale tint strength.
+  { key: 'unpaidLeave', label: 'Unpaid leave', color: '#b91c1c', match: (dn) => /unpaid/i.test(dn) },
   { key: 'sickOther', label: 'Sick/Other Leave', color: '#8b5cf6', match: (dn) => /\bsick\b|other\s*leave/i.test(dn) },
   // "floating holiday" folded in here, not into publicHoliday below --
   // confirmed against real data this tenant's real Autotask Leave billing
@@ -256,11 +295,11 @@ const SHIFT_CATEGORIES = [
   // earned day off) than to an actual gazetted, company-wide Public
   // Holiday, so it's bucketed here rather than guessed into that one.
   { key: 'rdoTil', label: 'RDO/Time in Lieu', color: '#9ca3af', match: (dn) => /\brdo\b|time\s*in\s*lieu|floating\s*holiday/i.test(dn) },
-  // Pink, by request -- matches the three real spellings people actually
+  // Blue, by request -- matches the three real spellings people actually
   // enter for this ("TIL Accrual", "Accruing TIL", "ACCR-TIL"), tolerant
   // of a space or hyphen between ACCR and TIL since that one's an
   // abbreviation someone's more likely to type inconsistently.
-  { key: 'accruingTil', label: 'Accruing TIL', color: '#ec4899', match: (dn) => /til\s*accrual|accruing\s*til|accr[\s-]*til/i.test(dn) },
+  { key: 'accruingTil', label: 'Accruing TIL', color: '#3b82f6', match: (dn) => /til\s*accrual|accruing\s*til|accr[\s-]*til/i.test(dn) },
   {
     key: 'publicHoliday',
     label: 'Public Holiday',
@@ -275,8 +314,215 @@ function categorizeShift(entry) {
   return SHIFT_CATEGORIES.find((cat) => cat.match(dn)) || null;
 }
 
+// -- External system quick links -- MOVED here from @dashboard/start-here's
+// own client.js, by request ("Move the Systems, Monitoring, etc (all of
+// them) buttons boxes to the bottom of the What's On page") -- this is
+// the one and only copy now, not a duplicate; Start Here's own right-hand
+// column (and its own externalLinkGroupHtml()/externalLinkHtml()) is gone.
+// See start-here/client.js's own git history for the fuller original
+// comment on every choice here (why url: null renders as an inert
+// placeholder rather than ever shipping a guessed link, why icon is a
+// plain emoji, etc) -- unchanged, just relocated.
+const EXTERNAL_LINK_GROUPS = [
+  {
+    label: 'Systems',
+    links: [
+      { label: 'Kaseya One', icon: '🖥️', url: 'https://one.kaseya.com/login?companyName=Ambient%20IT' },
+      { label: 'AIT Intranet', icon: '🏢', url: 'https://ambientitptyltd.sharepoint.com/' },
+      { label: 'Strety', icon: '📊', url: 'https://2.strety.com/714f93d7-437d-4d8d-a4f4-94f5da9c09ef/home' },
+      { label: 'Rewst', icon: '🤖', url: 'https://app.rewst.asia/organizations/019f187a-5165-72c5-a370-e094207f9890/dashboard' },
+    ],
+  },
+  {
+    label: 'Monitoring',
+    links: [
+      // Antenna, not a floppy disk -- leans into the product's own "Radar" pun.
+      { label: 'Backup Radar', icon: '📡', url: 'https://eu.backupradar.com/app/dashboard/tiles' },
+      { label: 'Unifi Portal', icon: '📶', url: 'https://unifi.ui.com/' },
+      { label: 'UNMS Portal', icon: '🔌', url: 'https://unms.ambientit.com.au/' },
+    ],
+  },
+  {
+    label: 'Services',
+    links: [
+      { label: 'Ingram Micro', icon: '🛒', url: 'https://au.ingrammicro.com/cep/app/home' },
+      { label: 'Huntress', icon: '🛡️', url: 'https://ambient-it.huntress.io/account/command_center' },
+      { label: 'AutoElevate', icon: '🔐', url: 'https://msp.autoelevate.com/login' },
+      { label: 'EasyDMARC', icon: '✉️', url: 'https://app.easydmarc.com/dashboard' },
+    ],
+  },
+  {
+    label: 'Online Services',
+    links: [
+      { label: 'TPP Wholesale', icon: '🌐', url: 'https://www.tppwholesale.com.au/sign-in/' },
+      { label: 'CloudFlare', icon: '☁️', url: 'https://dash.cloudflare.com/' },
+      { label: 'WPEngine', icon: '🔧', url: 'https://my.wpengine.com/' },
+    ],
+  },
+  {
+    label: 'Internet & Telco',
+    links: [
+      { label: 'Access4-SasBoss', icon: '☎️', url: 'https://ambientit.sasboss.com.au' },
+      { label: 'AussieBroadband', icon: '🐨', url: 'https://carbon.aussiebroadband.com.au/login' },
+      // Loop pun.
+      { label: 'Superloop', icon: '🔁', url: 'https://krypton.superloop.com/login' },
+      // Wire/link pun.
+      { label: 'Over the Wire', icon: '🔗', url: 'https://portal.overthewire.com.au/login' },
+      // "Telco in a box" pun.
+      { label: 'Telcoinabox (Octane)', icon: '📦', url: 'https://octane.telcoinabox.com/tiab/Login' },
+    ],
+  },
+  {
+    label: 'TOOLS',
+    links: [
+      { label: 'One Time Secret', icon: '🔒', url: 'https://onetimesecret.com/' },
+      { label: 'Keeper Vault', icon: '🔑', url: 'https://keepersecurity.com/vault/' },
+      { label: 'MX Toolbox', icon: '🧰', url: 'https://mxtoolbox.com/' },
+      { label: "What's My DNS", icon: '🌍', url: 'https://www.whatsmydns.net/' },
+      // Windows pun.
+      { label: 'Microsoft Portals', icon: '🪟', url: 'https://msportals.io/?search=' },
+    ],
+  },
+  {
+    label: 'Finance/Admin',
+    links: [
+      // Fastway's login -- Fastway rebranded as Aramex in AU/NZ.
+      { label: 'Aramex Shipping', icon: '🚚', url: 'https://identity.fastway.org/account/login' },
+      { label: 'Xero Accounting', icon: '🧮', url: 'https://login.xero.com/' },
+      { label: 'ZenContract', icon: '✍️', url: 'https://my.zencontract.com/edge?show2FAReminder=False' },
+      // Hive pun.
+      { label: 'GlassHive', icon: '🐝', url: 'https://app.glasshive.com/Marketing' },
+    ],
+  },
+];
+
+// Same .resource-group card look used everywhere else on this dashboard --
+// one box per named category. .wo-links-section (styles.css) is what lays
+// these boxes out horizontally, wrapping, at the bottom of this page --
+// unchanged from Start Here's own look otherwise.
+function externalLinkGroupHtml(group) {
+  return `
+    <div class="resource-group">
+      <div class="section-heading section-heading--nav">${escapeHtml(group.label)}</div>
+      <div class="start-here-buttons">
+        ${group.links.map(externalLinkHtml).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// Promoted to module scope (was previously defined inside mount() only)
+// so externalLinkGroupHtml()/externalLinkHtml() above -- module-scope
+// themselves, since EXTERNAL_LINK_GROUPS is static data rendered the same
+// way on every mount -- can reach it too; every call site already inside
+// mount() still resolves this exact same function via normal outer-scope
+// lookup, nothing else changes for them.
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function externalLinkHtml(link) {
+  const iconHtml = link.icon ? `<span class="button-link-icon" aria-hidden="true">${link.icon}</span>` : '';
+  if (!link.url) {
+    // Not a real disabled <button> -- an <a> with no href isn't focusable/
+    // clickable at all by default, which is enough here without extra ARIA.
+    return `<span class="button-link button-link--pending" title="URL not confirmed yet">${iconHtml}${escapeHtml(link.label)}</span>`;
+  }
+  // Real popup window, not just a new tab -- same convention every other
+  // external link on this dashboard uses.
+  return `<a class="button-link" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${iconHtml}${escapeHtml(link.label)}</a>`;
+}
+
+// -- Special Staff Hours -- MOVED here from @dashboard/start-here's own
+// client.js, by request (Start Here is being retired eventually, and
+// this isn't just a visual copy -- the button/popup lived there, now it
+// lives here instead). Two technicians' own non-standard working hours,
+// popping up a real separate window (`window.open('', ...)` +
+// `document.write()`, same "built client-side from already-loaded data"
+// pattern @dashboard/teams-shifts' own openDayPopup() uses -- shell/
+// public/app.js's global window.open() wrap centers it on the same
+// monitor automatically, no extra positioning code needed here). Static
+// content, supplied directly rather than sourced from Autotask/Shifts --
+// these are real fixed personal schedules known outside any system this
+// dashboard already reads, not data this page could otherwise derive.
+const JETT_HOURS = [
+  { day: 'Mon', start: '9:00am', end: '5:00pm', hours: '7.5 hrs' },
+  { day: 'Tue', start: '11:00am', end: '5:00pm', hours: '5.5 hrs' },
+  { day: 'Wed', start: '9:00am', end: '1:00pm', hours: '4 hrs' },
+  { day: 'Thu', start: '10:00am', end: '5:00pm', hours: '6.5 hrs' },
+  { day: 'Fri', start: '10:00am', end: '4:00pm', hours: '5.5 hrs' },
+];
+const PETER_HOURS_TEXT = 'Usually works Mon - Wed; with Thu & Fri Off; Occasionally varies when Peter helps out when we have people away.';
+
+function openSpecialStaffHoursPopup() {
+  const popup = window.open('', '_blank', 'width=480,height=520,scrollbars=yes');
+  if (!popup) return; // genuinely blocked by the browser's popup blocker -- nothing more to do
+
+  const isDark =
+    document.documentElement.getAttribute('data-theme') === 'dark' ||
+    (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const colors = isDark
+    ? { bg: '#14161a', fg: '#eef0f3', muted: '#9aa3af', border: '#2a2e35', card: '#1b1e24' }
+    : { bg: '#ffffff', fg: '#1a1a1a', muted: '#6b7280', border: '#e5e7eb', card: '#f9fafb' };
+
+  const jettRowsHtml = JETT_HOURS.map((r) => `<tr><td>${escapeHtml(r.day)}</td><td>${escapeHtml(r.start)}</td><td>${escapeHtml(r.end)}</td><td>${escapeHtml(r.hours)}</td></tr>`).join('');
+
+  popup.document.open();
+  popup.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Special Staff Hours</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: ${colors.bg}; color: ${colors.fg}; margin: 0; padding: 1rem 1.25rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
+  .card { border: 1px solid ${colors.border}; border-radius: 8px; background: ${colors.card}; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+  .card h2 { font-size: 1rem; margin: 0 0 0.6rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 0.3rem 0.6rem 0.3rem 0; border-bottom: 1px solid ${colors.border}; }
+  th { color: ${colors.muted}; font-weight: 600; }
+  p { margin: 0; }
+</style>
+</head>
+<body>
+<h1>Special Staff Hours</h1>
+<div class="card">
+  <h2>Jett's Hours</h2>
+  <table>
+    <thead><tr><th>Day</th><th>Start</th><th>End</th><th>Hours</th></tr></thead>
+    <tbody>${jettRowsHtml}</tbody>
+  </table>
+</div>
+<div class="card">
+  <h2>Peter's Hours</h2>
+  <p>${escapeHtml(PETER_HOURS_TEXT)}</p>
+</div>
+</body>
+</html>`);
+  popup.document.close();
+}
+
 export function mount(container) {
   container.innerHTML = `
+    <div id="handler-section" class="check-up-handler-banner wo-handler-banner" hidden>
+      <div class="check-up-handler-banner-main">
+        <div class="check-up-handler-banner-row">
+          <label for="handler-select" class="check-up-handler-banner-text">Helpdesk Handler:</label>
+          <select id="handler-select" class="check-up-handler-select"></select>
+        </div>
+        <div id="handler-meta" class="check-up-handler-meta"></div>
+      </div>
+      <div class="wo-handler-right">
+        <button type="button" id="special-staff-hours-button" class="button-link button-link--small">Special Staff Hours</button>
+        <div id="handler-pct-grid" class="wo-handler-pct-grid" hidden></div>
+      </div>
+    </div>
+
     <div class="wo-top-row" id="wo-top-row">
       <div class="wo-sc-section" id="sc-section">
         <div class="section-heading section-heading--nav section-heading-row">
@@ -327,8 +573,18 @@ export function mount(container) {
       <div id="shifts-calendar" class="results"></div>
       <div id="shifts-legend" class="shifts-legend"></div>
     </div>
+
+    <div class="wo-links-section">
+      ${EXTERNAL_LINK_GROUPS.map(externalLinkGroupHtml).join('')}
+    </div>
   `;
 
+  container.querySelector('#special-staff-hours-button').addEventListener('click', openSpecialStaffHoursPopup);
+
+  const handlerSectionEl = container.querySelector('#handler-section');
+  const handlerSelectEl = container.querySelector('#handler-select');
+  const handlerMetaEl = container.querySelector('#handler-meta');
+  const handlerPctGridEl = container.querySelector('#handler-pct-grid');
   const refreshButton = container.querySelector('#refresh-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
@@ -345,6 +601,134 @@ export function mount(container) {
   const ttRefreshButton = container.querySelector('#tt-refresh-button');
   const ttStatusEl = container.querySelector('#tt-status');
   const ttColumnsEl = container.querySelector('#tt-columns');
+
+  // -- Helpdesk Handler -- copied from @dashboard/check-up/client.js, see
+  // this section's own module-scope comment up top for why. Every
+  // function/listener below is identical to that page's own copy.
+  handlerSelectEl.addEventListener('change', async () => {
+    const resourceId = handlerSelectEl.value;
+    if (!resourceId) return;
+    handlerSelectEl.disabled = true;
+    try {
+      const res = await fetch('/api/check-up/handler', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resourceId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      lastHandler = data.handler;
+      activeRenderHandler(data.handler);
+    } catch (err) {
+      alert(`Error setting Helpdesk Handler: ${err.message}`);
+      activeRenderHandler(lastHandler);
+    } finally {
+      handlerSelectEl.disabled = false;
+    }
+  });
+
+  async function loadHandler() {
+    handlerSelectEl.disabled = true;
+    try {
+      const [optionsRes, handlerRes, pctRes] = await Promise.all([
+        lastHandlerOptions ? null : fetch('/api/check-up/handler-options'),
+        fetch('/api/check-up/handler', { cache: 'no-store' }),
+        fetch('/api/check-up/weekly-hours-pct'),
+      ]);
+      if (optionsRes) {
+        const optionsData = await optionsRes.json();
+        if (!optionsRes.ok) throw new Error(optionsData.error || `Request failed (${optionsRes.status})`);
+        lastHandlerOptions = optionsData;
+      }
+      const handlerData = await handlerRes.json();
+      if (!handlerRes.ok) throw new Error(handlerData.error || `Request failed (${handlerRes.status})`);
+      lastHandler = handlerData.handler;
+      const pctData = await pctRes.json();
+      if (!pctRes.ok) throw new Error(pctData.error || `Request failed (${pctRes.status})`);
+      lastHandlerPct = pctData.weeklyHoursPct;
+      hasLoadedHandlerOnce = true;
+      activeRenderHandlerOptions(lastHandlerOptions);
+      activeRenderHandler(lastHandler);
+      activeRenderHandlerPct(lastHandlerPct);
+    } catch (err) {
+      console.error("What's On: Helpdesk Handler load failed:", err);
+    } finally {
+      handlerSelectEl.disabled = false;
+    }
+  }
+
+  function renderHandlerOptions(options) {
+    if (!options) return;
+    handlerSectionEl.hidden = false;
+    handlerSelectEl.innerHTML = buildHandlerSelectOptionsHtml(options, lastHandler?.resourceId ?? null);
+  }
+
+  function buildHandlerSelectOptionsHtml(options, currentId) {
+    const optionHtml = (r, discouraged) =>
+      `<option value="${r.id}"${discouraged ? ' class="check-up-handler-option--other"' : ''}${r.id === currentId ? ' selected' : ''}>${escapeHtml(r.name)}</option>`;
+    const placeholder = `<option value="" disabled${currentId ? '' : ' selected'}>Not yet set</option>`;
+    return `
+      ${placeholder}
+      <optgroup label="Support Desk">${options.serviceDesk.map((r) => optionHtml(r, false)).join('')}</optgroup>
+      <optgroup label="Professional Services">${options.professionalServices.map((r) => optionHtml(r, true)).join('')}</optgroup>
+      <optgroup label="Leadership Team">${options.leadership.map((r) => optionHtml(r, true)).join('')}</optgroup>
+    `;
+  }
+
+  function renderHandler(handler) {
+    if (lastHandlerOptions) handlerSelectEl.innerHTML = buildHandlerSelectOptionsHtml(lastHandlerOptions, handler?.resourceId ?? null);
+    handlerMetaEl.textContent =
+      handler && handler.updatedAt ? `Last changed ${formatHandlerDateTime(handler.updatedAt)}${handler.updatedByName ? ` by ${handler.updatedByName}` : ''}` : '';
+  }
+
+  function formatHandlerDateTime(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  // Small copies of Check Up's own Client Hours %/Billable Hours % tiles,
+  // by request ("put a copy of the 2 client hours and billable hours red
+  // boxes into the right side of the helpdesk handler banner... Smaller
+  // copies so that they don't enlarge the helpdesk handler banner box") --
+  // same /api/check-up/weekly-hours-pct data and the same red/orange/green
+  // threshold classes (.check-up-pct-tile--*) Check Up's own client.js
+  // uses, just a smaller .wo-handler-pct-grid (no zoom) instead of that
+  // page's own big zoomed .check-up-pct-grid.
+  function renderHandlerPct(weeklyHoursPct) {
+    if (!weeklyHoursPct) {
+      handlerPctGridEl.hidden = true;
+      return;
+    }
+    handlerPctGridEl.hidden = false;
+    const dateSub = escapeHtml(formatWeekRangeShort(weeklyHoursPct.weekFrom, weeklyHoursPct.weekTo));
+    const pct = (n) => `${Math.round(n)}%`;
+    const colorClass = (n) => (n >= 75 ? 'check-up-pct-tile--green' : n >= 40 ? 'check-up-pct-tile--orange' : 'check-up-pct-tile--red');
+    handlerPctGridEl.innerHTML = `
+      <div class="datto-card ${colorClass(weeklyHoursPct.clientHoursPct)}">
+        <div class="wo-handler-pct-number">${pct(weeklyHoursPct.clientHoursPct)}</div>
+        <div class="datto-card-label">Client Hours</div>
+        <div class="datto-card-sub">${dateSub}</div>
+      </div>
+      <div class="datto-card ${colorClass(weeklyHoursPct.billableHoursPct)}">
+        <div class="wo-handler-pct-number">${pct(weeklyHoursPct.billableHoursPct)}</div>
+        <div class="datto-card-label">Billable Hours</div>
+        <div class="datto-card-sub">${dateSub}</div>
+      </div>
+    `;
+  }
+
+  // Same "17 Aug - 23 Aug" shape Check Up's own formatWeekRange() uses --
+  // a small separate copy (own name, to avoid clashing with this file's
+  // other date formatters) rather than imported, same per-page-duplicated-
+  // boilerplate convention this dashboard already follows elsewhere.
+  function formatWeekRangeShort(fromKey, toKey) {
+    const [fy, fm, fd] = fromKey.split('-').map(Number);
+    const [ty, tm, td] = toKey.split('-').map(Number);
+    const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const from = `${fd} ${MONTH_ABBR[fm - 1]}`;
+    const to = `${td} ${MONTH_ABBR[tm - 1]}`;
+    return fy !== ty ? `${from} ${fy} - ${to} ${ty}` : `${from} - ${to}`;
+  }
 
   // Ticks every few seconds, updating each clock's displayed HH:MM and its
   // "variance from QLD" line in place. Self-cleaning (stops itself the
@@ -516,6 +900,24 @@ export function mount(container) {
 
   if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
   else loadTodayTomorrow(justConnectedStrety);
+
+  // This mount is now the active one for the Helpdesk Handler banner too
+  // -- see its own module-scope comment up top for why this restores
+  // instantly AND still calls loadHandler() below regardless (unlike this
+  // page's other three sections' simpler "restore OR load"): the Handler
+  // can change from Check Up, another browser tab, or anyone else's
+  // What's On, so a cached value is only ever a safe INSTANT first paint,
+  // never trusted as still-current without actually re-checking.
+  activeRenderHandlerOptions = renderHandlerOptions;
+  activeRenderHandler = renderHandler;
+  activeRenderHandlerPct = renderHandlerPct;
+  if (hasLoadedHandlerOnce) {
+    renderHandlerOptions(lastHandlerOptions);
+    renderHandler(lastHandler);
+    renderHandlerPct(lastHandlerPct);
+  }
+  loadHandler();
+
   // Fire-and-forget, not awaited -- primes cachedServiceCallStatusOptions
   // (see its own module-scope comment) well before anyone actually opens
   // the Service Calls column's own "Change Status" submenu, without
@@ -2464,14 +2866,5 @@ export function mount(container) {
     if (hours === null || hours === undefined) return '0';
     const rounded = Math.round(hours * 10) / 10;
     return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
-  }
-
-  function escapeHtml(str) {
-    if (str === null || str === undefined) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
   }
 }

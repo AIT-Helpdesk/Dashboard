@@ -1,100 +1,6 @@
 export const id = "start-here";
 export const label = "Start Here";
 
-// External systems this dashboard doesn't cover -- opened in a new tab, not
-// navigated to in place (leaving the dashboard entirely would be jarring
-// for something meant as a quick jumping-off point). Grouped into named
-// categories, by request (each its own .resource-group card + section
-// heading, same visual convention the left column's own page-list groups
-// already use -- see groupHtml() below). Every URL here is a real,
-// confirmed login/portal URL supplied directly, OR a genuinely tenant-
-// independent public tool's own homepage (One Time Secret/MX Toolbox/
-// What's My DNS/Xero's login gate -- the same URL regardless of which
-// account you sign into). `url: null` renders as a disabled-look
-// placeholder (see externalLinkHtml below) rather than ever shipping a
-// guessed tenant-specific login link that might be wrong for this
-// specific account -- several entries below are still null for exactly
-// that reason and need a real URL supplied.
-//
-// `icon` is a plain emoji, by request -- same lightweight-icon convention
-// already used for the sidebar's own theme toggle ('☀️ Light Mode'/'🌙 Dark
-// Mode' in app.js), not a real per-brand logo. Fetching each service's real
-// favicon was deliberately not done -- would mean a live request out to
-// dozens of different third-party domains just to render this page, for a
-// purely cosmetic label decoration.
-const EXTERNAL_LINK_GROUPS = [
-  {
-    label: 'Systems',
-    links: [
-      { label: 'Kaseya One', icon: '🖥️', url: 'https://one.kaseya.com/login?companyName=Ambient%20IT' },
-      { label: 'AIT Intranet', icon: '🏢', url: 'https://ambientitptyltd.sharepoint.com/' },
-      { label: 'Strety', icon: '📊', url: 'https://2.strety.com/714f93d7-437d-4d8d-a4f4-94f5da9c09ef/home' },
-      { label: 'Rewst', icon: '🤖', url: 'https://app.rewst.asia/organizations/019f187a-5165-72c5-a370-e094207f9890/dashboard' },
-    ],
-  },
-  {
-    label: 'Monitoring',
-    links: [
-      // Antenna, not a floppy disk -- leans into the product's own "Radar" pun.
-      { label: 'Backup Radar', icon: '📡', url: 'https://eu.backupradar.com/app/dashboard/tiles' },
-      { label: 'Unifi Portal', icon: '📶', url: 'https://unifi.ui.com/' },
-      { label: 'UNMS Portal', icon: '🔌', url: 'https://unms.ambientit.com.au/' },
-    ],
-  },
-  {
-    label: 'Services',
-    links: [
-      { label: 'Ingram Micro', icon: '🛒', url: 'https://au.ingrammicro.com/cep/app/home' },
-      { label: 'Huntress', icon: '🛡️', url: 'https://ambient-it.huntress.io/account/command_center' },
-      { label: 'AutoElevate', icon: '🔐', url: 'https://msp.autoelevate.com/login' },
-      { label: 'EasyDMARC', icon: '✉️', url: 'https://app.easydmarc.com/dashboard' },
-    ],
-  },
-  {
-    label: 'Online Services',
-    links: [
-      { label: 'TPP Wholesale', icon: '🌐', url: 'https://www.tppwholesale.com.au/sign-in/' },
-      { label: 'CloudFlare', icon: '☁️', url: 'https://dash.cloudflare.com/' },
-      { label: 'WPEngine', icon: '🔧', url: 'https://my.wpengine.com/' },
-    ],
-  },
-  {
-    label: 'Internet & Telco',
-    links: [
-      { label: 'Access4-SasBoss', icon: '☎️', url: 'https://ambientit.sasboss.com.au' },
-      { label: 'AussieBroadband', icon: '🐨', url: 'https://carbon.aussiebroadband.com.au/login' },
-      // Loop pun.
-      { label: 'Superloop', icon: '🔁', url: 'https://krypton.superloop.com/login' },
-      // Wire/link pun.
-      { label: 'Over the Wire', icon: '🔗', url: 'https://portal.overthewire.com.au/login' },
-      // "Telco in a box" pun.
-      { label: 'Telcoinabox (Octane)', icon: '📦', url: 'https://octane.telcoinabox.com/tiab/Login' },
-    ],
-  },
-  {
-    label: 'TOOLS',
-    links: [
-      { label: 'One Time Secret', icon: '🔒', url: 'https://onetimesecret.com/' },
-      { label: 'Keeper Vault', icon: '🔑', url: 'https://keepersecurity.com/vault/' },
-      { label: 'MX Toolbox', icon: '🧰', url: 'https://mxtoolbox.com/' },
-      { label: "What's My DNS", icon: '🌍', url: 'https://www.whatsmydns.net/' },
-      // Windows pun.
-      { label: 'Microsoft Portals', icon: '🪟', url: 'https://msportals.io/?search=' },
-    ],
-  },
-  {
-    label: 'Finance/Admin',
-    links: [
-      // Fastway's login -- Fastway rebranded as Aramex in AU/NZ.
-      { label: 'Aramex Shipping', icon: '🚚', url: 'https://identity.fastway.org/account/login' },
-      { label: 'Xero Accounting', icon: '🧮', url: 'https://login.xero.com/' },
-      { label: 'ZenContract', icon: '✍️', url: 'https://my.zencontract.com/edge?show2FAReminder=False' },
-      // Hive pun.
-      { label: 'GlassHive', icon: '🐝', url: 'https://app.glasshive.com/Marketing' },
-    ],
-  },
-];
-
 // One-line descriptions for the internal page list -- kept
 // here rather than in each page's own package.json so adding this page
 // didn't require touching all ~23 others. Deliberately NOT the single
@@ -145,12 +51,7 @@ const INTRO_TEXT =
 // fixed, curated list rather than the live/reconciled full page list.
 const DAILY_CHECKLIST_HTML = `
   <div class="resource-group start-here-checklist">
-    <div class="section-heading section-heading--nav section-heading-row">
-      <span>Daily Checklist</span>
-      <div class="date-form">
-        <button type="button" id="special-staff-hours-button" class="button-link button-link--small">Special Staff Hours</button>
-      </div>
-    </div>
+    <div class="section-heading section-heading--nav">Daily Checklist</div>
     <div class="start-here-checklist-featured">
       <div class="start-here-checklist-col start-here-checklist-col-main">
         <a href="#whats-on" class="start-here-checklist-title">What's On</a>
@@ -201,85 +102,11 @@ export function mount(container) {
         ${DAILY_CHECKLIST_HTML}
         <div id="page-groups"><p class="status">Loading page list...</p></div>
       </div>
-      <div class="start-here-links">
-        ${EXTERNAL_LINK_GROUPS.map(externalLinkGroupHtml).join('')}
-      </div>
     </div>
   `;
 
   loadPageList(container.querySelector('#page-groups'));
   loadUpdatesExcerpt(container.querySelector('#updates-excerpt'));
-  container.querySelector('#special-staff-hours-button').addEventListener('click', openSpecialStaffHoursPopup);
-}
-
-// Two technicians' own non-standard working hours, by request -- a
-// "Special Staff Hours" button, right-justified on the Daily Checklist
-// card's own heading row (same `.section-heading-row` pattern What's On's
-// "Today & Tomorrow"/"Team Shifts" headings already use for an inline
-// button beside the heading text), popping up a real separate window
-// (`window.open('', ...)` + `document.write()`, same "built client-side
-// from already-loaded data" pattern @dashboard/teams-shifts' own
-// openDayPopup() uses -- shell/public/app.js's global window.open() wrap
-// centers it on the same monitor automatically, no extra positioning
-// code needed here). Static content, supplied directly rather than
-// sourced from Autotask/Shifts -- these are real fixed personal
-// schedules known outside any system this dashboard already reads, not
-// data this page could otherwise derive.
-const JETT_HOURS = [
-  { day: 'Mon', start: '9:00am', end: '5:00pm', hours: '7.5 hrs' },
-  { day: 'Tue', start: '11:00am', end: '5:00pm', hours: '5.5 hrs' },
-  { day: 'Wed', start: '9:00am', end: '1:00pm', hours: '4 hrs' },
-  { day: 'Thu', start: '10:00am', end: '5:00pm', hours: '6.5 hrs' },
-  { day: 'Fri', start: '10:00am', end: '4:00pm', hours: '5.5 hrs' },
-];
-const PETER_HOURS_TEXT = 'Usually works Mon - Wed; with Thu & Fri Off; Occasionally varies when Peter helps out when we have people away.';
-
-function openSpecialStaffHoursPopup() {
-  const popup = window.open('', '_blank', 'width=480,height=520,scrollbars=yes');
-  if (!popup) return; // genuinely blocked by the browser's popup blocker -- nothing more to do
-
-  const isDark =
-    document.documentElement.getAttribute('data-theme') === 'dark' ||
-    (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  const colors = isDark
-    ? { bg: '#14161a', fg: '#eef0f3', muted: '#9aa3af', border: '#2a2e35', card: '#1b1e24' }
-    : { bg: '#ffffff', fg: '#1a1a1a', muted: '#6b7280', border: '#e5e7eb', card: '#f9fafb' };
-
-  const jettRowsHtml = JETT_HOURS.map((r) => `<tr><td>${escapeHtml(r.day)}</td><td>${escapeHtml(r.start)}</td><td>${escapeHtml(r.end)}</td><td>${escapeHtml(r.hours)}</td></tr>`).join('');
-
-  popup.document.open();
-  popup.document.write(`<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Special Staff Hours</title>
-<style>
-  body { font-family: system-ui, sans-serif; background: ${colors.bg}; color: ${colors.fg}; margin: 0; padding: 1rem 1.25rem; }
-  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
-  .card { border: 1px solid ${colors.border}; border-radius: 8px; background: ${colors.card}; padding: 0.75rem 1rem; margin-bottom: 1rem; }
-  .card h2 { font-size: 1rem; margin: 0 0 0.6rem; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { text-align: left; padding: 0.3rem 0.6rem 0.3rem 0; border-bottom: 1px solid ${colors.border}; }
-  th { color: ${colors.muted}; font-weight: 600; }
-  p { margin: 0; }
-</style>
-</head>
-<body>
-<h1>Special Staff Hours</h1>
-<div class="card">
-  <h2>Jett's Hours</h2>
-  <table>
-    <thead><tr><th>Day</th><th>Start</th><th>End</th><th>Hours</th></tr></thead>
-    <tbody>${jettRowsHtml}</tbody>
-  </table>
-</div>
-<div class="card">
-  <h2>Peter's Hours</h2>
-  <p>${escapeHtml(PETER_HOURS_TEXT)}</p>
-</div>
-</body>
-</html>`);
-  popup.document.close();
 }
 
 const UPDATES_EXCERPT_LIMIT = 5;
@@ -362,32 +189,6 @@ function formatShortDate(dateKey) {
   const d = new Date(`${dateKey}T00:00:00`);
   if (Number.isNaN(d.getTime())) return dateKey;
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-}
-
-// Same .resource-group + .section-heading--nav card look the left
-// column's own page-list groups use (see groupHtml() below) -- one card
-// per named category, by request.
-function externalLinkGroupHtml(group) {
-  return `
-    <div class="resource-group">
-      <div class="section-heading section-heading--nav">${escapeHtml(group.label)}</div>
-      <div class="start-here-buttons">
-        ${group.links.map(externalLinkHtml).join('')}
-      </div>
-    </div>
-  `;
-}
-
-function externalLinkHtml(link) {
-  const iconHtml = link.icon ? `<span class="button-link-icon" aria-hidden="true">${link.icon}</span>` : '';
-  if (!link.url) {
-    // Not a real disabled <button> -- an <a> with no href isn't focusable/
-    // clickable at all by default, which is enough here without extra ARIA.
-    return `<span class="button-link button-link--pending" title="URL not confirmed yet">${iconHtml}${escapeHtml(link.label)}</span>`;
-  }
-  // Real popup window, not just a new tab -- same convention every other
-  // external link on this dashboard uses.
-  return `<a class="button-link" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${iconHtml}${escapeHtml(link.label)}</a>`;
 }
 
 // Pulled live from the same two sources the sidebar itself uses
