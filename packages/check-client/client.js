@@ -1141,18 +1141,21 @@ export function mount(container) {
     `;
     }
 
-    // Display Name/Email/Department/Office/Licenses, by request -- Office
-    // is always blank right now (see server.js's own comment on this --
-    // the underlying Rewst workflow doesn't $select officeLocation yet),
-    // shown as its own column regardless so it starts working with no
-    // client-side change the moment that's added. Licenses already comes
-    // back as friendly product names (server.js's own ms_sku_id match),
-    // joined onto one line, comma-separated -- a wrapping <td>, not
-    // .ticket-number's nowrap, since a well-licensed user can easily have
-    // 4-5 products listed.
+    // Display Name/Email/User Type/Department/Office/Licenses, by request
+    // -- Office is always blank right now (see server.js's own comment on
+    // this -- the underlying Rewst workflow doesn't $select officeLocation
+    // yet), shown as its own column regardless so it starts working with
+    // no client-side change the moment that's added. Licenses already
+    // comes back as friendly product names (server.js's own ms_sku_id
+    // match), joined onto one line, comma-separated -- a wrapping <td>,
+    // not .ticket-number's nowrap, since a well-licensed user can easily
+    // have 4-5 products listed. User Type ("Member"/"Guest", Graph's own
+    // real distinction) added by request, confirmed live against real
+    // data (one real tenant: 84 Member, 28 Guest).
     const M365_USERS_COLUMNS = [
       { key: 'displayName', label: 'Display Name' },
       { key: 'email', label: 'Email' },
+      { key: 'userType', label: 'User Type' },
       { key: 'department', label: 'Department' },
       { key: 'office', label: 'Office' },
       { key: 'licenses', label: 'Licenses' },

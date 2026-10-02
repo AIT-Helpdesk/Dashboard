@@ -387,6 +387,9 @@ router.get('/m365-users', async (req, res) => {
         // still a real sign-in address, so it's the fallback rather than
         // leaving the cell blank.
         email: u.mail || u.userPrincipalName || '',
+        // Real field, confirmed live this session (Kraftur: 84 Member, 28
+        // Guest) -- Graph's own "Member"/"Guest" distinction, by request.
+        userType: u.userType || '',
         department: u.department || '',
         office: u.officeLocation || '',
         licenses: (u.assignedLicenses || []).map((l) => nameBySkuId.get((l.skuId || '').trim().toLowerCase()) || l.skuId).filter(Boolean),
