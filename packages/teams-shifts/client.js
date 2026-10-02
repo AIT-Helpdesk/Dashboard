@@ -1,6 +1,12 @@
 export const id = 'teams-shifts';
 export const label = 'Shifts and Schedules';
 
+// By request -- an unapproved leave entry (kind: 'leave', approved: false)
+// links straight to Autotask's own "Approve Leave" landing page (its real
+// built-in time-off-requests-waiting-my-approval view) instead of being a
+// plain, unclickable entry, so there's no separate step to go find it.
+const APPROVE_LEAVE_URL = 'https://ww29.autotask.net/AutotaskOnyx/LandingPage?view=time-off-requests-waiting-my-approval';
+
 // Module-scope, not inside mount() -- the shell fully tears down and re-mounts a
 // page's DOM on every navigation away and back, but the dynamically-imported
 // module itself is cached by the browser and stays alive for the session, so a
@@ -295,15 +301,20 @@ export function mount(container) {
     // fetchPublicHolidayEntries()) have no clock time OR hours figure at
     // all -- line1 shows the real holiday's own short name instead
     // (e.userName/line2 already carries which Holiday Set it's from).
-    const line1 = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : e.kind === 'publicHoliday' ? e.holidayName : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
-    const line2 = e.userName || '(Open shift)';
+    const timePart = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : e.kind === 'publicHoliday' ? e.holidayName : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
+    // Person's name right next to the time on line1 now, by request
+    // (changed from an earlier decision that put the category/label there
+    // instead) -- the label moved to line2, in that line's own smaller,
+    // lighter/muted text.
+    const userPart = e.userName || '(Open shift)';
+    const line1 = `${timePart} ${userPart}`;
     // The matched legend category's own clean label when there is one
     // (e.g. "Vacation", not the raw underlying reason text "Vacation
     // (green)"), otherwise the raw displayName/schedulingGroupName this
     // page already fell back to -- same real convention What's On's own
     // shiftEntryHtml() uses for this identical field, by request ("Apply
     // this colouring also to the 'Shifts and Schedules' page").
-    const line3 = cat ? cat.label : e.displayName || e.schedulingGroupName || '';
+    const labelPart = cat ? cat.label : e.displayName || e.schedulingGroupName || '';
     // line2's own colour is pinned literal light --muted (not
     // var(--muted), which would follow the page's real theme) only once
     // a matched category has ALSO pinned this entry's own background to
@@ -311,8 +322,8 @@ export function mount(container) {
     // shiftEntryHtml() uses: a dark-theme muted grey would otherwise sit
     // illegibly on top of the now-always-light pastel tint.
     const line2Style = cat ? ' style="color: #6b7280;"' : '';
-    const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line2)}</span>${
-      line3 ? `<span class="calendar-entry-line2"${line2Style}>${escapeHtml(line3)}</span>` : ''
+    const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span>${
+      labelPart ? `<span class="calendar-entry-line2"${line2Style}>${escapeHtml(labelPart)}</span>` : ''
     }`;
     const titleLines =
       e.kind === 'publicHoliday'
@@ -321,11 +332,15 @@ export function mount(container) {
             e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
             `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
           ];
-    if (e.kind !== 'publicHoliday' && e.displayName) titleLines.push(`Label: ${e.displayName}${cat ? ` -- ${cat.label}` : ''}`);
+    // Only the matched category's own clean label when there is one (the
+    // part after "--" previously), not the raw displayName too -- by
+    // request, that was repeating the same information twice.
+    if (e.kind !== 'publicHoliday' && e.displayName) titleLines.push(`Label: ${cat ? cat.label : e.displayName}`);
     if (e.schedulingGroupName) titleLines.push(`Group: ${e.schedulingGroupName}`);
     if (e.notes) titleLines.push(`Notes: ${e.notes}`);
     if (!e.published) titleLines.push('Not yet published (draft)');
-    if (e.kind === 'leave' && e.approved === false) titleLines.push('Not yet approved');
+    const isUnapprovedLeave = e.kind === 'leave' && e.approved === false;
+    if (isUnapprovedLeave) titleLines.push('Not yet approved -- click to open Approve Leave in Autotask');
     const title = escapeHtml(titleLines.join('\n'));
 
     // Public Holiday's box is white -- a translucent tint would be
@@ -343,7 +358,16 @@ export function mount(container) {
         ? `style="background: #ffffff; color: #1a1a1a; border: 1px solid #e5e7eb; border-left: 4.5px solid #9ca3af;"`
         : `style="${categoryBackground(cat, e.approved)} color: #1a1a1a; border-left-color: ${cat.color};"`;
     const draftClass = e.published ? '' : ' calendar-entry--onsite-tba'; // reuse the existing dashed/red-accent look for "needs attention" -- draft shifts aren't final yet
-    return `<div class="calendar-entry calendar-entry--allocated${draftClass}" ${style} title="${title}">${inner}</div>`;
+    // Unapproved leave becomes a real link to Autotask's own Approve Leave
+    // landing page -- a new window on the same screen (not just a new tab),
+    // same convention Start Here's own external-system buttons use
+    // (window.open() wrapped by shell/public/app.js, which centers it on
+    // the same monitor automatically).
+    const tag = isUnapprovedLeave ? 'a' : 'div';
+    const linkAttrs = isUnapprovedLeave
+      ? ` href="${APPROVE_LEAVE_URL}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;"`
+      : '';
+    return `<${tag} class="calendar-entry calendar-entry--allocated${draftClass}" ${style}${linkAttrs} title="${title}">${inner}</${tag}>`;
   }
 
   // Same "real popup window, built client-side from already-loaded data"

@@ -1,6 +1,12 @@
 export const id = "whats-on";
 export const label = "What's On";
 
+// By request -- an unapproved leave entry (kind: 'leave', approved: false)
+// links straight to Autotask's own "Approve Leave" landing page (its real
+// built-in time-off-requests-waiting-my-approval view) instead of being a
+// plain, unclickable entry, so there's no separate step to go find it.
+const APPROVE_LEAVE_URL = 'https://ww29.autotask.net/AutotaskOnyx/LandingPage?view=time-off-requests-waiting-my-approval';
+
 // Module-scope, not inside mount() -- the shell tears down and re-mounts a
 // page's DOM on every navigation, but the imported module itself stays
 // alive for the browser tab's session, so this survives across re-mounts.
@@ -1755,15 +1761,18 @@ export function mount(container) {
     // fetchPublicHolidayEntries()) have no clock time OR hours figure at
     // all -- line1 shows the real holiday's own short name instead
     // (e.userName/line2 already carries which Holiday Set it's from).
-    const line1 = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : e.kind === 'publicHoliday' ? e.holidayName : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
-    const line2 = e.userName || '(Open shift)';
+    const timePart = e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h` : e.kind === 'publicHoliday' ? e.holidayName : `${formatTime(e.startDateTime)}-${formatTime(e.endDateTime)}`;
+    // Person's name right next to the time on line1 now, by request
+    // (changed from an earlier decision that put the category/label there
+    // instead) -- the label moved to line2, in that line's own smaller,
+    // lighter/muted text.
+    const userPart = e.userName || '(Open shift)';
+    const line1 = `${timePart} ${userPart}`;
     // Type -- the matched legend category's own clean label when there is
     // one (e.g. "Vacation", not the raw underlying reason text "Vacation
     // (green)"), otherwise the raw displayName so an uncategorized entry
-    // still shows something rather than nothing. By request -- previously
-    // this was tooltip-only ("Type: ..."); now shown directly on the entry
-    // itself, one line taller.
-    const line3 = cat ? cat.label : e.displayName || '(unlabeled)';
+    // still shows something rather than nothing.
+    const labelPart = cat ? cat.label : e.displayName || '(unlabeled)';
     // .calendar-entry-line2's shared CSS rule reads color: var(--muted) --
     // fine normally, but once a matched-category entry's own background is
     // pinned to its light-mode look (below), that class rule would still
@@ -1773,18 +1782,22 @@ export function mount(container) {
     // isn't one of these colored entries and keeps following the class
     // rule (and the page's real theme) normally.
     const line2Style = cat ? ' style="color: #6b7280;"' : '';
-    const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line2)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(line3)}</span>`;
+    const inner = `<span class="calendar-entry-line1">${escapeHtml(line1)}</span><span class="calendar-entry-line2"${line2Style}>${escapeHtml(labelPart)}</span>`;
     const titleLines =
       e.kind === 'publicHoliday'
         ? [`Public Holiday: ${e.holidayName}`, `${e.holidaySetName && e.holidaySetName.includes(',') ? 'Holiday Sets' : 'Holiday Set'}: ${e.holidaySetName}`]
         : [
             e.kind === 'leave' ? `${formatHours(e.hoursWorked)}h leave` : `${formatDateTime(e.startDateTime)} - ${formatDateTime(e.endDateTime)}`,
             `Assigned: ${e.userName || 'Open shift (unassigned)'}`,
-            `Type: ${e.displayName || '(unlabeled)'}${cat ? ` -- ${cat.label}` : ''}`,
+            // Only the matched category's own clean label when there is one
+            // (the part after "--" previously), not the raw displayName too
+            // -- by request, that was repeating the same information twice.
+            `Type: ${cat ? cat.label : e.displayName || '(unlabeled)'}`,
           ];
     if (e.notes) titleLines.push(`Notes: ${e.notes}`);
     if (!e.published) titleLines.push('Not yet published (draft)');
-    if (e.kind === 'leave' && e.approved === false) titleLines.push('Not yet approved');
+    const isUnapprovedLeave = e.kind === 'leave' && e.approved === false;
+    if (isUnapprovedLeave) titleLines.push('Not yet approved -- click to open Approve Leave in Autotask');
     const title = escapeHtml(titleLines.join('\n'));
 
     // Public Holiday's box is white -- a translucent color-mix tint (the
@@ -1812,7 +1825,16 @@ export function mount(container) {
       : cat.key === 'publicHoliday'
         ? `background: #ffffff; color: #1a1a1a; border: 1px solid #e5e7eb; border-left: 4.5px solid #9ca3af;`
         : `${categoryBackground(cat, e.approved)} color: #1a1a1a; border-left-color: ${cat.color};`;
-    return `<div class="calendar-entry calendar-entry--allocated" style="${style}" title="${title}">${inner}</div>`;
+    // Unapproved leave becomes a real link to Autotask's own Approve Leave
+    // landing page -- a new window on the same screen (not just a new tab),
+    // same convention this dashboard's external-system buttons use
+    // (window.open() wrapped by shell/public/app.js, which centers it on
+    // the same monitor automatically).
+    const tag = isUnapprovedLeave ? 'a' : 'div';
+    const linkAttrs = isUnapprovedLeave
+      ? ` href="${APPROVE_LEAVE_URL}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;"`
+      : '';
+    return `<${tag} class="calendar-entry calendar-entry--allocated" style="${style}"${linkAttrs} title="${title}">${inner}</${tag}>`;
   }
 
   function renderShiftsLegend() {
