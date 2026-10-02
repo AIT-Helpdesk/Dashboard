@@ -372,11 +372,5 @@
     "id": "damon-special",
     "label": "Damon Special",
     "children": []
-  },
-  {
-    "type": "category",
-    "id": "start-here",
-    "label": "Start Here",
-    "children": []
   }
 ]
