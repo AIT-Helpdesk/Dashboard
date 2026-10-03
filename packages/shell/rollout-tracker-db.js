@@ -172,6 +172,27 @@ function createRolloutTrackerDb(dbPath) {
     return columnId;
   }
 
+  // Re-numbers every column's sort_order to match `orderedColumnIds`'
+  // own position (0, 1, 2, ...) -- by request ("Dragging a column left or
+  // right... Each column will need to be numbered to retain order after
+  // refresh"). The caller (rollout-tracker-server.js's own PUT
+  // /columns/order) already validates this is exactly the current set of
+  // column ids, just reordered -- this function trusts that and just
+  // writes the new positions, wrapped in one transaction so a half-
+  // renumbered table is never left behind by a crash partway through.
+  function reorderColumns(orderedColumnIds) {
+    db.exec('BEGIN');
+    try {
+      orderedColumnIds.forEach((columnId, index) => {
+        db.prepare('UPDATE columns SET sort_order = ? WHERE id = ?').run(index, columnId);
+      });
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // Single-cell edit. Returns the { status, reason } written, or null if
   // no such row/column cell exists (caller returns 404).
   function setCell(rowId, columnId, status, reason, actor) {
@@ -291,6 +312,7 @@ function createRolloutTrackerDb(dbPath) {
     seedNewColumn,
     addRow,
     addColumn,
+    reorderColumns,
     setCell,
     bulkSetRow,
     bulkSetColumn,

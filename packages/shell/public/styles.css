@@ -4931,6 +4931,91 @@ tr.row-text-highlight-blue td {
   font-weight: normal;
   color: var(--fg);
 }
+/* Filter row -- by request ("On each Tracker column there will be a
+   filter capability", "The first column will filter by content such as
+   Client name with wildcards"). NOT sticky, unlike the main header row
+   right above it (.rt-table thead th's own position: sticky/top: 0) --
+   stacking a second sticky row under the first would need a hardcoded
+   top offset matching the first row's own real rendered height, which
+   varies with how many lines a column label wraps to; simplest and most
+   robust is just letting this one row scroll away normally. */
+.rt-table thead tr.rt-filter-row th {
+  position: static;
+  z-index: auto;
+  background: var(--row-alt-bg);
+  font-size: 0.75rem;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.rt-row-filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.78rem;
+  font-weight: normal;
+  text-transform: none;
+}
+/* Compound selector (not a bare .rt-status-filter-cell alone) -- same
+   same-specificity-single-class footgun documented elsewhere in this
+   file (.datto-donut-wrap.critical-donut-wrap--large's own comment):
+   .rt-table thead tr.rt-filter-row th above was winning on specificity
+   and leaving this cell at position: static, so the popup below (which
+   anchors to the nearest POSITIONED ancestor) had nothing to anchor to
+   and rendered off in the wrong part of the page entirely -- confirmed
+   the hard way ("Filter... looks like a link and does nothing", when it
+   was actually opening, just somewhere never seen). */
+.rt-table thead tr.rt-filter-row th.rt-status-filter-cell {
+  position: relative;
+}
+.rt-status-filter-popup {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.15rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  text-align: left;
+  white-space: nowrap;
+}
+.rt-status-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: normal;
+  color: var(--fg);
+  text-transform: none;
+}
+.rt-status-filter-clear {
+  align-self: flex-start;
+  font-size: 0.75rem;
+  margin-top: 0.15rem;
+}
+/* Drag-to-reorder columns, by request. Cursor/visual feedback only on a
+   Tracker Manager's own view -- [draggable="false"] (everyone else, see
+   renderGrid() in rollout-tracker-client.js) gets neither. */
+.rt-col-header[draggable="true"] {
+  cursor: grab;
+}
+.rt-col-dragging {
+  opacity: 0.4;
+}
+.rt-col-drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
 .rt-cell {
   font-weight: 600;
 }

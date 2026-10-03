@@ -107,7 +107,7 @@ function sanitizeNotesHtml(html) {
 }
 
 function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
-  const { db, addRow, addColumn, setCell, bulkSetRow, bulkSetColumn, renameRow, deleteRow, getGrid, getCellHistory } = createRolloutTrackerDb(
+  const { db, addRow, addColumn, reorderColumns, setCell, bulkSetRow, bulkSetColumn, renameRow, deleteRow, getGrid, getCellHistory } = createRolloutTrackerDb(
     path.join(storageDir, 'data.db')
   );
   // The generated package folder's own name IS this tracker's page id --
@@ -236,6 +236,37 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const key = uniqueKey(slugify(label), existingKeys);
       const columnId = addColumn(label, key, actorFrom(req));
       res.status(201).json({ id: columnId, key, label });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Drag-to-reorder columns, by request -- Tracker Manager-only, same
+  // reasoning as POST /columns above ("changing what's tracked affects
+  // everyone looking at this tracker"). The client sends the FULL new
+  // order (every column id, once each) after a drop, rather than a
+  // single "move this one to index N" -- simpler to validate (it has to
+  // be exactly a permutation of the real current column ids, nothing
+  // added/dropped/duplicated) and immune to two managers reordering at
+  // once racing each other into an inconsistent half-applied state the
+  // way a relative move could.
+  router.put('/columns/order', (req, res) => {
+    try {
+      if (!isTrackerManager(req)) {
+        return res.status(403).json({ error: 'Only a Tracker Manager can reorder columns.' });
+      }
+      const order = req.body?.order;
+      if (!Array.isArray(order) || !order.every((id) => Number.isInteger(id))) {
+        return res.status(400).json({ error: 'order must be an array of column ids.' });
+      }
+      const existingIds = db.prepare('SELECT id FROM columns').all().map((c) => c.id);
+      const sameSet = order.length === existingIds.length && existingIds.every((id) => order.includes(id)) && new Set(order).size === order.length;
+      if (!sameSet) {
+        return res.status(400).json({ error: 'order must contain every existing column id exactly once.' });
+      }
+      reorderColumns(order);
+      res.json({ ok: true });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });

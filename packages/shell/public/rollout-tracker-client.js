@@ -6,9 +6,9 @@
 // returning that page's real mount(container) function. Every generated
 // tracker shares this one module (loaded once by the browser), so nothing
 // here is module-scope state -- each call below gets its own closure over
-// lastGridData/showAll, the same way multiple tabbed pages built from
-// tab-page-client.js each get their own independent state despite sharing
-// that one module too.
+// showAll and the filter/drag state just below it, the same way multiple
+// tabbed pages built from tab-page-client.js each get their own
+// independent state despite sharing that one module too.
 const STATUS_LABELS = { not_done: 'Not Done', started: 'Started', done: 'Done', na: 'N/A', cancelled: 'Cancelled', issue: 'Issue', note: 'Note' };
 const STATUS_SYMBOLS = { not_done: '✗', started: '▶', done: '✓', na: 'N/A', cancelled: '⛔', issue: '⚠️', note: '📝' };
 const STATUS_ORDER = ['not_done', 'started', 'done', 'na', 'cancelled', 'issue', 'note'];
@@ -21,8 +21,25 @@ const RENAME_ICON_SVG =
   '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
 
 export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item' }) {
-  let lastGridData = null;
   let showAll = false;
+  // Client-side filtering, by request -- narrows which rows are DISPLAYED
+  // out of whatever loadGrid() already fetched (Show All or not), with no
+  // extra round trip, same "filter what's already loaded" convention
+  // Check Client's own M365 Users table uses. rowNameFilterText is plain
+  // wildcard text against the first column; columnStatusFilters is
+  // columnId -> Set of allowed statuses (absent or empty = no filter for
+  // that column). currentVisibleRowIds is kept in sync on every re-render
+  // so the column bulk-update button ("set every visible row in this
+  // column") respects these filters too, not just Show All -- by
+  // request, row bulk-update does NOT need this (it already always
+  // applies to every column of its own row, filters or not).
+  let rowNameFilterText = '';
+  const columnStatusFilters = new Map();
+  let currentVisibleRowIds = [];
+  // Set while a column header drag is in progress -- module-call-scope
+  // (not per-render), so it survives the dragstart->drop round trip
+  // regardless of how many times the grid re-renders in between.
+  let draggedColumnId = null;
 
   return function mount(container) {
     container.innerHTML = `
@@ -444,7 +461,6 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         const res = await fetch(`${apiBase}/${showAll ? '?all=true' : ''}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-        lastGridData = data;
         renderGrid(data);
         addColumnButton.hidden = !data.isManager;
         if (data.isManager) {
@@ -474,36 +490,230 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       }
       const table = document.createElement('table');
       table.className = 'rt-table';
+      // Filter row, by request -- a wildcard text filter under the row-
+      // name column (same "e.g. Acme* (wildcards with *)" convention this
+      // dashboard already uses for client-name search elsewhere), and a
+      // status multi-select filter under every real column. Both are
+      // purely client-side, narrowing whatever loadGrid() already loaded
+      // -- see renderTbodyRows()/applyLocalFilters() below, not a new
+      // server round trip per keystroke/checkbox.
       table.innerHTML = `
         <thead>
           <tr class="shaded-row">
-            <th>${escapeHtml(rowNoun)} (${rows.length}/${totalRows})</th>
+            <th>${escapeHtml(rowNoun)} (<span class="rt-visible-count"></span>/${totalRows})</th>
             ${columns
               .map(
                 (col) =>
-                  `<th><button type="button" class="rt-bulk-col-btn" data-column-id="${col.id}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ${escapeHtml(col.label)}</th>`
+                  `<th class="rt-col-header" draggable="${data.isManager ? 'true' : 'false'}" data-column-id="${col.id}"><button type="button" class="rt-bulk-col-btn" data-column-id="${col.id}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ${escapeHtml(col.label)}</th>`
+              )
+              .join('')}
+          </tr>
+          <tr class="rt-filter-row">
+            <th><input type="text" class="rt-row-filter-input" placeholder="e.g. Acme* (wildcards with *)" value="${escapeHtml(rowNameFilterText)}" /></th>
+            ${columns
+              .map(
+                (col) =>
+                  `<th class="rt-status-filter-cell" data-column-id="${col.id}"><button type="button" class="link-button rt-status-filter-btn" data-column-id="${col.id}">Filter${statusFilterCountLabel(col.id)}</button></th>`
               )
               .join('')}
           </tr>
         </thead>
-        <tbody>
-          ${rows
-            .map(
-              (row) => `
+        <tbody></tbody>
+      `;
+      gridContainer.innerHTML = '';
+      gridContainer.appendChild(table);
+      // wireCellInteractions is delegated on `table` itself, and
+      // wireBulkColumnButtons' own buttons live in the header -- both
+      // survive a tbody-only refresh untouched, so both are wired ONCE
+      // here, not inside renderTbodyRows() (which runs again on every
+      // filter change and would otherwise stack duplicate listeners on
+      // the same persistent elements). wireBulkRowButtons/
+      // wireRenameButtons are the opposite -- their buttons live INSIDE
+      // tbody and get destroyed/recreated on every refresh, so those two
+      // DO need re-wiring every time, inside renderTbodyRows() itself.
+      wireCellInteractions(table);
+      wireBulkColumnButtons(table);
+      renderTbodyRows(columns, rows);
+      wireRowNameFilterInput(table, columns, rows);
+      wireStatusFilterButtons(table, columns, rows);
+      wireColumnDragReorder(table, columns);
+    }
+
+    function statusFilterCountLabel(columnId) {
+      const selected = columnStatusFilters.get(columnId);
+      return selected && selected.size > 0 ? ` (${selected.size})` : '';
+    }
+
+    // A row passes if its name matches the wildcard filter (when set) AND
+    // every column with an active status filter has that row's cell in
+    // one of the selected statuses -- same "every active filter ANDed"
+    // convention Check Client's own M365 Users table uses. An EMPTY
+    // selected-status set for a column means "no filter" (show
+    // everything), not "hide everything" -- same "nothing checked = no
+    // filter" convention a plain Excel-style column filter uses.
+    function applyLocalFilters(rows, columns) {
+      return rows.filter((row) => {
+        if (rowNameFilterText && !matchesWildcard(row.name, rowNameFilterText)) return false;
+        for (const col of columns) {
+          const selected = columnStatusFilters.get(col.id);
+          if (!selected || selected.size === 0) continue;
+          const cell = row.cells[col.id];
+          const status = cell ? cell.status : 'not_done';
+          if (!selected.has(status)) return false;
+        }
+        return true;
+      });
+    }
+
+    // Rebuilds just <tbody> -- called on every full loadGrid() AND on
+    // every filter change, without re-fetching or rebuilding the header/
+    // filter row (whose own input/checkbox state would otherwise be lost
+    // mid-edit). currentVisibleRowIds is updated here so the column bulk-
+    // update button (wireBulkColumnButtons below) always reflects
+    // whatever's actually on screen right now.
+    function renderTbodyRows(columns, allRows) {
+      const table = gridContainer.querySelector('table');
+      if (!table) return;
+      const visibleRows = applyLocalFilters(allRows, columns);
+      currentVisibleRowIds = visibleRows.map((r) => r.id);
+      const visibleCountEl = table.querySelector('.rt-visible-count');
+      if (visibleCountEl) visibleCountEl.textContent = String(visibleRows.length);
+      const tbody = table.querySelector('tbody');
+      tbody.innerHTML =
+        visibleRows.length > 0
+          ? visibleRows
+              .map(
+                (row) => `
             <tr>
               <td><button type="button" class="rt-bulk-row-btn" data-row-id="${row.id}" title="Set every column in this row to the same value">⚙</button> <button type="button" class="rt-rename-btn" data-row-id="${row.id}" data-row-name="${escapeHtml(row.name)}" title="Rename">${RENAME_ICON_SVG}</button> ${escapeHtml(row.name)}</td>
               ${columns.map((col) => cellHtml(row, col)).join('')}
             </tr>`
-            )
-            .join('')}
-        </tbody>
-      `;
-      gridContainer.innerHTML = '';
-      gridContainer.appendChild(table);
-      wireCellInteractions(table);
+              )
+              .join('')
+          : `<tr><td colspan="${columns.length + 1}" class="status">No ${rowNoun.toLowerCase()}s matching these filters.</td></tr>`;
+      // Only the two buttons that live INSIDE tbody rows (and so get
+      // destroyed/recreated every time this runs) need re-wiring here --
+      // see renderGrid()'s own comment for why wireCellInteractions/
+      // wireBulkColumnButtons are wired exactly once, there, instead.
       wireBulkRowButtons(table);
-      wireBulkColumnButtons(table);
       wireRenameButtons(table);
+    }
+
+    function wireRowNameFilterInput(table, columns, rows) {
+      const input = table.querySelector('.rt-row-filter-input');
+      input.addEventListener('input', () => {
+        rowNameFilterText = input.value.trim();
+        renderTbodyRows(columns, rows);
+      });
+    }
+
+    // Toggleable checkbox popup per column -- clicking the same Filter
+    // button again closes it (same convention wireBulkColumnButtons' own
+    // editor already uses below), and by request ("the filter popups
+    // won't close") so does clicking anywhere outside it, same standard
+    // dropdown-dismissal behaviour as the rest of the web.
+    function wireStatusFilterButtons(table, columns, rows) {
+      table.querySelectorAll('.rt-status-filter-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation(); // otherwise this same click immediately re-triggers the outside-click handler being registered below, on the very popup it just opened
+          const filterCell = btn.closest('th');
+          const existing = filterCell.querySelector('.rt-status-filter-popup');
+          if (existing) {
+            existing.remove();
+            return;
+          }
+          const columnId = Number(btn.dataset.columnId);
+          if (!columnStatusFilters.has(columnId)) columnStatusFilters.set(columnId, new Set());
+          const selected = columnStatusFilters.get(columnId);
+          const popup = document.createElement('div');
+          popup.className = 'rt-status-filter-popup';
+          popup.innerHTML = `
+            ${STATUS_ORDER.map(
+              (s) =>
+                `<label class="rt-status-filter-option"><input type="checkbox" value="${s}"${selected.has(s) ? ' checked' : ''} /> ${STATUS_SYMBOLS[s]} ${STATUS_LABELS[s]}</label>`
+            ).join('')}
+            <button type="button" class="link-button rt-status-filter-clear">Clear</button>
+          `;
+          popup.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+            cb.addEventListener('change', () => {
+              if (cb.checked) selected.add(cb.value);
+              else selected.delete(cb.value);
+              btn.textContent = `Filter${statusFilterCountLabel(columnId)}`;
+              renderTbodyRows(columns, rows);
+            });
+          });
+          popup.querySelector('.rt-status-filter-clear').addEventListener('click', () => {
+            selected.clear();
+            popup.querySelectorAll('input[type="checkbox"]').forEach((cb) => (cb.checked = false));
+            btn.textContent = 'Filter';
+            renderTbodyRows(columns, rows);
+          });
+          filterCell.appendChild(popup);
+          // Close on an outside click. Safe to register right here (not
+          // deferred) -- e.stopPropagation() above already keeps THIS
+          // same click from ever reaching document, so there's no risk
+          // of it immediately closing the popup it just opened. Cleans
+          // itself up either way this popup closes: fires and removes
+          // itself on a genuine outside click, or self-removes (no-op by
+          // then) the next time anything is clicked after the Filter
+          // button's own re-click already closed it.
+          function onOutsideClick(ev) {
+            if (popup.isConnected && popup.contains(ev.target)) return;
+            popup.remove();
+            document.removeEventListener('click', onOutsideClick);
+          }
+          document.addEventListener('click', onOutsideClick);
+        });
+      });
+    }
+
+    // Drag-to-reorder columns, by request ("Dragging a column left or
+    // right to place it in a different position will be a permanent kept
+    // change") -- Tracker Manager-only (same `draggable` gate set in
+    // renderGrid() above). Computes the new order from `columns` (already
+    // in the real current sort order) rather than reading DOM positions,
+    // so no live header-dragging/reflow code is needed at all -- on drop,
+    // PUT the new full order, then loadGrid() picks it up from the
+    // server's own now-updated sort_order, same "server is the one
+    // source of truth, just reload" convention every other write on this
+    // page already follows.
+    function wireColumnDragReorder(table, columns) {
+      table.querySelectorAll('th.rt-col-header[draggable="true"]').forEach((th) => {
+        th.addEventListener('dragstart', () => {
+          draggedColumnId = Number(th.dataset.columnId);
+          th.classList.add('rt-col-dragging');
+        });
+        th.addEventListener('dragend', () => th.classList.remove('rt-col-dragging'));
+        th.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          if (Number(th.dataset.columnId) !== draggedColumnId) th.classList.add('rt-col-drag-over');
+        });
+        th.addEventListener('dragleave', () => th.classList.remove('rt-col-drag-over'));
+        th.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          th.classList.remove('rt-col-drag-over');
+          const targetColumnId = Number(th.dataset.columnId);
+          if (draggedColumnId === null || draggedColumnId === targetColumnId) return;
+          const order = columns.map((c) => c.id);
+          const fromIndex = order.indexOf(draggedColumnId);
+          const toIndex = order.indexOf(targetColumnId);
+          order.splice(fromIndex, 1);
+          order.splice(toIndex, 0, draggedColumnId);
+          draggedColumnId = null;
+          try {
+            const res = await fetch(`${apiBase}/columns/order`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ order }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+            await loadGrid();
+          } catch (err) {
+            alert(`Error reordering columns: ${err.message}`);
+          }
+        });
+      });
     }
 
     function cellHtml(row, col) {
@@ -709,13 +919,22 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             return;
           }
           const columnId = btn.dataset.columnId;
-          // Scoped to whichever rows are currently rendered, same
-          // convention as tc-elite-rollout's own wireBulkColumnButtons.
-          const visibleRowIds = lastGridData.rows.map((r) => r.id);
+          // Scoped to whichever rows are CURRENTLY VISIBLE -- by request,
+          // this has to respect the new per-column/row-name filters too,
+          // not just Show All (currentVisibleRowIds is kept in sync by
+          // renderTbodyRows() on every filter change, same convention
+          // tc-elite-rollout's own wireBulkColumnButtons already followed
+          // for Show All alone, just generalised).
+          const visibleRowIds = currentVisibleRowIds;
           const editor = buildBulkEditor(`Set Column (${visibleRowIds.length} visible)`, async (status, reason) => {
             await fetchBulkColumn(columnId, status, reason, visibleRowIds);
             await loadGrid();
           });
+          // This editor lands inside the column header's own <th>, which
+          // is draggable="true" now (column reordering) -- explicitly
+          // false here so clicking/dragging its select/input can't be
+          // mistaken for a column-reorder drag start.
+          editor.setAttribute('draggable', 'false');
           btn.insertAdjacentElement('afterend', editor);
         });
       });
@@ -847,6 +1066,37 @@ function isBlankHtml(html) {
 function formatDateTime(iso) {
   if (!iso) return '';
   return new Date(iso).toLocaleString();
+}
+
+// Same wildcard semantics as @dashboard/autotask-client's own
+// parseWildcard()/matchesWildcard() (e.g. Client Details' own "Acme*"
+// search) -- duplicated here rather than imported since that package is
+// Node-only (used from server.js files), and this module runs in the
+// browser. No `*` at all defaults to "contains" (same as `*text*`), a
+// trailing `*` means "begins with", a leading `*` means "ends with".
+function parseWildcard(term) {
+  if (!term) return null;
+  const startsWithStar = term.startsWith('*');
+  const endsWithStar = term.endsWith('*');
+  let value = term;
+  if (startsWithStar) value = value.slice(1);
+  if (endsWithStar) value = value.slice(0, -1);
+  value = value.trim();
+  if (!value) return null;
+  if (startsWithStar && endsWithStar) return { op: 'contains', value };
+  if (endsWithStar) return { op: 'beginsWith', value };
+  if (startsWithStar) return { op: 'endsWith', value };
+  return { op: 'contains', value };
+}
+
+function matchesWildcard(value, term) {
+  const parsed = parseWildcard(term);
+  if (!parsed) return true;
+  const v = (value || '').toLowerCase();
+  const needle = parsed.value.toLowerCase();
+  if (parsed.op === 'beginsWith') return v.startsWith(needle);
+  if (parsed.op === 'endsWith') return v.endsWith(needle);
+  return v.includes(needle);
 }
 
 function escapeHtml(str) {
