@@ -4942,7 +4942,15 @@ tr.row-text-highlight-blue td {
 .rt-table thead tr.rt-filter-row th {
   position: static;
   z-index: auto;
-  background: var(--row-alt-bg);
+  /* Light grey, by request -- a neutral tint (not --row-alt-bg's own
+     near-white, barely-there shade) so this row visibly reads as its
+     own band, distinct from the sticky header above it and the body
+     rows below. */
+  background: color-mix(in srgb, #6b7280 12%, var(--card));
+  /* Narrower, by request -- less padding than the base .rt-table th/td
+     rule (0.3rem 0.5rem) so this row takes less vertical space than a
+     real header/data row. */
+  padding: 0.15rem 0.3rem;
   font-size: 0.75rem;
   font-weight: normal;
   text-transform: none;
@@ -4951,7 +4959,7 @@ tr.row-text-highlight-blue td {
 .rt-row-filter-input {
   width: 100%;
   box-sizing: border-box;
-  padding: 0.25rem 0.4rem;
+  padding: 0.15rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
@@ -5224,6 +5232,19 @@ tr.row-text-highlight-blue td {
   color: #dc2626;
 }
 .date-form button.button-link--small.rt-delete-button:hover {
+  background: #dc2626;
+  color: white;
+}
+
+/* Clear All Filters -- red, by request. Same compound-selector shape
+   (class+element+class) as .rt-delete-button right above, for the same
+   reason -- out-specifies the plain .button-link--small rule this
+   toolbar already applies to every button in it. */
+.date-form button.button-link--small.rt-clear-filters-button {
+  background: color-mix(in srgb, #dc2626 15%, transparent);
+  color: #dc2626;
+}
+.date-form button.button-link--small.rt-clear-filters-button:hover {
   background: #dc2626;
   color: white;
 }

@@ -49,6 +49,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
           <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
             <input type="checkbox" id="show-all-toggle" /> Show All
           </label>
+          <button type="button" id="clear-filters-button" class="button-link button-link--small rt-clear-filters-button">Clear All Filters</button>
           <button type="button" id="add-row-button" class="button-link button-link--small">Add ${escapeHtml(rowNoun)}</button>
           <button type="button" id="bulk-add-rows-button" class="button-link button-link--small">Bulk Add ${escapeHtml(rowNoun)}s</button>
           <button type="button" id="add-column-button" class="button-link button-link--small" hidden>Add Column</button>
@@ -127,6 +128,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     const statusEl = container.querySelector('#status');
     const refreshButton = container.querySelector('#refresh-button');
     const showAllToggle = container.querySelector('#show-all-toggle');
+    const clearFiltersButton = container.querySelector('#clear-filters-button');
     const addRowButton = container.querySelector('#add-row-button');
     const bulkAddRowsButton = container.querySelector('#bulk-add-rows-button');
     const addColumnButton = container.querySelector('#add-column-button');
@@ -147,6 +149,16 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     refreshButton.addEventListener('click', () => loadGrid());
     showAllToggle.addEventListener('change', () => {
       showAll = showAllToggle.checked;
+      loadGrid();
+    });
+
+    // By request -- a full loadGrid() (not just a tbody refresh) so the
+    // filter row itself (the wildcard input's value, each column's
+    // "Filter (N)" button label, any open status-filter popup) rebuilds
+    // from this now-cleared state too, not just the rows it narrows.
+    clearFiltersButton.addEventListener('click', () => {
+      rowNameFilterText = '';
+      columnStatusFilters.clear();
       loadGrid();
     });
 
