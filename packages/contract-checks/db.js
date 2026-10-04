@@ -877,26 +877,31 @@ function listOutstandingProcessing(processType) {
 }
 
 // "Mark Renewals as Done" popup, by request -- every not-yet-done renewal
-// order whose client has no order of any OTHER TYPE (change/sales/
-// cancellation/termination) anywhere in the synced dataset for this process
-// type, so a bulk approval here can't silently sweep past a client whose
-// order history is more complex than straightforward renewals. A client
-// with SEVERAL renewals and nothing else still qualifies for all of them --
-// real case confirmed live: "Brandi Projects" has 3 renewal orders and
-// nothing else, but the original version of this query only matched a
-// client with exactly ONE order total, wrongly excluding every one of
-// them. Deliberately NOT scoped by whatever Since date happens to be
-// selected on the page right now -- "no other orders" has to mean the
-// whole dataset, not just today's filtered view, or a client's other order
-// sitting just outside the date range would make this wrongly think they
-// only have renewals.
+// order whose client has no STILL-OUTSTANDING order of any OTHER TYPE
+// (change/sales/cancellation/termination) anywhere in the synced dataset
+// for this process type, so a bulk approval here can't silently sweep past
+// a client whose order history is more complex than straightforward
+// renewals. By request: an other-type order that's already All Done
+// doesn't disqualify a renewal any more -- only one that's STILL
+// outstanding (all_done_at IS NULL) does, since there's nothing left on
+// an already-done order a bulk renewal approval could steamroll. A client
+// with SEVERAL renewals and nothing else (or nothing else still
+// outstanding) still qualifies for all of them -- real case confirmed
+// live: "Brandi Projects" has 3 renewal orders and nothing else, but the
+// original version of this query only matched a client with exactly ONE
+// order total, wrongly excluding every one of them. Deliberately NOT
+// scoped by whatever Since date happens to be selected on the page right
+// now -- "no other outstanding orders" has to mean the whole dataset, not
+// just today's filtered view, or a client's other order sitting just
+// outside the date range would make this wrongly think they only have
+// renewals.
 function listRenewalsEligibleForBulkDone(processType) {
   return db
     .prepare(
       `SELECT * FROM items
        WHERE process_type = ? AND order_type = 'renewal' AND all_done_at IS NULL
          AND customer_id NOT IN (
-           SELECT customer_id FROM items WHERE process_type = ? AND order_type != 'renewal' AND customer_id IS NOT NULL
+           SELECT customer_id FROM items WHERE process_type = ? AND order_type != 'renewal' AND customer_id IS NOT NULL AND all_done_at IS NULL
          )
        ORDER BY client_name ASC`
     )
