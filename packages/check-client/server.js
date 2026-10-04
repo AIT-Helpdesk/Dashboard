@@ -243,14 +243,11 @@ router.get('/m365-tenancy', async (req, res) => {
     // every request -- it's a local SQLite read, not an external call.
     //
     // The same Microsoft SKU can legitimately sit on more than one
-    // product_mappings row (confirmed real case: O365_BUSINESS_ESSENTIALS
-    // covers both "Microsoft 365 Business Basic" and its Non-Profit-Pricing
-    // Ingram listing) -- grouped by SKU rather than a last-one-wins Map, so
-    // an ambiguous match is never silently dropped down to one arbitrary
-    // row. Rows with no SKU at all (about a dozen NCE/perpetual-license
-    // rows in the source data) are excluded from the index -- grouping them
-    // under a blank key would falsely "match" every one of them together if
-    // a real SKU were ever blank too.
+    // product_mappings row -- grouped by SKU rather than a last-one-wins
+    // Map, so an ambiguous match is never silently dropped down to one
+    // arbitrary row. Rows with no SKU at all are excluded from the index
+    // -- grouping them under a blank key would falsely "match" every one
+    // of them together if a real SKU were ever blank too.
     const mappingsBySku = new Map();
     for (const m of contractChecks.listProductMappings()) {
       const key = (m.ms_sku_part_number || '').trim().toUpperCase();
@@ -410,8 +407,7 @@ router.get('/m365-users', async (req, res) => {
         // still a real sign-in address, so it's the fallback rather than
         // leaving the cell blank.
         email: u.mail || u.userPrincipalName || '',
-        // Real field, confirmed live this session (Kraftur: 84 Member, 28
-        // Guest) -- Graph's own "Member"/"Guest" distinction, by request.
+        // Graph's own "Member"/"Guest" distinction, by request.
         userType: u.userType || '',
         // Shown as a "Status" column (Enabled/Disabled) client-side, and
         // also drives the red/orange row-highlight there -- by request.

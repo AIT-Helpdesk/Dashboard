@@ -370,9 +370,8 @@ export function mount(container) {
   // friendly_ms_product_name) rather than the raw Ingram Micro product
   // name -- by request, "so that matching items appear on one line": the
   // same real Microsoft product can legitimately be listed under more than
-  // one Ingram Micro name (e.g. "Microsoft 365 Business Basic" and its own
-  // "... Donation (Non-Profit Pricing)" twin both map to the one real SKU),
-  // and grouping on the Ingram-side name alone (the previous approach)
+  // one Ingram Micro name, and grouping on the Ingram-side name alone
+  // (the previous approach)
   // split those into separate rows repeating the identical M365 numbers.
   // A full comparison, not just "Ingram subscriptions that happen to have
   // M365 data" -- an M365 SKU with no matching Ingram subscription, and an
@@ -392,14 +391,12 @@ export function mount(container) {
     return (lastServicesData?.byCompany || []).flatMap((c) => c.rows);
   }
 
-  // Real Autotask service/invoice names confirmed almost always carry a
-  // billing-term or adjustment qualifier AFTER the base product name --
-  // real examples pulled live this session: "Microsoft 365 Business
-  // Basic (Monthly)", "Microsoft 365 Business Basic - Refund", "Planner
-  // and Project Plan 3 (Annual)" -- so this is a PREFIX match (same
-  // approach, same " and "/"+" bundle-exclusion guard, as
-  // matchSkuByFriendlyNamePrefix() above), not an exact one; an exact
-  // match against these real names would never succeed at all.
+  // Real Autotask service/invoice names almost always carry a
+  // billing-term or adjustment qualifier AFTER the base product name,
+  // so this is a PREFIX match (same approach, same " and "/"+"
+  // bundle-exclusion guard, as matchSkuByFriendlyNamePrefix() above),
+  // not an exact one; an exact match against these real names would
+  // almost never succeed.
   function serviceRowNameStartsWithAny(rowName, names) {
     const lower = (rowName || '').trim().toLowerCase();
     if (!lower) return false;
@@ -414,13 +411,10 @@ export function mount(container) {
 
   // A real contract line whose own name marks it as a Refund or a
   // Prorate adjustment is excluded from the Contract (AT) count
-  // entirely, by request -- confirmed real case (Kraftur): a
-  // "Microsoft 365 Business Basic - Refund" line carrying 26 units
-  // would otherwise massively inflate the real count (22 actually
-  // enabled in M365) if just summed in alongside the real standing
-  // service lines. "That's an error anyway, I'll fix it up" -- Prorate
-  // excluded the same way, same reasoning (a billing adjustment for
-  // units already counted elsewhere, not a distinct standing quantity).
+  // entirely, by request -- a billing adjustment for units already
+  // counted elsewhere, not a distinct standing quantity, so summing it
+  // in alongside the real standing service lines would inflate the
+  // count.
   function isAdjustmentLine(r) {
     return /refund|prorate/i.test(r.serviceItemName || '') || /refund|prorate/i.test(r.serviceName || '');
   }
@@ -496,34 +490,27 @@ export function mount(container) {
     }
 
     // Ingram's own NCE naming convention appends a billing-term suffix onto
-    // the base product name -- real example that didn't merge before this:
-    // "Exchange Online (Plan 1) (NCE COM MTH)", when product_mappings only
-    // has a row for the bare "Exchange Online (Plan 1)" (no row exists, or
-    // ever reasonably could, for every NCE/billing-term suffix combination
-    // Ingram generates). By request ("match using the friendly_ms_product_
-    // name so that matching items appear on one line"): when a
-    // subscription's name isn't a KNOWN ingram_product_name, it still
-    // matches a SKU when its name simply STARTS WITH that SKU's own
-    // Microsoft friendly product name (`productName`) -- true for both the
-    // NCE-suffix case above and for a hand-typed ingram_product_name that's
-    // itself just the friendly name plus a trailing qualifier (e.g.
-    // "Microsoft 365 Business Basic Donation (Non-Profit Pricing)" still
-    // starts with "Microsoft 365 Business Basic"). Only applied when
-    // exactly one SKU's friendly name prefix-matches -- an ambiguous clash
-    // (more than one candidate) is left unmatched rather than guessed,
-    // same "don't guess" convention server.js's own SKU matching already
-    // follows for a genuinely ambiguous case.
+    // the base product name, and a hand-typed ingram_product_name can
+    // likewise carry its own trailing qualifier -- neither shape has (or
+    // could reasonably have) its own product_mappings row for every
+    // possible suffix combination. By request ("match using the
+    // friendly_ms_product_name so that matching items appear on one
+    // line"): when a subscription's name isn't a KNOWN
+    // ingram_product_name, it still matches a SKU when its name simply
+    // STARTS WITH that SKU's own Microsoft friendly product name
+    // (`productName`). Only applied when exactly one SKU's friendly name
+    // prefix-matches -- an ambiguous clash (more than one candidate) is
+    // left unmatched rather than guessed, same "don't guess" convention
+    // server.js's own SKU matching already follows for a genuinely
+    // ambiguous case.
     //
-    // Real bug, confirmed: this prefix check alone also caught a genuinely
-    // DIFFERENT, compound bundle subscription -- "Microsoft 365 Business
-    // Premium and Microsoft 365 Copilot Business" -- wrongly merged into
-    // the plain "Microsoft 365 Business Premium" group just because it
-    // happens to start with that same text (confirmed no product_mappings
-    // row causes this -- it's this prefix heuristic alone). A real
-    // qualifier suffix never joins on " and " or "+" right after the
-    // matched name (confirmed real examples: "(NCE COM MTH)", "Donation
-    // (Non-Profit Pricing)") -- only a genuinely separate bundled product
-    // name does, so that specific shape is excluded here.
+    // Real bug, confirmed: this prefix check alone also caught a
+    // genuinely DIFFERENT, compound bundle subscription, wrongly merged
+    // into a shorter product's own group just because it happened to
+    // start with that same text. A real qualifier suffix never joins on
+    // " and " or "+" right after the matched name -- only a genuinely
+    // separate bundled product name does, so that specific shape is
+    // excluded here.
     function matchSkuByFriendlyNamePrefix(subName) {
       const lower = subName.trim().toLowerCase();
       const candidates = skus.filter((s) => {
@@ -552,10 +539,8 @@ export function mount(container) {
     // used to merge a Monthly subscription and a separate Annual one for
     // the SAME product into one row, whose own Term/Billing Period
     // column could then only show ONE of the two (picked arbitrarily)
-    // next to the FULL combined license count -- confirmed real,
-    // misleading case: "Planner and Project Plan 3" showing "Annual /
-    // Annual" next to 4 licenses when only 3 of those 4 were actually
-    // annual (the 4th was a separate Monthly subscription).
+    // next to the FULL combined license count -- misleading when the
+    // two subscriptions don't carry the same number of licenses each.
     const groups = new Map();
     function groupFor(key, sku) {
       if (!groups.has(key)) groups.set(key, { sku: sku || null, subscriptions: [] });
@@ -616,12 +601,11 @@ export function mount(container) {
       // trailing "(NCE ...)" billing-term qualifier (see
       // matchSkuByFriendlyNamePrefix()'s own comment on it) is stripped
       // here for DISPLAY only, by request -- the real sub.name used for
-      // matching above is never touched. Deduped before joining -- real
-      // bug, confirmed: two distinct real subscriptions for the same
-      // product (e.g. an old one still briefly active alongside its own
-      // renewal) stripped down to the IDENTICAL display name were
-      // showing as "Planner and Project Plan 3 + Planner and Project
-      // Plan 3" instead of just once.
+      // matching above is never touched. Deduped before joining -- two
+      // distinct real subscriptions for the same product (e.g. an old
+      // one still briefly active alongside its own renewal) can strip
+      // down to the IDENTICAL display name, which should still only
+      // show once.
       name: g.subscriptions.length > 0 ? [...new Set(g.subscriptions.map((s) => stripNceSuffix(s.name)))].join(' + ') : groupKey,
       subscriptions: g.subscriptions,
       sku: g.sku,
@@ -677,30 +661,12 @@ export function mount(container) {
     // breakdown on every split row (same as M365 Licenses) is the more
     // useful, less confusing version.
     const contractMatches = contractMatchesForSku(sku);
-    // Each number's own "(NN)" is the count as at the start of that
-    // contract line's NEXT billing period, by request -- always plain
-    // .inline-subtext (muted), regardless of whether threeWayMismatch
-    // below reds out the rest of this cell: it's a heads-up about an
-    // already-known upcoming change, never itself a mismatch to flag,
-    // so it must never turn red even when the current count does.
-    // .cell-flag-red's own !important only wins on the <td> itself; this
-    // inner span's own explicit color isn't inherited from it, so this
-    // holds regardless of the row's own mismatch state.
-    const contractCell =
-      contractMatches.length === 0
-        ? ''
-        : `<span title="${escapeHtml(contractMatches.map((m) => `${m.contractName}: ${m.units}`).join('\n'))}">${contractMatches.map((m) => `${m.units}${m.nextPeriodUnits !== null && m.nextPeriodUnits !== m.units ? ` <span class="inline-subtext">(${m.nextPeriodUnits})</span>` : ''}`).join(' / ')}</span>`;
     // IM Licenses vs M365 Licenses vs Contract (AT), by request -- summed
     // ACROSS every term-split row for this same product ("ignoring
     // term"), not just this row's own partial count, since a row's own
     // partial IM total would never equal the full M365/Contract total
     // even when everything genuinely reconciles once all terms are added
-    // back together. All three go red together when any two of the
-    // (known) totals disagree; none go red when they all agree, or when
-    // there's nothing real to compare (e.g. no Autotask contract match at
-    // all yet -- most products, since product_mappings' own Autotask
-    // name columns are still largely unpopulated -- doesn't by itself
-    // force a false mismatch).
+    // back together.
     const siblingRows = sku ? (allRows || [row]).filter((r) => r.sku === sku) : [row];
     const imProductTotal = siblingRows.some((r) => licenseTotalForRow(r) !== null) ? siblingRows.reduce((n, r) => n + (licenseTotalForRow(r) || 0), 0) : null;
     const hasContractData = contractMatches.length > 0;
@@ -710,25 +676,43 @@ export function mount(container) {
     // so a contract with no scheduled change just reproduces
     // contractTotal here rather than going null and losing the check).
     const contractNextPeriodTotal = hasContractData ? contractMatches.reduce((n, m) => n + (m.nextPeriodUnits ?? m.units), 0) : null;
+    // By request: once a contract line has a known, DIFFERENT next-period
+    // count (a scheduled change already entered in Autotask ahead of its
+    // effective date), the comparison uses that NEXT-period total
+    // instead of the current one -- the current one is expected to look
+    // "off" by exactly the pending change in that case, so it's not the
+    // number worth checking against IM/M365 any more.
+    const usingNextPeriodTotal = hasContractData && contractNextPeriodTotal !== contractTotal;
+    const contractComparisonTotal = usingNextPeriodTotal ? contractNextPeriodTotal : contractTotal;
     const knownTotals = [];
     if (imProductTotal !== null) knownTotals.push(imProductTotal);
-    if (hasContractData) knownTotals.push(contractTotal);
+    if (hasContractData) knownTotals.push(contractComparisonTotal);
     if (sku && sku.enabled !== null) knownTotals.push(sku.enabled);
-    let threeWayMismatch = knownTotals.length > 1 && !knownTotals.every((v) => v === knownTotals[0]);
-    // By request: if EITHER Contract (AT)'s current total OR its
-    // next-period total (the bracketed figure) matches BOTH IM Licenses
-    // and M365 Licenses, that's good enough -- a scheduled contract
-    // change due at the next renewal (confirmed real case: Kraftur's
-    // Business Premium/Copilot both showing their CURRENT contract
-    // total one unit ahead of IM/M365 because next year's change was
-    // already entered in Autotask) shouldn't read as a live mismatch
-    // today just because the CURRENT total alone doesn't match. Every
-    // other check above (and Consumed's own, below) is untouched.
-    if (threeWayMismatch && hasContractData && imProductTotal !== null && sku && sku.enabled !== null) {
-      const currentFullyMatches = contractTotal === imProductTotal && contractTotal === sku.enabled;
-      const nextFullyMatches = contractNextPeriodTotal === imProductTotal && contractNextPeriodTotal === sku.enabled;
-      if (currentFullyMatches || nextFullyMatches) threeWayMismatch = false;
-    }
+    const threeWayMismatch = knownTotals.length > 1 && !knownTotals.every((v) => v === knownTotals[0]);
+    // Each number's own "(NN)" (shown only when it differs from the
+    // current count) is the count as at the start of that contract
+    // line's NEXT billing period. When it's shown, IT (not the plain
+    // current count beside it) is the one being compared above, so it's
+    // the one that gets coloured -- red on a mismatch, green when all
+    // three otherwise agree -- while the plain current count stays
+    // default/grey either way. When there's no bracket at all, the plain
+    // count IS the comparison, so it alone gets the red/not-red colour
+    // instead. .cell-flag-red's own !important only applies to the <td>
+    // itself, so it's safe to leave the OTHER number in a mismatched cell
+    // with no color class at all -- it won't inherit red from the row.
+    const contractCell =
+      contractMatches.length === 0
+        ? ''
+        : `<span title="${escapeHtml(contractMatches.map((m) => `${m.contractName}: ${m.units}`).join('\n'))}">${contractMatches
+            .map((m) => {
+              const showBracket = m.nextPeriodUnits !== null && m.nextPeriodUnits !== m.units;
+              const currentHtml = !showBracket && threeWayMismatch ? `<span class="cell-flag-red">${m.units}</span>` : String(m.units);
+              const bracketHtml = showBracket
+                ? ` <span class="${threeWayMismatch ? 'cell-flag-red' : 'cell-flag-green'}">(${m.nextPeriodUnits})</span>`
+                : '';
+              return `${currentHtml}${bracketHtml}`;
+            })
+            .join(' / ')}</span>`;
     // M365 Licenses vs Consumed stays its own separate check, unaffected
     // by the three-way one above -- only drives M365 Licenses' own red
     // state (OR'd with threeWayMismatch), never IM Licenses/Contract (AT).
@@ -748,7 +732,7 @@ export function mount(container) {
       <tr${m365Mismatch ? ' class="chk-summary-row-mismatch"' : ''}>
         <td>${escapeHtml(row.name || '')}${statusBadge}</td>
         <td class="ticket-number${threeWayMismatch ? ' cell-flag-red' : ''}">${licenseTotal ?? ''}</td>
-        <td class="ticket-number${threeWayMismatch && hasContractData ? ' cell-flag-red' : ''}">${contractCell}</td>
+        <td class="ticket-number">${contractCell}</td>
         <td class="ticket-number${m365Mismatch ? ' cell-flag-red' : ''}">${sku ? (sku.enabled ?? '') : ''}</td>
         <td class="ticket-number${consumedVsM365Mismatch ? ' cell-flag-red' : ''}">${sku ? (sku.consumed ?? '') : ''}</td>
         <td class="ticket-number${sku && sku.suspended ? ' cell-flag-red' : ''}">${sku ? (sku.suspended ?? '') : ''}</td>
