@@ -453,15 +453,30 @@ export function mount(container) {
     const rawNames = sku.autotaskNames && sku.autotaskNames.length > 0 ? sku.autotaskNames : (sku.ingramProductName || '').split('\n');
     const names = [...new Set(rawNames.map((n) => n.trim().toLowerCase()).filter(Boolean))];
     if (names.length === 0) return [];
+    // nextPeriodUnits -- the same per-line "count as at the start of this
+    // line's own next billing period" Contract Services' own unitsCell()
+    // already shows, summed the same way as units itself. Tracked
+    // separately as "known or not" (hasNextPeriod) rather than defaulting
+    // to 0, since Contract Services only resolves this when it found a
+    // real next-period row to look it up from -- a contract with no known
+    // next period shouldn't display as "(0)".
     const byContract = new Map();
     for (const r of allServiceRows()) {
       if (isAdjustmentLine(r)) continue;
       const matches = serviceRowNameStartsWithAny(r.serviceItemName, names) || serviceRowNameStartsWithAny(r.serviceName, names);
       if (!matches) continue;
       const key = r.contractName || '(no contract name)';
-      byContract.set(key, (byContract.get(key) || 0) + (r.units || 0));
+      const entry = byContract.get(key) || { units: 0, nextPeriodUnits: 0, hasNextPeriod: false };
+      entry.units += r.units || 0;
+      if (r.nextPeriodUnits !== null && r.nextPeriodUnits !== undefined) {
+        entry.nextPeriodUnits += r.nextPeriodUnits;
+        entry.hasNextPeriod = true;
+      }
+      byContract.set(key, entry);
     }
-    return [...byContract.entries()].map(([contractName, units]) => ({ contractName, units })).sort((a, b) => a.contractName.localeCompare(b.contractName));
+    return [...byContract.entries()]
+      .map(([contractName, v]) => ({ contractName, units: v.units, nextPeriodUnits: v.hasNextPeriod ? v.nextPeriodUnits : null }))
+      .sort((a, b) => a.contractName.localeCompare(b.contractName));
   }
 
   function buildClientCheckSummaryRows() {
@@ -662,12 +677,19 @@ export function mount(container) {
     // breakdown on every split row (same as M365 Licenses) is the more
     // useful, less confusing version.
     const contractMatches = contractMatchesForSku(sku);
+    // Each number's own "(NN)" is the count as at the start of that
+    // contract line's NEXT billing period, by request -- always plain
+    // .inline-subtext (muted), regardless of whether threeWayMismatch
+    // below reds out the rest of this cell: it's a heads-up about an
+    // already-known upcoming change, never itself a mismatch to flag,
+    // so it must never turn red even when the current count does.
+    // .cell-flag-red's own !important only wins on the <td> itself; this
+    // inner span's own explicit color isn't inherited from it, so this
+    // holds regardless of the row's own mismatch state.
     const contractCell =
       contractMatches.length === 0
         ? ''
-        : contractMatches.length === 1
-          ? String(contractMatches[0].units)
-          : `<span title="${escapeHtml(contractMatches.map((m) => `${m.contractName}: ${m.units}`).join('\n'))}">${escapeHtml(contractMatches.map((m) => m.units).join(' / '))}</span>`;
+        : `<span title="${escapeHtml(contractMatches.map((m) => `${m.contractName}: ${m.units}`).join('\n'))}">${contractMatches.map((m) => `${m.units}${m.nextPeriodUnits !== null && m.nextPeriodUnits !== m.units ? ` <span class="inline-subtext">(${m.nextPeriodUnits})</span>` : ''}`).join(' / ')}</span>`;
     // IM Licenses vs M365 Licenses vs Contract (AT), by request -- summed
     // ACROSS every term-split row for this same product ("ignoring
     // term"), not just this row's own partial count, since a row's own
@@ -683,11 +705,30 @@ export function mount(container) {
     const imProductTotal = siblingRows.some((r) => licenseTotalForRow(r) !== null) ? siblingRows.reduce((n, r) => n + (licenseTotalForRow(r) || 0), 0) : null;
     const hasContractData = contractMatches.length > 0;
     const contractTotal = contractMatches.reduce((n, m) => n + m.units, 0);
+    // Same idea as contractTotal, but using each match's own NEXT-period
+    // units where known (falling back to its current units where not,
+    // so a contract with no scheduled change just reproduces
+    // contractTotal here rather than going null and losing the check).
+    const contractNextPeriodTotal = hasContractData ? contractMatches.reduce((n, m) => n + (m.nextPeriodUnits ?? m.units), 0) : null;
     const knownTotals = [];
     if (imProductTotal !== null) knownTotals.push(imProductTotal);
     if (hasContractData) knownTotals.push(contractTotal);
     if (sku && sku.enabled !== null) knownTotals.push(sku.enabled);
-    const threeWayMismatch = knownTotals.length > 1 && !knownTotals.every((v) => v === knownTotals[0]);
+    let threeWayMismatch = knownTotals.length > 1 && !knownTotals.every((v) => v === knownTotals[0]);
+    // By request: if EITHER Contract (AT)'s current total OR its
+    // next-period total (the bracketed figure) matches BOTH IM Licenses
+    // and M365 Licenses, that's good enough -- a scheduled contract
+    // change due at the next renewal (confirmed real case: Kraftur's
+    // Business Premium/Copilot both showing their CURRENT contract
+    // total one unit ahead of IM/M365 because next year's change was
+    // already entered in Autotask) shouldn't read as a live mismatch
+    // today just because the CURRENT total alone doesn't match. Every
+    // other check above (and Consumed's own, below) is untouched.
+    if (threeWayMismatch && hasContractData && imProductTotal !== null && sku && sku.enabled !== null) {
+      const currentFullyMatches = contractTotal === imProductTotal && contractTotal === sku.enabled;
+      const nextFullyMatches = contractNextPeriodTotal === imProductTotal && contractNextPeriodTotal === sku.enabled;
+      if (currentFullyMatches || nextFullyMatches) threeWayMismatch = false;
+    }
     // M365 Licenses vs Consumed stays its own separate check, unaffected
     // by the three-way one above -- only drives M365 Licenses' own red
     // state (OR'd with threeWayMismatch), never IM Licenses/Contract (AT).

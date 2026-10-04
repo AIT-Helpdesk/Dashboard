@@ -369,5 +369,11 @@
     "id": "damon-special",
     "label": "Damon Special",
     "children": []
+  },
+  {
+    "type": "category",
+    "id": "amber-only",
+    "label": "Amber Only",
+    "children": []
   }
 ]
