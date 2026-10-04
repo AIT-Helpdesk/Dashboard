@@ -291,6 +291,16 @@ router.get('/m365-tenancy', async (req, res) => {
         // free when EVERY matched row agrees it's free -- a mixed result is
         // treated as not-free (kept in the main table) rather than guessing.
         let isFree = false;
+        // Every real Autotask name product_mappings knows for this SKU
+        // (both its "server name" and "invoice name" columns -- a real
+        // Autotask Service/contract line can legitimately use either one
+        // as its own name), by request ("Contract (AT)" column -- the
+        // set client.js matches Contract Services' own rows against).
+        // Deduped, since an ambiguous multi-match can easily repeat the
+        // same Autotask name across more than one product_mappings row.
+        const autotaskNames = [
+          ...new Set(matches.flatMap((m) => [m.autotask_contract_server_name, m.autotask_contract_invoice_name]).filter(Boolean)),
+        ];
         if (matches.length === 1) {
           productName = matches[0].friendly_ms_product_name;
           ingramProductName = matches[0].ingram_product_name;
@@ -316,6 +326,7 @@ router.get('/m365-tenancy', async (req, res) => {
           suspended: s.prepaidUnits?.suspended ?? null,
           productName,
           ingramProductName,
+          autotaskNames,
           matchCount,
           ambiguousMatches,
           isFree,
@@ -376,10 +387,19 @@ router.get('/m365-users', async (req, res) => {
     // ms_sku_part_number. Falls back to the raw skuId (still better than
     // dropping it silently) for anything product_mappings has no
     // ms_sku_id filled in for yet.
+    // Free-ness travels alongside the name now, by request ("put any free
+    // licenses after the others ... in grey text and italics") -- same
+    // product_mappings.free column /m365-tenancy's own Free Products
+    // split already reads, just keyed on ms_sku_id here instead of
+    // ms_sku_part_number.
     const nameBySkuId = new Map();
+    const freeBySkuId = new Map();
     for (const m of contractChecks.listProductMappings()) {
       const key = (m.ms_sku_id || '').trim().toLowerCase();
-      if (key) nameBySkuId.set(key, m.friendly_ms_product_name || m.ms_sku_part_number || m.ms_sku_id);
+      if (key) {
+        nameBySkuId.set(key, m.friendly_ms_product_name || m.ms_sku_part_number || m.ms_sku_id);
+        freeBySkuId.set(key, m.free === 1);
+      }
     }
 
     const users = userRows
@@ -398,7 +418,13 @@ router.get('/m365-users', async (req, res) => {
         accountEnabled: Boolean(u.accountEnabled),
         department: u.department || '',
         office: u.officeLocation || '',
-        licenses: (u.assignedLicenses || []).map((l) => nameBySkuId.get((l.skuId || '').trim().toLowerCase()) || l.skuId).filter(Boolean),
+        licenses: (u.assignedLicenses || [])
+          .map((l) => {
+            const key = (l.skuId || '').trim().toLowerCase();
+            const name = nameBySkuId.get(key) || l.skuId;
+            return name ? { name, free: freeBySkuId.get(key) === true } : null;
+          })
+          .filter(Boolean),
       }))
       // All Members before any Guest (or other/blank userType), by
       // request ("Show all Members first, then guest users") -- same

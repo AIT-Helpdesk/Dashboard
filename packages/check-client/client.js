@@ -138,11 +138,13 @@ export function mount(container) {
     <div id="orders-results" class="results"></div>
 
     <h2 class="chk-section-heading">Subscriptions <span class="inline-subtext">(Ingram Micro)</span></h2>
+    <p class="chk-current-data-note">Current Data Shown, no historical point in time available.</p>
     <p id="subs-status" class="status" hidden></p>
     <div id="subs-summary" class="summary" hidden></div>
     <div id="subs-results" class="results"></div>
 
     <h2 class="chk-section-heading">Microsoft 365 Tenancy <span class="inline-subtext">(Ingram tenant ID &rarr; Rewst &rarr; M365)</span></h2>
+    <p class="chk-current-data-note">Current Data Shown, no historical point in time available.</p>
     <p id="m365-status" class="status" hidden></p>
     <div id="m365-summary" class="summary" hidden></div>
     <div id="m365-results" class="results"></div>
@@ -153,6 +155,7 @@ export function mount(container) {
     <div id="services-results" class="results"></div>
 
     <h2 class="chk-section-heading">Datto RMM <span class="inline-subtext">(devices &amp; open alerts)</span></h2>
+    <p class="chk-current-data-note">Current Data Shown, no historical point in time available.</p>
     <p id="datto-status" class="status" hidden></p>
     <div id="datto-summary" class="summary" hidden></div>
     <div id="datto-results" class="results"></div>
@@ -379,6 +382,88 @@ export function mount(container) {
   // kind of discrepancy this section exists to surface.
   // ---------------------------------------------------------------------
 
+  // Every active-contract service/bundle line this client has, flattened
+  // across however many company groups Contract Services' own response
+  // has (normally just one, for a single-client search) -- the "Contract
+  // (AT)" column's own match pool, by request ("Check all active
+  // contracts for the product" -- Contract Services' own data is already
+  // scoped to active contracts only, see its own summary line/server.js).
+  function allServiceRows() {
+    return (lastServicesData?.byCompany || []).flatMap((c) => c.rows);
+  }
+
+  // Real Autotask service/invoice names confirmed almost always carry a
+  // billing-term or adjustment qualifier AFTER the base product name --
+  // real examples pulled live this session: "Microsoft 365 Business
+  // Basic (Monthly)", "Microsoft 365 Business Basic - Refund", "Planner
+  // and Project Plan 3 (Annual)" -- so this is a PREFIX match (same
+  // approach, same " and "/"+" bundle-exclusion guard, as
+  // matchSkuByFriendlyNamePrefix() above), not an exact one; an exact
+  // match against these real names would never succeed at all.
+  function serviceRowNameStartsWithAny(rowName, names) {
+    const lower = (rowName || '').trim().toLowerCase();
+    if (!lower) return false;
+    for (const name of names) {
+      if (!lower.startsWith(name)) continue;
+      const remainder = lower.slice(name.length);
+      if (/^\s+and\s/.test(remainder) || /^\s*\+/.test(remainder)) continue;
+      return true;
+    }
+    return false;
+  }
+
+  // A real contract line whose own name marks it as a Refund or a
+  // Prorate adjustment is excluded from the Contract (AT) count
+  // entirely, by request -- confirmed real case (Kraftur): a
+  // "Microsoft 365 Business Basic - Refund" line carrying 26 units
+  // would otherwise massively inflate the real count (22 actually
+  // enabled in M365) if just summed in alongside the real standing
+  // service lines. "That's an error anyway, I'll fix it up" -- Prorate
+  // excluded the same way, same reasoning (a billing adjustment for
+  // units already counted elsewhere, not a distinct standing quantity).
+  function isAdjustmentLine(r) {
+    return /refund|prorate/i.test(r.serviceItemName || '') || /refund|prorate/i.test(r.serviceName || '');
+  }
+
+  // A SKU's Autotask name(s) (server.js's own autotaskNames, from
+  // product_mappings' server-name/invoice-name columns) matched against
+  // every active contract service row's OWN name -- checked against
+  // BOTH serviceItemName (the real Autotask Service name) and serviceName
+  // (the invoice description) since either one can legitimately be what
+  // product_mappings recorded. Grouped by contractName (summing units
+  // within the same contract, in case the same service appears on it more
+  // than once) -- "if it exists in more than one place" means more than
+  // one real CONTRACT, by request, not just more than one matching row.
+  // Falls back to the SKU's own Ingram product name(s) when
+  // product_mappings has no Autotask name recorded at all, by request --
+  // an Autotask contract service is occasionally named after the Ingram
+  // listing rather than a Microsoft friendly name, so this still has a
+  // real shot at matching instead of just going blank.
+  //
+  // Deliberately NOT scoped to any one Term/Billing Period split row --
+  // tried that, but since M365 Licenses already always shows the full
+  // cross-term total on every split row, a term-scoped Contract (AT)
+  // never actually lined up with it either; showing the full breakdown
+  // on every split row (same as M365 Licenses) is the more useful,
+  // less confusing version. See clientCheckSummaryRowHtml()'s own
+  // comment for how its total is now reconciled against IM/M365
+  // instead.
+  function contractMatchesForSku(sku) {
+    if (!sku) return [];
+    const rawNames = sku.autotaskNames && sku.autotaskNames.length > 0 ? sku.autotaskNames : (sku.ingramProductName || '').split('\n');
+    const names = [...new Set(rawNames.map((n) => n.trim().toLowerCase()).filter(Boolean))];
+    if (names.length === 0) return [];
+    const byContract = new Map();
+    for (const r of allServiceRows()) {
+      if (isAdjustmentLine(r)) continue;
+      const matches = serviceRowNameStartsWithAny(r.serviceItemName, names) || serviceRowNameStartsWithAny(r.serviceName, names);
+      if (!matches) continue;
+      const key = r.contractName || '(no contract name)';
+      byContract.set(key, (byContract.get(key) || 0) + (r.units || 0));
+    }
+    return [...byContract.entries()].map(([contractName, units]) => ({ contractName, units })).sort((a, b) => a.contractName.localeCompare(b.contractName));
+  }
+
   function buildClientCheckSummaryRows() {
     const subscriptions = (lastSubscriptionsData?.byClient || []).flatMap((c) => c.subscriptions);
     const skus = lastM365Data?.matched ? lastM365Data.skus.filter((s) => !s.isFree && s.ingramProductName) : [];
@@ -413,9 +498,27 @@ export function mount(container) {
     // (more than one candidate) is left unmatched rather than guessed,
     // same "don't guess" convention server.js's own SKU matching already
     // follows for a genuinely ambiguous case.
+    //
+    // Real bug, confirmed: this prefix check alone also caught a genuinely
+    // DIFFERENT, compound bundle subscription -- "Microsoft 365 Business
+    // Premium and Microsoft 365 Copilot Business" -- wrongly merged into
+    // the plain "Microsoft 365 Business Premium" group just because it
+    // happens to start with that same text (confirmed no product_mappings
+    // row causes this -- it's this prefix heuristic alone). A real
+    // qualifier suffix never joins on " and " or "+" right after the
+    // matched name (confirmed real examples: "(NCE COM MTH)", "Donation
+    // (Non-Profit Pricing)") -- only a genuinely separate bundled product
+    // name does, so that specific shape is excluded here.
     function matchSkuByFriendlyNamePrefix(subName) {
       const lower = subName.trim().toLowerCase();
-      const candidates = skus.filter((s) => s.productName && lower.startsWith(s.productName.toLowerCase()));
+      const candidates = skus.filter((s) => {
+        if (!s.productName) return false;
+        const prefix = s.productName.toLowerCase();
+        if (!lower.startsWith(prefix)) return false;
+        const remainder = lower.slice(prefix.length);
+        if (/^\s+and\s/.test(remainder) || /^\s*\+/.test(remainder)) return false;
+        return true;
+      });
       return candidates.length === 1 ? candidates[0] : null;
     }
 
@@ -427,24 +530,67 @@ export function mount(container) {
     }
 
     // groupKey -> { sku, subscriptions: [] } -- one entry per real
-    // Microsoft product this client either has an M365 SKU for, an Ingram
-    // subscription for, or both. Seeded with every SKU first (so an
-    // unmatched SKU still gets its own group), then every subscription is
-    // filed into the SAME group as whichever SKU its own name maps to
-    // (falling back to its own raw name -- its own standalone group -- when
-    // nothing claims it, i.e. not a recognised Microsoft product at all).
+    // Microsoft product (AND, by request, per distinct Term/Billing
+    // Period combination -- "only where the term / billing period
+    // matches as well") this client either has an M365 SKU for, an
+    // Ingram subscription for, or both. A plain product-name key alone
+    // used to merge a Monthly subscription and a separate Annual one for
+    // the SAME product into one row, whose own Term/Billing Period
+    // column could then only show ONE of the two (picked arbitrarily)
+    // next to the FULL combined license count -- confirmed real,
+    // misleading case: "Planner and Project Plan 3" showing "Annual /
+    // Annual" next to 4 licenses when only 3 of those 4 were actually
+    // annual (the 4th was a separate Monthly subscription).
     const groups = new Map();
     function groupFor(key, sku) {
       if (!groups.has(key)) groups.set(key, { sku: sku || null, subscriptions: [] });
+      else if (sku && !groups.get(key).sku) groups.get(key).sku = sku;
       return groups.get(key);
     }
-    for (const sku of skus) groupFor(sku.productName || sku.sku, sku);
+    // Raw term/billingPeriod (not the formatted display strings) --
+    // blank when a subscription carries neither (kept in the SAME group
+    // as any other blank-term subscription for that product, same as
+    // before this change, rather than needlessly splitting on "no data"
+    // alone).
+    // Real bug, confirmed: sub.term/sub.billingPeriod are OBJECTS
+    // ({type, duration} -- see formatPeriod()'s own comment further down
+    // this file), not strings -- calling .trim() on them directly threw
+    // a real TypeError inside buildClientCheckSummaryRows(), which is
+    // exactly why Client Check Summary went completely blank and
+    // Subscriptions' own "(failed to load licenses -- click to retry)"
+    // kept firing: loadLicensesForClient() calls
+    // activeRenderers.renderClientCheckSummary() inside its OWN try
+    // block, so THIS crash was being caught by ITS catch handler and
+    // misreported as a license-load failure, even though licenses
+    // themselves loaded fine. formatPeriod() already turns this shape
+    // into a plain display string safely -- reused here instead of
+    // touching sub.term/sub.billingPeriod directly a second way.
+    function termKeyFor(sub) {
+      const term = formatPeriod(sub.term);
+      const billing = formatPeriod(sub.billingPeriod);
+      return term || billing ? `${term}|${billing}` : '';
+    }
+    // Every subscription decides its own group first (product + term)
+    // -- a SKU is only pre-seeded into its OWN standalone group
+    // afterward, and only when NO subscription claimed it at all, so a
+    // SKU whose subscriptions split across two terms correctly ends up
+    // attached to BOTH of those term-specific groups (each showing the
+    // same real M365 Licenses/Consumed/Suspended numbers -- genuinely
+    // not split by term on Microsoft's own side) instead of stranded in
+    // a third, orphaned, subscription-less group of its own.
+    const claimedSkus = new Set();
     for (const sub of subscriptions) {
       const key = (sub.name || '').trim().toLowerCase();
       if (!key) continue;
       const matchedSku = ingramNameToSku.get(key) || matchSkuByFriendlyNamePrefix(sub.name);
-      const groupKey = matchedSku ? matchedSku.productName || matchedSku.sku : sub.name;
+      const baseGroupKey = matchedSku ? matchedSku.productName || matchedSku.sku : sub.name;
+      const tKey = termKeyFor(sub);
+      const groupKey = tKey ? `${baseGroupKey}\u0000${tKey}` : baseGroupKey;
       groupFor(groupKey, matchedSku).subscriptions.push(sub);
+      if (matchedSku) claimedSkus.add(matchedSku);
+    }
+    for (const sku of skus) {
+      if (!claimedSkus.has(sku)) groupFor(sku.productName || sku.sku, sku);
     }
 
     const rows = [...groups.entries()].map(([groupKey, g]) => ({
@@ -455,16 +601,45 @@ export function mount(container) {
       // trailing "(NCE ...)" billing-term qualifier (see
       // matchSkuByFriendlyNamePrefix()'s own comment on it) is stripped
       // here for DISPLAY only, by request -- the real sub.name used for
-      // matching above is never touched.
-      name: g.subscriptions.length > 0 ? g.subscriptions.map((s) => stripNceSuffix(s.name)).join(' + ') : groupKey,
+      // matching above is never touched. Deduped before joining -- real
+      // bug, confirmed: two distinct real subscriptions for the same
+      // product (e.g. an old one still briefly active alongside its own
+      // renewal) stripped down to the IDENTICAL display name were
+      // showing as "Planner and Project Plan 3 + Planner and Project
+      // Plan 3" instead of just once.
+      name: g.subscriptions.length > 0 ? [...new Set(g.subscriptions.map((s) => stripNceSuffix(s.name)))].join(' + ') : groupKey,
       subscriptions: g.subscriptions,
       sku: g.sku,
     }));
     rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    return rows;
+    // Dropped entirely, by request -- a row with real numbers nowhere
+    // EXCEPT Suspended isn't worth a line in the comparison (nothing to
+    // actually check/reconcile: no IM subscription, no Autotask contract
+    // match, nothing currently enabled or consumed in M365 -- just
+    // leftover suspended licenses sitting on an otherwise-dead SKU).
+    return rows.filter((row) => !isSuspendedOnlyRow(row));
   }
 
-  function clientCheckSummaryRowHtml(row) {
+  function isSuspendedOnlyRow(row) {
+    const sku = row.sku;
+    if (!sku || !sku.suspended) return false;
+    const licenseTotal = row.subscriptions.some((s) => s.licenseCount != null) ? row.subscriptions.reduce((n, s) => n + (s.licenseCount || 0), 0) : null;
+    if (licenseTotal) return false;
+    if (contractMatchesForSku(sku).length > 0) return false;
+    if (sku.enabled) return false;
+    if (sku.consumed) return false;
+    return true;
+  }
+
+  function licenseTotalForRow(r) {
+    return r.subscriptions.some((s) => s.licenseCount != null) ? r.subscriptions.reduce((n, s) => n + (s.licenseCount || 0), 0) : null;
+  }
+
+  // allRows is Array.map's own 3rd callback argument (the array being
+  // mapped) -- renderClientCheckSummary() calls this as
+  // `rows.map(clientCheckSummaryRowHtml)`, so it arrives for free, no
+  // call-site change needed.
+  function clientCheckSummaryRowHtml(row, _index, allRows) {
     const subs = row.subscriptions;
     // The one subscription whose own Term/Auto-Renewal/Renews/Expires
     // represents this row -- prefers an active one; arbitrary beyond that
@@ -472,26 +647,67 @@ export function mount(container) {
     // Microsoft product, see buildClientCheckSummaryRows()'s own comment).
     const primarySub = subs.find((s) => s.status === 'active') || subs[0] || null;
     const sku = row.sku;
-    const licenseTotal = subs.some((s) => s.licenseCount != null) ? subs.reduce((n, s) => n + (s.licenseCount || 0), 0) : null;
-    // Two comparisons against M365 Licenses (sku.enabled), by request:
-    // IM Licenses vs M365 Licenses, and M365 Licenses vs Consumed. IM
-    // Licenses' own red state comes ONLY from the first; Consumed's ONLY
-    // from the second -- but M365 Licenses itself is red when EITHER one
-    // doesn't match ("if they do match but M365 is already RED ... don't
-    // change it back to not red" -- i.e. its red state is the two checks
-    // OR'd together, never reset by the other one separately passing).
-    const imVsM365Mismatch = sku && sku.enabled !== null && licenseTotal !== null && licenseTotal !== sku.enabled;
+    const licenseTotal = licenseTotalForRow(row);
+    // "Contract (AT)" -- the number of matching licenses/units on this
+    // client's active Autotask contract(s) for this product, by request.
+    // A single match shows its own plain number; more than one (i.e. the
+    // same product billed across more than one real contract) shows each
+    // contract's own count joined "NN / NN / NN", with a hover tooltip
+    // listing which contract each number belongs to -- contractMatches is
+    // already sorted by contractName, so the order here is stable.
+    // Deliberately NOT scoped to this row's own Term/Billing Period --
+    // tried that, but since M365 Licenses already always shows the FULL
+    // cross-term total on every split row, a term-scoped Contract (AT)
+    // never actually lines up with it either; showing the SAME full
+    // breakdown on every split row (same as M365 Licenses) is the more
+    // useful, less confusing version.
+    const contractMatches = contractMatchesForSku(sku);
+    const contractCell =
+      contractMatches.length === 0
+        ? ''
+        : contractMatches.length === 1
+          ? String(contractMatches[0].units)
+          : `<span title="${escapeHtml(contractMatches.map((m) => `${m.contractName}: ${m.units}`).join('\n'))}">${escapeHtml(contractMatches.map((m) => m.units).join(' / '))}</span>`;
+    // IM Licenses vs M365 Licenses vs Contract (AT), by request -- summed
+    // ACROSS every term-split row for this same product ("ignoring
+    // term"), not just this row's own partial count, since a row's own
+    // partial IM total would never equal the full M365/Contract total
+    // even when everything genuinely reconciles once all terms are added
+    // back together. All three go red together when any two of the
+    // (known) totals disagree; none go red when they all agree, or when
+    // there's nothing real to compare (e.g. no Autotask contract match at
+    // all yet -- most products, since product_mappings' own Autotask
+    // name columns are still largely unpopulated -- doesn't by itself
+    // force a false mismatch).
+    const siblingRows = sku ? (allRows || [row]).filter((r) => r.sku === sku) : [row];
+    const imProductTotal = siblingRows.some((r) => licenseTotalForRow(r) !== null) ? siblingRows.reduce((n, r) => n + (licenseTotalForRow(r) || 0), 0) : null;
+    const hasContractData = contractMatches.length > 0;
+    const contractTotal = contractMatches.reduce((n, m) => n + m.units, 0);
+    const knownTotals = [];
+    if (imProductTotal !== null) knownTotals.push(imProductTotal);
+    if (hasContractData) knownTotals.push(contractTotal);
+    if (sku && sku.enabled !== null) knownTotals.push(sku.enabled);
+    const threeWayMismatch = knownTotals.length > 1 && !knownTotals.every((v) => v === knownTotals[0]);
+    // M365 Licenses vs Consumed stays its own separate check, unaffected
+    // by the three-way one above -- only drives M365 Licenses' own red
+    // state (OR'd with threeWayMismatch), never IM Licenses/Contract (AT).
     const consumedVsM365Mismatch = sku && sku.enabled !== null && sku.consumed !== null && sku.enabled !== sku.consumed;
-    const m365Mismatch = imVsM365Mismatch || consumedVsM365Mismatch;
+    const m365Mismatch = threeWayMismatch || consumedVsM365Mismatch;
     // Suspended deliberately NOT part of this -- "If any of the 3 (ignore
     // suspended) don't match... shade the row red", same --row-warn-bg
     // paler-red row shading this page's own M365 table already uses
     // (tr.row-no-mapping, for an unmapped SKU -- "flagged row, not a hard
     // error").
+    // "[Suspended]" etc. after the Subscription name, by request, when
+    // the M365 Tenancy side's own status is anything other than
+    // "Enabled" -- same .cell-flag-blue colour (and same `!== 'Enabled'`
+    // check) that table's own Status column already uses for this.
+    const statusBadge = sku && sku.status && sku.status !== 'Enabled' ? ` <span class="cell-flag-blue">[${escapeHtml(sku.status)}]</span>` : '';
     return `
       <tr${m365Mismatch ? ' class="chk-summary-row-mismatch"' : ''}>
-        <td>${escapeHtml(row.name || '')}</td>
-        <td class="ticket-number${imVsM365Mismatch ? ' cell-flag-red' : ''}">${licenseTotal ?? ''}</td>
+        <td>${escapeHtml(row.name || '')}${statusBadge}</td>
+        <td class="ticket-number${threeWayMismatch ? ' cell-flag-red' : ''}">${licenseTotal ?? ''}</td>
+        <td class="ticket-number${threeWayMismatch && hasContractData ? ' cell-flag-red' : ''}">${contractCell}</td>
         <td class="ticket-number${m365Mismatch ? ' cell-flag-red' : ''}">${sku ? (sku.enabled ?? '') : ''}</td>
         <td class="ticket-number${consumedVsM365Mismatch ? ' cell-flag-red' : ''}">${sku ? (sku.consumed ?? '') : ''}</td>
         <td class="ticket-number${sku && sku.suspended ? ' cell-flag-red' : ''}">${sku ? (sku.suspended ?? '') : ''}</td>
@@ -525,7 +741,7 @@ export function mount(container) {
       <table class="chk-summary-table">
         <thead>
           <tr>
-            <th>Subscription</th><th>IM Licenses</th><th>M365 Licenses</th><th>Consumed</th><th>Suspended</th>
+            <th>Subscription</th><th>IM Licenses</th><th>Contract (AT)</th><th>M365 Licenses</th><th>Consumed</th><th>Suspended</th>
             <th>Term / Billing Period</th><th>Auto-Renewal</th><th>Renews</th><th>Expires</th>
           </tr>
         </thead>
@@ -992,6 +1208,7 @@ export function mount(container) {
     if (!subscriptionId && !clientName) {
       m365StatusEl.textContent = 'No single client resolved above -- narrow the search to look up Microsoft 365 Tenancy.';
       syncSummaryM365Pending();
+      activeRenderers.renderClientCheckSummary();
       return;
     }
 
@@ -1010,6 +1227,7 @@ export function mount(container) {
       m365StatusEl.className = 'status error';
       m365StatusEl.textContent = `Error: ${err.message}`;
       syncSummaryM365Pending();
+      activeRenderers.renderClientCheckSummary();
     }
   }
 
@@ -1162,10 +1380,24 @@ export function mount(container) {
       { key: 'office', label: 'Office' },
       { key: 'licenses', label: 'Licenses' },
     ];
+    // Plain text -- used for the per-column filter match (substring
+    // search still has to see every license name, free or not) and as
+    // the fallback inside m365UserCellHtml() below for every column that
+    // isn't 'licenses'.
     function m365UserCellText(u, key) {
-      if (key === 'licenses') return u.licenses.join(', ');
+      if (key === 'licenses') return u.licenses.map((l) => l.name).join(', ');
       if (key === 'status') return u.accountEnabled ? 'Enabled' : 'Disabled';
       return u[key] || '';
+    }
+    // Free licenses sort after the paid ones and render grey/italic in
+    // brackets, by request -- only the 'licenses' column needs real HTML
+    // (every other column just escapes m365UserCellText() as before).
+    function m365UserCellHtml(u, key) {
+      if (key !== 'licenses') return escapeHtml(m365UserCellText(u, key));
+      const paid = u.licenses.filter((l) => !l.free).map((l) => escapeHtml(l.name));
+      const free = u.licenses.filter((l) => l.free).map((l) => escapeHtml(l.name));
+      const freeHtml = free.length ? `<span class="chk-m365-free-license">(${free.join(', ')})</span>` : '';
+      return [paid.join(', '), freeHtml].filter(Boolean).join(' ');
     }
     // Red row+text for a Disabled account that STILL holds a license
     // (wasting a paid seat), orange/yellow row+text for an Enabled
@@ -1232,7 +1464,7 @@ export function mount(container) {
         countEl.textContent = anyFilterActive ? `[${filtered.length}]` : '';
         tbody.innerHTML =
           filtered.length > 0
-            ? filtered.map((u) => `<tr${m365UserRowClass(u)}>${M365_USERS_COLUMNS.map((c) => `<td>${escapeHtml(m365UserCellText(u, c.key))}</td>`).join('')}</tr>`).join('')
+            ? filtered.map((u) => `<tr${m365UserRowClass(u)}>${M365_USERS_COLUMNS.map((c) => `<td>${m365UserCellHtml(u, c.key)}</td>`).join('')}</tr>`).join('')
             : `<tr><td colspan="${M365_USERS_COLUMNS.length}" class="status">No users matching these filters.</td></tr>`;
       }
       table.querySelectorAll('[data-filter-key]').forEach((input) => {
@@ -1460,9 +1692,23 @@ export function mount(container) {
       const data = await fetchJson(`/api/check-client/services?${params.toString()}`, 'GET');
       lastServicesData = data;
       activeRenderers.renderServices(data);
+      // Real bug, confirmed: this was the ONE section whose own load()
+      // never re-rendered the Client Check Summary at all. Contract (AT)
+      // reads straight off lastServicesData (contractMatchesForSku()),
+      // and loadServices() runs CONCURRENTLY with loadSubscriptions() (see
+      // search()'s own Promise.allSettled) -- whichever of the two
+      // happened to resolve first before THIS fix determined whether the
+      // Summary's very next render saw fresh Services data or not, which
+      // is exactly why Contract (AT) showed up correctly some loads and
+      // went blank on others for the SAME client, purely on network
+      // timing. Now every one of Subscriptions/M365/Services calls this
+      // on its own completion, so whichever finishes LAST always leaves
+      // the Summary showing fully-current data regardless of order.
+      activeRenderers.renderClientCheckSummary();
     } catch (err) {
       servicesStatusEl.className = 'status error';
       servicesStatusEl.textContent = `Error: ${err.message}`;
+      activeRenderers.renderClientCheckSummary();
     }
   }
 

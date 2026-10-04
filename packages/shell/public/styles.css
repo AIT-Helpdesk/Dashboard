@@ -1710,12 +1710,15 @@ h1 {
 }
 .chk-summary-table th:nth-child(1),
 .chk-summary-table td:nth-child(1) {
-  width: 28%;
+  /* Narrowed from 28% to make room for the new "Contract (AT)" column
+     (3) below -- by request. */
+  width: 20%;
 }
-/* IM Licenses/M365 Licenses/Consumed/Suspended -- the four count columns,
-   by request ("centre the count columns data under the headers"). Applied
-   to both th and td so the header label sits centred over its own column
-   too, not just the data under a left-aligned heading. */
+/* IM Licenses/Contract (AT)/M365 Licenses/Consumed/Suspended -- the five
+   count columns, by request ("centre the count columns data under the
+   headers"). Applied to both th and td so the header label sits centred
+   over its own column too, not just the data under a left-aligned
+   heading. */
 .chk-summary-table th:nth-child(2),
 .chk-summary-table td:nth-child(2),
 .chk-summary-table th:nth-child(3),
@@ -1723,33 +1726,40 @@ h1 {
 .chk-summary-table th:nth-child(4),
 .chk-summary-table td:nth-child(4),
 .chk-summary-table th:nth-child(5),
-.chk-summary-table td:nth-child(5) {
+.chk-summary-table td:nth-child(5),
+.chk-summary-table th:nth-child(6),
+.chk-summary-table td:nth-child(6) {
   text-align: center;
 }
 .chk-summary-table th:nth-child(2),
 .chk-summary-table td:nth-child(2) {
   width: 7%;
 }
+/* Contract (AT) -- new column, by request ("add a column between IM
+   Licenses and M365 Licenses for Contract (AT)"). Every column from here
+   on is shifted one position later than it used to be. */
 .chk-summary-table th:nth-child(3),
 .chk-summary-table td:nth-child(3),
 .chk-summary-table th:nth-child(4),
 .chk-summary-table td:nth-child(4),
 .chk-summary-table th:nth-child(5),
-.chk-summary-table td:nth-child(5) {
-  width: 8%;
-}
+.chk-summary-table td:nth-child(5),
 .chk-summary-table th:nth-child(6),
 .chk-summary-table td:nth-child(6) {
-  width: 15%;
+  width: 8%;
 }
 .chk-summary-table th:nth-child(7),
 .chk-summary-table td:nth-child(7) {
-  width: 8%;
+  width: 15%;
 }
 .chk-summary-table th:nth-child(8),
-.chk-summary-table td:nth-child(8),
+.chk-summary-table td:nth-child(8) {
+  width: 8%;
+}
 .chk-summary-table th:nth-child(9),
-.chk-summary-table td:nth-child(9) {
+.chk-summary-table td:nth-child(9),
+.chk-summary-table th:nth-child(10),
+.chk-summary-table td:nth-child(10) {
   width: 9%;
 }
 
@@ -2046,6 +2056,15 @@ h1 {
   /* #16a34a -- same green used dashboard-wide (.cell-flag-green,
      .text-highlight-green), by request. */
   color: #16a34a;
+}
+/* Small print right under a section heading (Subscriptions, Microsoft
+   365 Tenancy), by request -- pulled tight against it (negative margin
+   cancels the heading's own 0.5rem margin-bottom) rather than sitting
+   at the usual paragraph spacing. */
+.check-client-page .chk-section-heading + .chk-current-data-note {
+  margin: -0.35rem 0 0.75rem;
+  font-size: 0.8rem;
+  color: #dc2626;
 }
 /* "Loading Microsoft 365 Tenancy..." mirrored next to the Client Check
    Summary heading while it's in flight (#summary-m365-pending), by
@@ -2905,6 +2924,18 @@ table {
 .chk-m365-users-count {
   float: right;
   color: #dc2626;
+}
+/* Free licenses in the M365 Users table's own Licenses column, by
+   request -- sorted after the paid ones (m365UserCellHtml() in
+   client.js already builds the string in that order), on their own
+   line and a size down, in grey italics so they read as "also has, but
+   doesn't cost anything" rather than another paid product. */
+.chk-m365-free-license {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.85em;
+  color: var(--muted);
+  font-style: italic;
 }
 /* Enabled/Consumed/Suspended (columns 3-5) -- by request, centered rather
    than left-hung; header text centered to match. Scoped to this table
