@@ -3047,6 +3047,19 @@ td.ticket-number {
 .col-service {
   max-width: 64ch;
 }
+.col-service-name {
+  font-weight: 600;
+}
+/* Internal Description stands out from the service name above it, by
+   request -- same orange (#f59e0b) this dashboard already uses for
+   "worth noticing, not an error" (the Loading status text, the adjust-
+   units modal's own Service/Item heading line), not a new one-off
+   shade. Scoped to just this column's own .cell-subtext, not the bare
+   class -- every other page's plain muted .cell-subtext usage is
+   untouched. */
+.col-service .cell-subtext {
+  color: #f59e0b;
+}
 
 /* What's On's scorecard matrix -- one narrow column per real check-in
    period (a date/week/month in the header, a value in the body cell below
@@ -9048,4 +9061,80 @@ tr.accrued-time-yellow-row th {
 .pm-form-field label {
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+/* Database Schema -- new page, by request. */
+.dbs-picker {
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+.dbs-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.dbs-picker-row select {
+  min-width: 20rem;
+}
+.dbs-cache-note {
+  margin: 0.5rem 0 0;
+}
+/* One collapsible card per table/view -- same native <details>/<summary>
+   mechanism Meeting Prep's own detailsBlock() already uses elsewhere on
+   this dashboard (no JS state to manage, collapsed by default costs
+   nothing), just its own dbs- prefixed classes rather than reusing that
+   page's mtg- ones. Stacked with .resource-group's own card look
+   (border/radius/margin) for visual consistency with the rest of this
+   dashboard's section cards. */
+.dbs-table-details > summary {
+  cursor: pointer;
+  padding: 0.6rem 0.9rem;
+  font-weight: 600;
+}
+.dbs-table-body {
+  padding: 0 0.9rem 0.9rem;
+}
+.dbs-columns-table {
+  margin-top: 0.3rem;
+}
+.dbs-columns-table th,
+.dbs-columns-table td {
+  font-size: 0.8rem;
+  padding: 0.3rem 0.5rem;
+}
+.dbs-subsection-heading {
+  margin: 0.75rem 0 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.dbs-plain-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.8rem;
+}
+.dbs-view-sql {
+  margin: 0.3rem 0 0;
+  padding: 0.6rem 0.75rem;
+  background: var(--row-alt-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+/* Show Data, by request -- lazy-loaded real row data under its own
+   table's columns/foreign-keys/indexes. Horizontal scroll on its own
+   wrapper (not the whole page) since a table can easily have more
+   columns than fit a normal viewport width. */
+.dbs-show-data-row {
+  margin-top: 0.75rem;
+}
+.dbs-row-data-scroll {
+  overflow-x: auto;
+}
+.dbs-row-count-note {
+  margin: 0.5rem 0 0.3rem;
 }

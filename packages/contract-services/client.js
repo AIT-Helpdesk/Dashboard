@@ -138,7 +138,7 @@ export function mount(container) {
               // above it to differ from).
               (r, i) => `
             <tr${rowClass(r, i > 0 && r.contractName !== group.rows[i - 1].contractName)}>
-              <td><div class="col-service">${formatServiceName(r.serviceName)}${r.internalDescription ? `<span class="cell-subtext">${escapeHtml(r.internalDescription)}</span>` : ''}</div></td>
+              <td><div class="col-service" title="${escapeHtml(r.serviceName)}"><span class="col-service-name">${formatServiceName(r.serviceItemName)}</span>${r.internalDescription ? `<span class="cell-subtext">${escapeHtml(r.internalDescription)}</span>` : ''}</div></td>
               <td class="col-contract">${contractLink(r)}</td>
               <td class="ticket-number">${unitsCell(r)}</td>
               <td class="ticket-number">${formatPrice(perItem(r.cost, r.units))}</td>

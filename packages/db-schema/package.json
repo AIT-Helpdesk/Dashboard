@@ -1,0 +1,15 @@
+{
+  "name": "@dashboard/db-schema",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "db-schema",
+    "label": "Database Schema",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

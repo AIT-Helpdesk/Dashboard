@@ -266,6 +266,10 @@
       },
       {
         "type": "page",
+        "id": "db-schema"
+      },
+      {
+        "type": "page",
         "id": "tc-elite"
       }
     ],
