@@ -361,7 +361,7 @@ export function mount(container) {
     const draftClass = e.published ? '' : ' calendar-entry--onsite-tba'; // reuse the existing dashed/red-accent look for "needs attention" -- draft shifts aren't final yet
     // Unapproved leave becomes a real link to Autotask's own Approve Leave
     // landing page -- a new window on the same screen (not just a new tab),
-    // same convention Start Here's own external-system buttons use
+    // same convention What's On's own external-system buttons use
     // (window.open() wrapped by shell/public/app.js, which centers it on
     // the same monitor automatically).
     const tag = isUnapprovedLeave ? 'a' : 'div';

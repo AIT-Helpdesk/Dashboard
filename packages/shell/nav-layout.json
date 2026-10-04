@@ -347,17 +347,6 @@
   },
   {
     "type": "category",
-    "id": "amber-only",
-    "label": "Amber Only",
-    "children": [
-      {
-        "type": "page",
-        "id": "start-here"
-      }
-    ]
-  },
-  {
-    "type": "category",
     "id": "present-to-client",
     "label": "Present To Client",
     "children": [

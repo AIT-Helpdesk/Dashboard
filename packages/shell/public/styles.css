@@ -271,33 +271,6 @@ html[data-sidebar-collapsed="true"] #preview-user-toggle {
   opacity: 0.7;
 }
 
-/* Start Here's own sidebar entry -- a root-level page link, but styled to
-   read like a section label (matching .nav-category-header's bold/
-   uppercase/green look) rather than a plain page link, by request.
-   Targeted by its href rather than a class -- app.js builds every nav-link
-   the same way, so this is the least invasive hook onto just this one
-   entry. Split into a :not(.active) rule (green text, no fill -- matches
-   the sidebar category headings) and its own .active rule (green fill,
-   white text, by request -- overrides the default .nav-link.active blue
-   fill for just this one entry, on a more specific selector so no
-   !important is needed here). No text-transform: uppercase here anymore
-   -- dropped once the whole sidebar went small-caps (see .nav-link's own
-   comment) since the two don't combine visually; still reads as a
-   distinct section-label style via the bold/green/letter-spacing alone. */
-a.nav-link[href="#start-here"]:not(.active) {
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  font-size: 0.85rem;
-  color: #16a34a;
-}
-a.nav-link.active[href="#start-here"] {
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  font-size: 0.85rem;
-  background: #16a34a;
-  color: #fff;
-}
-
 /* Every tabbed-layout page's own sidebar entry (page.tabbed, see
    registry.js/tab-page-client.js -- Ticket Info was the first, every page
    built the same way since shares this) -- by request, now reads as the
@@ -1073,19 +1046,20 @@ h1 {
 .button-link--small {
   padding: 0.25rem 0.6rem;
   font-size: 0.75rem;
-  /* Same lighter tint as Start Here's own buttons (.start-here-buttons
-     .button-link), by request -- only these three (What's On's Today &
-     Tomorrow "Show All" links) use --small at all, so this is scoped
-     tightly enough to just set it directly here rather than a separate
-     selector. */
+  /* Same lighter tint as the external-system quick-link buttons further
+     down this page (.start-here-buttons .button-link), by request --
+     only these three (What's On's Today & Tomorrow "Show All" links)
+     use --small at all, so this is scoped tightly enough to just set it
+     directly here rather than a separate selector. */
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
 }
 
-/* Start Here's external-system buttons -- a plain emoji before the label,
-   same lightweight-icon convention as the sidebar's own theme toggle
-   ('☀️ Light Mode'/'🌙 Dark Mode'). aria-hidden on the icon span itself
-   (set in start-here/client.js) since the label text alone is the
+/* What's On's external-system quick-link buttons (moved there from
+   @dashboard/start-here, since retired) -- a plain emoji before the
+   label, same lightweight-icon convention as the sidebar's own theme
+   toggle ('☀️ Light Mode'/'🌙 Dark Mode'). aria-hidden on the icon span
+   itself (set in whats-on/client.js) since the label text alone is the
    accessible name -- the emoji is decoration, not information. */
 .button-link-icon {
   margin-right: 0.4rem;
@@ -3242,200 +3216,6 @@ td.ticket-number {
   font-weight: normal;
 }
 
-/* Start Here -- was a wider left column beside a narrow right column of
-   external-system buttons; that right column moved to the bottom of
-   What's On (by request, "Move the Systems, Monitoring, etc buttons
-   boxes to the bottom of the What's On page"), so this is just the one
-   column now. .start-here-layout itself kept (rather than removed from
-   client.js's own markup) purely so this rule still has a hook -- a
-   single-column grid is a no-op layout-wise but costs nothing to leave
-   as-is either. */
-.start-here-layout {
-  display: grid;
-  grid-template-columns: 1fr;
-}
-/* The live page-groups list (Daily Dashboards downward) -- two flowing
-   newspaper-style columns rather than one long single-column stack, by
-   request. CSS multi-column (not grid) so groups just flow top-to-bottom
-   filling the left column before starting the right one, without needing
-   to manually split the list in half in client.js. break-inside: avoid
-   on each .resource-group keeps a single category card from being split
-   awkwardly across the column gap. */
-#page-groups {
-  columns: 2;
-  column-gap: 1.5rem;
-}
-#page-groups .resource-group {
-  break-inside: avoid;
-  -webkit-column-break-inside: avoid;
-}
-@media (max-width: 720px) {
-  #page-groups {
-    columns: 1;
-  }
-}
-
-/* Start Here's "Daily Checklist" callout -- a curated, static block above
-   the live page list, by request. Reuses .resource-group for its
-   border/rounded-corner card look (same as every scorecard/calendar group
-   elsewhere on this dashboard), then adds its own emphasis on top so it
-   doesn't just look like one more plain list. */
-.start-here-checklist-featured {
-  border-left: 4px solid #16a34a;
-  background: var(--row-changed-bg);
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  margin: 0.5rem 0 1rem;
-  /* Two columns, by request -- the original content (unchanged) in the
-     first, a second column (currently just a "Recent Updates" heading/
-     link, real content designed later) alongside it. Flex, not the
-     multi-column layout #page-groups uses below -- these two columns hold
-     genuinely different content, not one list that should flow across
-     both, so an explicit side-by-side split is the correct tool here. */
-  display: flex;
-  gap: 1.5rem;
-}
-.start-here-checklist-col-main {
-  flex: 1 1 auto;
-  min-width: 0; /* lets the main column's own content (e.g. long links) shrink/wrap rather than forcing the box wider */
-}
-.start-here-checklist-col-updates {
-  /* 40% of the row's available width, by request -- flex-basis (not
-     width) so it still plays correctly with the gap/padding around it;
-     grow/shrink both 0 so it holds that 40% rather than the main column's
-     own content pushing it wider or narrower. */
-  flex: 0 0 40%;
-  min-width: 0;
-  border-left: 1px solid var(--border);
-  padding-left: 1.25rem;
-}
-@media (max-width: 720px) {
-  /* Same breakpoint the page's own two-column #page-groups list already
-     collapses at -- stacked instead of side-by-side once the window's too
-     narrow for both to read comfortably. */
-  .start-here-checklist-featured {
-    flex-direction: column;
-  }
-  .start-here-checklist-col-updates {
-    flex-basis: auto;
-    border-left: none;
-    border-top: 1px solid var(--border);
-    padding-left: 0;
-    padding-top: 0.75rem;
-  }
-}
-.start-here-checklist-title {
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: #16a34a;
-  text-decoration: none;
-}
-.start-here-checklist-title:hover {
-  text-decoration: underline;
-}
-.start-here-checklist-featured p {
-  margin: 0.3rem 0;
-}
-.start-here-checklist-featured ul {
-  margin: 0.3rem 0 0;
-  padding-left: 1.25rem;
-}
-.start-here-checklist-featured ul ul {
-  margin-top: 0.15rem;
-  padding-left: 1.1rem;
-  color: var(--muted);
-  font-size: 0.88rem;
-}
-.start-here-checklist-subheading {
-  font-weight: 600;
-  margin: 0 0 0.3rem;
-}
-ul.start-here-checklist-other {
-  margin: 0;
-  padding-left: 1.25rem;
-}
-/* .cell-subtext's base rule (shared across many pages) is display:block,
-   dropping it to its own line below -- by request, these three sit
-   beside their heading link instead, so scoped to just this list rather
-   than touching the shared base rule. Font-size/color still inherited
-   from .cell-subtext itself (0.8rem/muted), unchanged -- only display
-   and the block-only top margin are overridden here. */
-.start-here-checklist-other .cell-subtext {
-  display: inline;
-  margin-top: 0;
-}
-
-/* Start Here's "Recent Updates" second column -- a compact excerpt list,
-   see @dashboard/start-here/client.js's buildUpdatesColumnHtml() and
-   @dashboard/updates for the real page. */
-.start-here-updates-list {
-  list-style: none;
-  margin: 0.5rem 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-.start-here-update-item {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.5rem;
-}
-.start-here-update-item:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
-}
-/* Inline now, not its own line -- by request, combined onto the first
-   line's own link text instead, in brackets right after it (see
-   updatesExcerptItemHtml() in client.js). */
-.start-here-update-date {
-  font-size: 0.78rem;
-  font-weight: 400;
-  color: var(--muted);
-}
-/* Only the first line is a link (jumps to the real entry on the Updates
-   page), by request -- the second line, when there is one, is plain text
-   right underneath it. Both are truncated to a single visual line each
-   (ellipsis on overflow) -- "the first 2 lines only" means exactly that
-   regardless of how long either line's own text is or how narrow this
-   40%-wide column ends up (a long line would otherwise wrap onto a THIRD
-   visual row on screen even though it's still only "2 lines" of extracted
-   text, which defeats the point of capping it at 2). The date (now inline
-   inside this same link, in brackets) is part of that same truncated run --
-   a very long line-1 can crowd the date off the end, same as any other
-   overflow here. */
-.start-here-update-link {
-  display: block;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--fg);
-  text-decoration: none;
-}
-.start-here-update-link:hover {
-  color: var(--accent);
-  text-decoration: underline;
-}
-.start-here-update-line2 {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 0.8rem;
-  color: var(--muted);
-  margin-top: 0.1rem;
-}
-/* Deliberately NOT .tt-column-footer (What's On's own equivalent) -- that
-   class carries its own horizontal padding, meant for a bare .tt-column
-   with none of its own; this column already gets padding from its parent
-   .start-here-checklist-featured, so reusing it here would double up the
-   indent. */
-.start-here-updates-footer {
-  margin-top: 0.6rem;
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--border);
-}
-
 /* Datto RMM's card grid -- donut-ring cards (ported look from
    C:\Code\Improved-Dashboards' own React donut widgets, drawn as plain SVG
    here since this dashboard has no component layer). */
@@ -3850,9 +3630,10 @@ html[data-rotate-active="true"] .check-up-notes {
 
 /* Much lighter than a plain .button-link, by request -- a light accent
    tint instead of the solid fill, since this is a whole stacked column of
-   them (Start Here's right-hand external-link list), not a single call-to-
-   action button. .button-link--pending (below) is untouched -- still its
-   own distinct greyed-out/inert look for an unconfirmed URL. */
+   them (What's On's external-system quick-link boxes, moved from Start
+   Here, since retired), not a single call-to-action button.
+   .button-link--pending (below) is untouched -- still its own distinct
+   greyed-out/inert look for an unconfirmed URL. */
 .start-here-buttons .button-link {
   text-align: center;
   background: color-mix(in srgb, var(--accent) 15%, transparent);
@@ -3866,35 +3647,6 @@ html[data-rotate-active="true"] .check-up-notes {
   background: var(--row-alt-bg);
   color: var(--muted);
   cursor: default;
-}
-
-.start-here-page-list {
-  list-style: none;
-  margin: 0;
-  padding: 0.25rem 1rem 0.75rem;
-}
-
-.start-here-page-list li {
-  padding: 0.4rem 0;
-  border-top: 1px solid var(--border);
-}
-
-.start-here-page-list li:first-child {
-  border-top: none;
-}
-
-.start-here-page-list a {
-  color: var(--accent);
-  text-decoration: none;
-  font-weight: 500;
-}
-
-.start-here-page-list a:hover {
-  text-decoration: underline;
-}
-
-.start-here-page-list .cell-subtext {
-  margin-top: 0.1rem;
 }
 
 /* Plain label color, same tone as .inline-subtext but no size change --
