@@ -447,29 +447,45 @@ export function mount(container) {
     const rawNames = sku.autotaskNames && sku.autotaskNames.length > 0 ? sku.autotaskNames : (sku.ingramProductName || '').split('\n');
     const names = [...new Set(rawNames.map((n) => n.trim().toLowerCase()).filter(Boolean))];
     if (names.length === 0) return [];
-    // nextPeriodUnits -- the same per-line "count as at the start of this
-    // line's own next billing period" Contract Services' own unitsCell()
-    // already shows, summed the same way as units itself. Tracked
-    // separately as "known or not" (hasNextPeriod) rather than defaulting
-    // to 0, since Contract Services only resolves this when it found a
-    // real next-period row to look it up from -- a contract with no known
-    // next period shouldn't display as "(0)".
-    const byContract = new Map();
+    // A mid-month unit change splits a contract line's own
+    // ContractServiceUnit period in two -- e.g. one day at the OLD count
+    // immediately followed by the rest of the month at the NEW count --
+    // and BOTH rows legitimately overlap "active this month", so both
+    // arrive here. Those must collapse to ONE number (the most CURRENT
+    // period), never summed together, or a routine mid-month adjustment
+    // inflates the count by the old count's own leftover sliver.
+    // contractServiceID/contractServiceBundleID (the line's own real FK,
+    // not just contractName) is what tells two rows apart as "the same
+    // line, different period" vs. "a genuinely different line" -- only
+    // genuinely different lines (a separate add-on line, or a different
+    // contract entirely) get summed together; same-line period rows just
+    // keep whichever one started most recently.
+    const byContract = new Map(); // contractName -> Map(lineKey -> latest-period row)
     for (const r of allServiceRows()) {
       if (isAdjustmentLine(r)) continue;
       const matches = serviceRowNameStartsWithAny(r.serviceItemName, names) || serviceRowNameStartsWithAny(r.serviceName, names);
       if (!matches) continue;
-      const key = r.contractName || '(no contract name)';
-      const entry = byContract.get(key) || { units: 0, nextPeriodUnits: 0, hasNextPeriod: false };
-      entry.units += r.units || 0;
-      if (r.nextPeriodUnits !== null && r.nextPeriodUnits !== undefined) {
-        entry.nextPeriodUnits += r.nextPeriodUnits;
-        entry.hasNextPeriod = true;
-      }
-      byContract.set(key, entry);
+      const contractKey = r.contractName || '(no contract name)';
+      const lineKey = r.isBundle ? `bundle:${r.contractServiceBundleID}` : `service:${r.contractServiceID}`;
+      if (!byContract.has(contractKey)) byContract.set(contractKey, new Map());
+      const lines = byContract.get(contractKey);
+      const existing = lines.get(lineKey);
+      if (!existing || r.startDate > existing.startDate) lines.set(lineKey, r);
     }
+    // nextPeriodUnits -- the same per-line "count as at the start of this
+    // line's own next billing period" Contract Services' own unitsCell()
+    // already shows. Tracked as "known or not" (hasNextPeriod) rather
+    // than defaulting to 0, since Contract Services only resolves this
+    // when it found a real next-period row to look it up from -- a
+    // contract with no known next period shouldn't display as "(0)".
     return [...byContract.entries()]
-      .map(([contractName, v]) => ({ contractName, units: v.units, nextPeriodUnits: v.hasNextPeriod ? v.nextPeriodUnits : null }))
+      .map(([contractName, lines]) => {
+        const picked = [...lines.values()];
+        const units = picked.reduce((n, r) => n + (r.units || 0), 0);
+        const hasNextPeriod = picked.some((r) => r.nextPeriodUnits !== null && r.nextPeriodUnits !== undefined);
+        const nextPeriodUnits = hasNextPeriod ? picked.reduce((n, r) => n + (r.nextPeriodUnits ?? r.units ?? 0), 0) : null;
+        return { contractName, units, nextPeriodUnits };
+      })
       .sort((a, b) => a.contractName.localeCompare(b.contractName));
   }
 
