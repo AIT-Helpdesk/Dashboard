@@ -511,15 +511,24 @@ export function mount(container) {
     // " and " or "+" right after the matched name -- only a genuinely
     // separate bundled product name does, so that specific shape is
     // excluded here.
+    // Tries BOTH the SKU's Microsoft friendly name AND each of its own
+    // already-known Ingram listing name(s) as the prefix, not just the
+    // friendly name alone -- a Microsoft rebrand can leave product_mappings'
+    // friendly_ms_product_name on the OLD name while a real subscription's
+    // own name (and ingram_product_name) already use the NEW one, so the
+    // two share no common prefix at all; trying the SKU's own ingram name(s)
+    // too still catches it.
     function matchSkuByFriendlyNamePrefix(subName) {
       const lower = subName.trim().toLowerCase();
       const candidates = skus.filter((s) => {
-        if (!s.productName) return false;
-        const prefix = s.productName.toLowerCase();
-        if (!lower.startsWith(prefix)) return false;
-        const remainder = lower.slice(prefix.length);
-        if (/^\s+and\s/.test(remainder) || /^\s*\+/.test(remainder)) return false;
-        return true;
+        const prefixes = [s.productName, ...(s.ingramProductName || '').split('\n')]
+          .map((p) => (p || '').trim().toLowerCase())
+          .filter(Boolean);
+        return prefixes.some((prefix) => {
+          if (!lower.startsWith(prefix)) return false;
+          const remainder = lower.slice(prefix.length);
+          return !/^\s+and\s/.test(remainder) && !/^\s*\+/.test(remainder);
+        });
       });
       return candidates.length === 1 ? candidates[0] : null;
     }
