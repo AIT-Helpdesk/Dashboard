@@ -182,6 +182,7 @@ db.exec(`
     autotask_contract_server_name TEXT,
     autotask_contract_invoice_name TEXT,
     free INTEGER,                         -- 1 = Yes, 0 = No, NULL = not specified in the source data
+    ignore_consumed_count INTEGER NOT NULL DEFAULT 0, -- 1 = Yes, 0 = No
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -200,6 +201,19 @@ function migrateAddMsSkuId() {
   db.exec(`ALTER TABLE product_mappings ADD COLUMN ms_sku_id TEXT`);
 }
 migrateAddMsSkuId();
+
+// Adds ignore_consumed_count to an already-existing product_mappings table
+// -- a plain NOT NULL DEFAULT 0 ADD COLUMN (SQLite applies that default to
+// every existing row automatically, same "every row starts at a known
+// value, not NULL" shape the request itself asked for), then backfills
+// the one real row this is for ("Office 365 Extra File Storage") to 1.
+function migrateAddIgnoreConsumedCount() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('product_mappings')`).all();
+  if (columns.some((c) => c.name === 'ignore_consumed_count')) return;
+  db.exec(`ALTER TABLE product_mappings ADD COLUMN ignore_consumed_count INTEGER NOT NULL DEFAULT 0`);
+  db.prepare(`UPDATE product_mappings SET ignore_consumed_count = 1 WHERE ingram_product_name = ?`).run('Office 365 Extra File Storage');
+}
+migrateAddIgnoreConsumedCount();
 
 // Adds `name` to an already-existing templates table (the 'ticket_note' row
 // created before this concept existed) -- a plain nullable ADD COLUMN, same
