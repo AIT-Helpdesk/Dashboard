@@ -1752,7 +1752,11 @@ h1 {
   flex-wrap: wrap;
 }
 .chk-tce-notes {
-  flex: 1 1 16rem;
+  /* No flex-grow, by request -- fits its own content width instead of
+     stretching to fill the row's remaining space. No max-width either
+     (removed again, by request "don't wrap the lines") -- the box
+     grows to whatever its longest line actually needs. */
+  flex: 0 1 auto;
   margin-top: 0.5rem;
   background: var(--row-alt-bg);
   border: 1px solid var(--border);
@@ -1763,6 +1767,7 @@ h1 {
   margin: 0 0 0.4rem;
   font-size: 0.85rem;
   color: var(--muted);
+  white-space: nowrap;
 }
 .chk-tce-notes p:last-child {
   margin-bottom: 0;

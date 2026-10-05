@@ -922,7 +922,10 @@ export function mount(container) {
       let value = parseFactor();
       while (peek() === '*' || peek() === '/') {
         const op = tokens[pos++];
-        value = combine(value, parseFactor(), op === '*' ? (a, b) => a * b : (a, b) => a / b);
+        // Division rounds UP to the nearest whole number, by request
+        // -- Math.ceil, not a plain a/b (e.g. U*/2 for an odd U* total
+        // shouldn't leave a .5 in the result).
+        value = combine(value, parseFactor(), op === '*' ? (a, b) => a * b : (a, b) => Math.ceil(a / b));
       }
       return value;
     }
@@ -985,11 +988,19 @@ export function mount(container) {
     const rows = lines
       .map((r) => {
         const calc = tcCalcForTag(r.internalDescription, counts);
+        // Contract shows the NEXT period's count when one's known, by
+        // request -- only falling back to the current count when
+        // there's no next-period value at all. Unit Price/Total are
+        // deliberately untouched -- those are the real CURRENT billing
+        // amounts, not a hypothetical future one.
+        const contractCount = r.nextPeriodUnits ?? r.units;
         // Bold red on BOTH cells when they genuinely disagree, by
         // request -- only when calc resolved to a real number (never
         // for '' -- no formula to compare -- or null -- not loaded yet,
-        // nothing to compare against either).
-        const mismatch = typeof calc === 'number' && calc !== r.units;
+        // nothing to compare against either). Compared against the SAME
+        // value Contract actually displays, so the highlight always
+        // matches what's on screen.
+        const mismatch = typeof calc === 'number' && calc !== contractCount;
         const mismatchClass = mismatch ? ' cell-flag-red' : '';
         const calcCell = calc === null ? '<span class="inline-subtext">Not yet loaded</span>' : calc;
         return `
@@ -997,7 +1008,7 @@ export function mount(container) {
         <td>${escapeHtml(r.serviceItemName || '')}</td>
         <td>${escapeHtml(bracketPart(r.internalDescription))}</td>
         <td class="ticket-number${mismatchClass}">${calcCell}</td>
-        <td class="ticket-number${mismatchClass}">${r.units ?? ''}</td>
+        <td class="ticket-number${mismatchClass}">${contractCount ?? ''}</td>
         <td class="ticket-number">${formatPrice(perItem(r.price, r.units))}</td>
         <td class="ticket-number">${formatPrice(r.price)}</td>
       </tr>`;
@@ -1061,6 +1072,7 @@ export function mount(container) {
         ${techCoverEliteUsersRmmTableHtml()}
         <div class="chk-tce-notes">
           <p><u>Calculations based on Microsoft allocated licenses and Datto RMM Devices</u></p>
+          <p>Contract Counts are for Next Period</p>
           <p><strong>USERS:</strong> <span class="text-highlight-orange">U1:</span>Premium,Standard,Office E3 | <span class="text-highlight-orange">U2:</span>Basic | <span class="text-highlight-orange">U3:</span>Exch Online | <span class="text-highlight-orange">U4:</span>F3 = <span class="text-highlight-orange">U*:</span>All</p>
           <p><strong>DRMM:</strong> <span class="text-highlight-orange">DW:</span>Workstation | <span class="text-highlight-orange">DS:</span>Server | <span class="text-highlight-orange">DN:</span>Network | <span class="text-highlight-orange">DO:</span>Other | <span class="text-highlight-orange">D*:</span>All</p>
         </div>
@@ -1881,7 +1893,11 @@ export function mount(container) {
           usersLoaded = true;
           usersGroup.innerHTML = '';
           usersGroup.appendChild(buildM365UsersTable(usersData.users));
-          usersToggle.textContent = `Hide Users (${usersData.users.length})`;
+          // "Users (N), N Unlicensed" -- by request; the Show/Hide verb
+          // in front is still swapped by the toggle handler below, same
+          // as before, so this keeps working across repeat clicks.
+          const unlicensedCount = usersData.users.filter((u) => (u.licenses || []).length === 0).length;
+          usersToggle.textContent = `Hide Users (${usersData.users.length}), ${unlicensedCount} Unlicensed`;
           // Tech Cover Elite's own licensed-users count reads this --
           // refreshed now that it's actually available, same "each
           // independent load renders the Summary on ITS OWN completion"
@@ -2614,7 +2630,7 @@ export function mount(container) {
       .map(
         (d) => `
       <tr>
-        <td>${escapeHtml(d.hostname)}${d.rebootRequired ? ' <span class="inline-subtext">(reboot required)</span>' : ''}</td>
+        <td>${escapeHtml(d.hostname)}${d.rebootRequired ? ' <span class="text-highlight-orange">(reboot required)</span>' : ''}</td>
         <td class="${d.online ? 'cell-flag-green' : 'cell-flag-red'}">${d.online ? 'Online' : 'Offline'}</td>
         <td>${escapeHtml(d.os)}</td>
         <td>${escapeHtml(d.patchStatus)}</td>
