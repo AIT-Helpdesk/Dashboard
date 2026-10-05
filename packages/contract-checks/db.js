@@ -183,6 +183,7 @@ db.exec(`
     autotask_contract_invoice_name TEXT,
     free INTEGER,                         -- 1 = Yes, 0 = No, NULL = not specified in the source data
     ignore_consumed_count INTEGER NOT NULL DEFAULT 0, -- 1 = Yes, 0 = No
+    user_level INTEGER,                   -- 1-4, NULL = not specified
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -214,6 +215,32 @@ function migrateAddIgnoreConsumedCount() {
   db.prepare(`UPDATE product_mappings SET ignore_consumed_count = 1 WHERE ingram_product_name = ?`).run('Office 365 Extra File Storage');
 }
 migrateAddIgnoreConsumedCount();
+
+// Adds user_level to an already-existing product_mappings table -- a
+// plain nullable ADD COLUMN (no default requested for the rest, unlike
+// ignore_consumed_count's -- rows outside the named categories just stay
+// NULL/"not specified", same convention `free` already uses), then
+// backfills by matching either name field against each category's own
+// phrase, by request. "Office 365 E3" is matched as its own full phrase,
+// not a bare "E3" substring -- real data has an unrelated "Windows
+// 10/11 Enterprise E3" row that a bare "E3" would have wrongly swept in
+// too. Otherwise these phrases never overlap each other as substrings,
+// so each UPDATE only ever touches rows the others didn't.
+function migrateAddUserLevel() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('product_mappings')`).all();
+  if (columns.some((c) => c.name === 'user_level')) return;
+  db.exec(`ALTER TABLE product_mappings ADD COLUMN user_level INTEGER`);
+  const setLevel = (level, phrases) => {
+    const conditions = phrases.map(() => `(ingram_product_name LIKE ? OR friendly_ms_product_name LIKE ?)`).join(' OR ');
+    const params = phrases.flatMap((p) => [`%${p}%`, `%${p}%`]);
+    db.prepare(`UPDATE product_mappings SET user_level = ? WHERE ${conditions}`).run(level, ...params);
+  };
+  setLevel(1, ['Business Premium', 'Business Standard', 'Office 365 E3']);
+  setLevel(2, ['Business Basic']);
+  setLevel(3, ['Exchange Online']);
+  setLevel(4, ['Microsoft 365 F3']);
+}
+migrateAddUserLevel();
 
 // Adds `name` to an already-existing templates table (the 'ticket_note' row
 // created before this concept existed) -- a plain nullable ADD COLUMN, same
@@ -459,78 +486,122 @@ function listProductMappings() {
   return db.prepare('SELECT * FROM product_mappings ORDER BY ingram_product_name ASC').all();
 }
 
-// View/edit UI for product_mappings, by request -- the "not-yet-built
-// feature" comment above finally gets one. ingram_product_name is the
-// table's own real key (UNIQUE NOT NULL, see CREATE TABLE above), so both
-// create and update check for a real collision first and throw a plain
-// Error with a clean message -- server.js's own route catches this and
-// responds 400, rather than ever surfacing a raw SQLite constraint
-// message to the UI. free stored as 1/0/NULL (Yes/No/not specified),
-// same convention the table's own CREATE TABLE comment documents --
-// normalized here from whatever truthy/falsy/null the client sent.
-function normalizeFree(free) {
-  return free === null || free === undefined || free === '' ? null : free ? 1 : 0;
+// View/edit UI for product_mappings, generated from the table's own real
+// structure rather than a hardcoded field list, by request ("generate the
+// columns and edit page based on the table structure on the fly") -- a
+// column added to the CREATE TABLE above (like user_level) just shows up
+// here and in product-mappings/client.js automatically, nothing else to
+// update. id/created_at/updated_at are system-managed and never part of
+// this -- no field for them, and writes below only ever touch them via
+// nowIso()/lastInsertRowid.
+const PRODUCT_MAPPINGS_SYSTEM_COLUMNS = new Set(['id', 'created_at', 'updated_at']);
+
+// "On the fly" for the FIELD TYPE too, not just which fields exist: a
+// NOT NULL/nullable INTEGER column whose only real values seen so far
+// are 0/1 (free, ignore_consumed_count) is treated as a Yes/No boolean;
+// any other INTEGER column (user_level -- 1-4) is a plain number field;
+// everything else is plain text. required/unique both come straight off
+// SQLite's own PRAGMA metadata (notnull, and whichever column(s) a real
+// UNIQUE index covers) rather than a hardcoded "ingram_product_name is
+// the key" assumption, so this still holds if that ever changes.
+function humanizeColumnName(name) {
+  return name
+    .split('_')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+function getProductMappingColumns() {
+  const tableInfo = db.prepare(`SELECT name, type, "notnull" FROM pragma_table_info('product_mappings')`).all();
+  const uniqueIndexes = db.prepare(`SELECT name FROM pragma_index_list('product_mappings') WHERE "unique" = 1`).all();
+  const uniqueColumns = new Set();
+  for (const idx of uniqueIndexes) {
+    const idxCols = db.prepare(`SELECT name FROM pragma_index_info(?)`).all(idx.name);
+    if (idxCols.length === 1) uniqueColumns.add(idxCols[0].name);
+  }
+  const allRows = db.prepare('SELECT * FROM product_mappings').all();
+  return tableInfo
+    .filter((c) => !PRODUCT_MAPPINGS_SYSTEM_COLUMNS.has(c.name))
+    .map((c) => {
+      const isIntegerType = (c.type || '').toUpperCase().includes('INT');
+      const seenValues = isIntegerType ? new Set(allRows.map((r) => r[c.name]).filter((v) => v !== null)) : null;
+      const isBoolean = isIntegerType && [...(seenValues || [])].every((v) => v === 0 || v === 1);
+      return {
+        name: c.name,
+        label: humanizeColumnName(c.name),
+        required: !!c.notnull,
+        unique: uniqueColumns.has(c.name),
+        inputType: isBoolean ? 'boolean' : isIntegerType ? 'number' : 'text',
+      };
+    });
 }
 
-function assertNoDuplicateIngramName(ingramProductName, excludeId) {
-  const existing = db.prepare('SELECT id FROM product_mappings WHERE ingram_product_name = ?').get(ingramProductName);
+// Blank always normalizes to NULL (never an empty string) regardless of
+// type -- a required column failing on NULL rather than silently storing
+// "" is what makes the required check below actually mean something.
+function normalizeValueForColumn(column, rawValue) {
+  if (column.inputType === 'boolean') {
+    // The real client sends this straight off a <select>'s own string
+    // value ('0'/'1'/'') -- a naive `rawValue ? 1 : 0` would treat the
+    // non-empty STRING '0' as truthy and store it as 1, backwards from
+    // "No". Checked against both the string and number/boolean shape so
+    // this holds regardless of what a caller actually sends.
+    if (rawValue === null || rawValue === undefined || rawValue === '') return null;
+    return rawValue === '0' || rawValue === 0 || rawValue === false ? 0 : 1;
+  }
+  if (column.inputType === 'number') {
+    if (rawValue === null || rawValue === undefined || rawValue === '') return null;
+    const n = Number(rawValue);
+    return Number.isFinite(n) ? n : null;
+  }
+  const s = (rawValue === null || rawValue === undefined ? '' : String(rawValue)).trim();
+  return s === '' ? null : s;
+}
+
+function assertNoDuplicateValue(column, value, excludeId) {
+  if (value === null) return; // a nullable unique column (none currently) can repeat NULL -- nothing to check
+  const existing = db.prepare(`SELECT id FROM product_mappings WHERE ${column.name} = ?`).get(value);
   if (existing && existing.id !== excludeId) {
-    throw new Error(`A row already exists for Ingram Product Name "${ingramProductName}".`);
+    throw new Error(`A row already exists with ${column.label} "${value}".`);
   }
 }
 
+// Shared by create/update -- validates every real column against the
+// request body (keyed by the REAL column name, not a camelCase alias;
+// product-mappings/client.js sends it that way since it built the form
+// from this exact same column list) and returns $-prefixed bind params
+// ready for either an INSERT or an UPDATE statement.
+function buildProductMappingParams(columns, data) {
+  const params = {};
+  for (const col of columns) {
+    const normalized = normalizeValueForColumn(col, data[col.name]);
+    if (col.required && normalized === null) throw new Error(`${col.label} is required.`);
+    params[`$${col.name}`] = normalized;
+  }
+  return params;
+}
+
 function createProductMapping(data) {
-  const ingramProductName = (data.ingramProductName || '').trim();
-  if (!ingramProductName) throw new Error('Ingram Product Name is required.');
-  assertNoDuplicateIngramName(ingramProductName, null);
+  const columns = getProductMappingColumns();
+  const params = buildProductMappingParams(columns, data);
+  for (const col of columns.filter((c) => c.unique)) assertNoDuplicateValue(col, params[`$${col.name}`], null);
   const now = nowIso();
-  const info = db
-    .prepare(
-      `INSERT INTO product_mappings
-         (ingram_product_name, ms_sku_part_number, ms_sku_id, friendly_ms_product_name, autotask_contract_server_name, autotask_contract_invoice_name, free, created_at, updated_at)
-       VALUES ($ingramProductName, $msSkuPartNumber, $msSkuId, $friendlyMsProductName, $autotaskContractServerName, $autotaskContractInvoiceName, $free, $now, $now)`
-    )
-    .run({
-      $ingramProductName: ingramProductName,
-      $msSkuPartNumber: data.msSkuPartNumber || null,
-      $msSkuId: data.msSkuId || null,
-      $friendlyMsProductName: data.friendlyMsProductName || null,
-      $autotaskContractServerName: data.autotaskContractServerName || null,
-      $autotaskContractInvoiceName: data.autotaskContractInvoiceName || null,
-      $free: normalizeFree(data.free),
-      $now: now,
-    });
+  params.$now = now;
+  const colNames = columns.map((c) => c.name);
+  const sql = `INSERT INTO product_mappings (${colNames.join(', ')}, created_at, updated_at) VALUES (${colNames.map((n) => `$${n}`).join(', ')}, $now, $now)`;
+  const info = db.prepare(sql).run(params);
   return db.prepare('SELECT * FROM product_mappings WHERE id = ?').get(Number(info.lastInsertRowid));
 }
 
 function updateProductMapping(id, data) {
   const existing = db.prepare('SELECT id FROM product_mappings WHERE id = ?').get(id);
   if (!existing) throw new Error('No such product mapping row.');
-  const ingramProductName = (data.ingramProductName || '').trim();
-  if (!ingramProductName) throw new Error('Ingram Product Name is required.');
-  assertNoDuplicateIngramName(ingramProductName, id);
-  db.prepare(
-    `UPDATE product_mappings SET
-       ingram_product_name = $ingramProductName,
-       ms_sku_part_number = $msSkuPartNumber,
-       ms_sku_id = $msSkuId,
-       friendly_ms_product_name = $friendlyMsProductName,
-       autotask_contract_server_name = $autotaskContractServerName,
-       autotask_contract_invoice_name = $autotaskContractInvoiceName,
-       free = $free,
-       updated_at = $now
-     WHERE id = $id`
-  ).run({
-    $id: id,
-    $ingramProductName: ingramProductName,
-    $msSkuPartNumber: data.msSkuPartNumber || null,
-    $msSkuId: data.msSkuId || null,
-    $friendlyMsProductName: data.friendlyMsProductName || null,
-    $autotaskContractServerName: data.autotaskContractServerName || null,
-    $autotaskContractInvoiceName: data.autotaskContractInvoiceName || null,
-    $free: normalizeFree(data.free),
-    $now: nowIso(),
-  });
+  const columns = getProductMappingColumns();
+  const params = buildProductMappingParams(columns, data);
+  for (const col of columns.filter((c) => c.unique)) assertNoDuplicateValue(col, params[`$${col.name}`], id);
+  params.$id = id;
+  params.$now = nowIso();
+  const setClause = columns.map((c) => `${c.name} = $${c.name}`).join(', ');
+  db.prepare(`UPDATE product_mappings SET ${setClause}, updated_at = $now WHERE id = $id`).run(params);
   return db.prepare('SELECT * FROM product_mappings WHERE id = ?').get(id);
 }
 
@@ -994,6 +1065,7 @@ module.exports = {
   getTemplate,
   setTemplate,
   listProductMappings,
+  getProductMappingColumns,
   createProductMapping,
   updateProductMapping,
   deleteProductMapping,

@@ -1730,11 +1730,84 @@ h1 {
 .chk-summary-table td:nth-child(8) {
   width: 8%;
 }
+/* Renews and Expires merged into one column, by request -- keeps their
+   combined former width (9% + 9%) now that it's a single column. */
 .chk-summary-table th:nth-child(9),
-.chk-summary-table td:nth-child(9),
-.chk-summary-table th:nth-child(10),
-.chk-summary-table td:nth-child(10) {
-  width: 9%;
+.chk-summary-table td:nth-child(9) {
+  width: 18%;
+}
+
+/* Tech Cover Elite's own small Metric/Count table, by request -- deliberately
+   NOT .chk-summary-table (that class's own nth-child width rules above are
+   tuned for its 9-column layout, which would badly squeeze this table's
+   unrelated 2 columns). Narrow and left-aligned rather than stretched full
+   width -- there's only ever 4 short rows. */
+/* Tech Cover Elite's two columns, by request -- the counts table
+   alongside a shaded grey notes box. Wraps to one column at phone width
+   so the notes box doesn't get squeezed. */
+.chk-tce-columns {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+.chk-tce-notes {
+  flex: 1 1 16rem;
+  margin-top: 0.5rem;
+  background: var(--row-alt-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+.chk-tce-notes p {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.chk-tce-notes p:last-child {
+  margin-bottom: 0;
+}
+/* The per-contract-line table, by request -- wider than .chk-tce-table
+   (5 columns, a real Service Name can run long), sits on its own row
+   above the Users/RMM + notes columns rather than squeezed into either
+   one of them. */
+.chk-tce-lines-table {
+  margin: 0.5rem 0 1rem;
+  width: 100%;
+  max-width: 48rem;
+}
+.chk-tce-lines-table th,
+.chk-tce-lines-table td {
+  padding: 0.35rem 0.75rem;
+}
+.chk-tce-lines-table td.ticket-number {
+  text-align: right;
+}
+.chk-tce-lines-table th:nth-child(3),
+.chk-tce-lines-table th:nth-child(4),
+.chk-tce-lines-table th:nth-child(5),
+.chk-tce-lines-table th:nth-child(6) {
+  text-align: right;
+}
+.chk-tce-table {
+  margin-top: 0.5rem;
+  max-width: 26rem;
+}
+.chk-tce-table th,
+.chk-tce-table td {
+  padding: 0.35rem 0.75rem;
+}
+.chk-tce-table td.ticket-number {
+  text-align: right;
+}
+.chk-tce-table th:last-child {
+  text-align: right;
+}
+.chk-tce-table th:first-child,
+.chk-tce-table td:first-child,
+.chk-tce-table th:nth-child(2),
+.chk-tce-table td:nth-child(2) {
+  white-space: nowrap;
 }
 
 /* Wraps the whole Client Check Summary section (heading, status line, and
@@ -1753,6 +1826,15 @@ h1 {
 }
 .chk-summary-box .chk-section-heading {
   margin-top: 1rem;
+}
+/* Between sections sharing one green box (Orders/Subscriptions), by
+   request -- only placed in the markup between two sections that both
+   exist in the same box, never after the last one, so no rule is needed
+   here to hide a trailing divider. */
+.chk-box-divider {
+  border: none;
+  border-top: 2px solid var(--border);
+  margin: 1.5rem 0;
 }
 
 .ingram-orders-table {
@@ -2031,12 +2113,14 @@ h1 {
      .text-highlight-green), by request. */
   color: #16a34a;
 }
-/* Small print right under a section heading (Subscriptions, Microsoft
-   365 Tenancy), by request -- pulled tight against it (negative margin
-   cancels the heading's own 0.5rem margin-bottom) rather than sitting
-   at the usual paragraph spacing. */
-.check-client-page .chk-section-heading + .chk-current-data-note {
-  margin: -0.35rem 0 0.75rem;
+/* Small print between a section's own count row (.summary) and its
+   results table, by request -- hidden until that section's own query
+   actually completes (toggled in client.js alongside its .summary's own
+   hidden state, never shown during loading or on an error/no-match
+   status). Pulled up tight against the count row (cancelling almost all
+   of .summary's own 1.5rem margin-bottom), by request. */
+.check-client-page .summary + .chk-current-data-note {
+  margin: -1.35rem 0 0.75rem;
   font-size: 0.8rem;
   color: #dc2626;
 }
@@ -2046,6 +2130,13 @@ h1 {
    specificity over the heading's green, this just backs off the
    heading's own bold/larger size so the note doesn't read as loudly. */
 .check-client-page .chk-section-heading #summary-m365-pending {
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+/* Same treatment for Tech Cover Elite Check Summary's own "Calculating
+   TC Calc values..." badge -- backs off the heading's bold/larger size
+   the same way #summary-m365-pending's own rule does. */
+.check-client-page .chk-section-heading .chk-tce-calculating {
   font-size: 0.85rem;
   font-weight: 400;
 }

@@ -6,6 +6,7 @@ export const label = "Product Mappings";
 // switching tabs away and back (this page lives as a Contract Mgmt tab)
 // doesn't flash blank.
 let lastMappings = null;
+let lastColumns = null;
 let lastIsManager = false;
 let hasLoadedOnce = false;
 
@@ -15,24 +16,17 @@ let hasLoadedOnce = false;
 // client/client.js's own activeRenderers for the fuller writeup).
 let activeRender = null;
 
-// The real columns on product_mappings (see @dashboard/contract-checks'
-// own db.js CREATE TABLE) -- id/created_at/updated_at deliberately not
-// shown as their own columns (id is an internal key, created_at/
-// updated_at aren't something anyone's asked to see here), everything
-// else this table actually carries is.
-const PM_COLUMNS = [
-  { key: 'ingram_product_name', label: 'Ingram Product Name' },
-  { key: 'ms_sku_part_number', label: 'MS SKU Part Number' },
-  { key: 'ms_sku_id', label: 'MS SKU ID' },
-  { key: 'friendly_ms_product_name', label: 'Friendly MS Product Name' },
-  { key: 'autotask_contract_server_name', label: 'Autotask Contract Server Name' },
-  { key: 'autotask_contract_invoice_name', label: 'Autotask Contract Invoice Name' },
-  { key: 'free', label: 'Free' },
-];
-
-function pmCellText(m, key) {
-  if (key === 'free') return m.free === 1 ? 'Yes' : m.free === 0 ? 'No' : '';
-  return m[key] || '';
+// The table's own columns (name/label/required/unique/inputType) come
+// straight off the server's GET / response now, by request ("generate
+// the columns and edit page based on the table structure on the fly
+// instead of hard coded") -- @dashboard/contract-checks' own
+// getProductMappingColumns() is the real source of truth; this page has
+// no second, separately-maintained column list any more. A column added
+// to product_mappings later just shows up here automatically.
+function pmCellText(m, col) {
+  const v = m[col.name];
+  if (col.inputType === 'boolean') return v === 1 ? 'Yes' : v === 0 ? 'No' : '';
+  return v === null || v === undefined ? '' : String(v);
 }
 
 export function mount(container) {
@@ -65,10 +59,11 @@ export function mount(container) {
     try {
       const data = await fetchJson('/api/product-mappings', 'GET');
       lastMappings = data.mappings;
+      lastColumns = data.columns;
       lastIsManager = !!data.isManager;
       hasLoadedOnce = true;
       statusEl.hidden = true;
-      activeRender(lastMappings, lastIsManager);
+      activeRender(lastMappings, lastColumns, lastIsManager);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
@@ -81,21 +76,21 @@ export function mount(container) {
   // table uses (buildM365UsersTable() in check-client/client.js) -- a
   // second header row, one plain text input per column, every active
   // filter ANDed together.
-  function render(mappings, isManager) {
+  function render(mappings, columns, isManager) {
     addButton.hidden = !isManager;
     if (!mappings || mappings.length === 0) {
       tableWrapEl.innerHTML = '<p class="status">No product mappings yet.</p>';
       return;
     }
-    const columns = isManager ? [...PM_COLUMNS, { key: 'actions', label: '' }] : PM_COLUMNS;
+    const displayColumns = isManager ? [...columns, { name: 'actions', label: '' }] : columns;
     const filters = {};
     const table = document.createElement('table');
     table.className = 'pm-table';
     table.innerHTML = `
       <thead>
-        <tr class="shaded-row">${columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('')}</tr>
-        <tr class="pm-filter-row">${columns
-          .map((c) => (c.key === 'actions' ? '<th></th>' : `<th><input type="text" data-filter-key="${c.key}" placeholder="Filter..." /></th>`))
+        <tr class="shaded-row">${displayColumns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('')}</tr>
+        <tr class="pm-filter-row">${displayColumns
+          .map((c) => (c.name === 'actions' ? '<th></th>' : `<th><input type="text" data-filter-key="${c.name}" placeholder="Filter..." /></th>`))
           .join('')}</tr>
       </thead>
       <tbody></tbody>
@@ -103,16 +98,16 @@ export function mount(container) {
     const tbody = table.querySelector('tbody');
     function renderRows() {
       const filtered = mappings.filter((m) =>
-        PM_COLUMNS.every((c) => {
-          const f = filters[c.key];
-          return !f || pmCellText(m, c.key).toLowerCase().includes(f);
+        columns.every((c) => {
+          const f = filters[c.name];
+          return !f || pmCellText(m, c).toLowerCase().includes(f);
         })
       );
       tbody.innerHTML =
         filtered.length > 0
           ? filtered
               .map((m) => {
-                const cells = PM_COLUMNS.map((c) => `<td>${escapeHtml(pmCellText(m, c.key))}</td>`).join('');
+                const cells = columns.map((c) => `<td>${escapeHtml(pmCellText(m, c))}</td>`).join('');
                 const actionsCell = isManager
                   ? `<td class="pm-actions-cell">
                        <button type="button" class="link-button pm-edit-button" data-id="${m.id}">Edit</button>
@@ -122,7 +117,7 @@ export function mount(container) {
                 return `<tr>${cells}${actionsCell}</tr>`;
               })
               .join('')
-          : `<tr><td colspan="${columns.length}" class="status">No rows matching these filters.</td></tr>`;
+          : `<tr><td colspan="${displayColumns.length}" class="status">No rows matching these filters.</td></tr>`;
       if (isManager) {
         tbody.querySelectorAll('.pm-edit-button').forEach((btn) => {
           btn.addEventListener('click', () => {
@@ -149,7 +144,8 @@ export function mount(container) {
   async function deleteMapping(id) {
     const m = lastMappings.find((x) => x.id === id);
     if (!m) return;
-    if (!confirm(`Delete the mapping for "${m.ingram_product_name}"? This can't be undone.`)) return;
+    const nameColumn = lastColumns.find((c) => c.unique) || lastColumns[0];
+    if (!confirm(`Delete the mapping for "${m[nameColumn.name]}"? This can't be undone.`)) return;
     try {
       await fetchJson(`/api/product-mappings/${id}`, 'DELETE');
       await load();
@@ -158,14 +154,50 @@ export function mount(container) {
     }
   }
 
+  // One form field per real column -- text/number/boolean (Yes/No
+  // dropdown) decided by that column's own inputType, exactly as
+  // getProductMappingColumns() classified it. A required boolean column
+  // (ignore_consumed_count) gets no "(not specified)" option at all --
+  // it can never actually be NULL in the database, so the dropdown
+  // defaults to No on a brand new row instead of offering a blank state
+  // that would just fail validation on save.
+  function fieldHtml(col, mapping) {
+    const existing = mapping ? mapping[col.name] : null;
+    const requiredMark = col.required ? ' *' : '';
+    if (col.inputType === 'boolean') {
+      const value = existing === 1 ? '1' : existing === 0 ? '0' : '';
+      const blankOption = col.required ? '' : `<option value=""${value === '' ? ' selected' : ''}>(not specified)</option>`;
+      const noSelected = value === '0' || (col.required && value === '') ? ' selected' : '';
+      return `
+        <div class="pm-form-field">
+          <label for="pm-f-${col.name}">${escapeHtml(col.label)}${requiredMark}</label>
+          <select id="pm-f-${col.name}" class="wsp-field" data-input-type="boolean">
+            ${blankOption}
+            <option value="1"${value === '1' ? ' selected' : ''}>Yes</option>
+            <option value="0"${noSelected}>No</option>
+          </select>
+        </div>
+      `;
+    }
+    const inputType = col.inputType === 'number' ? 'number' : 'text';
+    const value = existing === null || existing === undefined ? '' : existing;
+    return `
+      <div class="pm-form-field">
+        <label for="pm-f-${col.name}">${escapeHtml(col.label)}${requiredMark}</label>
+        <input type="${inputType}" id="pm-f-${col.name}" class="wsp-field" data-input-type="${inputType}" value="${escapeHtml(String(value))}" />
+      </div>
+    `;
+  }
+
   // Add (mapping === null) or Edit (mapping === the real row) -- same
   // form either way, same shared .history-modal-* overlay/panel shell
-  // every other popup on this dashboard uses.
+  // every other popup on this dashboard uses. Field order/labels/types
+  // all come from lastColumns -- see fieldHtml() above.
   function openMappingModal(mapping) {
+    const nameColumn = lastColumns.find((c) => c.unique) || lastColumns[0];
     const overlay = document.createElement('div');
     overlay.className = 'history-modal-overlay';
-    const title = mapping ? `Edit -- ${mapping.ingram_product_name}` : 'Add Product Mapping';
-    const freeValue = mapping ? (mapping.free === 1 ? '1' : mapping.free === 0 ? '0' : '') : '';
+    const title = mapping ? `Edit -- ${mapping[nameColumn.name]}` : 'Add Product Mapping';
     overlay.innerHTML = `
       <div class="history-modal-panel pm-modal-panel">
         <div class="history-modal-panel-header">
@@ -173,38 +205,7 @@ export function mount(container) {
           <button type="button" class="history-modal-close" aria-label="Close">✕</button>
         </div>
         <div class="history-modal-body">
-          <div class="pm-form-field">
-            <label for="pm-f-ingram">Ingram Product Name *</label>
-            <input type="text" id="pm-f-ingram" class="wsp-field" value="${escapeHtml(mapping ? mapping.ingram_product_name : '')}" />
-          </div>
-          <div class="pm-form-field">
-            <label for="pm-f-sku-part">MS SKU Part Number</label>
-            <input type="text" id="pm-f-sku-part" class="wsp-field" value="${escapeHtml(mapping ? mapping.ms_sku_part_number || '' : '')}" />
-          </div>
-          <div class="pm-form-field">
-            <label for="pm-f-sku-id">MS SKU ID</label>
-            <input type="text" id="pm-f-sku-id" class="wsp-field" value="${escapeHtml(mapping ? mapping.ms_sku_id || '' : '')}" />
-          </div>
-          <div class="pm-form-field">
-            <label for="pm-f-friendly">Friendly MS Product Name</label>
-            <input type="text" id="pm-f-friendly" class="wsp-field" value="${escapeHtml(mapping ? mapping.friendly_ms_product_name || '' : '')}" />
-          </div>
-          <div class="pm-form-field">
-            <label for="pm-f-at-server">Autotask Contract Server Name</label>
-            <input type="text" id="pm-f-at-server" class="wsp-field" value="${escapeHtml(mapping ? mapping.autotask_contract_server_name || '' : '')}" />
-          </div>
-          <div class="pm-form-field">
-            <label for="pm-f-at-invoice">Autotask Contract Invoice Name</label>
-            <input type="text" id="pm-f-at-invoice" class="wsp-field" value="${escapeHtml(mapping ? mapping.autotask_contract_invoice_name || '' : '')}" />
-          </div>
-          <div class="pm-form-field">
-            <label for="pm-f-free">Free</label>
-            <select id="pm-f-free" class="wsp-field">
-              <option value=""${freeValue === '' ? ' selected' : ''}>(not specified)</option>
-              <option value="1"${freeValue === '1' ? ' selected' : ''}>Yes</option>
-              <option value="0"${freeValue === '0' ? ' selected' : ''}>No</option>
-            </select>
-          </div>
+          ${lastColumns.map((c) => fieldHtml(c, mapping)).join('')}
           <p class="status error pm-modal-error" hidden></p>
           <div class="wsp-form-actions">
             <button type="button" class="button-link pm-save-button">Save</button>
@@ -228,20 +229,19 @@ export function mount(container) {
       if (e.target === overlay) close();
     });
 
-    const ingramInput = overlay.querySelector('#pm-f-ingram');
+    const firstInput = overlay.querySelector(`#pm-f-${nameColumn.name}`);
     async function save() {
       const errorEl = overlay.querySelector('.pm-modal-error');
       errorEl.hidden = true;
-      const freeRaw = overlay.querySelector('#pm-f-free').value;
-      const body = {
-        ingramProductName: ingramInput.value.trim(),
-        msSkuPartNumber: overlay.querySelector('#pm-f-sku-part').value.trim(),
-        msSkuId: overlay.querySelector('#pm-f-sku-id').value.trim(),
-        friendlyMsProductName: overlay.querySelector('#pm-f-friendly').value.trim(),
-        autotaskContractServerName: overlay.querySelector('#pm-f-at-server').value.trim(),
-        autotaskContractInvoiceName: overlay.querySelector('#pm-f-at-invoice').value.trim(),
-        free: freeRaw === '' ? null : freeRaw === '1',
-      };
+      // Keyed by the REAL column name directly -- the server's own
+      // normalizeValueForColumn() does the actual type coercion
+      // (blank -> NULL, string '0'/'1' -> a real 0/1, etc.), so this
+      // just reads each control's raw value as-is.
+      const body = {};
+      for (const col of lastColumns) {
+        const el = overlay.querySelector(`#pm-f-${col.name}`);
+        body[col.name] = el.value.trim ? el.value.trim() : el.value;
+      }
       try {
         if (mapping) {
           await fetchJson(`/api/product-mappings/${mapping.id}`, 'PUT', body);
@@ -256,13 +256,13 @@ export function mount(container) {
       }
     }
     overlay.querySelector('.pm-save-button').addEventListener('click', save);
-    ingramInput.focus();
+    if (firstInput) firstInput.focus();
   }
 
   activeRender = render;
   if (hasLoadedOnce) {
     statusEl.hidden = true;
-    render(lastMappings, lastIsManager);
+    render(lastMappings, lastColumns, lastIsManager);
     load();
   } else {
     load();

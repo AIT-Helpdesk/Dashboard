@@ -37,6 +37,11 @@ let lastSubscriptionsData = null;
 let lastM365Data = null;
 let lastServicesData = null;
 let lastDattoData = null;
+// Only ever set once the "Show Users" button (Microsoft 365 Tenancy's own
+// lazy toggle) has actually been clicked -- by request, the Tech Cover
+// Elite section's own licensed-users count does NOT trigger that fetch on
+// its own, it just reads whatever's already there (or isn't).
+let lastM365UsersData = null;
 
 // Whichever mount() is CURRENTLY on screen registers its own section
 // render functions here, overwriting whatever the previous mount left
@@ -132,21 +137,25 @@ export function mount(container) {
       <div id="summary-results" class="results"></div>
     </div>
 
-    <h2 class="chk-section-heading">Orders <span class="inline-subtext">(Ingram Micro)</span></h2>
-    <p id="orders-status" class="status" hidden></p>
-    <div id="orders-summary" class="summary" hidden></div>
-    <div id="orders-results" class="results"></div>
+    <div class="chk-summary-box">
+      <h2 class="chk-section-heading">Orders <span class="inline-subtext">(Ingram Micro)</span></h2>
+      <p id="orders-status" class="status" hidden></p>
+      <div id="orders-summary" class="summary" hidden></div>
+      <div id="orders-results" class="results"></div>
 
-    <h2 class="chk-section-heading">Subscriptions <span class="inline-subtext">(Ingram Micro)</span></h2>
-    <p class="chk-current-data-note">Current Data Shown, no historical point in time available.</p>
-    <p id="subs-status" class="status" hidden></p>
-    <div id="subs-summary" class="summary" hidden></div>
-    <div id="subs-results" class="results"></div>
+      <hr class="chk-box-divider" />
+
+      <h2 class="chk-section-heading">Subscriptions <span class="inline-subtext">(Ingram Micro)</span></h2>
+      <p id="subs-status" class="status" hidden></p>
+      <div id="subs-summary" class="summary" hidden></div>
+      <p id="subs-current-data-note" class="chk-current-data-note" hidden>Current Data Shown, no historical point in time available.</p>
+      <div id="subs-results" class="results"></div>
+    </div>
 
     <h2 class="chk-section-heading">Microsoft 365 Tenancy <span class="inline-subtext">(Ingram tenant ID &rarr; Rewst &rarr; M365)</span></h2>
-    <p class="chk-current-data-note">Current Data Shown, no historical point in time available.</p>
     <p id="m365-status" class="status" hidden></p>
     <div id="m365-summary" class="summary" hidden></div>
+    <p id="m365-current-data-note" class="chk-current-data-note" hidden>Current Data Shown, no historical point in time available.</p>
     <div id="m365-results" class="results"></div>
 
     <h2 class="chk-section-heading">Contracts <span class="inline-subtext">(Autotask)</span></h2>
@@ -155,9 +164,9 @@ export function mount(container) {
     <div id="services-results" class="results"></div>
 
     <h2 class="chk-section-heading">Datto RMM <span class="inline-subtext">(devices &amp; open alerts)</span></h2>
-    <p class="chk-current-data-note">Current Data Shown, no historical point in time available.</p>
     <p id="datto-status" class="status" hidden></p>
     <div id="datto-summary" class="summary" hidden></div>
+    <p id="datto-current-data-note" class="chk-current-data-note" hidden>Current Data Shown, no historical point in time available.</p>
     <div id="datto-results" class="results"></div>
     </div>
   `;
@@ -179,6 +188,7 @@ export function mount(container) {
   const ordersResultsEl = container.querySelector('#orders-results');
   const subsStatusEl = container.querySelector('#subs-status');
   const subsSummaryEl = container.querySelector('#subs-summary');
+  const subsCurrentDataNoteEl = container.querySelector('#subs-current-data-note');
   const subsResultsEl = container.querySelector('#subs-results');
   const m365StatusEl = container.querySelector('#m365-status');
   // Mirrors m365StatusEl's own current message next to the Client Check
@@ -200,12 +210,14 @@ export function mount(container) {
     summaryM365PendingEl.textContent = m365StatusEl.textContent;
   }
   const m365SummaryEl = container.querySelector('#m365-summary');
+  const m365CurrentDataNoteEl = container.querySelector('#m365-current-data-note');
   const m365ResultsEl = container.querySelector('#m365-results');
   const servicesStatusEl = container.querySelector('#services-status');
   const servicesSummaryEl = container.querySelector('#services-summary');
   const servicesResultsEl = container.querySelector('#services-results');
   const dattoStatusEl = container.querySelector('#datto-status');
   const dattoSummaryEl = container.querySelector('#datto-summary');
+  const dattoCurrentDataNoteEl = container.querySelector('#datto-current-data-note');
   const dattoResultsEl = container.querySelector('#datto-results');
 
   // AEST (UTC+10, no DST in Queensland) "today", not the browser's own local
@@ -327,6 +339,7 @@ export function mount(container) {
     // the one section with no single load() of its own to do it from.
     lastSubscriptionsData = null;
     lastM365Data = null;
+    lastM365UsersData = null;
     activeRenderers.renderClientCheckSummary();
     try {
       // Datto RMM has no dependency on the other sections' own results
@@ -753,6 +766,19 @@ export function mount(container) {
     // "Enabled" -- same .cell-flag-blue colour (and same `!== 'Enabled'`
     // check) that table's own Status column already uses for this.
     const statusBadge = sku && sku.status && sku.status !== 'Enabled' ? ` <span class="cell-flag-blue">[${escapeHtml(sku.status)}]</span>` : '';
+    // Renews and Expires merged into one column, by request -- whichever
+    // one is actually the meaningful date for this subscription (Renews
+    // when it auto-renews and a renewal date is known, Expires
+    // otherwise), coloured green for a Renews date and red for an
+    // Expires date so which one's showing is clear without needing two
+    // separate columns.
+    const renewsExpiresCell = !primarySub
+      ? ''
+      : primarySub.autoRenews && primarySub.renewalDate
+        ? `<span class="cell-flag-green">${formatDate(primarySub.renewalDate)}</span>`
+        : primarySub.expirationDate
+          ? `<span class="cell-flag-red">${formatDate(primarySub.expirationDate)}</span>`
+          : '';
     return `
       <tr${m365Mismatch ? ' class="chk-summary-row-mismatch"' : ''}>
         <td>${escapeHtml(row.name || '')}${statusBadge}</td>
@@ -763,9 +789,283 @@ export function mount(container) {
         <td class="ticket-number${sku && sku.suspended ? ' cell-flag-red' : ''}">${sku ? (sku.suspended ?? '') : ''}</td>
         <td class="ticket-number">${primarySub ? `${formatPeriod(primarySub.term)} / ${formatPeriod(primarySub.billingPeriod)}` : ''}</td>
         <td class="${primarySub ? (primarySub.autoRenews ? 'cell-flag-green' : 'cell-flag-red') : ''}">${primarySub ? (primarySub.autoRenews ? 'Yes' : 'No') : ''}</td>
-        <td class="ticket-number">${primarySub ? formatDate(primarySub.renewalDate) : ''}</td>
-        <td class="ticket-number">${primarySub ? formatDate(primarySub.expirationDate) : ''}</td>
+        <td class="ticket-number">${renewsExpiresCell}</td>
       </tr>`;
+  }
+
+  // Tech Cover Elite, by request -- a separate section, shown only when
+  // this client actually has a real Autotask contract whose name STARTS
+  // WITH "Tech Cover Elite" (checked against Contract Services' own
+  // already-loaded rows, not re-fetched) -- by request, not an exact
+  // match, so a real variant name (e.g. "Tech Cover Elite Platinum")
+  // still counts.
+  function hasTechCoverEliteContract() {
+    return (lastServicesData?.byCompany || []).some((c) => c.rows.some((r) => (r.contractName || '').trim().toLowerCase().startsWith('tech cover elite')));
+  }
+
+  // One row per real contract LINE, by request -- collapses a line that
+  // got mid-month split into two period rows (same real issue/fix as
+  // Contract (AT)'s own contractMatchesForSku(): a routine unit-count
+  // change shouldn't show as an extra phantom row here either) down to
+  // just its own most-recently-started period, keyed on the line's real
+  // FK (contractServiceID/contractServiceBundleID) within each contract.
+  function techCoverEliteContractLines() {
+    const linesByKey = new Map();
+    for (const r of allServiceRows()) {
+      if (!(r.contractName || '').trim().toLowerCase().startsWith('tech cover elite')) continue;
+      const lineKey = `${r.contractId}:${r.isBundle ? `bundle:${r.contractServiceBundleID}` : `service:${r.contractServiceID}`}`;
+      const existing = linesByKey.get(lineKey);
+      if (!existing || r.startDate > existing.startDate) linesByKey.set(lineKey, r);
+    }
+    return [...linesByKey.values()].sort((a, b) => (a.serviceItemName || '').localeCompare(b.serviceItemName || ''));
+  }
+
+  // The real Autotask data carries this tag in the Internal Description
+  // field (confirmed live: "[U1+U2]", "Exch Online Users [U3+U4]",
+  // "[DW-U1-U2]") -- extracted verbatim for the Tag column, by request,
+  // not parsed there (the TC Calc column below is where it gets
+  // interpreted as a formula instead).
+  function bracketPart(text) {
+    const m = /\[([^\]]*)\]/.exec(text || '');
+    return m ? m[1] : '';
+  }
+
+  // Shared by the Tag-as-formula column (TC Calc) and the Licensed
+  // Users/RMM table below, so both read the exact same underlying
+  // counts. Each of u1-u4/w/s/n/o is a number once its own source has
+  // loaded, or null while it hasn't -- same "each user counts once,
+  // under their SMALLEST user_level" rule as the Licensed Users table
+  // (a license with no user_level mapped is ignored when picking that
+  // minimum). W is Desktop + Laptop combined, N is "Network Device", O
+  // is everything else (deviceType is UNCONFIRMED against this
+  // account's real live payload, same caveat renderDattoRmm()'s own
+  // per-type grouping already carries).
+  function computeTceCounts() {
+    function userMinLevel(u) {
+      const levels = (u.licenses || []).map((l) => l.userLevel).filter((lvl) => lvl !== null && lvl !== undefined);
+      return levels.length > 0 ? Math.min(...levels) : null;
+    }
+    const userLevelCount = (level) => (lastM365UsersData ? lastM365UsersData.filter((u) => userMinLevel(u) === level).length : null);
+    const devices = lastDattoData ? (lastDattoData.bySite || []).flatMap((s) => s.devices) : null;
+    const w = devices ? devices.filter((d) => d.deviceType === 'Desktop' || d.deviceType === 'Laptop').length : null;
+    const s = devices ? devices.filter((d) => d.deviceType === 'Server').length : null;
+    const n = devices ? devices.filter((d) => d.deviceType === 'Network Device').length : null;
+    const o = devices ? devices.length - w - s - n : null;
+    return { u1: userLevelCount(1), u2: userLevelCount(2), u3: userLevelCount(3), u4: userLevelCount(4), w, s, n, o };
+  }
+
+  // TC Calc, by request ("give it a try") -- a real small formula
+  // evaluator (recursive descent, standard +/- lowest, then */, then
+  // Max()/Min()/parens/identifiers), not just a flat token sum. Real
+  // confirmed formulas needed this: Kraftur's own tags are
+  // "Max(U*/2,U1)" and "U* - Max(U*/2,U1)" -- a function call AND
+  // division, not just +/-. An identifier is "DW"/"DS"/"DN"/"DO" (that
+  // DRMM count), "D*" (all 4 DRMM counts summed), "U1".."U4" (that
+  // licensed-user-level count), or "U*" (all 4 user levels summed).
+  // Returns '' for a blank tag, an unrecognised identifier, or any
+  // parse error (never guesses at a formula it can't fully understand),
+  // or null if a recognised identifier's own underlying data (Users/
+  // Datto) hasn't loaded yet -- null propagates through the whole
+  // expression (can't compute ANY of it without that one piece).
+  function resolveTceIdentifier(tok, counts) {
+    const t = tok.toUpperCase();
+    if (t === 'D*') return [counts.w, counts.s, counts.n, counts.o].some((x) => x === null) ? null : counts.w + counts.s + counts.n + counts.o;
+    if (t === 'U*') return [counts.u1, counts.u2, counts.u3, counts.u4].some((x) => x === null) ? null : counts.u1 + counts.u2 + counts.u3 + counts.u4;
+    if (t === 'DW') return counts.w;
+    if (t === 'DS') return counts.s;
+    if (t === 'DN') return counts.n;
+    if (t === 'DO') return counts.o;
+    if (t === 'U1') return counts.u1;
+    if (t === 'U2') return counts.u2;
+    if (t === 'U3') return counts.u3;
+    if (t === 'U4') return counts.u4;
+    return undefined; // unrecognised
+  }
+  // Tokenizes against an explicit allow-list (identifiers/function names/
+  // numbers/parens/operators) rather than a generic letter pattern --
+  // anything that doesn't cleanly tokenize this way (a typo, a genuinely
+  // different convention) throws, which tcCalcForTag() below turns into
+  // a blank cell instead of a wrong guess.
+  function tokenizeTceFormula(text) {
+    const cleaned = text.replace(/\s+/g, '');
+    if (!cleaned) return [];
+    const re = /DW|DS|DN|DO|D\*|U1|U2|U3|U4|U\*|MAX|MIN|\d+(?:\.\d+)?|[()+\-*/,]/gi;
+    const tokens = [];
+    let lastEnd = 0;
+    let m;
+    while ((m = re.exec(cleaned))) {
+      if (m.index !== lastEnd) throw new Error('unrecognised text in formula');
+      tokens.push(m[0]);
+      lastEnd = re.lastIndex;
+    }
+    if (lastEnd !== cleaned.length) throw new Error('unrecognised trailing text in formula');
+    return tokens;
+  }
+  // Standard recursive-descent precedence: expr (+/-) over term (*//)
+  // over factor (a number, an identifier, Max(...)/Min(...), a
+  // parenthesized expr, or a unary minus). null short-circuits through
+  // every combine() -- a sub-expression that can't be computed yet
+  // means the WHOLE formula can't be, not a guessed partial answer.
+  function evaluateTceFormula(tokens, counts) {
+    let pos = 0;
+    const peek = () => tokens[pos];
+    const combine = (a, b, fn) => (a === null || b === null ? null : fn(a, b));
+    function parseExpr() {
+      let value = parseTerm();
+      while (peek() === '+' || peek() === '-') {
+        const op = tokens[pos++];
+        value = combine(value, parseTerm(), op === '+' ? (a, b) => a + b : (a, b) => a - b);
+      }
+      return value;
+    }
+    function parseTerm() {
+      let value = parseFactor();
+      while (peek() === '*' || peek() === '/') {
+        const op = tokens[pos++];
+        value = combine(value, parseFactor(), op === '*' ? (a, b) => a * b : (a, b) => a / b);
+      }
+      return value;
+    }
+    function parseFactor() {
+      const tok = peek();
+      if (tok === undefined) throw new Error('unexpected end of formula');
+      if (tok === '-') {
+        pos++;
+        const v = parseFactor();
+        return v === null ? null : -v;
+      }
+      if (tok === '(') {
+        pos++;
+        const v = parseExpr();
+        if (tokens[pos++] !== ')') throw new Error('expected )');
+        return v;
+      }
+      if (/^(MAX|MIN)$/i.test(tok)) {
+        const fn = tok.toUpperCase();
+        pos++;
+        if (tokens[pos++] !== '(') throw new Error('expected ( after ' + fn);
+        const args = [parseExpr()];
+        while (peek() === ',') {
+          pos++;
+          args.push(parseExpr());
+        }
+        if (tokens[pos++] !== ')') throw new Error('expected )');
+        if (args.some((a) => a === null)) return null;
+        return fn === 'MAX' ? Math.max(...args) : Math.min(...args);
+      }
+      if (/^\d+(\.\d+)?$/.test(tok)) {
+        pos++;
+        return Number(tok);
+      }
+      const v = resolveTceIdentifier(tok, counts);
+      if (v === undefined) throw new Error('unrecognised identifier ' + tok);
+      pos++;
+      return v;
+    }
+    const result = parseExpr();
+    if (pos !== tokens.length) throw new Error('unexpected trailing tokens');
+    return result;
+  }
+  function tcCalcForTag(tag, counts) {
+    const bracket = bracketPart(tag).trim();
+    if (!bracket) return '';
+    try {
+      const tokens = tokenizeTceFormula(bracket);
+      if (tokens.length === 0) return '';
+      return evaluateTceFormula(tokens, counts);
+    } catch {
+      return ''; // couldn't parse/resolve this formula -- never guess
+    }
+  }
+
+  function techCoverEliteLinesTableHtml() {
+    const lines = techCoverEliteContractLines();
+    if (lines.length === 0) return '<p class="status">No active Tech Cover Elite contract lines found.</p>';
+    const counts = computeTceCounts();
+    const rows = lines
+      .map((r) => {
+        const calc = tcCalcForTag(r.internalDescription, counts);
+        // Bold red on BOTH cells when they genuinely disagree, by
+        // request -- only when calc resolved to a real number (never
+        // for '' -- no formula to compare -- or null -- not loaded yet,
+        // nothing to compare against either).
+        const mismatch = typeof calc === 'number' && calc !== r.units;
+        const mismatchClass = mismatch ? ' cell-flag-red' : '';
+        const calcCell = calc === null ? '<span class="inline-subtext">Not yet loaded</span>' : calc;
+        return `
+      <tr>
+        <td>${escapeHtml(r.serviceItemName || '')}</td>
+        <td>${escapeHtml(bracketPart(r.internalDescription))}</td>
+        <td class="ticket-number${mismatchClass}">${calcCell}</td>
+        <td class="ticket-number${mismatchClass}">${r.units ?? ''}</td>
+        <td class="ticket-number">${formatPrice(perItem(r.price, r.units))}</td>
+        <td class="ticket-number">${formatPrice(r.price)}</td>
+      </tr>`;
+      })
+      .join('');
+    return `
+      <table class="chk-tce-lines-table">
+        <thead><tr class="shaded-row"><th>Service Name</th><th>Tag</th><th>TC Calc</th><th>Contract</th><th>Unit Price</th><th>Total</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  // Licensed Users reads whatever "Show Users" (Microsoft 365 Tenancy's
+  // own lazy toggle) has already loaded -- by request, this section
+  // never fires that fetch on its own, so it shows a prompt instead of a
+  // number until someone's actually clicked that button this search.
+  function techCoverEliteUsersRmmTableHtml() {
+    const counts = computeTceCounts();
+    const usersNotLoaded = 'Click &quot;Show Users&quot;';
+    const dattoNotLoaded = 'Not yet loaded';
+    // "N1/N2/N3/N4 = total", by request -- the slash-joined breakdown
+    // PLUS the sum of all of them (U* -- "any time you see U*, that's
+    // all the U's added together"), one combined row/prompt rather than
+    // 4 separate ones.
+    function breakdownCell(values, notLoadedText, notLoadedClass = 'inline-subtext') {
+      if (values.some((v) => v === null)) return `<span class="${notLoadedClass}">${notLoadedText}</span>`;
+      return `${values.join(' | ')} = ${values.reduce((a, b) => a + b, 0)}`;
+    }
+    const licensedUsersCell = breakdownCell([counts.u1, counts.u2, counts.u3, counts.u4], usersNotLoaded, 'text-highlight-orange');
+    const rmmCell = breakdownCell([counts.w, counts.s, counts.n, counts.o], dattoNotLoaded);
+    return `
+      <table class="chk-tce-table">
+        <thead><tr class="shaded-row"><th>Source</th><th>Metric</th><th>Count</th></tr></thead>
+        <tbody>
+          <tr><td>Users-M365</td><td>Licensed Users</td><td class="ticket-number">${licensedUsersCell}</td></tr>
+          <tr><td>DRMM</td><td>W/S/N/O</td><td class="ticket-number">${rmmCell}</td></tr>
+        </tbody>
+      </table>
+    `;
+  }
+
+  function techCoverEliteSectionHtml() {
+    if (!hasTechCoverEliteContract()) return '';
+    // Same heading format as Client Check Summary's own (h2.chk-section-
+    // heading, not the smaller section-heading--nav style this used
+    // before), by request -- including an inline orange status span the
+    // same way that heading's own "Loading Microsoft 365 Tenancy..."
+    // does, shown here while ANY of TC Calc's own underlying counts
+    // (Users/Datto) hasn't loaded yet.
+    const counts = computeTceCounts();
+    const stillCalculating = Object.values(counts).some((v) => v === null);
+    const calculatingBadge = stillCalculating ? ' <span class="status loading chk-tce-calculating">Calculating TC Calc values...</span>' : '';
+    // Two columns for the Users/RMM table alongside the shaded grey
+    // notes box, same layout as before; the new per-line table sits on
+    // its own row above both, since it can run to several real lines.
+    return `
+      <h2 class="chk-section-heading">Tech Cover Elite Check Summary${calculatingBadge}</h2>
+      ${techCoverEliteLinesTableHtml()}
+      <div class="chk-tce-columns">
+        ${techCoverEliteUsersRmmTableHtml()}
+        <div class="chk-tce-notes">
+          <p><u>Calculations based on Microsoft allocated licenses and Datto RMM Devices</u></p>
+          <p><strong>USERS:</strong> <span class="text-highlight-orange">U1:</span>Premium,Standard,Office E3 | <span class="text-highlight-orange">U2:</span>Basic | <span class="text-highlight-orange">U3:</span>Exch Online | <span class="text-highlight-orange">U4:</span>F3 = <span class="text-highlight-orange">U*:</span>All</p>
+          <p><strong>DRMM:</strong> <span class="text-highlight-orange">DW:</span>Workstation | <span class="text-highlight-orange">DS:</span>Server | <span class="text-highlight-orange">DN:</span>Network | <span class="text-highlight-orange">DO:</span>Other | <span class="text-highlight-orange">D*:</span>All</p>
+        </div>
+      </div>
+    `;
   }
 
   // Matched against the row's own RENDERED text (every column, tags
@@ -776,8 +1076,9 @@ export function mount(container) {
   // with no second place to update).
   function renderClientCheckSummary() {
     const rows = buildClientCheckSummaryRows();
+    const tceHtml = techCoverEliteSectionHtml();
     if (rows.length === 0) {
-      summaryResultsEl.innerHTML = '';
+      summaryResultsEl.innerHTML = tceHtml;
       summaryStatusEl.hidden = false;
       summaryStatusEl.className = 'status';
       summaryStatusEl.textContent =
@@ -792,11 +1093,12 @@ export function mount(container) {
         <thead>
           <tr>
             <th>Subscription</th><th>IM Licenses</th><th>Contract (AT)</th><th>M365 Licenses</th><th>Consumed</th><th>Suspended</th>
-            <th>Term / Billing Period</th><th>Auto-Renewal</th><th>Renews</th><th>Expires</th>
+            <th>Term / Billing Period</th><th>Auto-Renewal</th><th>Renews / Expires</th>
           </tr>
         </thead>
         <tbody>${rows.map(clientCheckSummaryRowHtml).join('')}</tbody>
       </table>
+      ${tceHtml ? `<hr class="chk-box-divider" />${tceHtml}` : ''}
     `;
   }
 
@@ -1191,6 +1493,7 @@ export function mount(container) {
     subsStatusEl.className = 'status loading';
     subsStatusEl.textContent = `Loading subscriptions for "${client}"...`;
     subsSummaryEl.hidden = true;
+    subsCurrentDataNoteEl.hidden = true;
     subsResultsEl.innerHTML = '';
     // Stale the moment a new search starts -- Microsoft 365 Tenancy is
     // derived from this section's (and Contract Services') own results (see
@@ -1200,6 +1503,7 @@ export function mount(container) {
     m365StatusEl.className = 'status loading';
     m365StatusEl.textContent = 'Waiting for Subscriptions and Contracts...';
     m365SummaryEl.hidden = true;
+    m365CurrentDataNoteEl.hidden = true;
     m365ResultsEl.innerHTML = '';
     syncSummaryM365Pending();
     try {
@@ -1243,6 +1547,7 @@ export function mount(container) {
     m365StatusEl.hidden = false;
     m365StatusEl.className = 'status';
     m365SummaryEl.hidden = true;
+    m365CurrentDataNoteEl.hidden = true;
     m365ResultsEl.innerHTML = '';
 
     let subscriptionId = null;
@@ -1287,6 +1592,7 @@ export function mount(container) {
       m365StatusEl.className = 'status';
       m365StatusEl.textContent = m365UnmatchedText(data);
       m365SummaryEl.hidden = true;
+      m365CurrentDataNoteEl.hidden = true;
       m365ResultsEl.innerHTML = '';
       syncSummaryM365Pending();
       return;
@@ -1294,6 +1600,7 @@ export function mount(container) {
     m365StatusEl.hidden = true;
     syncSummaryM365Pending();
     m365SummaryEl.hidden = false;
+    m365CurrentDataNoteEl.hidden = false;
     const sourceText = data.tenantSource === 'rewst-name-match' ? ' (matched by name via Rewst -- no Ingram Microsoft subscription found)' : '';
     // The client name was rendering at the line's own normal (larger)
     // font-size while the Tenant ID right beside it sits in
@@ -1575,6 +1882,12 @@ export function mount(container) {
           usersGroup.innerHTML = '';
           usersGroup.appendChild(buildM365UsersTable(usersData.users));
           usersToggle.textContent = `Hide Users (${usersData.users.length})`;
+          // Tech Cover Elite's own licensed-users count reads this --
+          // refreshed now that it's actually available, same "each
+          // independent load renders the Summary on ITS OWN completion"
+          // convention every other section here already follows.
+          lastM365UsersData = usersData.users;
+          activeRenderers.renderClientCheckSummary();
         } catch (err) {
           usersGroup.innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
         } finally {
@@ -1626,6 +1939,7 @@ export function mount(container) {
       .join(', ');
     subsSummaryEl.hidden = false;
     subsSummaryEl.innerHTML = `<strong>${data.totalCount}</strong> subscriptions (${statusBreakdown}) across ${data.byClient.length} client${data.byClient.length === 1 ? '' : 's'}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
+    subsCurrentDataNoteEl.hidden = false;
 
     subsResultsEl.innerHTML = '';
     if (data.byClient.length === 0) {
@@ -2179,6 +2493,7 @@ export function mount(container) {
     dattoStatusEl.hidden = false;
     dattoStatusEl.className = 'status';
     dattoSummaryEl.hidden = true;
+    dattoCurrentDataNoteEl.hidden = true;
     dattoResultsEl.innerHTML = '';
     if (!site) {
       dattoStatusEl.textContent = 'Type a Datto Site above (defaults to Autotask Client) to look up devices.';
@@ -2204,11 +2519,13 @@ export function mount(container) {
       dattoStatusEl.className = 'status';
       dattoStatusEl.textContent = 'Datto RMM is not configured in .env.';
       dattoSummaryEl.hidden = true;
+      dattoCurrentDataNoteEl.hidden = true;
       dattoResultsEl.innerHTML = '';
       return;
     }
     dattoStatusEl.hidden = true;
     dattoSummaryEl.hidden = false;
+    dattoCurrentDataNoteEl.hidden = false;
     const alertsText = data.alertsTotalCount > 0 ? `, ${data.alertsTotalCount} open High/Critical alert${data.alertsTotalCount === 1 ? '' : 's'}` : ', no open High/Critical alerts';
     dattoSummaryEl.innerHTML = `<strong>${data.totalDevices}</strong> device${data.totalDevices === 1 ? '' : 's'} (${data.onlineCount} online, ${data.offlineCount} offline, ${data.rebootRequiredCount} reboot required) across ${data.bySite.length} site${data.bySite.length === 1 ? '' : 's'}${alertsText}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
 

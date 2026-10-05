@@ -1,5 +1,11 @@
 const express = require('express');
-const { listProductMappings, createProductMapping, updateProductMapping, deleteProductMapping } = require('@dashboard/contract-checks/db.js');
+const {
+  listProductMappings,
+  getProductMappingColumns,
+  createProductMapping,
+  updateProductMapping,
+  deleteProductMapping,
+} = require('@dashboard/contract-checks/db.js');
 const { isContractManager } = require('@dashboard/shell/contract-manager-permissions.js');
 
 // View/edit UI for @dashboard/contract-checks' own product_mappings table
@@ -17,8 +23,14 @@ const { isContractManager } = require('@dashboard/shell/contract-manager-permiss
 const router = express.Router();
 router.use(express.json());
 
+// columns -- the table's own real structure (name/label/required/unique/
+// inputType), by request ("generate the columns and edit page based on
+// the table structure on the fly instead of hard coded") -- client.js
+// builds both the list view's columns and the add/edit form's fields
+// from this, so a column added to product_mappings later needs no
+// change here or there.
 router.get('/', (req, res) => {
-  res.json({ mappings: listProductMappings(), isManager: isContractManager(req) });
+  res.json({ mappings: listProductMappings(), columns: getProductMappingColumns(), isManager: isContractManager(req) });
 });
 
 router.post('/', (req, res) => {

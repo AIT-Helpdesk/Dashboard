@@ -389,13 +389,18 @@ router.get('/m365-users', async (req, res) => {
     // product_mappings.free column /m365-tenancy's own Free Products
     // split already reads, just keyed on ms_sku_id here instead of
     // ms_sku_part_number.
+    // user_level travels alongside the name/free-ness too, by request --
+    // Tech Cover Elite's own "Licensed Users" table reads this to bucket
+    // each license into U1-U4.
     const nameBySkuId = new Map();
     const freeBySkuId = new Map();
+    const userLevelBySkuId = new Map();
     for (const m of contractChecks.listProductMappings()) {
       const key = (m.ms_sku_id || '').trim().toLowerCase();
       if (key) {
         nameBySkuId.set(key, m.friendly_ms_product_name || m.ms_sku_part_number || m.ms_sku_id);
         freeBySkuId.set(key, m.free === 1);
+        userLevelBySkuId.set(key, m.user_level ?? null);
       }
     }
 
@@ -418,7 +423,7 @@ router.get('/m365-users', async (req, res) => {
           .map((l) => {
             const key = (l.skuId || '').trim().toLowerCase();
             const name = nameBySkuId.get(key) || l.skuId;
-            return name ? { name, free: freeBySkuId.get(key) === true } : null;
+            return name ? { name, free: freeBySkuId.get(key) === true, userLevel: userLevelBySkuId.get(key) ?? null } : null;
           })
           .filter(Boolean),
       }))
