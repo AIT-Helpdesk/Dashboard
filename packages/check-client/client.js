@@ -779,12 +779,24 @@ export function mount(container) {
         : primarySub.expirationDate
           ? `<span class="cell-flag-red">${formatDate(primarySub.expirationDate)}</span>`
           : '';
+    // If some of IM Licenses / Contract (AT) / M365 Licenses are blank and
+    // others aren't, the populated ones go red -- by request, a half-
+    // filled set is itself a flag, separate from the numeric mismatch
+    // check above. Nothing red when all three are blank or all filled.
+    const imBlank = licenseTotal === null;
+    const contractBlank = contractMatches.length === 0;
+    const m365Blank = !sku || sku.enabled === null || sku.enabled === undefined;
+    const blankFlags = [imBlank, contractBlank, m365Blank];
+    const mixedBlanks = blankFlags.some((b) => b) && blankFlags.some((b) => !b);
+    const imRed = threeWayMismatch || (mixedBlanks && !imBlank);
+    const contractRed = mixedBlanks && !contractBlank;
+    const m365Red = m365Mismatch || (mixedBlanks && !m365Blank);
     return `
       <tr${m365Mismatch ? ' class="chk-summary-row-mismatch"' : ''}>
         <td>${escapeHtml(row.name || '')}${statusBadge}</td>
-        <td class="ticket-number${threeWayMismatch ? ' cell-flag-red' : ''}">${licenseTotal ?? ''}</td>
-        <td class="ticket-number">${contractCell}</td>
-        <td class="ticket-number${m365Mismatch ? ' cell-flag-red' : ''}">${sku ? (sku.enabled ?? '') : ''}</td>
+        <td class="ticket-number${imRed ? ' cell-flag-red' : ''}">${licenseTotal ?? ''}</td>
+        <td class="ticket-number${contractRed ? ' cell-flag-red' : ''}">${contractCell}</td>
+        <td class="ticket-number${m365Red ? ' cell-flag-red' : ''}">${sku ? (sku.enabled ?? '') : ''}</td>
         <td class="ticket-number${consumedVsM365Mismatch ? ' cell-flag-red' : ''}">${sku ? (sku.consumed ?? '') : ''}</td>
         <td class="ticket-number${sku && sku.suspended ? ' cell-flag-red' : ''}">${sku ? (sku.suspended ?? '') : ''}</td>
         <td class="ticket-number">${primarySub ? `${formatPeriod(primarySub.term)} / ${formatPeriod(primarySub.billingPeriod)}` : ''}</td>
@@ -851,7 +863,12 @@ export function mount(container) {
     const s = devices ? devices.filter((d) => d.deviceType === 'Server').length : null;
     const n = devices ? devices.filter((d) => d.deviceType === 'Network Device').length : null;
     const o = devices ? devices.length - w - s - n : null;
-    return { u1: userLevelCount(1), u2: userLevelCount(2), u3: userLevelCount(3), u4: userLevelCount(4), w, s, n, o };
+    // The users U1-U4/U* actually count (each with a real user level) --
+    // Office:/Dept: identifiers filter within this same set, so
+    // U*-Office:Home means "levelled users not at Home", consistent with
+    // how U* itself is counted.
+    const levelledUsers = lastM365UsersData ? lastM365UsersData.filter((u) => userMinLevel(u) !== null) : null;
+    return { u1: userLevelCount(1), u2: userLevelCount(2), u3: userLevelCount(3), u4: userLevelCount(4), w, s, n, o, levelledUsers };
   }
 
   // TC Calc, by request ("give it a try") -- a real small formula
@@ -869,6 +886,15 @@ export function mount(container) {
   // expression (can't compute ANY of it without that one piece).
   function resolveTceIdentifier(tok, counts) {
     const t = tok.toUpperCase();
+    // Office:Home / Dept:Finance -- a count of the levelled users whose
+    // M365 office/department matches the value after the colon (case-
+    // insensitive, spaces inside the value allowed).
+    if (t.startsWith('OFFICE:') || t.startsWith('DEPT:')) {
+      if (counts.levelledUsers === null) return null;
+      const isOffice = t.startsWith('OFFICE:');
+      const want = tok.slice(isOffice ? 7 : 5).trim().toUpperCase();
+      return counts.levelledUsers.filter((u) => ((isOffice ? u.office : u.department) || '').trim().toUpperCase() === want).length;
+    }
     if (t === 'D*') return [counts.w, counts.s, counts.n, counts.o].some((x) => x === null) ? null : counts.w + counts.s + counts.n + counts.o;
     if (t === 'U*') return [counts.u1, counts.u2, counts.u3, counts.u4].some((x) => x === null) ? null : counts.u1 + counts.u2 + counts.u3 + counts.u4;
     if (t === 'DW') return counts.w;
@@ -887,18 +913,21 @@ export function mount(container) {
   // different convention) throws, which tcCalcForTag() below turns into
   // a blank cell instead of a wrong guess.
   function tokenizeTceFormula(text) {
-    const cleaned = text.replace(/\s+/g, '');
-    if (!cleaned) return [];
-    const re = /DW|DS|DN|DO|D\*|U1|U2|U3|U4|U\*|MAX|MIN|\d+(?:\.\d+)?|[()+\-*/,]/gi;
+    const s = text.trim();
+    if (!s) return [];
+    // Office:/Dept: values run up to the next operator, paren or comma,
+    // so they can contain spaces ("Office:Head Office"). Everything else
+    // is still an explicit allow-list token.
+    const re = /\s*(OFFICE:[^+\-*/(),]+|DEPT:[^+\-*/(),]+|DW|DS|DN|DO|D\*|U1|U2|U3|U4|U\*|MAX|MIN|\d+(?:\.\d+)?|[()+\-*/,])\s*/gi;
     const tokens = [];
-    let lastEnd = 0;
-    let m;
-    while ((m = re.exec(cleaned))) {
-      if (m.index !== lastEnd) throw new Error('unrecognised text in formula');
-      tokens.push(m[0]);
-      lastEnd = re.lastIndex;
+    let pos = 0;
+    while (pos < s.length) {
+      re.lastIndex = pos;
+      const m = re.exec(s);
+      if (!m || m.index !== pos) throw new Error('unrecognised text in formula');
+      tokens.push(m[1].trim());
+      pos = re.lastIndex;
     }
-    if (lastEnd !== cleaned.length) throw new Error('unrecognised trailing text in formula');
     return tokens;
   }
   // Standard recursive-descent precedence: expr (+/-) over term (*//)
@@ -1071,10 +1100,11 @@ export function mount(container) {
       <div class="chk-tce-columns">
         ${techCoverEliteUsersRmmTableHtml()}
         <div class="chk-tce-notes">
-          <p><u>Calculations based on Microsoft allocated licenses and Datto RMM Devices</u></p>
+          <p><u><b>Calculations based on Microsoft allocated licenses and Datto RMM Devices</b></u></p>
           <p>Contract Counts are for Next Period</p>
           <p><strong>USERS:</strong> <span class="text-highlight-orange">U1:</span>Premium,Standard,Office E3 | <span class="text-highlight-orange">U2:</span>Basic | <span class="text-highlight-orange">U3:</span>Exch Online | <span class="text-highlight-orange">U4:</span>F3 = <span class="text-highlight-orange">U*:</span>All</p>
-          <p><strong>DRMM:</strong> <span class="text-highlight-orange">DW:</span>Workstation | <span class="text-highlight-orange">DS:</span>Server | <span class="text-highlight-orange">DN:</span>Network | <span class="text-highlight-orange">DO:</span>Other | <span class="text-highlight-orange">D*:</span>All</p>
+          <p><strong>DRMM:</strong> <span class="text-highlight-orange">DW:</span>Workstation | <span class="text-highlight-orange">DS:</span>Server | <span class="text-highlight-orange">DN:</span>Network | <span class="text-highlight-orange">DO:</span>Other = <span class="text-highlight-orange">D*:</span>All</p>
+          <p><strong>OTHER:</strong> <span class="text-highlight-orange">Dept</span> | <span class="text-highlight-orange">Office</span> = Free text fields</p>
         </div>
       </div>
     `;
