@@ -681,15 +681,7 @@ export function mount(container) {
     const billableDollarHoursTotal = otherBillableDollarRows.reduce((s, r) => s + r.hours, 0);
     const billableDollarTotal = otherBillableDollarRows.reduce((s, r) => s + r.dollars, 0);
 
-    // Admin-only, by request ("make that Billable $ table only visible to
-    // admins") -- data.isAdmin is server-authoritative (isDashboardAdmin(),
-    // same one-account check every other admin-only feature on this
-    // dashboard uses), not just a client-side hide; a non-admin's own
-    // response also carries empty rate/billing-item maps (server.js skips
-    // those fetches for them entirely), so there's no real rate data to
-    // leak through the network tab either.
-    const billableDollarBoxHtml = data.isAdmin
-      ? `
+    const billableDollarBoxHtml = `
       <div class="tm-table-group">
       <table class="tm-overall-summary-table">
         <thead>
@@ -704,8 +696,7 @@ export function mount(container) {
         </tbody>
       </table>
       <p class="tm-footnote">Real Rates Shown</p>
-      </div>`
-      : '';
+      </div>`;
 
     resultsEl.innerHTML = `
       <div class="tm-summary-boxes-row">

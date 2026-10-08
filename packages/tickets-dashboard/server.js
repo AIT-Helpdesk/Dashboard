@@ -8,6 +8,8 @@ const {
   getPicklistLabels,
   getTicketUrl,
   mapWithConcurrency,
+  aestDayBoundsIso,
+  todayAestKey,
 } = require('@dashboard/autotask-client');
 
 // A real, generally-available page -- started as just the one widget (see
@@ -32,6 +34,20 @@ const CRITICAL_PRIORITY_VALUE = 4;
 // one instead), "P3 - SCHEDULED" (7), and plain "Scheduled" (6), none of
 // which is this one).
 const TRIAGE_PRIORITY_VALUE = 2;
+
+// "!! TO BE SCHEDULED" -- confirmed live against the same priority picklist,
+// by request ("Scheduled Me" widget).
+const TO_BE_SCHEDULED_PRIORITY_VALUE = 12;
+
+// "P1 - CANNOT BE MOVED" -- confirmed live, and already the real value this
+// tenant's own Strety automation uses for its "EOD - TODAY Jobs Missed"
+// metric (packages/strety-autotask-sync/metrics.js), by request ("DO TODAY"
+// widget).
+const P1_CANNOT_BE_MOVED_PRIORITY_VALUE = 10;
+
+// "Customer Note Added" -- confirmed live against Tickets' own status
+// picklist, by request ("Client Updates" widget).
+const CUSTOMER_NOTE_ADDED_STATUS_VALUE = 19;
 
 // "Open" here is simply "has no completedDate yet" -- same definition (and
 // same caveat -- a status-20 "Billing - Contract" ticket sitting in
@@ -62,6 +78,64 @@ async function fetchOpenTicketsByPriority(client, priorityValue) {
     { op: 'eq', field: 'priority', value: priorityValue },
   ]);
   return excludeMonitoringAlerts(tickets);
+}
+
+// Open tickets with the given status (e.g. "Customer Note Added"), by
+// request ("Client Updates" widget) -- same open/exclude-Monitoring-Alerts
+// shape as fetchOpenTicketsByPriority() above, just filtered by status
+// instead of priority.
+async function fetchOpenTicketsByStatus(client, statusValue) {
+  const tickets = await listAll(client.tickets, [
+    { op: 'notExist', field: 'completedDate' },
+    { op: 'eq', field: 'status', value: statusValue },
+  ]);
+  return excludeMonitoringAlerts(tickets);
+}
+
+// "Due today or earlier" -- a CALENDAR-DATE comparison, not a moment-in-time
+// one (due anytime today still counts, regardless of what time it is right
+// now) -- same AEST-anchored boundary (and the same confirmed-working `lt`
+// operator against AEST midnight TOMORROW, rather than an untested `lte`)
+// packages/strety-autotask-sync/metrics.js's own tomorrowAestMidnightUtcIso()
+// already uses for its "EOD - TODAY Jobs Missed"/"EOD - Urgent/Deadlines"
+// metrics -- reusing the shared aestDayBoundsIso()/todayAestKey() helpers
+// here instead of a second copy of that bespoke function.
+function tomorrowAestMidnightUtcIso() {
+  return aestDayBoundsIso(todayAestKey()).endISO;
+}
+
+// "DO TODAY" -- open tickets (no completedDate) with priority "P1 - CANNOT
+// BE MOVED", due today or earlier, by request. Monitoring Alerts
+// deliberately INCLUDED, not excluded -- same real call this dashboard's own
+// Strety automation already made for the identical "EOD - TODAY Jobs Missed"
+// metric ("an automated alert that's been escalated to this priority is
+// exactly as urgent as a human-raised one").
+async function fetchDoTodayTickets(client) {
+  return listAll(client.tickets, [
+    { op: 'notExist', field: 'completedDate' },
+    { op: 'eq', field: 'priority', value: P1_CANNOT_BE_MOVED_PRIORITY_VALUE },
+    { op: 'lt', field: 'dueDateTime', value: tomorrowAestMidnightUtcIso() },
+  ]);
+}
+
+// "Overdue tickets" banner -- a COUNT only, by request ("a red banner... with
+// a count but not a widget"), same real definition this dashboard's own
+// Strety automation already uses for its "EOD - Tickets Overdue" metric:
+// open, excluding Monitoring Alerts, excluding priority "!! SET PRIORITY"/
+// "!! TO BE SCHEDULED" (those two already have their own dedicated
+// triage/scheduling widgets -- an overdue ticket already called out there
+// shouldn't ALSO inflate this banner), due date strictly in the past (a
+// moment-in-time comparison -- unlike "DO TODAY" above, "overdue" means the
+// due time itself has already passed, not just "due today").
+async function fetchOverdueCount(client) {
+  const nowIso = new Date().toISOString();
+  const tickets = await listAll(client.tickets, [
+    { op: 'notExist', field: 'completedDate' },
+    { op: 'lt', field: 'dueDateTime', value: nowIso },
+  ]);
+  return excludeMonitoringAlerts(tickets).filter(
+    (t) => ![TRIAGE_PRIORITY_VALUE, TO_BE_SCHEDULED_PRIORITY_VALUE].includes(t.priority)
+  ).length;
 }
 
 const router = express.Router();
@@ -99,29 +173,51 @@ async function shapeTicketRows(client, tickets, statusLabels) {
 router.get('/', async (req, res) => {
   try {
     const client = await getClient();
-    const [criticalTickets, triageTickets] = await Promise.all([
-      fetchOpenTicketsByPriority(client, CRITICAL_PRIORITY_VALUE),
-      fetchOpenTicketsByPriority(client, TRIAGE_PRIORITY_VALUE),
-    ]);
+    // Throttled via mapWithConcurrency (same ~5 req/s rate-limit reasoning
+    // as its own comment up in autotask-client/index.js), NOT a flat
+    // Promise.all -- firing all 6 of these as independent concurrent
+    // POST /query calls the instant the page loads tripped Autotask's
+    // rate limit (observed live: every request came back 429) once a
+    // third widget row was added on top of the original two.
+    const [criticalTickets, triageTickets, doTodayTickets, scheduledMeTickets, clientUpdatesTickets, overdueCount] = await mapWithConcurrency(
+      [
+        () => fetchOpenTicketsByPriority(client, CRITICAL_PRIORITY_VALUE),
+        () => fetchOpenTicketsByPriority(client, TRIAGE_PRIORITY_VALUE),
+        () => fetchDoTodayTickets(client),
+        () => fetchOpenTicketsByPriority(client, TO_BE_SCHEDULED_PRIORITY_VALUE),
+        () => fetchOpenTicketsByStatus(client, CUSTOMER_NOTE_ADDED_STATUS_VALUE),
+        () => fetchOverdueCount(client),
+      ],
+      3,
+      (fn) => fn()
+    );
 
     // Pre-resolves each unique client/resource name once, concurrently,
-    // across BOTH widgets' tickets combined -- same "warm the cache
+    // across ALL FIVE widgets' tickets combined -- same "warm the cache
     // before the per-row loop" pattern Service Calls' own server.js
     // already uses -- rather than however many duplicate lookups a
-    // client/resource appearing on more than one ticket (in either or
-    // both lists) would otherwise cause.
-    const allTickets = [...criticalTickets, ...triageTickets];
+    // client/resource appearing on more than one ticket (in any of the
+    // lists) would otherwise cause.
+    const allTickets = [...criticalTickets, ...triageTickets, ...doTodayTickets, ...scheduledMeTickets, ...clientUpdatesTickets];
     const uniqueCompanyIds = [...new Set(allTickets.map((t) => t.companyID).filter((cid) => cid !== null && cid !== undefined))];
     const uniqueResourceIds = [...new Set(allTickets.map((t) => t.assignedResourceID).filter((rid) => rid !== null && rid !== undefined))];
-    const [statusLabels] = await Promise.all([
-      getPicklistLabels(client.tickets, 'status'),
-      mapWithConcurrency(uniqueCompanyIds, 3, (cid) => resolveCompanyName(client, cid)),
-      mapWithConcurrency(uniqueResourceIds, 3, (rid) => resolveResourceName(client, rid)),
-    ]);
+    // Sequential, not a Promise.all of all three -- now that there are 5
+    // widgets' worth of unique companies/resources to resolve instead of
+    // 2, running the picklist fetch and both already-throttled
+    // mapWithConcurrency(..., 3, ...) passes AT THE SAME TIME could put up
+    // to 7 requests in flight together, over Autotask's ~5 req/s limit
+    // (same 429 cause as the ticket-group fetches above). Each pass alone
+    // still stays within its own concurrency-3 cap.
+    const statusLabels = await getPicklistLabels(client.tickets, 'status');
+    await mapWithConcurrency(uniqueCompanyIds, 3, (cid) => resolveCompanyName(client, cid));
+    await mapWithConcurrency(uniqueResourceIds, 3, (rid) => resolveResourceName(client, rid));
 
-    const [criticalTicketRows, triageTicketRows] = await Promise.all([
+    const [criticalTicketRows, triageTicketRows, doTodayTicketRows, scheduledMeTicketRows, clientUpdatesTicketRows] = await Promise.all([
       shapeTicketRows(client, criticalTickets, statusLabels),
       shapeTicketRows(client, triageTickets, statusLabels),
+      shapeTicketRows(client, doTodayTickets, statusLabels),
+      shapeTicketRows(client, scheduledMeTickets, statusLabels),
+      shapeTicketRows(client, clientUpdatesTickets, statusLabels),
     ]);
 
     res.json({
@@ -130,6 +226,13 @@ router.get('/', async (req, res) => {
       criticalTickets: criticalTicketRows,
       triageOpenCount: triageTickets.length,
       triageTickets: triageTicketRows,
+      doTodayOpenCount: doTodayTickets.length,
+      doTodayTickets: doTodayTicketRows,
+      scheduledMeOpenCount: scheduledMeTickets.length,
+      scheduledMeTickets: scheduledMeTicketRows,
+      clientUpdatesOpenCount: clientUpdatesTickets.length,
+      clientUpdatesTickets: clientUpdatesTicketRows,
+      overdueCount,
     });
   } catch (err) {
     console.error(err);

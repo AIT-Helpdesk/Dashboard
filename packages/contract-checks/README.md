@@ -19,7 +19,7 @@ Same `@dashboard/ingram-client` calls Ingram Orders already uses (`getToken`/`ge
 
 ### Bootstrap vs incremental vs refresh-outstanding
 
-`runSync()` (called either by the page's "Check for more Orders in IM" button, via `POST /sync`, or later by `node sync.js` directly if a scheduled task ever gets added -- not built this round, only the on-demand button was asked for, but `sync.js` is structured so that's a drop-in addition, same shape as `packages/strety-autotask-sync/sync.js`):
+`runSync()` (called either by the page's "Check for more Orders in IM" button, via `POST /sync`, or by `node sync.js` directly -- the latter now also runs daily, unattended, via Windows Task Scheduler in production; see "Production setup" below):
 
 1. **First run only** (`sync_state.bootstrap_done = 0`): an incremental walk (see below) from a fixed cutoff, **2026-08-01**, to now, PLUS a one-time **full-history scan** -- every page of `/orders`, no early stop, reading only the cheap list fields (id/status/creationDate), no per-order detail call -- to find any order older than the cutoff that's *still* `status: processing`. These are flagged as likely incomplete Annual license changes: an annual-term change order can sit in `processing` for months until its actual renewal date, so the normal early-stopping incremental walk would never see one whose `creationDate` predates the cutoff. Only the (expected small) matching set gets a real detail fetch. `bootstrap_done` is then set to `1` -- this full scan never runs again.
 2. **Every run** (including right after bootstrap): an incremental walk from `sync_state.last_creation_date_seen` to now (new orders only), THEN a **refresh-outstanding** pass -- every DB row still `status: processing` that wasn't already touched by the incremental walk gets re-fetched. This is what actually catches a status flipping from `processing` to `completed`/`cancelled` -- satisfying "created or processed since you last collected them" for orders whose *processing* changed, not just brand-new orders -- and it's what keeps the bootstrap's Annual stragglers current going forward, without ever needing another full-history scan. The cursor (`last_creation_date_seen`) only ever advances from the incremental walk's own new orders -- the refresh pass never moves it.
@@ -85,8 +85,11 @@ This needed its own outcome value, `'local_dev_skipped'`, alongside the Change R
 
 The page itself shows the same bold red banner Workshop Board uses (`.wsp-localhost-warning` in `styles.css` -- already a generic, unscoped rule, reused as-is rather than duplicated) under the identical `window.location.hostname === 'localhost'` condition, so whoever's looking at the page can see why their changes aren't reaching the ticket.
 
+## Production setup (Windows Task Scheduler) -- `sync.js` run daily
+
+By request, "Check IM for More" also runs unattended once a day, not just on demand from the button -- no code change needed, since `sync.js` was already structured for exactly this (`runSync()` exported, a `require.main` CLI entry point, and its own `require('dotenv').config(...)` at the top so it loads `.env` correctly even run standalone outside the shell server). See `DEPLOYMENT.md`'s own section for the real `Register-ScheduledTask` commands -- same shape as `packages/strety-autotask-sync`'s own production task, just daily instead of every 30 minutes, and with no separate connect/auth step (this sync reuses the main dashboard's own already-connected Autotask/Ingram credentials, unlike that package's own separate limited-access Strety connection).
+
 ## Not yet built
 
-- A scheduled (Windows Task Scheduler) run of `sync.js`, mirroring `packages/strety-autotask-sync`'s own production setup -- only the manual "Check for more Orders in IM" button was asked for this round; `sync.js` is structured (`runSync()` exported, plus a `require.main` CLI entry point) so this is a drop-in addition, not a rework, whenever it's wanted.
 - Any second Contract Process Type beyond Ingram subscriptions.
 - A real, properly-scoped audit/print report for the Change Report -- a `window.print()` version was built and removed (see that section above); a genuine one likely needs its own date-range/row-selection thinking, not just a wider print rule.

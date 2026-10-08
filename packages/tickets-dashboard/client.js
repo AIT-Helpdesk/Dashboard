@@ -21,16 +21,27 @@ let lastData = null;
 let activeRender = null;
 
 // Same palette Datto RMM's own donut cards use (STATUS_COLORS there) --
-// only the two shades this page's donut widgets actually need, shared by
-// both Critical (P1) and Triage Now.
-const DONUT_COLORS = { danger: '#dc3545', healthy: '#28a745' };
+// danger/healthy are the two shades Critical (P1)/Triage Now/DO TODAY use
+// (genuinely urgent widgets -- any count at all is bad news, 0 is healthy).
+// `informational`, by request, is for Scheduled Me/Client Updates instead --
+// same #eab308 yellow .text-highlight-yellow already uses elsewhere on this
+// dashboard -- neither of those is inherently a bad-news count the way the
+// other three are, so forcing them red/green was misleading (reported as
+// "no colour" since a 0 count there drew a plain uncoloured ring).
+const DONUT_COLORS = { danger: '#dc3545', healthy: '#28a745', informational: '#eab308' };
 
 // Fixed denominator for each ring's own sweep -- NOT the open-ticket total
 // (see renderTicketWidget()'s own comment). 6 open tickets (or more) fills
 // a ring completely. Same value as Ticket Dashboards (Test)'s own copy of
-// the original Critical widget -- reused as-is for Triage Now too, absent
-// any reason to pick a different fullness point for it.
+// the original Critical widget -- reused as-is for Triage Now/DO TODAY too,
+// absent any reason to pick a different fullness point for them.
 const WIDGET_DONUT_SCALE = 6;
+
+// Scheduled Me/Client Updates' own scale, by request -- "0-10 with 10 as
+// the whole circle filled", wider than the other three widgets' /6 scale
+// since these two aren't bad-news counts that should look "full" quite as
+// early.
+const INFORMATIONAL_DONUT_SCALE = 10;
 
 export function mount(container) {
   container.innerHTML = `
@@ -40,22 +51,25 @@ export function mount(container) {
       </div>
     </header>
     <p id="status" class="status">Loading...</p>
+    <div id="overdue-banner" class="tickets-dashboard-overdue-banner" hidden></div>
     <div id="critical-chart" class="resource-group" hidden></div>
     <div id="triage-chart" class="resource-group" hidden></div>
-    <div id="widget-notes" class="wsp-usage-box tickets-dashboard-notes" hidden>
-      <div class="wsp-usage-box-title">Autotask Selection Criteria</div>
-      <ul>
-        <li><strong>Critical (P1)</strong> -- open tickets (no Completed Date) with Priority = "P1 - CRITICAL", excluding monitoring alerts.</li>
-        <li><strong>Triage Now</strong> -- open tickets (no Completed Date) with Priority = "!! SET PRIORITY", excluding monitoring alerts.</li>
-      </ul>
+    <div id="new-widgets-row" class="tickets-dashboard-widgets-row" hidden>
+      <div id="do-today-chart" class="resource-group tickets-dashboard-widgets-row-item" hidden></div>
+      <div id="scheduled-me-chart" class="resource-group tickets-dashboard-widgets-row-item" hidden></div>
+      <div id="client-updates-chart" class="resource-group tickets-dashboard-widgets-row-item" hidden></div>
     </div>
   `;
 
   const refreshButton = container.querySelector('#refresh-button');
   const statusEl = container.querySelector('#status');
+  const overdueBannerEl = container.querySelector('#overdue-banner');
   const criticalChartEl = container.querySelector('#critical-chart');
   const triageChartEl = container.querySelector('#triage-chart');
-  const notesEl = container.querySelector('#widget-notes');
+  const newWidgetsRowEl = container.querySelector('#new-widgets-row');
+  const doTodayChartEl = container.querySelector('#do-today-chart');
+  const scheduledMeChartEl = container.querySelector('#scheduled-me-chart');
+  const clientUpdatesChartEl = container.querySelector('#client-updates-chart');
 
   refreshButton.addEventListener('click', load);
 
@@ -64,9 +78,13 @@ export function mount(container) {
     statusEl.hidden = false;
     statusEl.className = 'status';
     statusEl.textContent = 'Loading...';
+    overdueBannerEl.hidden = true;
     criticalChartEl.hidden = true;
     triageChartEl.hidden = true;
-    notesEl.hidden = true;
+    newWidgetsRowEl.hidden = true;
+    doTodayChartEl.hidden = true;
+    scheduledMeChartEl.hidden = true;
+    clientUpdatesChartEl.hidden = true;
 
     try {
       const res = await fetch('/api/tickets-dashboard');
@@ -84,6 +102,7 @@ export function mount(container) {
 
   function render(data) {
     statusEl.hidden = true;
+    renderOverdueBanner(data.overdueCount);
     renderTicketWidget(criticalChartEl, data.criticalOpenCount, data.criticalTickets, {
       label: 'Critical (P1)',
       sub: 'Critical/Urgent/Licenses',
@@ -100,14 +119,45 @@ export function mount(container) {
       sub: 'Might be Urgent !',
       statusColored: false, // not inherently critical -- forcing red here would be misleading
     });
-    // Notes area shown alongside the widgets, EXCEPT while Rotate is
-    // running -- by request. Pure CSS (html[data-rotate-active="true"]
-    // #widget-notes, styles.css), same attribute app.js's own
-    // renderRotateControls() already toggles on <html> for every other
-    // Rotate-aware page on this dashboard -- no extra JS/event listener
-    // needed here, this element just isn't hidden/shown by anything but
-    // the normal load()/error flow above.
-    notesEl.hidden = false;
+    // The 3 new widgets, by request, sit on one row underneath Triage Now
+    // -- same renderTicketWidget() layout as Critical (P1)/Triage Now
+    // above, just 3 narrower columns side by side (.tickets-dashboard-
+    // widgets-row in styles.css) instead of one full-width row each,
+    // wrapping to fewer per row on a narrow screen.
+    newWidgetsRowEl.hidden = false;
+    renderTicketWidget(doTodayChartEl, data.doTodayOpenCount, data.doTodayTickets, {
+      label: 'DO TODAY',
+      sub: 'P1 - Cannot Be Moved',
+      statusColored: true, // every ticket here IS a must-do-today item, same reasoning as Critical (P1)
+      showList: false, // widget + count only, by request -- no ticket list here
+    });
+    renderTicketWidget(scheduledMeChartEl, data.scheduledMeOpenCount, data.scheduledMeTickets, {
+      label: 'Scheduled Me',
+      sub: 'To Be Scheduled',
+      statusColored: false, // not inherently critical, same reasoning as Triage Now
+      showList: false,
+      donutColor: DONUT_COLORS.informational, // yellow, by request -- not a bad-news count
+      donutScale: INFORMATIONAL_DONUT_SCALE, // 0-10, by request
+    });
+    renderTicketWidget(clientUpdatesChartEl, data.clientUpdatesOpenCount, data.clientUpdatesTickets, {
+      label: 'Client Updates',
+      sub: 'Customer Note Added',
+      statusColored: false, // informational, not inherently urgent
+      showList: false,
+      donutColor: DONUT_COLORS.informational, // yellow, by request -- not a bad-news count
+      donutScale: INFORMATIONAL_DONUT_SCALE, // 0-10, by request
+    });
+  }
+
+  // "Overdue tickets" -- a count-only red banner, by request, not a widget
+  // of its own (no donut, no ticket list) -- centred at the top of the
+  // page. Shown even at 0, same "silent isn't the point, the count always
+  // reads clearly" reasoning every other always-visible count on this
+  // dashboard follows -- there's no ambiguity about whether it's still
+  // loading once the page itself has rendered.
+  function renderOverdueBanner(count) {
+    overdueBannerEl.hidden = false;
+    overdueBannerEl.textContent = `Overdue tickets: ${count}`;
   }
 
   // Originally copied from Ticket Dashboards (Test) as one single-purpose
@@ -129,7 +179,7 @@ export function mount(container) {
   // `statusColored` is the one real behavioural difference between the
   // two widgets -- see statusCellHtml()'s own comment for why Critical
   // (P1) forces every status red but Triage Now doesn't.
-  function renderTicketWidget(containerEl, count, tickets, { label, sub, statusColored }) {
+  function renderTicketWidget(containerEl, count, tickets, { label, sub, statusColored, showList = true, donutColor, donutScale = WIDGET_DONUT_SCALE }) {
     containerEl.hidden = false;
     containerEl.innerHTML = '';
 
@@ -138,12 +188,15 @@ export function mount(container) {
 
     const donutWrap = document.createElement('div');
     donutWrap.className = 'datto-card-grid critical-donut-grid';
-    const color = count > 0 ? DONUT_COLORS.danger : DONUT_COLORS.healthy;
+    // Fixed yellow (donutColor), not count-dependent red/healthy-green, for
+    // the two widgets that pass one in -- see DONUT_COLORS.informational's
+    // own comment above for why.
+    const color = donutColor || (count > 0 ? DONUT_COLORS.danger : DONUT_COLORS.healthy);
     const card = document.createElement('div');
     card.className = 'datto-card';
     card.innerHTML = `
       <div class="datto-donut-wrap critical-donut-wrap--large">
-        ${donutSvg(count, WIDGET_DONUT_SCALE, color, 180)}
+        ${donutSvg(count, donutScale, color, 180)}
         <div class="datto-donut-center"><span class="datto-donut-count">${count}</span></div>
       </div>
       <div class="datto-card-label">${escapeHtml(label)}</div>
@@ -152,10 +205,16 @@ export function mount(container) {
     donutWrap.appendChild(card);
     layout.appendChild(donutWrap);
 
-    const listWrap = document.createElement('div');
-    listWrap.className = 'critical-tickets-list';
-    listWrap.innerHTML = ticketsTableHtml(tickets, statusColored);
-    layout.appendChild(listWrap);
+    // DO TODAY/Scheduled Me/Client Updates show just the widget and count,
+    // by request -- no ticket list, and no "No tickets currently open."
+    // filler either, unlike Critical (P1)/Triage Now (unchanged, still
+    // showList: true, their default).
+    if (showList) {
+      const listWrap = document.createElement('div');
+      listWrap.className = 'critical-tickets-list';
+      listWrap.innerHTML = ticketsTableHtml(tickets, statusColored);
+      layout.appendChild(listWrap);
+    }
 
     containerEl.appendChild(layout);
   }
