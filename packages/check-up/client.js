@@ -40,13 +40,6 @@ export function mount(container) {
       <div id="handler-meta" class="check-up-handler-meta"></div>
     </div>
     <div id="weekly-hours-pct-grid" class="check-up-pct-grid" hidden></div>
-    <div id="widget-notes" class="wsp-usage-box check-up-notes" hidden>
-      <div class="wsp-usage-box-title">About This Page</div>
-      <ul>
-        <li><strong>Helpdesk Handler</strong> -- who's fielding the helpdesk right now. Chosen from Support Desk; Professional Services and Leadership Team are shown but greyed out (still selectable, just discouraged). Shared with everyone who opens this page, and survives a server restart, until someone changes it.</li>
-        <li id="hours-pct-criteria-item" hidden></li>
-      </ul>
-    </div>
   `;
 
   const refreshButton = container.querySelector('#refresh-button');
@@ -54,9 +47,7 @@ export function mount(container) {
   const handlerSectionEl = container.querySelector('#handler-section');
   const handlerSelectEl = container.querySelector('#handler-select');
   const handlerMetaEl = container.querySelector('#handler-meta');
-  const notesEl = container.querySelector('#widget-notes');
   const weeklyHoursPctGridEl = container.querySelector('#weekly-hours-pct-grid');
-  const hoursPctCriteriaItemEl = container.querySelector('#hours-pct-criteria-item');
 
   refreshButton.addEventListener('click', () => load());
 
@@ -115,7 +106,6 @@ export function mount(container) {
       activeRender.handlerOptions(lastHandlerOptions);
       activeRender.handler(lastHandler);
       activeRender.weeklyHoursPct(lastWeeklyHoursPct);
-      notesEl.hidden = false;
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
@@ -173,7 +163,6 @@ export function mount(container) {
   function renderWeeklyHoursPct(weeklyHoursPct) {
     if (!weeklyHoursPct) {
       weeklyHoursPctGridEl.hidden = true;
-      hoursPctCriteriaItemEl.hidden = true;
       return;
     }
     weeklyHoursPctGridEl.hidden = false;
@@ -190,8 +179,6 @@ export function mount(container) {
         <div class="datto-card-sub">${dateSub}</div>
       </div>
     `;
-    hoursPctCriteriaItemEl.hidden = false;
-    hoursPctCriteriaItemEl.innerHTML = `<strong>Hours %</strong> -- ${escapeHtml(formatWeekRange(weeklyHoursPct.weekFrom, weeklyHoursPct.weekTo))} -- Support Desk`;
   }
 
   function formatPct(n) {
@@ -236,7 +223,6 @@ export function mount(container) {
     renderHandlerOptions(lastHandlerOptions);
     renderHandler(lastHandler);
     renderWeeklyHoursPct(lastWeeklyHoursPct);
-    notesEl.hidden = false;
     // Still refreshes in the background -- cached values restore instantly
     // so the page never flashes blank on a remount, but every value here
     // (especially the Handler, which another tab may have changed) can be

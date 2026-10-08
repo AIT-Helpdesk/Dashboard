@@ -13,15 +13,6 @@ const {
   fetchBillingItemsByTimeEntryId,
   resolveChargeableValue,
 } = require('@dashboard/autotask-client');
-// For the Billable $ box's own admin-only visibility, by request ("make
-// that Billable $ table only visible to admins") -- same "everyone can
-// read the page, only the admin sees/does the extra bit" precedent
-// @dashboard/updates and @dashboard/workshop already established (an
-// `isAdmin`-style flag in the JSON response, client.js renders around
-// it), not a route-level restrictedTo -- the rest of this page stays
-// open to everyone, only this one box is admin-only.
-const { isDashboardAdmin } = require('@dashboard/shell/registry.js');
-
 // A technician's normal working day, by request -- "7.6 for all (for now)".
 // Flat and global for everyone EXCEPT the real per-resource overrides
 // below.
@@ -704,14 +695,6 @@ router.get('/', async (req, res) => {
   const weekdayCount = countWeekdays(from, to);
   const fromIso = `${from}T00:00:00.000Z`;
   const toIso = `${to}T00:00:00.000Z`;
-  // Billable $ box is admin-only, by request -- everyone else's response
-  // just carries isAdmin: false and empty maps below (client.js never
-  // renders the box at all when isAdmin is false, so nothing is actually
-  // shown to anyone -- this only skips the extra Roles/BillingItems/
-  // WorkTypeModifiers fetches for a non-admin viewer who couldn't see the
-  // result anyway).
-  const isAdmin = isDashboardAdmin(req);
-
   try {
     const client = await getClient();
     const [{ selected, leaveEntries, ticketEntries }, aittimeTickets] = await Promise.all([
@@ -720,7 +703,7 @@ router.get('/', async (req, res) => {
     ]);
 
     if (selected.length === 0) {
-      return res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, isAdmin, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
+      return res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, resources: [], aittime: [], clientContracts: [], clientContractsBillable: [], clientContractsNonBillable: [] });
     }
 
     // Depends on `selected` (each resource's own locationID), so this
@@ -765,16 +748,13 @@ router.get('/', async (req, res) => {
     // computed for both calls below since they share one function), by
     // request ("use these data sources and formulas for 'awaiting approve
     // and post', posted and invoiced to show the dollar value of the times
-    // shown"). Admin-only, same gating as the Billable $ box itself always
-    // had -- a non-admin's response carries empty maps, so
-    // buildClientContractSplitHours() below just produces real $0 rows
-    // rather than skipping the shape entirely.
+    // shown").
     const [clientCtx, roleRatesById, billingItemByTeId] = await Promise.all([
       fetchClientTicketContext(client, [...new Set(ticketEntries.map((e) => e.ticketID))]),
-      isAdmin ? fetchRoleHourlyRates(client) : Promise.resolve(new Map()),
-      isAdmin ? fetchBillingItemsByTimeEntryId(client, ticketEntries.map((e) => e.id)) : Promise.resolve(new Map()),
+      fetchRoleHourlyRates(client),
+      fetchBillingItemsByTimeEntryId(client, ticketEntries.map((e) => e.id)),
     ]);
-    const workTypeModifiersById = isAdmin ? await fetchWorkTypeModifiers(client, ticketEntries.map((e) => e.billingCodeID)) : new Map();
+    const workTypeModifiersById = await fetchWorkTypeModifiers(client, ticketEntries.map((e) => e.billingCodeID));
     const clientContracts = clientCtx ? buildClientContractHours(clientCtx, ticketEntries) : [];
     const clientContractsBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, true, roleRatesById, workTypeModifiersById, billingItemByTeId) : [];
     const clientContractsNonBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, false, roleRatesById, workTypeModifiersById, billingItemByTeId) : [];
@@ -806,7 +786,7 @@ router.get('/', async (req, res) => {
       };
     });
 
-    res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, isAdmin, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
+    res.json({ from, to, team, weekdayCount, normalHoursPerDay: NORMAL_HOURS_PER_DAY, resources, aittime, clientContracts, clientContractsBillable, clientContractsNonBillable });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

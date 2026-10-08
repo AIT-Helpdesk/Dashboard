@@ -2017,7 +2017,7 @@ export function mount(container) {
       table.className = 'ingram-subscriptions-table';
       table.innerHTML = `
         <thead>
-          <tr><th>Subscription</th><th>Status</th><th>Auto-Renewal</th><th>Licenses</th><th>Term / Billing Period</th><th>Created</th><th>Renews</th><th>Expires</th></tr>
+          <tr><th>Subscription</th><th>Status</th><th>Auto-Renewal</th><th>Licenses</th><th>Term / Billing Period</th><th>Created</th><th>Renews / Expires</th></tr>
         </thead>
         <tbody>${subscriptionRowsHtml(client.subscriptions)}</tbody>
       `;
@@ -2038,8 +2038,7 @@ export function mount(container) {
         <td class="ticket-number">${s.licenseCount ?? ''}</td>
         <td class="ticket-number">${formatPeriod(s.term)} / ${formatPeriod(s.billingPeriod)}</td>
         <td class="ticket-number">${formatDate(s.creationDate)}</td>
-        <td class="ticket-number">${formatDate(s.renewalDate)}</td>
-        <td class="ticket-number">${formatDate(s.expirationDate)}</td>
+        <td class="ticket-number">${s.autoRenews && s.renewalDate ? `<span class="cell-flag-green">${formatDate(s.renewalDate)}</span>` : s.expirationDate ? `<span class="cell-flag-red">${formatDate(s.expirationDate)}</span>` : ''}</td>
       </tr>`
       )
       .join('');

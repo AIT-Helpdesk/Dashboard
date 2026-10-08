@@ -248,6 +248,53 @@ Get-ScheduledTaskInfo -TaskName "AmbientStretyAutotaskSync"   # LastTaskResult: 
 Get-Content C:\apps\autotask-dashboard-git\logs\strety-autotask-sync.log
 ```
 
+## Setting up the Contract Checks Ingram sync (Windows Task Scheduler)
+
+Runs the same `runSync()` the Contract Checks page's own "Check IM for More" button calls, once a day, unattended -- so the orders list is already current before anyone opens the page. No separate `.env`/connect step needed, unlike the Strety automation above -- `packages/contract-checks/sync.js` reuses the main dashboard's own already-configured Autotask/Ingram credentials (it loads the root `.env`, same file `server.js` does), so this is just a scheduled run of a script that already works today, confirmed with a real standalone run (`node packages\contract-checks\sync.js`, exit code 0, "Synced N new, refreshed N outstanding, N new terminations"). Do this once the main dashboard is already deployed and running.
+
+### 1. Create the scheduled task
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\apps\autotask-dashboard-git\logs | Out-Null
+
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c node packages\contract-checks\sync.js > logs\contract-checks-sync.log 2>&1' `
+  -WorkingDirectory "C:\apps\autotask-dashboard-git"
+
+$trigger = New-ScheduledTaskTrigger -Daily -At 6am
+
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "AmbientContractChecksSync" -Action $action -Trigger $trigger -Settings $settings `
+  -Description "Daily: pull new/changed Ingram Micro orders into Contract Checks (same as its own Check IM for More button)"
+```
+
+Runs as SYSTEM by default (no `-User` specified), same reasoning as the Strety automation's own task above -- only needs filesystem access to its own package folder and outbound HTTPS. The log is overwritten each run (`>` not `>>`) -- `data.db` is the real durable record of what was synced; the log is only for diagnosing a failed run. Pick a time that suits the business day (6am here, so the list is current before anyone's at a desk) -- change `-At` to taste.
+
+### 2. Verify it actually works before waiting for the first real run
+
+```powershell
+Start-ScheduledTask -TaskName "AmbientContractChecksSync"
+Start-Sleep -Seconds 15
+Get-ScheduledTaskInfo -TaskName "AmbientContractChecksSync"   # LastTaskResult: 0 means success
+Get-Content C:\apps\autotask-dashboard-git\logs\contract-checks-sync.log
+```
+
+**Changing the schedule later**: same real gotcha as the Strety automation above applies -- `Set-ScheduledTask -Trigger` doesn't reliably swap a trigger in place, so unregister and re-register together as one paste, then re-run the `Get-ScheduledTask` verify step immediately to confirm it actually exists:
+
+```powershell
+Unregister-ScheduledTask -TaskName "AmbientContractChecksSync" -Confirm:$false
+
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c node packages\contract-checks\sync.js > logs\contract-checks-sync.log 2>&1' `
+  -WorkingDirectory "C:\apps\autotask-dashboard-git"
+$trigger = New-ScheduledTaskTrigger -Daily -At 6am
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "AmbientContractChecksSync" -Action $action -Trigger $trigger -Settings $settings `
+  -Description "Daily: pull new/changed Ingram Micro orders into Contract Checks (same as its own Check IM for More button)"
+
+Get-ScheduledTask -TaskName "AmbientContractChecksSync"
+```
+
 ## One-time data sync -- product_mappings' real Microsoft SKU GUIDs
 
 Needed once, the first deploy after this was added (not part of the normal "Updating later" flow below -- `git pull` brings the CODE change, `db.js`'s own `migrateAddMsSkuId()` adds the empty COLUMN automatically on next start, but the real per-row DATA (every SKU's actual `ms_sku_id`, a few corrected/new rows) only exists in this chat session and has to be applied by hand, same reasoning as every other real per-environment `data.db` on this dashboard):
