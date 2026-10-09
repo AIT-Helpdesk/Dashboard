@@ -17,6 +17,7 @@ const {
   setTemplate,
   getItem,
   listProductMappings,
+  getSyncState,
 } = require('./db.js');
 const { runSync, PROCESS_TYPE, resolveTicketAutotaskId } = require('./sync.js');
 
@@ -671,6 +672,20 @@ router.post('/sync', async (req, res) => {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// The "(IM: DD/MM/YYYY)" label next to "Hide Clients w/only Renewal &
+// Pending", by request -- when sync.js (above, or the daily scheduled
+// task -- see README/DEPLOYMENT.md) last actually ran, successfully or
+// not, so a stale list is obvious at a glance rather than something you
+// only find out by noticing nothing's changed. getSyncState() itself
+// never fails (creates a fresh, all-null row on first call -- same
+// bootstrap-row convention every other sync_state read already relies
+// on), so lastRunAt is simply null until the very first sync this
+// install has ever run.
+router.get('/sync-state', (req, res) => {
+  const state = getSyncState(PROCESS_TYPE);
+  res.json({ lastRunAt: state.last_run_at || null });
 });
 
 // The "Change Report" popup, by request -- the real change HISTORY (which

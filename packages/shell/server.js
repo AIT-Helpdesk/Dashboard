@@ -494,38 +494,52 @@ function collectMenuPlacedPageIds(tree) {
   return ids;
 }
 
-// Reserved id for the synthetic "Missing Pages" category below --
-// never actually written to nav-layout.json (see the PUT route's own
-// strip, further down), so this is the one place that needs to agree
-// with itself on what it's called.
+// Reserved id for the "Missing Pages" category below -- this is the one
+// place that needs to agree with itself on what it's called, including
+// matching a REAL category someone made by hand (e.g. via .env's own
+// MENUCATEGORY_MISSING_PAGES, exactly what this was built to recognise
+// -- see the GET route's own comment for why that's merged into rather
+// than treated as a collision).
 const MISSING_PAGES_CATEGORY_ID = 'missing-pages';
 
 app.get('/api/nav-layout', (req, res) => {
   const admin = isDashboardAdmin(req);
   const rawTree = readNavLayout() || [];
-  // Computed fresh on every read, never persisted -- a safety net, by
-  // request, so a real page can never silently become unreachable from
-  // the sidebar just because nobody filed it anywhere yet. Admin-only
-  // (hidden: true, same as any other hidden category -- stripped from
-  // a non-admin's own tree by stripHiddenForUser below, so there's no
-  // point computing it for them at all) and only appended when there's
-  // actually at least one orphaned page -- an always-empty category
-  // permanently cluttering the admin's sidebar would defeat the point.
+  // Computed fresh on every read -- a safety net, by request, so a real
+  // page can never silently become unreachable from the sidebar just
+  // because nobody filed it anywhere yet. Admin-only (hidden: true when
+  // created fresh below -- stripped from a non-admin's own tree by
+  // stripHiddenForUser below either way, so there's no point computing
+  // this for them at all) and only appended when there's actually at
+  // least one orphaned page -- an always-empty category permanently
+  // cluttering the admin's sidebar would defeat the point.
+  //
+  // If a REAL "Missing Pages" category already exists (same id/label --
+  // e.g. hand-made via .env's own MENUCATEGORY_MISSING_PAGES, by
+  // request, specifically so it can carry its own access/hide rule the
+  // same way "Testing"/"Trackers - Complete" etc already do), the
+  // computed orphans are appended into THAT one instead of a second,
+  // colliding node. Deliberately NOT stripped back out on save (PUT,
+  // below) -- if the admin saves without first dragging an orphan
+  // elsewhere, it simply becomes a real, persisted member of this
+  // category from then on, which is a perfectly good outcome (it's now
+  // genuinely filed, just into this category specifically), not a bug
+  // to guard against. Next read, collectMenuPlacedPageIds() already
+  // counts it as placed (this category's own children count, same as
+  // any other), so it's never computed as missing again either way --
+  // the whole thing self-stabilizes with no special-casing needed on
+  // the write side.
   let tree = rawTree;
   if (admin) {
     const placedIds = collectMenuPlacedPageIds(rawTree);
     const missingPages = pages.filter((p) => !placedIds.has(p.id));
     if (missingPages.length > 0) {
-      tree = [
-        ...rawTree,
-        {
-          type: 'category',
-          id: MISSING_PAGES_CATEGORY_ID,
-          label: 'Missing Pages',
-          hidden: true,
-          children: missingPages.map((p) => ({ type: 'page', id: p.id })),
-        },
-      ];
+      const missingNodes = missingPages.map((p) => ({ type: 'page', id: p.id }));
+      const existingIndex = rawTree.findIndex((n) => n.type === 'category' && n.id === MISSING_PAGES_CATEGORY_ID);
+      tree =
+        existingIndex !== -1
+          ? rawTree.map((n, i) => (i === existingIndex ? { ...n, children: [...n.children, ...missingNodes] } : n))
+          : [...rawTree, { type: 'category', id: MISSING_PAGES_CATEGORY_ID, label: 'Missing Pages', hidden: true, children: missingNodes }];
     }
   }
   res.json({ tree: admin ? tree : stripHiddenForUser(tree, req.session.user), editable: admin });
@@ -542,15 +556,11 @@ app.put('/api/nav-layout', express.json(), (req, res) => {
   if (!Array.isArray(req.body?.tree)) {
     return res.status(400).json({ error: 'Body must be { tree: [...] }.' });
   }
-  // The synthetic "Missing Pages" category (see GET above) is never
-  // saved, however the client sent it back -- whole, edited, emptied,
-  // whatever. Any page the admin actually dragged OUT of it already
-  // moved into a real part of the tree by the time this arrives (that's
-  // a normal moveTo() on a real node, untouched here); this only drops
-  // the wrapper category itself, which gets recomputed fresh next load
-  // from whatever's STILL actually unplaced at that point.
-  const treeToSave = req.body.tree.filter((n) => n.id !== MISSING_PAGES_CATEGORY_ID);
-  writeNavLayout(treeToSave);
+  // No special-casing needed for "Missing Pages" here -- see GET
+  // above's own comment for why saving it as a real category (if the
+  // admin doesn't drag an orphan elsewhere first) is a fine outcome,
+  // not something to strip back out.
+  writeNavLayout(req.body.tree);
   res.json({ ok: true });
 });
 
