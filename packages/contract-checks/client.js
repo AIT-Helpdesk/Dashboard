@@ -158,6 +158,7 @@ export function mount(container) {
           <label for="hide-renewal-or-processing-only-input" class="inline-checkbox-label">
             <input type="checkbox" id="hide-renewal-or-processing-only-input" /> Hide Clients w/only Renewal & Pending
           </label>
+          <span id="im-last-sync" class="inline-subtext"></span>
         </div>
       </form>
     </header>
@@ -180,6 +181,7 @@ export function mount(container) {
   const includeAllRenewalsInput = container.querySelector('#include-all-renewals-input');
   const showAllDoneInput = container.querySelector('#show-all-done-input');
   const hideRenewalOrProcessingOnlyInput = container.querySelector('#hide-renewal-or-processing-only-input');
+  const imLastSyncEl = container.querySelector('#im-last-sync');
   const refreshButton = container.querySelector('#refresh-button');
   const syncButton = container.querySelector('#sync-button');
   const changeReportButton = container.querySelector('#change-report-button');
@@ -251,6 +253,7 @@ export function mount(container) {
       const result = await fetchJson('/api/contract-checks/sync', 'POST');
       statusEl.textContent = result.message || 'Sync complete.';
       await load();
+      fetchImLastSync();
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
@@ -1805,6 +1808,37 @@ export function mount(container) {
   activeRender = render;
 
   if (lastData) render(lastData);
+
+  // The "(IM: DD/MM/YYYY)" label, by request -- independent of the main
+  // "no auto-load" convention above (lastData/Refresh), since this is
+  // just a single cheap read of when sync.js (the "Check IM for More"
+  // button, or the daily scheduled task) last actually ran, not the
+  // page's own heavier ticket data. Always fetched fresh on mount,
+  // regardless of lastData -- best-effort, same "silently show nothing
+  // if it fails" reasoning every other small status fetch on this
+  // dashboard already uses.
+  fetchImLastSync();
+  async function fetchImLastSync() {
+    try {
+      const res = await fetch('/api/contract-checks/sync-state');
+      const data = await res.json();
+      if (!res.ok) return;
+      imLastSyncEl.textContent = data.lastRunAt ? `(IM: ${formatImDate(data.lastRunAt)})` : '';
+    } catch {
+      // Best-effort -- the label just stays blank if this fails.
+    }
+  }
+
+  // DD/MM/YYYY specifically (not toLocaleDateString()'s own locale-
+  // dependent ordering, which would show MM/DD/YYYY for an en-US
+  // browser) -- AEST-anchored (Australia/Brisbane, no DST in Queensland),
+  // same convention formatDate() above already uses for a date-only
+  // value; this one's a real timestamp (sync.js's own nowIso()), so it's
+  // genuinely a moment that needs a timezone to resolve to a calendar
+  // date, not just a label.
+  function formatImDate(iso) {
+    return new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(iso));
+  }
 
   async function fetchJson(url, method, body) {
     const res = await fetch(url, {
