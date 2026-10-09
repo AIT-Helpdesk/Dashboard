@@ -473,10 +473,62 @@ app.get('/pages/:id/client.js', (req, res) => {
   res.type('application/javascript').sendFile(path.join(page.root, page.client));
 });
 
+// Every real page id currently placed SOMEWHERE in the tree -- a root
+// entry, or a child of some category. One level of recursion only,
+// same assumption every other tree walk in this codebase already
+// makes (categories never nest). Deliberately does NOT look inside any
+// tabbed page's own tab list -- being shown as a TAB is a separate,
+// page-local concept from being IN THE SHARED MENU, by request ("every
+// page should exist in the menu somewhere... add them even if they are
+// in a tab page").
+function collectMenuPlacedPageIds(tree) {
+  const ids = new Set();
+  for (const node of tree) {
+    if (node.type === 'page') ids.add(node.id);
+    else if (node.type === 'category' && Array.isArray(node.children)) {
+      for (const child of node.children) {
+        if (child.type === 'page') ids.add(child.id);
+      }
+    }
+  }
+  return ids;
+}
+
+// Reserved id for the synthetic "Missing Pages" category below --
+// never actually written to nav-layout.json (see the PUT route's own
+// strip, further down), so this is the one place that needs to agree
+// with itself on what it's called.
+const MISSING_PAGES_CATEGORY_ID = 'missing-pages';
+
 app.get('/api/nav-layout', (req, res) => {
   const admin = isDashboardAdmin(req);
-  const rawTree = readNavLayout();
-  res.json({ tree: admin ? rawTree : stripHiddenForUser(rawTree, req.session.user), editable: admin });
+  const rawTree = readNavLayout() || [];
+  // Computed fresh on every read, never persisted -- a safety net, by
+  // request, so a real page can never silently become unreachable from
+  // the sidebar just because nobody filed it anywhere yet. Admin-only
+  // (hidden: true, same as any other hidden category -- stripped from
+  // a non-admin's own tree by stripHiddenForUser below, so there's no
+  // point computing it for them at all) and only appended when there's
+  // actually at least one orphaned page -- an always-empty category
+  // permanently cluttering the admin's sidebar would defeat the point.
+  let tree = rawTree;
+  if (admin) {
+    const placedIds = collectMenuPlacedPageIds(rawTree);
+    const missingPages = pages.filter((p) => !placedIds.has(p.id));
+    if (missingPages.length > 0) {
+      tree = [
+        ...rawTree,
+        {
+          type: 'category',
+          id: MISSING_PAGES_CATEGORY_ID,
+          label: 'Missing Pages',
+          hidden: true,
+          children: missingPages.map((p) => ({ type: 'page', id: p.id })),
+        },
+      ];
+    }
+  }
+  res.json({ tree: admin ? tree : stripHiddenForUser(tree, req.session.user), editable: admin });
 });
 
 app.put('/api/nav-layout', express.json(), (req, res) => {
@@ -490,7 +542,15 @@ app.put('/api/nav-layout', express.json(), (req, res) => {
   if (!Array.isArray(req.body?.tree)) {
     return res.status(400).json({ error: 'Body must be { tree: [...] }.' });
   }
-  writeNavLayout(req.body.tree);
+  // The synthetic "Missing Pages" category (see GET above) is never
+  // saved, however the client sent it back -- whole, edited, emptied,
+  // whatever. Any page the admin actually dragged OUT of it already
+  // moved into a real part of the tree by the time this arrives (that's
+  // a normal moveTo() on a real node, untouched here); this only drops
+  // the wrapper category itself, which gets recomputed fresh next load
+  // from whatever's STILL actually unplaced at that point.
+  const treeToSave = req.body.tree.filter((n) => n.id !== MISSING_PAGES_CATEGORY_ID);
+  writeNavLayout(treeToSave);
   res.json({ ok: true });
 });
 

@@ -1,11 +1,11 @@
 {
-  "name": "@dashboard/client-info-tabs",
+  "name": "@dashboard/client-tabs",
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
   "dashboardPage": {
-    "id": "client-info-tabs",
-    "label": "Client Info",
+    "id": "client-tabs",
+    "label": "CLIENT",
     "client": "client.js",
     "server": "server.js",
     "tabbed": true

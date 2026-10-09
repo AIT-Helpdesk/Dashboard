@@ -60,6 +60,23 @@ function registerPage(pageDescriptor) {
   mountPageRouter(pageDescriptor);
 }
 
+// The mirror of registerPage() above, by request (Tab Page Builder's own
+// DELETE route, for deleting a tab page outright once it has no tabs
+// left) -- removes a page descriptor from the live registry so it stops
+// appearing in the sidebar/pages-registry.js/pages/:id/client.js
+// immediately, same "no separate cache to invalidate" reasoning as
+// registerPage()'s own comment. Does NOT unmount that page's own
+// /api/<id> Express router -- Express has no supported way to remove a
+// mounted middleware at runtime, so if the deleted page had its own
+// server.js, that router stays mounted in memory, inert, until the next
+// restart. Harmless: by the time this is called the page's own package
+// directory is already gone from disk, so there's nothing left for
+// anyone to reach through it even if they somehow still had the URL.
+function unregisterPage(id) {
+  const index = pages.findIndex((p) => p.id === id);
+  if (index !== -1) pages.splice(index, 1);
+}
+
 // Indirection so this module (which has no Express `app` of its own --
 // that lives in server.js) can still trigger mounting a page's own
 // router. server.js calls setMountPageRouterImpl() once, right after it
@@ -443,6 +460,7 @@ module.exports = {
   pages,
   discoverPages,
   registerPage,
+  unregisterPage,
   setMountPageRouterImpl,
   mountPageRouter,
   pageVisibleTo,
