@@ -369,5 +369,11 @@
     "type": "page",
     "id": "client-financials-tabs",
     "label": "Client Finance"
+  },
+  {
+    "type": "category",
+    "id": "missing-pages",
+    "label": "Missing Pages",
+    "children": []
   }
 ]
