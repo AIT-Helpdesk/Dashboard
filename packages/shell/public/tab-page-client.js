@@ -79,6 +79,18 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
   let permanentTabIds = [];
   let isPermanentAdmin = false;
 
+  // Built-in tabs the admin has removed for everyone -- by request
+  // ("give me the ability to remove tabs from a tab page"). DEFAULT_TABS/
+  // DEFAULT_TAB_IDS themselves never change (that's this page's own
+  // generated client.js's fixed defaultTabs config); this is a separate,
+  // shared exclusion list layered on top (GET/PUT <apiBase>/removed-
+  // default-tabs, backed by its own small JSON file, same admin-gated
+  // shape permanentTabIds already uses). Starts empty, filled in by
+  // fetchRemovedDefaultTabs() once mount() runs -- same "render
+  // immediately with what's already known, let the fetch fill in once it
+  // resolves" pattern as permanentTabIds.
+  let removedDefaultTabIds = [];
+
   // Reorderable (drag-and-drop, see wireDragReorder below), by request --
   // per-BROWSER, not shared -- everyone can arrange their OWN view of
   // whichever tabs they can currently see (built-in + permanent + their
@@ -171,6 +183,7 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     renderTabBar();
     selectTab(lastActiveTabId);
     fetchPermanentTabs();
+    fetchRemovedDefaultTabs();
     fetchHelpText();
 
     async function fetchPermanentTabs() {
@@ -194,6 +207,30 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
       } catch {
         // Best-effort -- permanent tabs just won't show for this load if
         // the fetch fails; built-in + personal tabs still work regardless.
+      }
+    }
+
+    async function fetchRemovedDefaultTabs() {
+      try {
+        const res = await fetch(`${apiBase}/removed-default-tabs`);
+        const data = await res.json();
+        if (!res.ok) return;
+        removedDefaultTabIds = (data.tabIds || []).filter((tabId) => DEFAULT_TAB_IDS.has(tabId));
+        // A removed default tab shouldn't still be sitting in tabOrder
+        // (can happen if it was removed from a DIFFERENT browser since
+        // this one last loaded) -- drop it, and jump off it if it was
+        // somehow the active tab.
+        const before = tabOrder.length;
+        tabOrder = tabOrder.filter((tabId) => !removedDefaultTabIds.includes(tabId));
+        if (tabOrder.length !== before) saveTabOrder(tabOrder);
+        if (removedDefaultTabIds.includes(lastActiveTabId)) {
+          selectTab(tabOrder[0]);
+        } else {
+          renderTabBar();
+        }
+      } catch {
+        // Best-effort -- same reasoning as fetchPermanentTabs() above;
+        // every built-in tab just shows as normal if this fails.
       }
     }
 
@@ -221,6 +258,7 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     // than cached, since all three sources can change at runtime.
     function allTabsById() {
       const map = new Map(DEFAULT_TABS_BY_ID);
+      for (const tabId of removedDefaultTabIds) map.delete(tabId);
       for (const tabId of permanentTabIds) {
         const page = PAGES_BY_ID.get(tabId);
         if (page) map.set(tabId, { id: tabId, label: page.label });
@@ -275,10 +313,11 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
             selectTab(tabId);
           });
           // Admin-only right-click: make a personal tab permanent for
-          // everyone, or remove an existing permanent tab's permanent
-          // status -- never on the built-in tabs or Help, which are
-          // always fixed either way.
-          if (isPermanentAdmin && tabId !== HELP_TAB.id && !DEFAULT_TAB_IDS.has(tabId)) {
+          // everyone, remove an existing permanent tab's permanent
+          // status, or remove a built-in tab outright (see
+          // showTabContextMenu() below for which option a given tab
+          // actually gets) -- never on Help, which is always fixed.
+          if (isPermanentAdmin && tabId !== HELP_TAB.id) {
             btn.addEventListener('contextmenu', (e) => {
               e.preventDefault();
               showTabContextMenu(e.clientX, e.clientY, tabId);
@@ -330,8 +369,10 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         btn.addEventListener('dragend', (e) => {
           btn.classList.remove('dragging');
           if (e.dataTransfer.dropEffect !== 'none') return; // dropped somewhere valid -- already handled by that drop
-          if (DEFAULT_TAB_IDS.has(tabId) || tabId === HELP_TAB.id) return; // fixed tabs are never drag-removable
-          if (permanentTabIds.includes(tabId)) {
+          if (tabId === HELP_TAB.id) return; // Help is always fixed
+          if (DEFAULT_TAB_IDS.has(tabId)) {
+            if (isPermanentAdmin) removeDefaultTab(tabId); // admin-only, same as right-click's own "Remove This Tab"
+          } else if (permanentTabIds.includes(tabId)) {
             if (isPermanentAdmin) removePermanent(tabId);
           } else {
             removeExtraTab(tabId);
@@ -402,6 +443,15 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
 
     function addExtraTab(pageId) {
       if (pageId === id) return; // dragging this page itself onto its own tab bar -- no-op
+      // A removed built-in tab dragged back in from the sidebar restores
+      // it, rather than treating it as "already a tab here" (it isn't,
+      // any more) -- a second, more discoverable way back besides the
+      // Help tab's own "Restore" button below, for whichever page still
+      // independently has a sidebar entry of its own.
+      if (DEFAULT_TAB_IDS.has(pageId) && removedDefaultTabIds.includes(pageId)) {
+        restoreDefaultTab(pageId);
+        return;
+      }
       if (DEFAULT_TAB_IDS.has(pageId) || extraTabIds.includes(pageId) || permanentTabIds.includes(pageId)) {
         selectTab(pageId); // already a tab here -- just jump to it
         return;
@@ -474,6 +524,53 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
       renderTabBar();
     }
 
+    // Removing/restoring a BUILT-IN tab, by request -- unlike
+    // removePermanent() above, there's no personal-tab fallback here:
+    // DEFAULT_TAB_IDS membership never changes (that's the page's own
+    // fixed defaultTabs config), only whether a given id is currently
+    // excluded via removedDefaultTabIds, so removing one simply drops it
+    // from view for everyone until an admin restores it (right-click
+    // here, drag it back in from the sidebar if it still has its own
+    // entry there -- see addExtraTab() -- or the Help tab's own "Removed
+    // tabs" list below).
+    async function saveRemovedDefaultTabIds(nextIds) {
+      try {
+        const res = await fetch(`${apiBase}/removed-default-tabs`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tabIds: nextIds }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        return true;
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+        return false;
+      }
+    }
+
+    async function removeDefaultTab(pageId) {
+      if (removedDefaultTabIds.includes(pageId)) return;
+      const next = [...removedDefaultTabIds, pageId];
+      if (!(await saveRemovedDefaultTabIds(next))) return;
+      removedDefaultTabIds = next;
+      tabOrder = tabOrder.filter((tabId) => tabId !== pageId);
+      saveTabOrder(tabOrder);
+      if (lastActiveTabId === pageId) selectTab(tabOrder[0]);
+      else renderTabBar();
+    }
+
+    async function restoreDefaultTab(pageId) {
+      if (!removedDefaultTabIds.includes(pageId)) return;
+      const next = removedDefaultTabIds.filter((tabId) => tabId !== pageId);
+      if (!(await saveRemovedDefaultTabIds(next))) return;
+      removedDefaultTabIds = next;
+      if (!tabOrder.includes(pageId)) tabOrder.push(pageId);
+      saveTabOrder(tabOrder);
+      renderTabBar();
+      if (lastActiveTabId === HELP_TAB.id) renderHelpTab(); // "Removed tabs" list needs to drop this one too
+    }
+
     // Admin-only right-click menu (Make Permanent / Remove Permanent
     // Status) -- a small, self-contained popup, same visual language
     // (.nav-context-menu/.nav-context-menu-item) the sidebar's own
@@ -496,6 +593,7 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     }
     function showTabContextMenu(x, y, pageId) {
       closeTabContextMenu();
+      const isDefault = DEFAULT_TAB_IDS.has(pageId);
       const permanent = permanentTabIds.includes(pageId);
 
       const menu = document.createElement('div');
@@ -506,11 +604,15 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'nav-context-menu-item';
-      btn.textContent = permanent ? 'Remove Permanent Status' : 'Make Permanent for Everyone';
+      // A built-in tab only ever gets ONE action here (remove it) -- it's
+      // never "permanent" in the same sense as a dragged-in tab (it's
+      // already fixed by default), so Make/Remove Permanent don't apply.
+      btn.textContent = isDefault ? 'Remove This Tab' : permanent ? 'Remove Permanent Status' : 'Make Permanent for Everyone';
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         closeTabContextMenu();
-        if (permanent) removePermanent(pageId);
+        if (isDefault) removeDefaultTab(pageId);
+        else if (permanent) removePermanent(pageId);
         else makePermanent(pageId);
       });
       menu.appendChild(btn);
@@ -677,8 +779,27 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
       const adminNote = isPermanentAdmin
         ? `<p class="inline-subtext">You're the dashboard admin: right-click any tab you've added to make it
             permanent for everyone (or remove that status again), or drag it back out of the strip entirely to
-            the same effect. You can also rename this page itself from the sidebar (right-click "${escapeHtml(label)}").</p>`
+            the same effect. Right-click one of this page's own BUILT-IN tabs to remove it for everyone too (or
+            drag it out the same way) -- restore it again from the list below, or by dragging that page back in
+            from the sidebar if it still has its own entry there. You can also rename this page itself from the
+            sidebar (right-click "${escapeHtml(label)}").</p>`
         : '';
+      // Admin-only, by request -- a removed built-in tab doesn't
+      // necessarily still have its own sidebar entry to drag back in
+      // from (see addExtraTab()'s own restore path), so this is the
+      // guaranteed way back regardless. Only ever lists ids still in
+      // removedDefaultTabIds -- resolved against DEFAULT_TABS_BY_ID
+      // (not allTabsById(), which excludes them) since that's the one
+      // map that still carries a removed tab's own label.
+      const removedDefaultTabsHtml =
+        isPermanentAdmin && removedDefaultTabIds.length > 0
+          ? `<p class="inline-subtext">Removed tabs: ${removedDefaultTabIds
+              .map((tabId) => {
+                const tab = DEFAULT_TABS_BY_ID.get(tabId);
+                return tab ? `${escapeHtml(tab.label)} <button type="button" class="button-link button-link--small" data-restore-tab-id="${tabId}">Restore</button>` : '';
+              })
+              .join(' &middot; ')}</p>`
+          : '';
       // Hidden from normal users for now, by request -- still shown to the
       // admin (grouped with adminNote below it, same isPermanentAdmin
       // gate) since it's actually explaining THEIR own drag-to-add-a-
@@ -706,6 +827,7 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
           ${editButtonHtml}
           ${dragHelpHtml}
           ${adminNote}
+          ${removedDefaultTabsHtml}
         </div>
       `;
       const editBtn = tabContentEl.querySelector('#edit-help-btn');
@@ -715,6 +837,9 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
           renderHelpTab();
         });
       }
+      tabContentEl.querySelectorAll('[data-restore-tab-id]').forEach((btn) => {
+        btn.addEventListener('click', () => restoreDefaultTab(btn.dataset.restoreTabId));
+      });
     }
 
     function escapeHtml(str) {
