@@ -244,6 +244,27 @@ export function mount(container) {
         if (entries.length > 0) {
           td.querySelector('.calendar-cell-daynum').addEventListener('click', () => openDayPopup(dayKey, entries));
         }
+        // Drop target for drag-and-drop (see wireServiceCallEntries()'s own
+        // dragstart above) -- any day cell, including the greyed-out
+        // outside-month filler ones (real days, just not in the month
+        // currently shown; dropping there moves the call into an
+        // adjacent month, same as dragging on any other real calendar
+        // app). dragover must call preventDefault() -- a bare <td> isn't a
+        // drop target by default, and the browser silently refuses the
+        // drop (no 'drop' event at all) without it.
+        td.addEventListener('dragover', (ev) => {
+          ev.preventDefault();
+          ev.dataTransfer.dropEffect = 'move';
+          td.classList.add('calendar-cell--drag-over');
+        });
+        td.addEventListener('dragleave', () => td.classList.remove('calendar-cell--drag-over'));
+        td.addEventListener('drop', (ev) => {
+          ev.preventDefault();
+          td.classList.remove('calendar-cell--drag-over');
+          const scId = ev.dataTransfer.getData('text/plain');
+          const entry = entryById.get(scId);
+          if (entry) moveServiceCallToDay(entry, dayKey);
+        });
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
@@ -268,6 +289,17 @@ export function mount(container) {
         const entry = entryById.get(el.dataset.scId);
         if (entry) openServiceCallMenu(el, entry);
       });
+      // Drag-and-drop onto a different day, by request -- just the id in
+      // dataTransfer (not the whole entry), same "entryHtml() only embeds
+      // the id" convention entryById itself already exists for; the drop
+      // handler (wired per-cell in render() below) looks the entry back up
+      // the same way the click handler above does.
+      el.addEventListener('dragstart', (ev) => {
+        ev.dataTransfer.setData('text/plain', el.dataset.scId);
+        ev.dataTransfer.effectAllowed = 'move';
+        el.classList.add('calendar-entry--dragging');
+      });
+      el.addEventListener('dragend', () => el.classList.remove('calendar-entry--dragging'));
     });
   }
 
@@ -343,12 +375,12 @@ export function mount(container) {
       // above), but a middle-click or right-click -> "open in new tab"
       // never fires that JS at all, so those still go straight to the
       // ticket natively, same as any other real link.
-      return `<a class="calendar-entry${colorClass}${accentClass}${mineClass}" data-sc-id="${e.id}" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}">${inner}</a>`;
+      return `<a class="calendar-entry${colorClass}${accentClass}${mineClass}" data-sc-id="${e.id}" draggable="true" href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${title}">${inner}</a>`;
     }
     // No ticket doesn't mean nothing to click, by request -- Mark Complete
     // is still available even with no linked ticket, just via the same
     // popup with only that one option (see openServiceCallMenu() below).
-    return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}${accentClass}${mineClass}" data-sc-id="${e.id}" title="${title}">${inner}</div>`;
+    return `<div class="calendar-entry calendar-entry--no-ticket${colorClass}${accentClass}${mineClass}" data-sc-id="${e.id}" draggable="true" title="${title}">${inner}</div>`;
   }
 
   // ---- Open ticket / Mark Complete popup -- by request, replaces the old
@@ -478,6 +510,41 @@ export function mount(container) {
     // it again in the same tick.
     setTimeout(() => document.addEventListener('click', onServiceCallMenuOutsideClick, true), 0);
     document.addEventListener('keydown', onServiceCallMenuKeydown);
+  }
+
+  // Drag-and-drop onto a different day, by request -- reuses the SAME
+  // PATCH .../:id/datetime route (and server-side isRequired-both-fields
+  // validation) the Change Date/Time modal below already uses, rather
+  // than a separate route. Shifts BOTH startDateTime and endDateTime by
+  // the same whole-day delta, preserving time-of-day and duration exactly
+  // -- same "shifting Start also shifts End" reasoning that modal's own
+  // Start field change handler already follows, just driven by which day
+  // cell was dropped on instead of a typed value.
+  async function moveServiceCallToDay(entry, targetDayKey) {
+    if (targetDayKey === entry.dayKey) return; // dropped back on its own day -- nothing changed
+    const deltaMs = daysBetween(entry.dayKey, targetDayKey) * 86400000;
+    const startDateTime = new Date(new Date(entry.startDateTime).getTime() + deltaMs).toISOString();
+    const endDateTime = new Date(new Date(entry.endDateTime).getTime() + deltaMs).toISOString();
+    try {
+      await fetchJson(`/api/service-calls/${entry.id}/datetime`, 'PATCH', { startDateTime, endDateTime });
+      await load(lastMonth || defaultMonthKey(), true);
+    } catch (err) {
+      alert(`Error moving service call: ${err.message}`);
+    }
+  }
+
+  // Whole-day difference between two "YYYY-MM-DD" keys, independent of
+  // time-of-day/timezone -- both sides built as midnight-UTC Date.UTC()
+  // values representing the same calendar date, so the only thing that
+  // differs between them is the date itself. Not an AEST-anchored helper
+  // like this page's other date math (aestToUtcIso etc, server-side) --
+  // deliberately simpler, since this is purely "how many calendar days
+  // apart are these two YYYY-MM-DD labels", with no real clock time
+  // involved at all.
+  function daysBetween(fromKey, toKey) {
+    const [fy, fm, fd] = fromKey.split('-').map(Number);
+    const [ty, tm, td] = toKey.split('-').map(Number);
+    return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000);
   }
 
   // Shared by the popup menu above AND the day popup's own button (see

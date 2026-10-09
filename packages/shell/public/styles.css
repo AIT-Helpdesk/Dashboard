@@ -4025,6 +4025,29 @@ td.ticket-number {
 .calendar-entry--no-ticket {
   cursor: pointer;
 }
+/* Drag-and-drop a calendar entry onto a different day, by request --
+   "grab" cursor while idle (distinguishes it from the plain pointer
+   cursor every entry already has for the click-to-open-menu behaviour,
+   via a higher-specificity attribute selector so it wins over
+   .calendar-entry--no-ticket's own plain "pointer" above), dimmed while
+   actively being dragged (client.js toggles this on dragstart/dragend)
+   so the dragged entry itself reads as "in motion" rather than looking
+   like a second, stationary copy sitting under the drag ghost. */
+.calendar-entry[draggable="true"] {
+  cursor: grab;
+}
+.calendar-entry--dragging {
+  opacity: 0.4;
+}
+/* The drop target itself, by request -- a day cell currently being
+   dragged over, so it's obvious which day a drop would land the entry
+   on. Same accent blue as .calendar-entry--allocated's own border/fill
+   family, dashed since nothing is actually committed yet. */
+.calendar-cell--drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
 @media (max-width: 720px) {
   .calendar-cell {
     height: auto;

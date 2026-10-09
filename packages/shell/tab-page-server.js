@@ -12,15 +12,25 @@ const { isDashboardAdmin } = require('./registry.js');
 // living alongside it -- same "runtime-configured state" shape as
 // shell/nav-layout.json, read/write via the same plain fs pattern.
 //
-// Covers two admin-editable, genuinely SHARED (every viewer sees the
+// Covers three admin-editable, genuinely SHARED (every viewer sees the
 // same thing) settings for one tabbed page:
 //   - permanent-tabs.json -- which extra tabs the admin has made
 //     permanent for everyone (see tab-page-client.js's own comment).
+//   - removed-default-tabs.json -- which of the page's own ORIGINAL
+//     built-in tabs (defaultTabs, baked in at creation by Tab Page
+//     Builder) the admin has since removed for everyone -- by request
+//     ("give me the ability to remove tabs from a tab page"). Built-in
+//     tabs themselves never change (defaultTabs stays fixed in each
+//     page's own generated client.js); this is just a shared exclusion
+//     list layered on top, same "don't touch the generated file, persist
+//     a small overlay instead" shape permanent-tabs.json already uses
+//     for the opposite direction (adding, not removing).
 //   - help-text.json -- free-form custom notes the admin can add to that
 //     page's own Help tab, on top of the always-generated "how this
 //     works" explanation.
 function createTabPageRouter(storageDir) {
   const permanentTabsPath = path.join(storageDir, 'permanent-tabs.json');
+  const removedDefaultTabsPath = path.join(storageDir, 'removed-default-tabs.json');
   const helpTextPath = path.join(storageDir, 'help-text.json');
 
   function readPermanentTabIds() {
@@ -34,6 +44,19 @@ function createTabPageRouter(storageDir) {
 
   function writePermanentTabIds(ids) {
     fs.writeFileSync(permanentTabsPath, JSON.stringify(ids, null, 2));
+  }
+
+  function readRemovedDefaultTabIds() {
+    try {
+      const data = JSON.parse(fs.readFileSync(removedDefaultTabsPath, 'utf8'));
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return []; // no file yet, or unreadable -- nothing removed yet
+    }
+  }
+
+  function writeRemovedDefaultTabIds(ids) {
+    fs.writeFileSync(removedDefaultTabsPath, JSON.stringify(ids, null, 2));
   }
 
   function readHelpText() {
@@ -73,6 +96,24 @@ function createTabPageRouter(storageDir) {
       return res.status(400).json({ error: 'Body must be { tabIds: [...] }.' });
     }
     writePermanentTabIds(req.body.tabIds);
+    res.json({ ok: true });
+  });
+
+  router.get('/removed-default-tabs', (req, res) => {
+    res.json({ tabIds: readRemovedDefaultTabIds(), editable: isDashboardAdmin(req) });
+  });
+
+  router.put('/removed-default-tabs', (req, res) => {
+    // Same admin-only enforcement as /permanent-tabs above, for the same
+    // reason -- removing one of a tab page's own built-in tabs changes
+    // what EVERY viewer sees, not just this one.
+    if (!isDashboardAdmin(req)) {
+      return res.status(403).json({ error: 'Only Amber can remove a built-in tab.' });
+    }
+    if (!Array.isArray(req.body?.tabIds)) {
+      return res.status(400).json({ error: 'Body must be { tabIds: [...] }.' });
+    }
+    writeRemovedDefaultTabIds(req.body.tabIds);
     res.json({ ok: true });
   });
 

@@ -375,5 +375,11 @@
     "id": "amber-only",
     "label": "Amber Only",
     "children": []
+  },
+  {
+    "type": "category",
+    "id": "client-pages",
+    "label": "Client Pages",
+    "children": []
   }
 ]
