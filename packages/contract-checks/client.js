@@ -1829,15 +1829,26 @@ export function mount(container) {
     }
   }
 
-  // DD/MM/YYYY specifically (not toLocaleDateString()'s own locale-
-  // dependent ordering, which would show MM/DD/YYYY for an en-US
-  // browser) -- AEST-anchored (Australia/Brisbane, no DST in Queensland),
-  // same convention formatDate() above already uses for a date-only
-  // value; this one's a real timestamp (sync.js's own nowIso()), so it's
-  // genuinely a moment that needs a timezone to resolve to a calendar
-  // date, not just a label.
+  // DD/MM/YYYY HH:MM specifically, by request -- not toLocaleDateString()/
+  // toLocaleTimeString()'s own locale-dependent ordering (which would show
+  // MM/DD/YYYY and a 12-hour AM/PM clock for an en-US browser) -- AEST-
+  // anchored (Australia/Brisbane, no DST in Queensland), same convention
+  // formatDate() above already uses for a date-only value; this one's a
+  // real timestamp (sync.js's own nowIso()), so it's genuinely a moment
+  // that needs a timezone to resolve to a calendar date and time, not
+  // just a label. hour12: false for a 24-hour HH:MM, not 12-hour + AM/PM.
   function formatImDate(iso) {
-    return new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(iso));
+    const parts = new Intl.DateTimeFormat('en-AU', {
+      timeZone: 'Australia/Brisbane',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date(iso));
+    const get = (type) => parts.find((p) => p.type === type).value;
+    return `${get('day')}/${get('month')}/${get('year')} ${get('hour')}:${get('minute')}`;
   }
 
   async function fetchJson(url, method, body) {
