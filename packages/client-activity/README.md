@@ -11,7 +11,9 @@ Every ticket ever raised for the resolved company is fetched up front (not just 
 
 ## What counts as "done"
 
-Autotask has a per-status "SLA Event" admin setting (None / First Response / Resolution Plan / Resolved), and the intent here is "any status whose SLA Event is Resolved counts as done" -- but that mapping is NOT exposed anywhere in the REST API's field or picklist metadata (confirmed by grepping the full `Tickets` `entityInformation/fields` response for "sla" and finding nothing; it's admin-config-only, e.g. the Ticket Categories/Statuses screen). Absent API access to the real mapping, `DONE_STATUS_PATTERNS` in `server.js` matches by status LABEL instead, using the dashboard's standard wildcard convention (`matchesWildcard()`, shared): `complete`, `fix*`, `maybe done*`, `needs*`, `close if no reply`, `shipping confirmation`, `ready*`, `billing - *`, `rewst - stage done`. `computeDoneStatusIds()` resolves these against the live status picklist once per request, so a status renamed or added later that matches one of these patterns is picked up automatically -- no hardcoded ID list to maintain.
+Autotask has a per-status "SLA Event" admin setting (None / First Response / Resolution Plan / Resolved), and the intent here is "any status whose SLA Event is Resolved counts as done" -- but that mapping is NOT exposed anywhere in the REST API's field or picklist metadata (confirmed by grepping the full `Tickets` `entityInformation/fields` response for "sla" and finding nothing; it's admin-config-only, e.g. the Ticket Categories/Statuses screen). Absent API access to the real mapping, `DONE_STATUS_PATTERNS` in `server.js` matches by status LABEL instead, using the dashboard's standard wildcard convention (`matchesWildcard()`, shared): `complete`, `fix*`, `maybe done*`, `needs*`, `close if no reply`, `shipping confirmation`, `ready*`, `billing - *`, `rewst - stage done`. `computeStatusIdsMatching()` resolves these against the live status picklist once per request, so a status renamed or added later that matches one of these patterns is picked up automatically -- no hardcoded ID list to maintain.
+
+**This definition of "done" powers Currently Open and the monthly Completed count below, but NOT the Recent Tickets split** -- see that section's own note for why.
 
 ## Ticket volume table
 
@@ -29,7 +31,9 @@ Billable vs non-billable (`TimeEntries.isNonBillable`), summed from `hoursWorked
 
 ## Recent Tickets: Incomplete / Completed split
 
-The list of tickets created in the window is split into two sections -- **Incomplete** and **Completed** -- using the same done-status check as the Currently Open snapshot above (`doneStatusIds`/`DONE_STATUS_PATTERNS`), not a separate rule. Each ticket carries a `done` boolean in the API response for this.
+The list of tickets created in the window is split into two sections -- **Incomplete** and **Completed**. Each ticket carries a `done` boolean in the API response for this.
+
+**Deliberately a NARROWER check than Currently Open/the monthly chart above**, by request -- `RECENT_TICKETS_DONE_STATUS_PATTERNS` (`complete`, `billing - *` only) was split out from the broader `DONE_STATUS_PATTERNS` after "Shipping Confirmation"/"Needs Internal Update" tickets (both matched by the broader list's `shipping confirmation`/`needs*` patterns) were showing up in this list's own "Completed" section despite not actually being finished work. Scoped to just this one split for now, pending a decision on whether to widen `DONE_STATUS_PATTERNS` itself (which would also move those statuses out of Currently Open and the monthly Completed count) -- see that section's own README note.
 
 ## Recent Tickets: Priority and Time to Close columns
 

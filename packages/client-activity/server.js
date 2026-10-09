@@ -36,10 +36,20 @@ const DONE_STATUS_PATTERNS = [
   'billing - *',
   'rewst - stage done',
 ];
-function computeDoneStatusIds(statusLabels) {
+// Narrower than DONE_STATUS_PATTERNS above, by request -- "Shipping
+// Confirmation"/"Needs Internal Update" (etc, everything else
+// DONE_STATUS_PATTERNS treats as done) were showing up in the Recent
+// Tickets list's own "Completed" bucket, which is wrong -- neither is an
+// actually-finished ticket. Scoped to JUST that one list's own done/open
+// split (recentTickets[].done below) -- Currently Open and the monthly
+// Created/Completed chart keep using the broader DONE_STATUS_PATTERNS
+// above, unchanged, by request, pending a decision on whether to widen
+// this scope later.
+const RECENT_TICKETS_DONE_STATUS_PATTERNS = ['complete', 'billing - *'];
+function computeStatusIdsMatching(statusLabels, patterns) {
   const ids = new Set();
   for (const [code, label] of statusLabels) {
-    if (DONE_STATUS_PATTERNS.some((pattern) => matchesWildcard(label, pattern))) ids.add(code);
+    if (patterns.some((pattern) => matchesWildcard(label, pattern))) ids.add(code);
   }
   return ids;
 }
@@ -82,7 +92,8 @@ router.get('/', async (req, res) => {
       getPicklistLabels(client.tickets, 'priority'),
     ]);
     const allTickets = excludeMonitoringAlerts(rawAllTickets);
-    const doneStatusIds = computeDoneStatusIds(statusLabels);
+    const doneStatusIds = computeStatusIdsMatching(statusLabels, DONE_STATUS_PATTERNS);
+    const recentTicketsDoneStatusIds = computeStatusIdsMatching(statusLabels, RECENT_TICKETS_DONE_STATUS_PATTERNS);
 
     // Created / Completed per month. "Completed" date: status 5 ("Complete")
     // uses completedDate, since that's the one status Autotask actually
@@ -139,7 +150,7 @@ router.get('/', async (req, res) => {
         ticketUrl: await getTicketUrl(t.id),
         title: t.title,
         status: statusLabels.get(t.status) || `#${t.status}`,
-        done: doneStatusIds.has(t.status),
+        done: recentTicketsDoneStatusIds.has(t.status),
         priority: priorityLabels.get(t.priority) || `#${t.priority}`,
         createDate: t.createDate,
         // Time to close: from the (latest) Resolution Plan SLA event to the

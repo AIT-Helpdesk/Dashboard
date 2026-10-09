@@ -358,6 +358,14 @@ html[data-sidebar-collapsed="true"] #preview-user-toggle {
   opacity: 0.4;
 }
 
+/* A whole category being dragged (to reorder it, and everything inside
+   it, among the other root-level items) -- by request. Same dim effect
+   as .nav-item.dragging above, just a separate rule since a category's
+   own <li> is '.nav-category', not '.nav-item'. */
+.nav-category.dragging {
+  opacity: 0.4;
+}
+
 .nav-item.drag-over {
   box-shadow: inset 0 2px 0 0 var(--accent);
 }

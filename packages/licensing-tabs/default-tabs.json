@@ -1,0 +1,6 @@
+[
+  { "id": "ingram-subscriptions", "label": "Ingram Subscriptions" },
+  { "id": "ingram-orders", "label": "Ingram Orders" },
+  { "id": "m365-environment", "label": "M365 Environment" },
+  { "id": "csp-customers", "label": "CSP Customers" }
+]

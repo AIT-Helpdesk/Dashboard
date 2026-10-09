@@ -1,0 +1,6 @@
+[
+  { "id": "asked-for-review", "label": "Asked for Review" },
+  { "id": "tickets-created-today", "label": "Tickets Created" },
+  { "id": "completed-tickets", "label": "Completed Tickets" },
+  { "id": "ticket-times", "label": "Ticket Times" }
+]

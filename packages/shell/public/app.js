@@ -1448,6 +1448,28 @@ let dragSrc = null; // a location descriptor, set on dragstart
 function moveTo(targetLoc) {
   if (!dragSrc) return;
   const node = removeAt(dragSrc);
+  // Categories AND tab pages never nest inside a category -- by request
+  // ("dragging menu categories or tab pages should not allow nesting,
+  // only repositioning at the top level"). Enforced HERE, centrally,
+  // rather than at each individual drop handler that calls moveTo(). If
+  // the node being moved is a category, or a page with dashboardPage.
+  // tabbed set, and the target is "inside some category's children",
+  // redirect to that category's own ROOT position instead (the same
+  // effect dropping directly on its header already has). A PLAIN
+  // (non-tabbed) page is unaffected -- filing an ordinary page into a
+  // category is still completely normal. Confirmed the hard way that
+  // guarding only the category header's own drop handler wasn't enough
+  // for the category case: dropping on a PLAIN PAGE that lives inside a
+  // DIFFERENT category went through renderPageItem()'s own drop handler
+  // instead, which had no such check -- same nesting bug, different
+  // call site. Centralizing it here means every current AND future
+  // caller of moveTo() is covered, not just the ones this was tested
+  // against.
+  const isTabPage = node.type === 'page' && !!pagesById.get(node.id)?.tabbed;
+  if ((node.type === 'category' || isTabPage) && targetLoc.kind === 'category') {
+    const rootIndex = tree.findIndex((n) => n.id === targetLoc.categoryId);
+    targetLoc = { kind: 'root', index: rootIndex === -1 ? tree.length : rootIndex };
+  }
   // Removing the source shifts everything after it down by one -- if the
   // target is later in the SAME list, its index needs the same adjustment,
   // otherwise the dragged item lands one slot past where it was dropped.
@@ -1486,6 +1508,72 @@ function renamePage(node, page) {
   const trimmed = next.trim();
   if (!trimmed) return;
   node.label = trimmed;
+  renderNav(currentPageId());
+  saveTree();
+}
+
+// Deletes a tabbed page outright, by request -- admin-only, same gating
+// as Rename/Hide, offered for the same pages (page.tabbed, see
+// renderPageItem() below). The one real safety rule it was asked for
+// ("only deletes when there's no tabs") is enforced SERVER-side (DELETE
+// /api/<id>/, tab-page-server.js -- checks the page's own built-in AND
+// permanent tabs, fails with a clear count otherwise) -- this is just
+// the confirm prompt and the client-side bookkeeping once that succeeds:
+// remove the node from the in-memory tree (same shape toggleHidden()/
+// renamePage() already mutate directly, rather than a separate
+// saveTree() round trip -- the DELETE route already persisted the
+// updated nav-layout.json itself, same as Tab Page Builder's own POST
+// /publish does for the opposite direction), and navigate away if this
+// was the page currently open (its own URL hash now points at nothing).
+function removeNodeFromTree(id) {
+  const rootIndex = tree.findIndex((n) => n.id === id);
+  if (rootIndex !== -1) {
+    tree.splice(rootIndex, 1);
+    return;
+  }
+  for (const node of tree) {
+    if (node.type === 'category' && Array.isArray(node.children)) {
+      const childIndex = node.children.findIndex((c) => c.id === id);
+      if (childIndex !== -1) {
+        node.children.splice(childIndex, 1);
+        return;
+      }
+    }
+  }
+}
+async function deletePage(node, page) {
+  if (!confirm(`Delete "${node.label || page.label}"? This cannot be undone.`)) return;
+  try {
+    const res = await nativeFetch(`/api/${page.id}/`, { method: 'DELETE' });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+    removeNodeFromTree(node.id);
+    if (currentPageId() === node.id) {
+      window.location.hash = `#${flattenPageIds()[0] || ''}`;
+    }
+    renderNav(currentPageId());
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  }
+}
+
+// Deletes a MENU CATEGORY outright, by request -- only ever a category
+// with zero children (re-checked HERE, right before acting, not just
+// when the menu item was shown -- a drag could have filed something
+// into it in the few seconds between right-click and this click). No
+// server route needed, unlike deletePage() above -- a category is
+// purely a nav-layout.json entry, no package/files of its own to clean
+// up, so this is just a plain tree mutation + the existing
+// saveTree()/PUT /api/nav-layout round trip every other sidebar edit
+// here already uses.
+function deleteCategory(node) {
+  if (node.children.length > 0) {
+    alert(`"${node.label}" isn't empty any more -- move or remove its pages first.`);
+    renderNav(currentPageId());
+    return;
+  }
+  if (!confirm(`Delete the empty "${node.label}" category? This cannot be undone.`)) return;
+  removeNodeFromTree(node.id);
   renderNav(currentPageId());
   saveTree();
 }
@@ -1593,7 +1681,7 @@ function renderNav(activeId) {
       // exception -- the whole point there is to drag a page INTO an
       // otherwise-empty category, so keep it visible while editing.
       if (node.children.length === 0 && !admin) return;
-      navList.appendChild(renderCategory(node, index, activeId, admin));
+      navList.appendChild(renderCategory(node, { kind: 'root', index }, activeId, admin));
     } else {
       navList.appendChild(renderPageItem(node, { kind: 'root', index }, activeId, admin));
     }
@@ -1775,10 +1863,17 @@ function renderPageItem(node, loc, activeId, admin) {
     const actions = [];
     if (admin && !isRotateLoc) {
       actions.push({ label: node.hidden ? 'Unhide' : 'Hide', onClick: () => toggleHidden(node) });
-      // Rename is offered only for a tabbed page (page.tabbed) -- by
-      // request, renaming any other page's sidebar label wasn't asked
-      // for, so this stays scoped rather than generalised to every page.
-      if (page.tabbed) actions.push({ label: 'Rename', onClick: () => renamePage(node, page) });
+      // Rename/Delete are offered only for a tabbed page (page.tabbed) --
+      // by request, neither was asked for on any other kind of page, so
+      // this stays scoped rather than generalised to every page. Delete
+      // itself is always OFFERED here; whether it's actually ALLOWED
+      // (only once every tab is gone) is enforced server-side at click
+      // time, not pre-checked just to decide whether to show the menu
+      // item -- see deletePage()/tab-page-server.js's own DELETE route.
+      if (page.tabbed) {
+        actions.push({ label: 'Rename', onClick: () => renamePage(node, page) });
+        actions.push({ label: 'Delete', onClick: () => deletePage(node, page) });
+      }
     }
     if (isRotateLoc) {
       // Set Rotation Time only makes sense from inside Rotate itself --
@@ -1800,9 +1895,55 @@ function renderPageItem(node, loc, activeId, admin) {
   return li;
 }
 
-function renderCategory(node, index, activeId, admin) {
+function renderCategory(node, loc, activeId, admin) {
   const li = document.createElement('li');
   li.className = 'nav-category';
+
+  // Draggable as a whole unit -- by request ("drag on the Menu Category
+  // should drag the category and all of its content"). Categories only
+  // ever live at root (nav-layout.json never nests one inside another --
+  // see loc's own comment up top), so `loc` here is always
+  // {kind:'root', index}, same shape a root PAGE's own dragSrc already
+  // uses. moveTo()/removeAt()/insertAt() are generic over node TYPE --
+  // they just splice whatever object sits at that location, so moving a
+  // category this way already carries its own node.children array along
+  // for free; nothing extra needed for "and all of its content" beyond
+  // making the category a drag source at all.
+  //
+  // The childList.contains(e.target) guard below is load-bearing, not
+  // decorative -- a real bug confirmed live (reported as "categories and
+  // pages vanishing when I move things"): the browser picking the nested
+  // CHILD <li> as the native drag SOURCE (correct, closest-draggable-
+  // wins) does NOT stop that child's own dragstart EVENT from then
+  // bubbling up through this category's own <li>, which also has a
+  // dragstart listener. Without this guard, dragging a page that lives
+  // INSIDE a category fired the page's own (correct) handler first, then
+  // this one second, silently OVERWRITING dragSrc to point at the whole
+  // category instead of the page just dragged. FIRST attempt at this
+  // guard checked `e.target !== li` instead -- wrong, and a worse bug:
+  // e.target for a drag that starts on THIS category's own header is the
+  // header <div> (or a span inside it), never the bare <li> itself, so
+  // that version rejected EVERY category drag, not just bubbled ones
+  // (confirmed live: "No Menu Categories can be moved"). childList is
+  // declared further below but already captured by closure by the time
+  // this ever actually fires (a later user interaction, long after this
+  // whole function has returned and childList is fully assigned) --
+  // checking "did this event originate from within MY OWN children
+  // list" is the one distinction that actually matters, not element
+  // identity against `li` itself.
+  if (admin) {
+    li.draggable = true;
+    li.addEventListener('dragstart', (e) => {
+      if (childList.contains(e.target)) return;
+      e.dataTransfer.effectAllowed = 'move'; // 'move' only -- a category is never draggable INTO a tabbed page's own tab strip, unlike a page
+      li.classList.add('dragging');
+      dragSrc = loc;
+    });
+    li.addEventListener('dragend', (e) => {
+      if (childList.contains(e.target)) return;
+      li.classList.remove('dragging');
+    });
+  }
 
   // Auto-opening for the active page is handled once, on navigation, by
   // autoOpenCategoryFor() (called from renderNav()) -- expandedCategories is
@@ -1843,16 +1984,30 @@ function renderCategory(node, index, activeId, admin) {
       e.preventDefault();
       header.classList.remove('drag-over');
       if (!dragSrc) return;
+      // Always asks for "insert into my children" -- moveTo() itself now
+      // redirects this to a plain root-level reorder (landing right at
+      // THIS category's own position, same categoryId) when the thing
+      // being dragged is itself a category, so categories never actually
+      // nest regardless of what's dropped here. See moveTo()'s own
+      // comment for why that check lives there instead of here.
       moveTo({ kind: 'category', categoryId: node.id, index: node.children.length });
       // Open it afterward -- otherwise a page just dropped into a collapsed
-      // category would silently disappear from view.
+      // category would silently disappear from view. Harmless no-op when
+      // the drop above actually redirected to a root reorder instead.
       expandedCategories.add(node.id);
       saveExpanded();
       renderNav(activeId);
     });
     header.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      showNavContextMenu(e.clientX, e.clientY, [{ label: node.hidden ? 'Unhide' : 'Hide', onClick: () => toggleHidden(node) }]);
+      const actions = [{ label: node.hidden ? 'Unhide' : 'Hide', onClick: () => toggleHidden(node) }];
+      // Delete only offered for a genuinely EMPTY category, by request
+      // ("remove an EMPTY menu category") -- checked fresh right here
+      // (not cached from whenever the menu was last rendered), so a
+      // category that picked up a child in between still correctly
+      // doesn't offer this.
+      if (node.children.length === 0) actions.push({ label: 'Delete', onClick: () => deleteCategory(node) });
+      showNavContextMenu(e.clientX, e.clientY, actions);
     });
   }
   li.appendChild(header);

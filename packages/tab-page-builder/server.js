@@ -132,6 +132,15 @@ router.post('/publish', (req, res) => {
     fs.writeFileSync(path.join(pageDir, 'package.json'), buildPackageJson(slug, label));
     fs.writeFileSync(path.join(pageDir, 'client.js'), buildClientJs(slug, label, defaultTabs));
     fs.writeFileSync(path.join(pageDir, 'server.js'), buildServerJs());
+    // A separate, server-readable copy of this page's own built-in tabs --
+    // by request ("Delete" on a tab page, only allowed once every tab is
+    // gone). client.js above embeds the same list as a JS literal (for the
+    // browser); this JSON copy is what tab-page-server.js's own DELETE
+    // route reads to know the FULL original set, so it can tell whether
+    // every one of them has since been removed. See that file's own
+    // readDefaultTabs() comment for why a JSON copy rather than parsing
+    // the generated client.js.
+    fs.writeFileSync(path.join(pageDir, 'default-tabs.json'), JSON.stringify(defaultTabs, null, 2));
 
     // Makes it immediately servable AND mounts its own /api/<id> router
     // (its permanent-tabs GET/PUT) -- see registerPage()'s own comment in

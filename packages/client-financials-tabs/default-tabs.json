@@ -1,0 +1,5 @@
+[
+  { "id": "client-summary", "label": "Client Summary" },
+  { "id": "contract-services", "label": "Contract Services" },
+  { "id": "client-financials", "label": "Client Financials" }
+]

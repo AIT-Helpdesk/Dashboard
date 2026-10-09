@@ -5,10 +5,6 @@
   },
   {
     "type": "page",
-    "id": "workshop"
-  },
-  {
-    "type": "page",
     "id": "about-me"
   },
   {
@@ -16,6 +12,10 @@
     "id": "daily-dashboards",
     "label": "Daily Dashboards",
     "children": [
+      {
+        "type": "page",
+        "id": "workshop"
+      },
       {
         "type": "page",
         "id": "service-calls"
@@ -55,40 +55,8 @@
   },
   {
     "type": "page",
-    "id": "client-info-tabs",
-    "label": "Client Lookup"
-  },
-  {
-    "type": "category",
-    "id": "client-info",
-    "label": "Client Info",
-    "children": [
-      {
-        "type": "page",
-        "id": "client-details"
-      },
-      {
-        "type": "page",
-        "id": "client-contacts"
-      },
-      {
-        "type": "page",
-        "id": "client-activity"
-      },
-      {
-        "type": "page",
-        "id": "classification-summary"
-      },
-      {
-        "type": "page",
-        "id": "find-passwords"
-      }
-    ],
-    "hidden": true
-  },
-  {
-    "type": "page",
-    "id": "time-reporting-tabs"
+    "id": "time-reporting-tabs",
+    "label": "Time & Tickets"
   },
   {
     "type": "category",
@@ -136,17 +104,25 @@
   },
   {
     "type": "page",
-    "id": "client-financials-tabs",
-    "label": "Client Finance"
+    "id": "client-tabs",
+    "label": "Client Info"
   },
   {
     "type": "category",
-    "id": "financials",
-    "label": "Client Financials",
+    "id": "client-pages",
+    "label": "Client Pages",
     "children": [
       {
         "type": "page",
+        "id": "client-activity"
+      },
+      {
+        "type": "page",
         "id": "client-summary"
+      },
+      {
+        "type": "page",
+        "id": "client-financials"
       },
       {
         "type": "page",
@@ -154,7 +130,23 @@
       },
       {
         "type": "page",
-        "id": "client-financials"
+        "id": "client-details"
+      },
+      {
+        "type": "page",
+        "id": "client-contacts"
+      },
+      {
+        "type": "page",
+        "id": "classification-summary"
+      },
+      {
+        "type": "page",
+        "id": "find-passwords"
+      },
+      {
+        "type": "page",
+        "id": "m365-environment"
       }
     ],
     "hidden": true
@@ -162,6 +154,11 @@
   {
     "type": "page",
     "id": "licensing-tabs"
+  },
+  {
+    "type": "page",
+    "id": "contract-mgmt-tabs",
+    "label": "Contract Mgmt"
   },
   {
     "type": "category",
@@ -178,19 +175,10 @@
       },
       {
         "type": "page",
-        "id": "m365-environment"
-      },
-      {
-        "type": "page",
         "id": "csp-customers"
       }
     ],
     "hidden": true
-  },
-  {
-    "type": "page",
-    "id": "contract-mgmt-tabs",
-    "label": "Contract Mgmt"
   },
   {
     "type": "category",
@@ -291,6 +279,11 @@
       {
         "type": "page",
         "id": "rollout-tracker-builder"
+      },
+      {
+        "type": "page",
+        "id": "updates",
+        "hidden": true
       }
     ],
     "hidden": true
@@ -313,15 +306,6 @@
         "id": "today-things"
       }
     ]
-  },
-  {
-    "type": "page",
-    "id": "updates",
-    "hidden": true
-  },
-  {
-    "type": "page",
-    "id": "voice-scheduler"
   },
   {
     "type": "category",
@@ -374,12 +358,16 @@
     "type": "category",
     "id": "amber-only",
     "label": "Amber Only",
-    "children": []
+    "children": [
+      {
+        "type": "page",
+        "id": "voice-scheduler"
+      }
+    ]
   },
   {
-    "type": "category",
-    "id": "client-pages",
-    "label": "Client Pages",
-    "children": []
+    "type": "page",
+    "id": "client-financials-tabs",
+    "label": "Client Finance"
   }
 ]

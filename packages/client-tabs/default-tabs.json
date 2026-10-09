@@ -1,0 +1,10 @@
+[
+  { "id": "check-client", "label": "Check Client" },
+  { "id": "client-activity", "label": "Client Activity" },
+  { "id": "client-financials", "label": "Client Financials" },
+  { "id": "client-info-tabs", "label": "Client Info" },
+  { "id": "client-summary", "label": "Client Summary" },
+  { "id": "contract-services", "label": "Contract Services" },
+  { "id": "contract-services-update-contracts", "label": "Contract Services" },
+  { "id": "m365-environment", "label": "M365 Environment" }
+]
