@@ -3097,6 +3097,26 @@ th, td {
   cursor: pointer;
 }
 
+/* Order # cells that copy a ticket-ready text summary on click (Ingram
+   Orders, Contract Checks, Check Client's Orders section) -- same plain-
+   text-but-clickable look as .ticket-link above, reused rather than a new
+   one-off style, since this is the same "no visual noise, cursor: pointer
+   is the only hint" convention. The native `title` tooltip (set by each
+   page's own client.js, multi-line via escaped \n) previews what a click
+   copies. --copied is a brief flash (same #16a34a .cell-flag-green already
+   uses dashboard-wide, not a new shade) confirming the copy succeeded,
+   since there's no separate button label here to swap to "Copied!" the way
+   a dedicated Copy button would. */
+.order-copy-btn {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.order-copy-btn--copied {
+  color: #16a34a !important;
+}
+
 tbody tr:nth-child(even) {
   background: var(--row-alt-bg);
 }

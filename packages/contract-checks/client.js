@@ -401,7 +401,7 @@ export function mount(container) {
         (o) => `
       <tr>
         <td><input type="checkbox" class="cc-row-select" data-id="${o.id}" data-customer-id="${escapeHtml(o.customerId ?? '')}" title="Select for bulk close (same client only)" /></td>
-        <td class="ticket-number"><button type="button" class="wsp-icon-btn cc-history-btn" data-id="${o.id}" title="${historyIconTitle(o)}">\u{1F553}</button> ${escapeHtml(o.orderNumber)}</td>
+        <td class="ticket-number"><button type="button" class="wsp-icon-btn cc-history-btn" data-id="${o.id}" title="${historyIconTitle(o)}">\u{1F553}</button> ${orderNumberCellHtml(o)}</td>
         <td>${escapeHtml(capitalize(o.orderType))}</td>
         <td${o.status !== 'completed' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(capitalize(o.status))}</td>
         <td class="ticket-number">${formatDateTime(o.creationDate)}</td>
@@ -417,6 +417,118 @@ export function mount(container) {
       </tr>`
       )
       .join('');
+  }
+
+  // Order # text itself, by request -- click copies a ticket-ready text
+  // summary (same "Ingram Order ... / Client: ... / Subscription: ..."
+  // shape Ingram Orders' own Copy feature builds) straight to the
+  // clipboard, previewed as the native `title` tooltip on hover. A
+  // 'termination' row has no real backing Ingram order (sourceOrderId is a
+  // SUBSCRIPTION id there instead -- see server.js's shapeItem() comment),
+  // so it stays plain text, same as a row with no sourceOrderId at all.
+  function orderNumberCellHtml(o) {
+    if (o.orderType === 'termination' || !o.sourceOrderId) return escapeHtml(o.orderNumber);
+    return `<span class="order-copy-btn" data-id="${o.id}" title="Click to copy this order's ticket details">${escapeHtml(o.orderNumber)}</span>`;
+  }
+
+  // Ingram order/subscription detail isn't stored in this page's own
+  // database (only poNumber/products/currentTotal are -- see db.js's items
+  // table) -- fetched lazily, on first hover or click, from Ingram Orders'
+  // own already-built /detail route (same cached, retry-on-429 logic that
+  // page's "Load All Products & Licenses" uses), rather than duplicating
+  // that fetch here. `o.ticket` stays `undefined` until a fetch is tried,
+  // then is the real ticket object or `null` (tried, nothing came back) --
+  // same convention server.js's own getSubOnce() uses, so a second call
+  // never re-fetches. Cached directly on the order object, which is the
+  // same object instance findOrder() returns, so this persists for the rest
+  // of the page's life once resolved.
+  async function ensureOrderTicket(o) {
+    if (o.ticket !== undefined) return o.ticket;
+    if (!o._ticketPromise) {
+      o._ticketPromise = (async () => {
+        try {
+          const res = await fetch(`/api/ingram-orders/detail?ids=${encodeURIComponent(o.sourceOrderId)}`);
+          const data = await res.json();
+          o.ticket = (res.ok && data.details && data.details[o.sourceOrderId] && data.details[o.sourceOrderId].ticket) || null;
+        } catch {
+          o.ticket = null;
+        }
+        return o.ticket;
+      })();
+    }
+    return o._ticketPromise;
+  }
+
+  // Same field shape Ingram Orders' own buildTicketText() produces, adapted
+  // to this page's order objects (orderType instead of type, clientName
+  // already sitting on the order itself rather than a separate param).
+  // Every line is conditional on the underlying field having a value, by
+  // the same "never show a blank field" rule that page's version follows.
+  function buildOrderTicketText(o, ticket) {
+    const t = ticket || {};
+    const sub = t.subscription;
+    const lines = [];
+    lines.push(`Ingram Order ${o.orderNumber} (${capitalize(o.orderType)}) -- ${capitalize(o.status)}`);
+    lines.push(`Client: ${o.clientName}`);
+    lines.push(`Created: ${formatDateTime(o.creationDate)}`);
+    if (o.provisioningDate) lines.push(`Provisioned: ${formatDateTime(o.provisioningDate)}`);
+    if (t.poNumber) lines.push(`PO #: ${t.poNumber}`);
+    if (t.lineDescription) {
+      lines.push('');
+      lines.push(t.lineDescription);
+    }
+    if (t.unitPrice != null) {
+      lines.push(`Unit price: ${moneyText(t.unitPrice, t.currency)} | Extended: ${moneyText(t.extendedPrice, t.currency)} | Tax: ${moneyText(t.taxAmount, t.currency)}`);
+    }
+    if (sub) {
+      lines.push('');
+      lines.push(`Subscription: ${sub.name} (ID ${sub.id})`);
+      lines.push(`Status: ${capitalize(sub.status)} | Auto-renew: ${sub.renewalStatus ? 'Yes' : 'No'}`);
+      lines.push(`Created: ${formatDate(sub.creationDate)}`);
+      lines.push(sub.renewalStatus ? `Renews: ${formatDate(sub.renewalDate)}` : `Expires: ${formatDate(sub.expirationDate)}`);
+      if (sub.seats != null) lines.push(`Seats: ${sub.seats}`);
+      if (sub.totalPrice != null) {
+        lines.push(
+          `Current period total: ${moneyText(sub.totalPrice, t.currency)} | Full term: ${moneyText(sub.totalSubscriptionPrice, t.currency)} (cost ${moneyText(sub.totalSubscriptionCost, t.currency)})`
+        );
+      }
+      if (sub.microsoftDomain) lines.push(`Microsoft tenant domain: ${sub.microsoftDomain}`);
+      if (sub.microsoftCustomerId) lines.push(`Microsoft customer ID: ${sub.microsoftCustomerId}`);
+      if (sub.microsoftSubscriptionId) lines.push(`Microsoft subscription ID: ${sub.microsoftSubscriptionId}`);
+      if (sub.cspOrderId) lines.push(`CSP order ID: ${sub.cspOrderId}`);
+    }
+    return lines.join('\n');
+  }
+
+  function moneyText(amount, currency) {
+    if (amount === null || amount === undefined) return '';
+    return currency ? `$${amount} ${currency}` : `$${amount}`;
+  }
+
+  // First hover warms the tooltip (so it previews real content rather than
+  // the placeholder) without blocking anything; a click awaits the same
+  // (de-duped, see ensureOrderTicket()) fetch before copying, so it works
+  // correctly even on the very first interaction with no prior hover.
+  async function warmOrderTicketTooltip(el, o) {
+    const ticket = await ensureOrderTicket(o);
+    el.title = ticket ? buildOrderTicketText(o, ticket) : "No ticket details available for this order.";
+  }
+
+  async function copyOrderTicket(el, o) {
+    const ticket = await ensureOrderTicket(o);
+    if (!ticket) {
+      el.title = 'No ticket details available for this order.';
+      return;
+    }
+    const text = buildOrderTicketText(o, ticket);
+    el.title = text;
+    try {
+      await navigator.clipboard.writeText(text);
+      el.classList.add('order-copy-btn--copied');
+      setTimeout(() => el.classList.remove('order-copy-btn--copied'), 1200);
+    } catch (err) {
+      alert(`Couldn't copy: ${err.message}`);
+    }
   }
 
   // Single Provisioned column, by request -- shows the real provisioningDate
@@ -863,6 +975,13 @@ export function mount(container) {
 
     groupEl.querySelectorAll('.cc-po-edit-btn').forEach((el) => {
       el.addEventListener('click', () => openPoNumberModal(el.dataset.id, findOrder(el.dataset.id)));
+    });
+
+    groupEl.querySelectorAll('.order-copy-btn').forEach((el) => {
+      const o = findOrder(el.dataset.id);
+      if (!o) return;
+      el.addEventListener('mouseenter', () => warmOrderTicketTooltip(el, o), { once: true });
+      el.addEventListener('click', () => copyOrderTicket(el, o));
     });
 
     groupEl.querySelectorAll('.cc-toggle').forEach((el) => {

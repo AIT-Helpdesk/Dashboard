@@ -1220,7 +1220,7 @@ export function mount(container) {
       .map(
         (o) => `
       <tr>
-        <td class="ticket-number"><button type="button" class="wsp-icon-btn cc-history-btn" data-id="${o.id}" title="${historyIconTitle(o)}">\u{1F553}</button> ${escapeHtml(o.orderNumber)}</td>
+        <td class="ticket-number"><button type="button" class="wsp-icon-btn cc-history-btn" data-id="${o.id}" title="${historyIconTitle(o)}">\u{1F553}</button> ${orderNumberCellHtml(o)}</td>
         <td>${escapeHtml(capitalize(o.orderType))}</td>
         <td${o.status !== 'completed' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(capitalize(o.status))}</td>
         <td class="ticket-number">${formatDateTime(o.creationDate)}</td>
@@ -1250,6 +1250,107 @@ export function mount(container) {
   function historyIconTitle(o) {
     const count = o.historyCount || 0;
     return `View history (${count} record${count === 1 ? '' : 's'})`;
+  }
+
+  // Order # text itself, by request -- click copies a ticket-ready text
+  // summary (same shape Ingram Orders' own Copy feature builds) to the
+  // clipboard, previewed as the native `title` tooltip on hover. A
+  // 'termination' row has no real backing Ingram order (sourceOrderId is a
+  // SUBSCRIPTION id there instead -- see contract-checks/server.js's
+  // shapeItem() comment), so it stays plain text, same as a row with no
+  // sourceOrderId at all. Mirrors Contract Checks' own read-only-page
+  // version of this, since this page's Orders section renders the exact
+  // same item shape that page does.
+  function orderNumberCellHtml(o) {
+    if (o.orderType === 'termination' || !o.sourceOrderId) return escapeHtml(o.orderNumber);
+    return `<span class="order-copy-btn" data-id="${o.id}" title="Click to copy this order's ticket details">${escapeHtml(o.orderNumber)}</span>`;
+  }
+
+  // Ingram order/subscription detail isn't part of this read-only rollup's
+  // own data at all -- fetched lazily, on first hover or click, from Ingram
+  // Orders' own already-built /detail route, same as Contract Checks' own
+  // page does. `o.ticket` stays `undefined` until a fetch is tried, then is
+  // the real ticket object or `null` (tried, nothing came back), cached
+  // directly on the order object so a second call never re-fetches.
+  async function ensureOrderTicket(o) {
+    if (o.ticket !== undefined) return o.ticket;
+    if (!o._ticketPromise) {
+      o._ticketPromise = (async () => {
+        try {
+          const res = await fetch(`/api/ingram-orders/detail?ids=${encodeURIComponent(o.sourceOrderId)}`);
+          const data = await res.json();
+          o.ticket = (res.ok && data.details && data.details[o.sourceOrderId] && data.details[o.sourceOrderId].ticket) || null;
+        } catch {
+          o.ticket = null;
+        }
+        return o.ticket;
+      })();
+    }
+    return o._ticketPromise;
+  }
+
+  // Same field shape Ingram Orders' own buildTicketText() produces.
+  function buildOrderTicketText(o, ticket) {
+    const t = ticket || {};
+    const sub = t.subscription;
+    const lines = [];
+    lines.push(`Ingram Order ${o.orderNumber} (${capitalize(o.orderType)}) -- ${capitalize(o.status)}`);
+    lines.push(`Client: ${o.clientName}`);
+    lines.push(`Created: ${formatDateTime(o.creationDate)}`);
+    if (o.provisioningDate) lines.push(`Provisioned: ${formatDateTime(o.provisioningDate)}`);
+    if (t.poNumber) lines.push(`PO #: ${t.poNumber}`);
+    if (t.lineDescription) {
+      lines.push('');
+      lines.push(t.lineDescription);
+    }
+    if (t.unitPrice != null) {
+      lines.push(`Unit price: ${moneyText(t.unitPrice, t.currency)} | Extended: ${moneyText(t.extendedPrice, t.currency)} | Tax: ${moneyText(t.taxAmount, t.currency)}`);
+    }
+    if (sub) {
+      lines.push('');
+      lines.push(`Subscription: ${sub.name} (ID ${sub.id})`);
+      lines.push(`Status: ${capitalize(sub.status)} | Auto-renew: ${sub.renewalStatus ? 'Yes' : 'No'}`);
+      lines.push(`Created: ${formatDate(sub.creationDate)}`);
+      lines.push(sub.renewalStatus ? `Renews: ${formatDate(sub.renewalDate)}` : `Expires: ${formatDate(sub.expirationDate)}`);
+      if (sub.seats != null) lines.push(`Seats: ${sub.seats}`);
+      if (sub.totalPrice != null) {
+        lines.push(
+          `Current period total: ${moneyText(sub.totalPrice, t.currency)} | Full term: ${moneyText(sub.totalSubscriptionPrice, t.currency)} (cost ${moneyText(sub.totalSubscriptionCost, t.currency)})`
+        );
+      }
+      if (sub.microsoftDomain) lines.push(`Microsoft tenant domain: ${sub.microsoftDomain}`);
+      if (sub.microsoftCustomerId) lines.push(`Microsoft customer ID: ${sub.microsoftCustomerId}`);
+      if (sub.microsoftSubscriptionId) lines.push(`Microsoft subscription ID: ${sub.microsoftSubscriptionId}`);
+      if (sub.cspOrderId) lines.push(`CSP order ID: ${sub.cspOrderId}`);
+    }
+    return lines.join('\n');
+  }
+
+  function moneyText(amount, currency) {
+    if (amount === null || amount === undefined) return '';
+    return currency ? `$${amount} ${currency}` : `$${amount}`;
+  }
+
+  async function warmOrderTicketTooltip(el, o) {
+    const ticket = await ensureOrderTicket(o);
+    el.title = ticket ? buildOrderTicketText(o, ticket) : "No ticket details available for this order.";
+  }
+
+  async function copyOrderTicket(el, o) {
+    const ticket = await ensureOrderTicket(o);
+    if (!ticket) {
+      el.title = 'No ticket details available for this order.';
+      return;
+    }
+    const text = buildOrderTicketText(o, ticket);
+    el.title = text;
+    try {
+      await navigator.clipboard.writeText(text);
+      el.classList.add('order-copy-btn--copied');
+      setTimeout(() => el.classList.remove('order-copy-btn--copied'), 1200);
+    } catch (err) {
+      alert(`Couldn't copy: ${err.message}`);
+    }
   }
 
   function poNumberCellHtml(o) {
@@ -1380,6 +1481,12 @@ export function mount(container) {
     });
     groupEl.querySelectorAll('.cc-history-btn').forEach((el) => {
       el.addEventListener('click', () => openHistoryModal(el.dataset.id, findOrder(el.dataset.id)));
+    });
+    groupEl.querySelectorAll('.order-copy-btn').forEach((el) => {
+      const o = findOrder(el.dataset.id);
+      if (!o) return;
+      el.addEventListener('mouseenter', () => warmOrderTicketTooltip(el, o), { once: true });
+      el.addEventListener('click', () => copyOrderTicket(el, o));
     });
   }
 

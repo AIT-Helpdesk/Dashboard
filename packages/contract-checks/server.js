@@ -299,6 +299,12 @@ async function postTicketNoteAndClose(ticketAutotaskId, noteText, actor, bulkWit
 function shapeItem(row) {
   return {
     id: row.id,
+    // Ingram's own order id (or, for a synthesized 'termination' row, a
+    // SUBSCRIPTION id instead -- see sync.js's own comment on why those
+    // share this column) -- exposed so the client can ask Ingram Orders'
+    // existing /api/ingram-orders/detail route for this order's "copy for
+    // ticket" text on demand, same id space that route already expects.
+    sourceOrderId: row.source_order_id,
     processType: row.process_type,
     customerId: row.customer_id,
     orderNumber: row.order_number,
