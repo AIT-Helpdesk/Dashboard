@@ -161,6 +161,7 @@ async function buildReport(sinceDate, filterTerm, includeRenewals, includeAllRen
       o.products = details[i].products;
       o.currentTotal = details[i].currentTotal;
       o.effectiveDate = details[i].effectiveDate;
+      o.ticket = details[i].ticket;
     });
     byClient = byClient
       .map((c) => ({ ...c, orders: c.orders.filter((o) => (o.products || []).some((p) => matchesWildcard(p.name, productTerm))) }))
@@ -331,7 +332,59 @@ async function fetchOrderDetailWithRetry(id, token, attempt = 1) {
       }
     }
 
-    return { poNumber: detail.poNumber || null, products, currentTotal, effectiveDate };
+    // Everything needed for the "Copy for ticket" button, by request --
+    // reuses the SAME subscription fetch as the three lookups above
+    // (getSubOnce() is memoized, so this is never a 4th request) rather than
+    // issuing its own. `details[0]` is the order's own line item (its free-
+    // text description is the clearest human summary of what happened --
+    // confirmed against real data this is always a single-entry array for
+    // every order type that has one at all). orderParameters/
+    // fulfillmentParameters live on the SUBSCRIPTION detail response, not
+    // the order's own -- confirmed against real data -- and are ~40/~16
+    // mostly-blank name/value pairs; only the handful with real values on a
+    // typical order are surfaced here by name, not the whole arrays.
+    const s = await getSubOnce();
+    const lineItem = (detail.details || [])[0] || null;
+    const subParams = Object.fromEntries((s?.orderParameters || []).map((p) => [p.name, p.value]));
+    const subFulfillment = Object.fromEntries((s?.fulfillmentParameters || []).map((p) => [p.name, p.value]));
+    const ticket = {
+      poNumber: detail.poNumber || null,
+      lineDescription: lineItem?.description || null,
+      currency: lineItem?.unitPrice?.currency || s?.totalPrice?.currency || null,
+      unitPrice: lineItem?.unitPrice?.amount ?? null,
+      extendedPrice: lineItem?.extendedPrice?.amount ?? null,
+      taxAmount: lineItem?.taxAmount?.amount ?? null,
+      subscription: s
+        ? {
+            id: s.id,
+            name: s.name,
+            status: s.status,
+            renewalStatus: s.renewalStatus,
+            renewalType: s.renewalType,
+            creationDate: s.creationDate,
+            renewalDate: s.renewalDate,
+            expirationDate: s.expirationDate,
+            lastModifiedDate: s.lastModifiedDate,
+            seats: totalQuantity(s),
+            unitPrice: s.products?.[0]?.unitPrice?.amount ?? null,
+            unitCost: s.products?.[0]?.unitCost?.amount ?? null,
+            totalPrice: s.totalPrice?.amount ?? null,
+            totalSubscriptionPrice: s.totalSubscriptionPrice?.amount ?? null,
+            totalSubscriptionCost: s.totalSubscriptionCost?.amount ?? null,
+            microsoftDomain: subParams.microsoft_domain || null,
+            agreementFirstName: subParams.first_name_agreement || null,
+            agreementLastName: subParams.last_name_agreement || null,
+            agreementEmail: subParams.email_address_agreement || null,
+            agreementDate: subParams.agreement_date || null,
+            autoRenewal: subParams.cb_autorenewal || null,
+            microsoftCustomerId: subFulfillment.ms_customer_id || null,
+            microsoftSubscriptionId: subFulfillment.subscription_id || null,
+            cspOrderId: subFulfillment.csp_order_id || null,
+          }
+        : null,
+    };
+
+    return { poNumber: detail.poNumber || null, products, currentTotal, effectiveDate, ticket };
   } catch (err) {
     if (err.response?.status === 429 && attempt < MAX_ATTEMPTS) {
       const retryAfterHeader = err.response.headers['retry-after'];
@@ -341,7 +394,7 @@ async function fetchOrderDetailWithRetry(id, token, attempt = 1) {
       return fetchOrderDetailWithRetry(id, token, attempt + 1);
     }
     console.error(`Failed to fetch order detail for ${id}:`, err.message);
-    return { poNumber: null, products: [], currentTotal: null, effectiveDate: null };
+    return { poNumber: null, products: [], currentTotal: null, effectiveDate: null, ticket: null };
   }
 }
 
