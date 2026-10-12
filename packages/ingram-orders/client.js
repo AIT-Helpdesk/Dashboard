@@ -247,22 +247,35 @@ export function mount(container) {
       table.className = 'ingram-orders-table';
       table.innerHTML = `
         <thead>
-          <tr><th>Order #</th><th>Type</th><th>Status</th><th>Created</th><th>Provisioned</th><th>PO #</th><th>Product</th><th>Licenses</th><th>Ticket</th></tr>
+          <tr><th>Order #</th><th>Type</th><th>Status</th><th>Created</th><th>Provisioned</th><th>PO #</th><th>Product</th><th>Licenses</th></tr>
         </thead>
-        <tbody>${orderRowsHtml(client.orders)}</tbody>
+        <tbody>${orderRowsHtml(client.orders, client.clientName)}</tbody>
       `;
       groupEl.appendChild(table);
       resultsEl.appendChild(groupEl);
-      wireCopyButtons(table, client);
+      wireOrderNumberCopy(table, client);
     }
   }
 
-  function orderRowsHtml(orders) {
+  // Order # cell -- plain text until that order's detail (and therefore
+  // `o.ticket`) has been loaded (see loadDetailForClient()/loadAllDetails()
+  // below); once it has, the number itself becomes the "copy for ticket"
+  // affordance -- by request, replacing the separate Ticket/Copy column
+  // this used to be a dedicated column for. The native `title` tooltip
+  // previews the exact text a click copies, same multi-line-via-\n
+  // convention toggleHistoryTitle()-style tooltips already use elsewhere on
+  // this dashboard.
+  function orderNumberCellHtml(o, clientName) {
+    if (!o.ticket) return escapeHtml(o.orderNumber);
+    return `<span class="order-copy-btn" data-order-id="${escapeHtml(o.id)}" title="${escapeHtml(buildTicketText(o, clientName))}">${escapeHtml(o.orderNumber)}</span>`;
+  }
+
+  function orderRowsHtml(orders, clientName) {
     return orders
       .map(
         (o) => `
       <tr>
-        <td class="ticket-number">${escapeHtml(o.orderNumber)}</td>
+        <td class="ticket-number">${orderNumberCellHtml(o, clientName)}</td>
         <td>${escapeHtml(capitalize(o.type))}</td>
         <td${o.status !== 'completed' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(capitalize(o.status))}</td>
         <td class="ticket-number">${formatDateTime(o.creationDate)}</td>
@@ -270,22 +283,22 @@ export function mount(container) {
         <td class="ticket-number">${escapeHtml(o.poNumber ?? '')}</td>
         <td>${escapeHtml((o.products || []).map((p) => p.name).join(', '))}</td>
         <td class="ticket-number">${licensesCellHtml(o)}</td>
-        <td class="ticket-number">${o.ticket ? `<button type="button" class="link-button copy-ticket-button" data-order-id="${escapeHtml(o.id)}">Copy</button>` : ''}</td>
       </tr>`
       )
       .join('');
   }
 
-  // Wires up every "Copy" button currently in `tableOrTbodyEl` against
-  // `client.orders` -- called fresh any time a table/tbody's HTML is
-  // (re)built (orderRowsHtml() produces plain markup, no listeners), so this
-  // has to run after EVERY place that sets that innerHTML: the initial
-  // render() above, and loadDetailForClient()'s own tbody replacement below.
-  // loadAllDetails() doesn't need its own call -- it always finishes with a
-  // full render(lastData), which already runs this for every client.
-  function wireCopyButtons(tableOrTbodyEl, client) {
-    tableOrTbodyEl.querySelectorAll('.copy-ticket-button').forEach((btn) => {
-      btn.addEventListener('click', () => copyTicketText(btn, client));
+  // Wires up every Order # cell with a loaded ticket (`.order-copy-btn`)
+  // currently in `tableOrTbodyEl` against `client.orders` -- called fresh any
+  // time a table/tbody's HTML is (re)built (orderRowsHtml() produces plain
+  // markup, no listeners), so this has to run after EVERY place that sets
+  // that innerHTML: the initial render() above, and loadDetailForClient()'s
+  // own tbody replacement below. loadAllDetails() doesn't need its own call
+  // -- it always finishes with a full render(lastData), which already runs
+  // this for every client.
+  function wireOrderNumberCopy(tableOrTbodyEl, client) {
+    tableOrTbodyEl.querySelectorAll('.order-copy-btn').forEach((el) => {
+      el.addEventListener('click', () => copyTicketText(el, client));
     });
   }
 
@@ -338,18 +351,17 @@ export function mount(container) {
     return currency ? `$${amount} ${currency}` : `$${amount}`;
   }
 
+  // `btn` is the Order # cell's own <span> (see orderNumberCellHtml()) --
+  // its text IS the order number, so "copied" feedback is a brief colour
+  // flash (.order-copy-btn--copied) rather than swapping the label the way
+  // a dedicated Copy button used to.
   async function copyTicketText(btn, client) {
     const order = client.orders.find((o) => String(o.id) === btn.dataset.orderId);
     if (!order) return;
     try {
       await navigator.clipboard.writeText(buildTicketText(order, client.clientName));
-      const original = btn.textContent;
-      btn.textContent = 'Copied!';
-      btn.disabled = true;
-      setTimeout(() => {
-        btn.textContent = original;
-        btn.disabled = false;
-      }, 1500);
+      btn.classList.add('order-copy-btn--copied');
+      setTimeout(() => btn.classList.remove('order-copy-btn--copied'), 1200);
     } catch (err) {
       alert(`Couldn't copy: ${err.message}`);
     }
@@ -486,8 +498,8 @@ export function mount(container) {
       client.detailLoaded = true;
 
       const tbody = groupEl.querySelector('tbody');
-      tbody.innerHTML = orderRowsHtml(client.orders);
-      wireCopyButtons(tbody, client);
+      tbody.innerHTML = orderRowsHtml(client.orders, client.clientName);
+      wireOrderNumberCopy(tbody, client);
       nameButton.textContent = client.clientName;
     } catch (err) {
       nameButton.textContent = `${client.clientName} (failed to load details -- click to retry)`;
