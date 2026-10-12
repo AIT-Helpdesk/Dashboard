@@ -362,7 +362,15 @@ async function fetchTicketDueCountsSection(client, resourceId) {
   // No `exist: dueDateTime` filter (unlike the earlier due-date-only
   // version of this query) -- allOpenMine below needs every open ticket
   // assigned to this resource, due date or not.
-  const tickets = excludeMonitoringAlerts(await listAll(client.tickets, [{ op: 'notExist', field: 'completedDate' }]));
+  // Status 20 ("Billing - Contract") never gets completedDate set, so it'd
+  // otherwise slip through this query and count as open -- excluded
+  // client-side (status is never null on a real ticket, but this still
+  // follows the same "don't filter via a `noteq` Autotask query" convention
+  // excludeMonitoringAlerts() uses, for the same NULL-semantics reason) since,
+  // by request, Billing - Contract always counts as done.
+  const tickets = excludeMonitoringAlerts(await listAll(client.tickets, [{ op: 'notExist', field: 'completedDate' }])).filter(
+    (t) => t.status !== 20
+  );
   const { startISO: todayStartISO, endISO: todayEndISO } = aestDayBoundsIso(todayAestKey());
   const overdueMine = [];
   const dueTodayMine = [];

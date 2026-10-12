@@ -49,11 +49,10 @@ const P1_CANNOT_BE_MOVED_PRIORITY_VALUE = 10;
 // picklist, by request ("Client Updates" widget).
 const CUSTOMER_NOTE_ADDED_STATUS_VALUE = 19;
 
-// "Open" here is simply "has no completedDate yet" -- same definition (and
-// same caveat -- a status-20 "Billing - Contract" ticket sitting in
-// billing still counts as open, slightly overstating the count relative
-// to Completed Tickets' own stricter definition) as Ticket Dashboards
-// (Test) uses for its own openTickets.
+// "Open" is "has no completedDate yet" AND status isn't 20 ("Billing -
+// Contract" -- that status never gets completedDate set at all, and by
+// request always counts as done, same as everywhere else on this
+// dashboard).
 //
 // Filtered by priority IN THE QUERY ITSELF, not fetched-then-filtered --
 // unlike Ticket Dashboards (Test)'s own copy of this function, this page
@@ -77,7 +76,11 @@ async function fetchOpenTicketsByPriority(client, priorityValue) {
     { op: 'notExist', field: 'completedDate' },
     { op: 'eq', field: 'priority', value: priorityValue },
   ]);
-  return excludeMonitoringAlerts(tickets);
+  // Status 20 ("Billing - Contract") never gets completedDate set, so a
+  // ticket that finished with this priority still set and moved to billing
+  // would otherwise slip through and show as still needing triage -- by
+  // request, Billing - Contract always counts as done.
+  return excludeMonitoringAlerts(tickets).filter((t) => t.status !== 20);
 }
 
 // Open tickets with the given status (e.g. "Customer Note Added"), by
@@ -111,11 +114,16 @@ function tomorrowAestMidnightUtcIso() {
 // metric ("an automated alert that's been escalated to this priority is
 // exactly as urgent as a human-raised one").
 async function fetchDoTodayTickets(client) {
-  return listAll(client.tickets, [
+  const tickets = await listAll(client.tickets, [
     { op: 'notExist', field: 'completedDate' },
     { op: 'eq', field: 'priority', value: P1_CANNOT_BE_MOVED_PRIORITY_VALUE },
     { op: 'lt', field: 'dueDateTime', value: tomorrowAestMidnightUtcIso() },
   ]);
+  // Status 20 ("Billing - Contract") never gets completedDate set, so a
+  // finished ticket that moved to billing while still carrying this
+  // priority would otherwise wrongly reappear here -- by request, Billing -
+  // Contract always counts as done.
+  return tickets.filter((t) => t.status !== 20);
 }
 
 // "Overdue tickets" banner -- a COUNT only, by request ("a red banner... with
@@ -133,8 +141,12 @@ async function fetchOverdueCount(client) {
     { op: 'notExist', field: 'completedDate' },
     { op: 'lt', field: 'dueDateTime', value: nowIso },
   ]);
+  // Status 20 ("Billing - Contract") never gets completedDate set, so a
+  // finished, overdue-looking ticket that moved to billing would otherwise
+  // inflate this banner -- by request, Billing - Contract always counts as
+  // done.
   return excludeMonitoringAlerts(tickets).filter(
-    (t) => ![TRIAGE_PRIORITY_VALUE, TO_BE_SCHEDULED_PRIORITY_VALUE].includes(t.priority)
+    (t) => t.status !== 20 && ![TRIAGE_PRIORITY_VALUE, TO_BE_SCHEDULED_PRIORITY_VALUE].includes(t.priority)
   ).length;
 }
 

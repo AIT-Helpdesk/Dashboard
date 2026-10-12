@@ -742,7 +742,13 @@ async function buildAutotaskTicketsComponent(client, siteTerm) {
     getPicklistLabels(client.tickets, 'priority'),
   ]);
 
-  const openTickets = excludeMonitoringAlerts(openTicketsRaw);
+  // Status 20 ("Billing - Contract") never gets completedDate set, so it'd
+  // otherwise slip through the notExist(completedDate) query above and count
+  // as "open" -- excluded client-side (not via a `noteq` Autotask query
+  // filter -- see excludeMonitoringAlerts()'s own comment for why) since,
+  // by request, Billing - Contract always counts as done, same as every
+  // other "open vs closed" count on this dashboard.
+  const openTickets = excludeMonitoringAlerts(openTicketsRaw).filter((t) => t.status !== 20);
   const closedThisMonth = excludeMonitoringAlerts([...completedRaw, ...billingRaw]);
   const openedThisMonth = excludeMonitoringAlerts(openedThisMonthRaw);
 

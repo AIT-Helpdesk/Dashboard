@@ -33,18 +33,19 @@ const TREND_WINDOW_DAYS = 30;
 // (byPriority) and the normal MSP sense of "critical tickets".
 const CRITICAL_PRIORITY_VALUE = 4;
 
-// "Open" here is simply "has no completedDate yet" -- the same field Autotask
-// itself sets on the 5 ("Complete") transition. NOT the same definition
-// Completed Tickets uses for the mirror case (which also treats status 20,
-// "Billing - Contract", as done via resolvedDateTime, since those tickets
-// never get a completedDate at all -- see that page's own server.js). Kept
-// deliberately simple for this first test cut: a status-20 ticket sitting in
-// billing still counts as "open" here, which slightly overstates the open
-// count relative to Completed Tickets' stricter definition. Worth tightening
-// if this page graduates past "test".
+// "Open" is "has no completedDate yet" (the same field Autotask itself sets
+// on the 5 -> "Complete" transition) AND status isn't 20 ("Billing -
+// Contract") -- by request, Billing - Contract always counts as done, same
+// as Completed Tickets/Accrued Time/What's On/Today Things elsewhere on this
+// dashboard. A status-20 ticket never gets completedDate set at all, so it'd
+// otherwise slip through the completedDate check and overstate the open
+// count. Filtered client-side (status is never null on a real ticket, but
+// this still follows the same "don't filter via a Autotask `noteq` query"
+// convention excludeMonitoringAlerts() uses, for the same NULL-semantics
+// reason -- see that function's own comment).
 async function fetchOpenTickets(client) {
   const tickets = await listAll(client.tickets, [{ op: 'notExist', field: 'completedDate' }]);
-  return excludeMonitoringAlerts(tickets);
+  return excludeMonitoringAlerts(tickets).filter((t) => t.status !== 20);
 }
 
 // Groups a ticket list by one picklist field, resolving each code to its real

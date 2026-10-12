@@ -28,16 +28,14 @@ Autotask picklists specific to this account's configuration (queues in
 particular are custom: Helpdesk, Workshop, Billing Issues, etc.), not fixed
 values this app owns.
 
-### "Open" is defined loosely, on purpose
+### "Open" definition
 
-Open = `completedDate` is not set. That's *simpler* than Completed
-Tickets' own definition (which also treats status 20, "Billing - Contract",
-as done via `resolvedDateTime`, since those tickets never get a
-`completedDate` at all). Kept simple for this first test cut -- a status-20
-ticket sitting in billing still counts as "open" here, which slightly
-overstates the open count relative to Completed Tickets' stricter one. Worth
-tightening (reuse Completed Tickets' exact closed-set definition, inverted)
-if this page graduates past "test".
+Open = `completedDate` is not set AND status isn't 20 ("Billing - Contract").
+That second check matters because status-20 tickets never get a
+`completedDate` set at all (Autotask only sets it on the transition to status
+5, "Complete"), so without it a billing-contract ticket would wrongly show as
+still open -- by request, Billing - Contract always counts as done, same as
+Completed Tickets and every other open/closed count on this dashboard.
 
 `completedDate IS NULL` is queried via Autotask's real `notExist` filter
 operator -- confirmed working via a live round-trip (not previously used
