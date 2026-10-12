@@ -88,11 +88,9 @@ export function mount(container) {
   const resultsEl = container.querySelector('#results');
 
   // AEST (UTC+10, no DST in Queensland) "today", not the browser's own local
-  // timezone -- same convention as every other date-scoped page. Defaults to
-  // 7 days ago rather than today, since "orders since today" would usually
-  // come back empty/near-empty on a page meant to review recent activity.
+  // timezone -- same convention as every other date-scoped page.
   function defaultSinceISO() {
-    return new Date(Date.now() + 10 * 60 * 60 * 1000 - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 10);
   }
   sinceInput.value = lastSince || defaultSinceISO();
   clientInput.value = lastFilter;
@@ -249,12 +247,13 @@ export function mount(container) {
       table.className = 'ingram-orders-table';
       table.innerHTML = `
         <thead>
-          <tr><th>Order #</th><th>Type</th><th>Status</th><th>Created</th><th>Provisioned</th><th>PO #</th><th>Product</th><th>Licenses</th></tr>
+          <tr><th>Order #</th><th>Type</th><th>Status</th><th>Created</th><th>Provisioned</th><th>PO #</th><th>Product</th><th>Licenses</th><th>Ticket</th></tr>
         </thead>
         <tbody>${orderRowsHtml(client.orders)}</tbody>
       `;
       groupEl.appendChild(table);
       resultsEl.appendChild(groupEl);
+      wireCopyButtons(table, client);
     }
   }
 
@@ -271,9 +270,89 @@ export function mount(container) {
         <td class="ticket-number">${escapeHtml(o.poNumber ?? '')}</td>
         <td>${escapeHtml((o.products || []).map((p) => p.name).join(', '))}</td>
         <td class="ticket-number">${licensesCellHtml(o)}</td>
+        <td class="ticket-number">${o.ticket ? `<button type="button" class="link-button copy-ticket-button" data-order-id="${escapeHtml(o.id)}">Copy</button>` : ''}</td>
       </tr>`
       )
       .join('');
+  }
+
+  // Wires up every "Copy" button currently in `tableOrTbodyEl` against
+  // `client.orders` -- called fresh any time a table/tbody's HTML is
+  // (re)built (orderRowsHtml() produces plain markup, no listeners), so this
+  // has to run after EVERY place that sets that innerHTML: the initial
+  // render() above, and loadDetailForClient()'s own tbody replacement below.
+  // loadAllDetails() doesn't need its own call -- it always finishes with a
+  // full render(lastData), which already runs this for every client.
+  function wireCopyButtons(tableOrTbodyEl, client) {
+    tableOrTbodyEl.querySelectorAll('.copy-ticket-button').forEach((btn) => {
+      btn.addEventListener('click', () => copyTicketText(btn, client));
+    });
+  }
+
+  // Plain text, not HTML -- by request, this is meant to be pasted straight
+  // into an Autotask ticket note, where only plain text is ever going to
+  // read cleanly anyway. Every line is conditional on the underlying field
+  // actually having a value, so an order/subscription with gaps (e.g. no PO
+  // number, or a renewal/cancellation order with no line-item pricing) just
+  // omits that line rather than showing "PO #: " or "Unit price: null".
+  function buildTicketText(o, clientName) {
+    const t = o.ticket || {};
+    const sub = t.subscription;
+    const lines = [];
+    lines.push(`Ingram Order ${o.orderNumber} (${capitalize(o.type)}) -- ${capitalize(o.status)}`);
+    lines.push(`Client: ${clientName}`);
+    lines.push(`Created: ${formatDateTime(o.creationDate)}`);
+    if (o.provisioningDate) lines.push(`Provisioned: ${formatDateTime(o.provisioningDate)}`);
+    if (t.poNumber) lines.push(`PO #: ${t.poNumber}`);
+    if (t.lineDescription) {
+      lines.push('');
+      lines.push(t.lineDescription);
+    }
+    if (t.unitPrice != null) {
+      lines.push(
+        `Unit price: ${money(t.unitPrice, t.currency)} | Extended: ${money(t.extendedPrice, t.currency)} | Tax: ${money(t.taxAmount, t.currency)}`
+      );
+    }
+    if (sub) {
+      lines.push('');
+      lines.push(`Subscription: ${sub.name} (ID ${sub.id})`);
+      lines.push(`Status: ${capitalize(sub.status)} | Auto-renew: ${sub.renewalStatus ? 'Yes' : 'No'}`);
+      lines.push(`Created: ${formatDate(sub.creationDate)}`);
+      lines.push(sub.renewalStatus ? `Renews: ${formatDate(sub.renewalDate)}` : `Expires: ${formatDate(sub.expirationDate)}`);
+      if (sub.seats != null) lines.push(`Seats: ${sub.seats}`);
+      if (sub.totalPrice != null) {
+        lines.push(
+          `Current period total: ${money(sub.totalPrice, t.currency)} | Full term: ${money(sub.totalSubscriptionPrice, t.currency)} (cost ${money(sub.totalSubscriptionCost, t.currency)})`
+        );
+      }
+      if (sub.microsoftDomain) lines.push(`Microsoft tenant domain: ${sub.microsoftDomain}`);
+      if (sub.microsoftCustomerId) lines.push(`Microsoft customer ID: ${sub.microsoftCustomerId}`);
+      if (sub.microsoftSubscriptionId) lines.push(`Microsoft subscription ID: ${sub.microsoftSubscriptionId}`);
+      if (sub.cspOrderId) lines.push(`CSP order ID: ${sub.cspOrderId}`);
+    }
+    return lines.join('\n');
+  }
+
+  function money(amount, currency) {
+    if (amount === null || amount === undefined) return '';
+    return currency ? `$${amount} ${currency}` : `$${amount}`;
+  }
+
+  async function copyTicketText(btn, client) {
+    const order = client.orders.find((o) => String(o.id) === btn.dataset.orderId);
+    if (!order) return;
+    try {
+      await navigator.clipboard.writeText(buildTicketText(order, client.clientName));
+      const original = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.disabled = false;
+      }, 1500);
+    } catch (err) {
+      alert(`Couldn't copy: ${err.message}`);
+    }
   }
 
   // Provisioned cell content. `provisioningDate` (a real timestamp) wins
@@ -402,10 +481,13 @@ export function mount(container) {
         o.products = detail?.products ?? [];
         o.currentTotal = detail?.currentTotal ?? null;
         o.effectiveDate = detail?.effectiveDate ?? null;
+        o.ticket = detail?.ticket ?? null;
       }
       client.detailLoaded = true;
 
-      groupEl.querySelector('tbody').innerHTML = orderRowsHtml(client.orders);
+      const tbody = groupEl.querySelector('tbody');
+      tbody.innerHTML = orderRowsHtml(client.orders);
+      wireCopyButtons(tbody, client);
       nameButton.textContent = client.clientName;
     } catch (err) {
       nameButton.textContent = `${client.clientName} (failed to load details -- click to retry)`;
@@ -448,6 +530,7 @@ export function mount(container) {
           o.products = detail?.products ?? [];
           o.currentTotal = detail?.currentTotal ?? null;
           o.effectiveDate = detail?.effectiveDate ?? null;
+          o.ticket = detail?.ticket ?? null;
         }
         client.detailLoaded = true;
       }
