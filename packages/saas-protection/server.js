@@ -5,6 +5,16 @@ const axios = require('axios');
 // convention (`*` prefix/suffix -> beginsWith/endsWith/contains), same as
 // every other page's client-name filter.
 const { matchesWildcard } = require('@dashboard/autotask-client');
+const { upsertAcceptedFailure, getAcceptedFailure, listAllAcceptedFailures, listActiveAcceptedFailures } = require('./db.js');
+
+// AEST (UTC+10, no DST in Queensland) "today" as YYYY-MM-DD -- same
+// convention every date-scoped page on this dashboard uses (e.g. Ingram
+// Orders' own defaultSinceISO()), so an accepted-failure's end date lines
+// up with what "today" means everywhere else here, not the server's own
+// local/UTC day.
+function todayAestDateString() {
+  return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
 
 // Datto SaaS Protection's own REST API (api.datto.com) -- a wholly separate
 // system from both Autotask and Datto RMM (@dashboard/datto-rmm, a
@@ -92,18 +102,12 @@ function buildReport(domains, filterTerm) {
     });
 
   const totalSeats = rows.reduce((sum, c) => sum + (c.seatsUsed || 0), 0);
-  const allFailedCount = rows.filter((c) => c.backupPercentage === 0).length;
-  const someFailedCount = rows.filter((c) => c.backupPercentage !== null && c.backupPercentage > 0 && c.backupPercentage < 100).length;
-  const succeededCount = rows.filter((c) => c.backupPercentage === 100).length;
 
   return {
     asOf: new Date().toISOString(),
     filterTerm: filterTerm || null,
     totalClients: rows.length,
     totalSeats,
-    allFailedCount,
-    someFailedCount,
-    succeededCount,
     byClient: rows,
   };
 }
@@ -238,85 +242,49 @@ async function getDetail(customerId, force) {
   return { applications, seats };
 }
 
-// The four Datto-RMM-style donut widgets, by request -- allFailed/
-// someFailed/succeeded are drawn straight off the already-cached /domains
-// report's own `backupPercentage` (same field the main table sorts by), so
-// counting them costs nothing extra; only clicking into allFailed/
-// someFailed triggers a live per-client applications fetch (bounded
-// concurrency, capped), since 'succeeded' has no error detail to show --
-// its popup is just the plain client list already in hand. 'all' ("All
-// Backups") is handled entirely separately, see getServiceAggregate()
-// below -- it's a whole-account application-level aggregate, not a
-// backupPercentage bucket at all.
+// All five widgets, by request, are now application-type-level and
+// accepted-failure-aware -- EVERY bucket routes through the one
+// getServiceAggregate() computation below, not the cheap /domains-level
+// backupPercentage this used to filter on. That earlier version (allFailed
+// = backupPercentage === 0, etc.) couldn't honor an accepted failure at
+// all: a client's SEAT-level backupPercentage from Datto has no concept of
+// "ignore this one application type for now", so a fully-accepted client
+// would still show up in "All Backups Failed" even though its one real
+// failure had been dealt with. Classification per client, from the same
+// per-app pass that builds the "All Backups" ring:
+//   - succeeded: zero REAL (non-actively-accepted) failing app types.
+//   - allFailed: every app type is a real failing one.
+//   - someFailed: some, but not all.
+//   - (a client with no application data at all -- a Datto-side 500, see
+//     below -- isn't classified into any of the three; we genuinely don't
+//     know its state, so it's left out rather than guessed at.)
 const WIDGET_FETCH_CONCURRENCY = 10;
-const WIDGET_FETCH_CAP = 150; // defensive -- a genuinely pathological day shouldn't fire 150+ concurrent-ish Datto requests from one click
 
 async function getWidgetBucket(bucket, force) {
-  // 'all' ("All Backups") is handled separately -- by request, clicking it
-  // shows the failure breakdown behind that widget's own red arc (which
-  // clients, and which of their application types, aren't currently
-  // backing up), not a plain client list. That's the exact same
-  // per-client-per-application data the service-aggregate computation
-  // already builds for the donut's own success/failure counts, so this
-  // reuses it (same cache, same in-flight de-dupe) rather than fetching
-  // ~230+ clients' /applications a second time.
-  if (bucket === 'all') {
-    const aggregate = await getServiceAggregate(force);
-    return { bucket, clients: aggregate.failingClients };
-  }
-
-  const domains = await getDomains(false);
-  const { byClient } = buildReport(domains, null);
-
-  let clients;
-  let needsApps;
-  if (bucket === 'allFailed') {
-    clients = byClient.filter((c) => c.backupPercentage === 0);
-    needsApps = true;
-  } else if (bucket === 'someFailed') {
-    clients = byClient.filter((c) => c.backupPercentage !== null && c.backupPercentage > 0 && c.backupPercentage < 100);
-    needsApps = true;
-  } else if (bucket === 'succeeded') {
-    clients = byClient.filter((c) => c.backupPercentage === 100);
-    needsApps = false;
-  } else {
-    throw Object.assign(new Error('Unknown bucket -- expected all, allFailed, someFailed, or succeeded.'), { status: 400 });
-  }
-
-  if (!needsApps) {
-    return { bucket, clients: clients.map((c) => ({ ...c, apps: null })) };
-  }
-
-  const toFetch = clients.slice(0, WIDGET_FETCH_CAP);
-  const appsByClient = await mapWithConcurrency(toFetch, WIDGET_FETCH_CONCURRENCY, (c) =>
-    getApplications(c.customerId, force).catch((err) => {
-      console.error(`Failed to fetch applications for customer ${c.customerId}:`, err.message);
-      return null;
-    })
-  );
-  const enriched = toFetch.map((c, i) => ({ ...c, apps: appsByClient[i] }));
-  return { bucket, clients: enriched, truncated: clients.length > toFetch.length, totalMatching: clients.length };
+  const aggregate = await getServiceAggregate(force);
+  if (bucket === 'all') return { bucket, clients: aggregate.failingClients };
+  if (bucket === 'allFailed') return { bucket, clients: aggregate.allFailedClients };
+  if (bucket === 'someFailed') return { bucket, clients: aggregate.someFailedClients };
+  if (bucket === 'succeeded') return { bucket, clients: aggregate.succeededClients.map((c) => ({ ...c, apps: null })) };
+  throw Object.assign(new Error('Unknown bucket -- expected all, allFailed, someFailed, or succeeded.'), { status: 400 });
 }
 
-// "All Backups" widget -- by request, this counts APPLICATION TYPES
-// (Exchange/SharePoint/OneDrive/Teams, one row per client from each
-// client's own /applications fetch) summed across every client, not the
-// /domains endpoint's own activeServicesCount/activeServicesWithRecentBackupCount
-// (those turned out to be a seat-equivalent count, same unit as `seatsUsed`,
-// not what "services" meant here) -- AND, by a follow-up request, clicking
-// the widget shows exactly which clients/application types make up its
-// failure count. Both come out of the same single pass (`failingClients`
-// alongside the totals), not two separate fetches. Unlike the allFailed/
-// someFailed widget buckets, this is NOT capped -- it's a whole-account
-// aggregate (and the failure list behind it), not a list to page through,
-// so under-counting it to stay cheap would just be wrong. Always over the
-// FULL unfiltered client list (a client-name search narrows the table, but
-// this widget is a whole-account KPI, not a per-search one). Cached as one
-// aggregate (20-min TTL) so even a cold cache only pays for the ~230+ live
-// /applications calls once per window, for BOTH the donut and the popup --
-// every individual call still goes through getApplications()'s own cache
-// too, so a later click into a specific client (or an allFailed/someFailed
-// popup) never re-fetches what this already pulled.
+// The single per-client, per-application-type pass behind every widget on
+// this page -- by request, this counts APPLICATION TYPES (Exchange/
+// SharePoint/OneDrive/Teams, one row per client from each client's own
+// /applications fetch) summed across every client, not the /domains
+// endpoint's own activeServicesCount/activeServicesWithRecentBackupCount
+// (those turned out to be a seat-equivalent count, same unit as
+// `seatsUsed`, not what "services" meant here). NOT capped -- it's a
+// whole-account aggregate (and the four client lists behind it), not a
+// list to page through, so under-counting it to stay cheap would just be
+// wrong. Always over the FULL unfiltered client list (a client-name search
+// narrows the main table, but this widget set is a whole-account KPI, not
+// a per-search one). Cached as one aggregate (20-min TTL) so even a cold
+// cache only pays for the ~230+ live /applications calls once per window,
+// for every widget at once -- every individual call still goes through
+// getApplications()'s own cache too, so a later click into a specific
+// client never re-fetches what this already pulled.
 const SERVICE_AGGREGATE_CACHE_TTL_MS = 20 * 60 * 1000;
 let serviceAggregateCache = null; // { data, expiresAt }
 let serviceAggregateInFlight = null;
@@ -326,33 +294,113 @@ let serviceAggregateInFlight = null;
 // Datto's own `error.internal`, reproduced in isolation (not a side effect
 // of this file's own concurrency), so retrying wouldn't help the way the
 // 429 retry in dattoGet() does. Those clients just contribute nothing to
-// the totals/failure list below rather than failing the whole aggregate --
-// a known, Datto-side undercount, not a bug here.
+// the totals/classification below rather than failing the whole aggregate
+// -- a known, Datto-side undercount, not a bug here.
+//
+// Accepted failures, by request: a (customerId, appType) pair with an
+// ACTIVE acceptance (end_date >= today) is excluded entirely -- counted
+// as neither success nor failure, same as it never happened -- "exclude
+// these until the date is reached", and that exclusion now applies to
+// every widget that classifies a client by its failures, not just the
+// All Backups ring. One that WAS accepted but has since LAPSED (end_date
+// < today) is still a failure as normal, just carries its lapsed
+// `acceptedFailure` record along so the client can show the "Failure
+// accepted for X to Y" note. Looked up from one single query (not one
+// SELECT per failing app) into a plain Map.
+//
+// `failingClients` and `allFailedClients`/`someFailedClients` deliberately
+// share the SAME object reference per client (not a copy) -- so
+// patchServiceAggregateCache() below only ever has to mutate one object to
+// keep both in sync, and `totalApps` rides along on it specifically so
+// that patch can tell "no real failures left" (-> succeeded) apart from
+// "fewer failures, but not zero" (-> demote All Failed to Some Failed)
+// without re-deriving anything.
 async function computeServiceAggregate(force) {
   const domains = await getDomains(false);
   const { byClient } = buildReport(domains, null);
   const appsByClient = await mapWithConcurrency(byClient, WIDGET_FETCH_CONCURRENCY, (c) =>
     getApplications(c.customerId, force).catch((err) => {
-      console.error(`Failed to fetch applications for customer ${c.customerId} (Datto-side error, excluded from totals):`, err.message);
-      return [];
+      console.error(`Failed to fetch applications for customer ${c.customerId} (Datto-side error, excluded):`, err.message);
+      return null;
     })
   );
+
+  const today = todayAestDateString();
+  const acceptedByKey = new Map(listAllAcceptedFailures().map((r) => [`${r.customer_id}|${r.app_type}`, r]));
+
   let success = 0;
   let failure = 0;
   const failingClients = [];
+  const allFailedClients = [];
+  const someFailedClients = [];
+  const succeededClients = [];
+
   byClient.forEach((c, i) => {
     const apps = appsByClient[i];
+    if (apps === null || apps.length === 0) return; // no application data at all -- can't classify this client either way
+
     const unhealthy = [];
     for (const a of apps) {
-      if (a.healthy) success++;
-      else {
-        failure++;
-        unhealthy.push(a);
+      if (a.healthy) {
+        success++;
+        continue;
       }
+      const accepted = acceptedByKey.get(`${c.customerId}|${a.appType}`);
+      if (accepted && accepted.end_date >= today) continue; // actively accepted -- excluded, not counted either way
+      failure++;
+      unhealthy.push(accepted ? { ...a, acceptedFailure: { startDate: accepted.start_date, endDate: accepted.end_date } } : a);
     }
-    if (unhealthy.length > 0) failingClients.push({ ...c, apps: unhealthy });
+
+    if (unhealthy.length === 0) {
+      succeededClients.push(c);
+      return;
+    }
+
+    const entry = { ...c, apps: unhealthy, totalApps: apps.length };
+    failingClients.push(entry);
+    if (unhealthy.length === apps.length) allFailedClients.push(entry);
+    else someFailedClients.push(entry);
   });
-  return { success, failure, total: success + failure, failingClients };
+
+  return { success, failure, total: success + failure, failingClients, allFailedClients, someFailedClients, succeededClients };
+}
+
+// Patches an already-cached aggregate in place right after a successful
+// accept -- removes that one app from the client's shared failure entry
+// and adjusts the totals, WITHOUT forcing the full ~230+-client recompute
+// (that's a ~75s round trip, far too slow for "I just accepted this, make
+// it disappear"). Also reclassifies that client between the allFailed/
+// someFailed/succeeded lists if the accept changes which bucket it belongs
+// in (e.g. its last remaining real failure just got accepted -> moves to
+// succeeded). The cache's own expiresAt is left untouched, so it still
+// naturally recomputes from scratch later (self-healing against any edge
+// case here). No-ops silently if the cache is cold or doesn't contain this
+// pair -- the next real computeServiceAggregate() run reflects it
+// correctly either way; this is purely so an already-warm cache doesn't go
+// stale the moment someone accepts something.
+function patchServiceAggregateCache(customerId, appType) {
+  if (!serviceAggregateCache) return;
+  const data = serviceAggregateCache.data;
+  const entry = data.failingClients.find((c) => String(c.customerId) === String(customerId));
+  if (!entry) return;
+  const idx = entry.apps.findIndex((a) => a.appType === appType);
+  if (idx === -1) return;
+  entry.apps.splice(idx, 1);
+  data.failure -= 1;
+  data.total -= 1;
+
+  if (entry.apps.length === 0) {
+    data.failingClients = data.failingClients.filter((c) => c !== entry);
+    data.allFailedClients = data.allFailedClients.filter((c) => c !== entry);
+    data.someFailedClients = data.someFailedClients.filter((c) => c !== entry);
+    const { apps, totalApps, ...plain } = entry;
+    data.succeededClients.push(plain);
+  } else if (data.allFailedClients.includes(entry)) {
+    // Removing any app while apps.length > 0 means it's no longer EVERY
+    // app failing -- demote from All Failed to Some Failed.
+    data.allFailedClients = data.allFailedClients.filter((c) => c !== entry);
+    data.someFailedClients.push(entry);
+  }
 }
 
 async function getServiceAggregate(force) {
@@ -371,6 +419,11 @@ async function getServiceAggregate(force) {
 }
 
 const router = express.Router();
+// Only POST /accept-failure sends a body -- Express only parses one when a
+// request actually has one, so this is a no-op for every GET route here,
+// same router.use(express.json()) convention Contract Checks/Check Client
+// already use for their own one write route each.
+router.use(express.json());
 
 router.get('/', async (req, res) => {
   try {
@@ -396,10 +449,24 @@ router.get('/detail', async (req, res) => {
   }
 });
 
+// Feeds all four client-classifying widgets (All Backups' own ring, plus
+// the All Failed/Some Failed/Succeeded counts) from the one aggregate --
+// `classifiedTotal` (not the base report's `totalClients`) is the right
+// denominator for those three, since a client with no application data at
+// all (a Datto-side error) is excluded from classification entirely and
+// shouldn't silently deflate their "X of Y" percentage.
 router.get('/service-totals', async (req, res) => {
   try {
-    const { success, failure, total } = await getServiceAggregate(req.query.force === 'true');
-    res.json({ success, failure, total });
+    const agg = await getServiceAggregate(req.query.force === 'true');
+    res.json({
+      success: agg.success,
+      failure: agg.failure,
+      total: agg.total,
+      allFailedCount: agg.allFailedClients.length,
+      someFailedCount: agg.someFailedClients.length,
+      succeededCount: agg.succeededClients.length,
+      classifiedTotal: agg.allFailedClients.length + agg.someFailedClients.length + agg.succeededClients.length,
+    });
   } catch (err) {
     console.error(err);
     const detail = err.response ? `Datto API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
@@ -416,6 +483,63 @@ router.get('/widget-detail', async (req, res) => {
     console.error(err);
     const detail = err.response ? `Datto API returned HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
     res.status(500).json({ error: detail });
+  }
+});
+
+// Accept (or re-accept) one failing (client, application type) pair --
+// purely a DB write, no live Datto call, so this is instant regardless of
+// how long the aggregate itself takes to (re)compute. patchServiceAggregateCache()
+// keeps any already-warm cache honest immediately, rather than leaving a
+// stale failure sitting in it until the next natural 20-min recompute.
+router.post('/accept-failure', (req, res) => {
+  const { customerId, appType, clientName, domain, endDate } = req.body || {};
+  if (!customerId || !appType) return res.status(400).json({ error: 'customerId and appType are required.' });
+  if (!endDate || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    return res.status(400).json({ error: 'endDate is required, in YYYY-MM-DD format.' });
+  }
+  const today = todayAestDateString();
+  if (endDate < today) return res.status(400).json({ error: 'endDate cannot be in the past.' });
+
+  try {
+    const existing = getAcceptedFailure(customerId, appType);
+    const record = upsertAcceptedFailure({
+      customerId,
+      appType,
+      clientName,
+      domain,
+      startDate: existing ? existing.start_date : today,
+      endDate,
+      acceptedByName: req.session?.user?.name || null,
+      acceptedAt: new Date().toISOString(),
+    });
+    patchServiceAggregateCache(customerId, appType);
+    res.json({ ok: true, record });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The 5th widget's own data -- active (not yet lapsed) accepted failures
+// only, cheap (DB-only, no Datto calls), so this is always fetched fresh,
+// no cache needed.
+router.get('/accepted-failures', (req, res) => {
+  try {
+    const today = todayAestDateString();
+    const rows = listActiveAcceptedFailures(today).map((r) => ({
+      customerId: r.customer_id,
+      appType: r.app_type,
+      clientName: r.client_name,
+      domain: r.domain,
+      startDate: r.start_date,
+      endDate: r.end_date,
+      acceptedByName: r.accepted_by_name,
+      acceptedAt: r.accepted_at,
+    }));
+    res.json({ items: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
 

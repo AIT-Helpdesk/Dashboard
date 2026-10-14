@@ -4293,6 +4293,18 @@ td.ticket-number a:hover {
   font-weight: 600;
 }
 
+/* SaaS Protection's "Accept" control (All Backups popup) -- the date
+   input and its Accept button, inline on one line within the cell. */
+.saas-accept-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.saas-accept-date {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.3rem;
+}
+
 tr.row-no-next-period {
   background: var(--row-warn-bg) !important;
 }
@@ -4683,6 +4695,20 @@ tr.row-text-highlight-blue td {
   max-height: 80vh;
   overflow-y: auto;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+/* SaaS Protection's five widget popups -- ~30% wider than the shared
+   default (30rem -> 39rem), by request, since these carry a per-app
+   Accept Until column/date-picker the default width crowds. Compound
+   selector (.history-modal-panel.saas-widget-modal-panel), not just the
+   one class -- same equal-specificity gotcha .cc-ticket-note-modal-panel's
+   own comment documents elsewhere in this file (a single-class rule here
+   would tie with .wsp-qa-modal-panel's own width rule, which sits LATER in
+   this file and would silently win regardless of what's set here). Only
+   on the widget popups, not the per-client one (openClientModal() in
+   client.js doesn't pass the `wide` flag) -- that one's narrower content
+   doesn't need it. */
+.history-modal-panel.saas-widget-modal-panel {
+  max-width: min(39rem, 90vw);
 }
 .history-modal-panel-header {
   display: flex;
