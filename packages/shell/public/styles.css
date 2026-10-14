@@ -4283,6 +4283,16 @@ td.ticket-number a:hover {
   font-weight: 600;
 }
 
+/* "Yellowy orange" (#f59e0b, by request) -- same amber already used
+   dashboard-wide for this exact shade (.text-highlight-orange,
+   .status.loading, etc.), not a new one-off. First use of an orange
+   cell-flag variant alongside the existing red/green/blue trio -- SaaS
+   Protection's Backup % column (>90% but <100%), by request. */
+.cell-flag-orange {
+  color: #f59e0b !important;
+  font-weight: 600;
+}
+
 tr.row-no-next-period {
   background: var(--row-warn-bg) !important;
 }
