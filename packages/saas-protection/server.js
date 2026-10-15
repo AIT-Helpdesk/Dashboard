@@ -418,6 +418,31 @@ async function getServiceAggregate(force) {
   return serviceAggregateInFlight;
 }
 
+// Background pre-warm, by request ("the initial load takes a long time")
+// -- same convention Today Things' own warmCache() uses. Without this, the
+// ~230+-call, ~75s-on-a-cold-cache computeServiceAggregate() run only ever
+// started the moment some user's browser actually asked for it (on first
+// page load after a server restart, or the first request after the 20-min
+// cache expired), making THAT request the one that waits. Warming it here
+// instead -- once immediately at server startup, then on a recurring timer
+// comfortably inside the 20-min TTL -- means a real user's request almost
+// always lands on an already-warm cache. Errors are swallowed (logged, not
+// thrown) -- a failed background warm just leaves the existing cache to
+// expire normally and the next real request pays for its own fetch, same
+// as if this warming didn't exist at all; it should never crash the
+// server. `.unref()` -- doesn't hold the process open on its own (the real
+// HTTP server's own listening socket already does that); lets a
+// short-lived script that merely requires this module still exit
+// naturally rather than hanging on a timer that runs forever.
+const SERVICE_AGGREGATE_WARM_INTERVAL_MS = 15 * 60 * 1000; // comfortably inside the 20-minute SERVICE_AGGREGATE_CACHE_TTL_MS
+function warmServiceAggregateCache() {
+  getServiceAggregate(true).catch((err) => {
+    console.error('saas-protection: background aggregate warm failed:', err.message);
+  });
+}
+warmServiceAggregateCache();
+setInterval(warmServiceAggregateCache, SERVICE_AGGREGATE_WARM_INTERVAL_MS).unref();
+
 const router = express.Router();
 // Only POST /accept-failure sends a body -- Express only parses one when a
 // request actually has one, so this is a no-op for every GET route here,

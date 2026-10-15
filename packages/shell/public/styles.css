@@ -4696,19 +4696,20 @@ tr.row-text-highlight-blue td {
   overflow-y: auto;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
-/* SaaS Protection's five widget popups -- ~30% wider than the shared
-   default (30rem -> 39rem), by request, since these carry a per-app
-   Accept Until column/date-picker the default width crowds. Compound
-   selector (.history-modal-panel.saas-widget-modal-panel), not just the
-   one class -- same equal-specificity gotcha .cc-ticket-note-modal-panel's
-   own comment documents elsewhere in this file (a single-class rule here
+/* SaaS Protection's five widget popups -- widened twice by request: first
+   ~30% over the shared default (30rem -> 39rem), then a further 40% on
+   top of that (39rem -> 54.6rem), since these carry a per-app Accept
+   Until column/date-picker the default width crowds. Compound selector
+   (.history-modal-panel.saas-widget-modal-panel), not just the one class
+   -- same equal-specificity gotcha .cc-ticket-note-modal-panel's own
+   comment documents elsewhere in this file (a single-class rule here
    would tie with .wsp-qa-modal-panel's own width rule, which sits LATER in
-   this file and would silently win regardless of what's set here). Only
-   on the widget popups, not the per-client one (openClientModal() in
-   client.js doesn't pass the `wide` flag) -- that one's narrower content
-   doesn't need it. */
+   this file and would silently win regardless of what's set here). Also
+   applied to the per-client popup (openClientModal() in client.js), by
+   request -- every popup on this page is wide now, not just the widget
+   ones. */
 .history-modal-panel.saas-widget-modal-panel {
-  max-width: min(39rem, 90vw);
+  max-width: min(54.6rem, 90vw);
 }
 .history-modal-panel-header {
   display: flex;
