@@ -147,16 +147,49 @@ export function mount(container) {
     table.className = 'saas-protection-table';
     table.innerHTML = `
       <thead>
-        <tr><th>Client</th><th>Domain</th><th>Product</th><th>${seatsHeaderHtml(data.byClient)}</th><th>${servicesHeaderHtml(data.byClient)}</th><th>Backup %</th></tr>
+        <tr>
+          <th>Client</th><th>Domain</th><th>Product</th>
+          <th class="saas-seats-header"></th>
+          <th class="saas-services-header"></th>
+          <th>Backup %</th>
+        </tr>
+        <tr class="saas-client-filter-row">
+          <th><input type="text" class="saas-client-filter-input" placeholder="Filter clients..." /></th>
+          <th></th><th></th><th></th><th></th><th></th>
+        </tr>
       </thead>
-      <tbody>${clientRowsHtml(data.byClient)}</tbody>
+      <tbody></tbody>
     `;
     resultsEl.appendChild(table);
 
-    table.querySelectorAll('.client-name-button').forEach((btn) => {
-      const client = data.byClient.find((c) => String(c.customerId) === btn.dataset.customerId);
-      if (client) btn.addEventListener('click', () => openClientModal(client));
-    });
+    // Live, purely in-memory filter on the Client column, by request --
+    // narrows the already-loaded `data.byClient` as you type, with no
+    // server round trip at all (unlike the top-of-page Client search box,
+    // which re-fetches from Datto on submit). The Seats/Services Backed Up
+    // header totals re-derive from whatever's currently visible, same
+    // "reflects the filtered set" rule those two already followed before
+    // this filter existed -- only the filter `<input>` element itself is
+    // never recreated (so typing doesn't lose focus/cursor position);
+    // everything else below it is rebuilt on every keystroke.
+    const seatsHeaderEl = table.querySelector('.saas-seats-header');
+    const servicesHeaderEl = table.querySelector('.saas-services-header');
+    const tbody = table.querySelector('tbody');
+    const filterInput = table.querySelector('.saas-client-filter-input');
+
+    function renderTableRows() {
+      const term = filterInput.value.trim().toLowerCase();
+      const visible = term ? data.byClient.filter((c) => c.clientName.toLowerCase().includes(term)) : data.byClient;
+      seatsHeaderEl.textContent = seatsHeaderHtml(visible);
+      servicesHeaderEl.textContent = servicesHeaderHtml(visible);
+      tbody.innerHTML = visible.length > 0 ? clientRowsHtml(visible) : `<tr><td colspan="6" class="status">No clients matching this filter.</td></tr>`;
+      tbody.querySelectorAll('.client-name-button').forEach((btn) => {
+        const client = visible.find((c) => String(c.customerId) === btn.dataset.customerId);
+        if (client) btn.addEventListener('click', () => openClientModal(client));
+      });
+    }
+
+    filterInput.addEventListener('input', renderTableRows);
+    renderTableRows();
   }
 
   // "All Backups" is a two-colour ring (green = services with a recent
@@ -483,11 +516,52 @@ export function mount(container) {
       : '<p class="status">No seats found.</p>';
 
     return `
+      ${backupStatusChartHtml(data.applications)}
       <h3>Applications</h3>
       ${appsHtml}
       <h3>Seats (${data.seats.length})</h3>
       ${seatsHtml}
     `;
+  }
+
+  // Mirrors Datto's own Partner Portal "Backup Status" widget, by request
+  // ("I can see this [screenshot of that widget] ... can you get me
+  // something similar?") -- a 30-day green/red/grey bar row per
+  // application type. `a.history` (only present on the per-client detail
+  // this modal fetches, not the bulk aggregate -- see
+  // getApplicationsHistory() in server.js) is a SPARSE array (an app type
+  // with little or no history, e.g. a freshly-added OneDrive, simply has
+  // fewer entries, not 30 blanks), so this fills in every day 0-29 from a
+  // lookup map rather than assuming index === day.
+  function backupStatusChartHtml(applications) {
+    if (!applications.length) return '';
+    return `
+      <h3>Backup Status <span class="inline-subtext">Last 30 days</span></h3>
+      <div class="saas-history-chart">
+        ${applications
+          .map(
+            (a) => `
+          <div class="saas-history-row">
+            <span class="saas-history-label">${escapeHtml(appTypeLabel(a.appType))}</span>
+            <span class="saas-history-bars">${backupHistoryBarsHtml(a.history)}</span>
+          </div>
+        `
+          )
+          .join('')}
+      </div>
+    `;
+  }
+
+  function backupHistoryBarsHtml(history) {
+    const byDaysAgo = new Map((history || []).map((h) => [h.daysAgo, h.status]));
+    const bars = [];
+    for (let daysAgo = 29; daysAgo >= 0; daysAgo--) {
+      const status = byDaysAgo.get(daysAgo);
+      const cls = !status ? 'saas-history-bar--none' : status === 'Perfect' ? 'saas-history-bar--ok' : 'saas-history-bar--issue';
+      const when = daysAgo === 0 ? 'Today' : `${daysAgo} day${daysAgo === 1 ? '' : 's'} ago`;
+      bars.push(`<span class="saas-history-bar ${cls}" title="${escapeHtml(`${when}: ${status || 'No data'}`)}"></span>`);
+    }
+    return bars.join('');
   }
 
   function appRowHtml(a) {
@@ -604,7 +678,7 @@ export function mount(container) {
   // since run out", never a currently-active one.
   function appFailureRowHtml(c, a, allowAccept) {
     const acceptedNote = a.acceptedFailure
-      ? `<br><span class="cell-flag-orange">Failure accepted for ${formatDate(a.acceptedFailure.startDate)} to ${formatDate(a.acceptedFailure.endDate)}</span>`
+      ? `<br><span class="cell-flag-orange saas-accepted-note">Failure accepted for ${formatDate(a.acceptedFailure.startDate)} to ${formatDate(a.acceptedFailure.endDate)}</span>`
       : '';
     return `<tr>
       <td>${escapeHtml(appTypeLabel(a.appType))}</td>
@@ -736,10 +810,16 @@ export function mount(container) {
 
   // Datto's own appType values are camelCase/compound ("Office365Exchange",
   // "Office365SharePoint", "Office365OneDrive", confirmed against real
-  // data) -- split into a readable label rather than shown verbatim.
+  // data) -- "Office365" stripped off the front, by request (every app
+  // type on this page is already Office365, so it's redundant noise on
+  // every row), then split into a readable label rather than shown
+  // verbatim.
   function appTypeLabel(appType) {
     if (!appType) return '';
-    return appType.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/(\d)([A-Z])/g, '$1 $2');
+    return appType
+      .replace(/^Office365/, '')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/(\d)([A-Z])/g, '$1 $2');
   }
 
   function formatBytes(bytes) {

@@ -4293,6 +4293,80 @@ td.ticket-number a:hover {
   font-weight: 600;
 }
 
+/* SaaS Protection's "Failure accepted for X to Y" note -- same orange as
+   .cell-flag-orange, by request, but NOT bold (that class's own
+   font-weight: 600 reads too loudly for a secondary note line under the
+   real status text). Compound selector so it reliably wins over the
+   single-class rule above regardless of file order -- same
+   equal-specificity gotcha this file's other compound overrides
+   (.cc-ticket-note-modal-panel etc.) already document. */
+.cell-flag-orange.saas-accepted-note {
+  font-weight: 400;
+}
+
+/* SaaS Protection's Client column filter (main table), by request --
+   same compact filter-box look Check Client's own per-column M365 Users
+   filter row already uses (.chk-m365-users-filter-row). */
+.saas-client-filter-row th {
+  padding-top: 0.25rem;
+  padding-bottom: 0.4rem;
+}
+.saas-client-filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+/* SaaS Protection's "Backup Status" chart (per-client popup) -- mirrors
+   Datto's own Partner Portal widget, by request: a green/red/grey bar per
+   day, 30 days, one row per application type. Same red/green already used
+   dashboard-wide (.cell-flag-red/-green's own #dc2626/#16a34a), grey is
+   var(--border) (not a literal) so it still reads correctly in dark mode. */
+.saas-history-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+.saas-history-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.saas-history-label {
+  width: 6rem;
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+.saas-history-bars {
+  display: flex;
+  gap: 2px;
+  /* No longer `flex: 1` -- by request, the bars shouldn't stretch to fill
+     the row/page width, just sit at their own natural (narrow) size. */
+}
+.saas-history-bar {
+  width: 0.5rem;
+  flex: none;
+  height: 1.1rem;
+  border-radius: 2px;
+}
+.saas-history-bar--ok {
+  background: #16a34a;
+}
+.saas-history-bar--issue {
+  background: #dc2626;
+}
+.saas-history-bar--none {
+  background: var(--border);
+}
+
 /* SaaS Protection's "Accept" control (All Backups popup) -- the date
    input and its Accept button, inline on one line within the cell. */
 .saas-accept-control {
