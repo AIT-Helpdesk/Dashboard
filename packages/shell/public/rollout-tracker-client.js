@@ -35,6 +35,15 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
   // applies to every column of its own row, filters or not).
   let rowNameFilterText = '';
   const columnStatusFilters = new Map();
+  // columnId -> lowercased search text, only meaningful (and only shown in
+  // the filter popup) while that column's own Note status checkbox is
+  // ticked -- by request ("when filtered by note, enable adding note
+  // content to filter by"). Narrows WITHIN the note-status rows a column
+  // filter already matches, by the cell's own `reason` (comment) text --
+  // see applyLocalFilters() below. Scoped to 'note' specifically, not
+  // na/cancelled/issue's own optional comments, matching exactly what was
+  // asked.
+  const columnNoteTextFilters = new Map();
   let currentVisibleRowIds = [];
   // Set while a column header drag is in progress -- module-call-scope
   // (not per-render), so it survives the dragstart->drop round trip
@@ -73,6 +82,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
               <button type="button" class="rt-notes-tool" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
               <button type="button" class="rt-notes-tool" data-cmd="insertUnorderedList" title="Bullet list">&#8226; List</button>
               <button type="button" class="rt-notes-tool" data-cmd="insertOrderedList" title="Numbered list">1. List</button>
+              <button type="button" class="rt-notes-tool" data-cmd="createLink" title="Insert link">&#128279; Link</button>
               <button type="button" class="rt-notes-tool" data-cmd="removeFormat" title="Clear formatting">Clear</button>
             </div>
             <div id="notes-editable" class="rt-notes-editable" contenteditable="true"></div>
@@ -159,6 +169,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     clearFiltersButton.addEventListener('click', () => {
       rowNameFilterText = '';
       columnStatusFilters.clear();
+      columnNoteTextFilters.clear();
       loadGrid();
     });
 
@@ -274,9 +285,52 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     notesEditor.querySelectorAll('.rt-notes-tool').forEach((btn) => {
       btn.addEventListener('click', () => {
         notesEditable.focus();
+        if (btn.dataset.cmd === 'createLink') {
+          insertNotesLink();
+          return;
+        }
         document.execCommand(btn.dataset.cmd, false, null);
       });
     });
+
+    // Link insertion needs a URL (prompt(), same lightweight convention
+    // Workshop/Updates/What's On already use for one-off text input) and a
+    // bit more than the generic one-liner above -- execCommand('createLink')
+    // only does anything when text is already selected, so with nothing
+    // selected this inserts the URL itself as the link's visible text
+    // instead of silently no-opping. target="_blank"/rel are set here too
+    // (not just server-side -- see sanitizeNotesHtml()'s own comment in
+    // rollout-tracker-server.js, which re-asserts them regardless of what
+    // the client sent) so the still-open editor's own saved-and-reloaded
+    // view is already correct without waiting on a round trip.
+    function insertNotesLink() {
+      const raw = prompt('Link URL (e.g. https://example.com):');
+      if (raw === null) return; // cancelled
+      const url = normalizeNotesLinkUrl(raw);
+      if (!url) return;
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) {
+        document.execCommand('insertHTML', false, `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`);
+      } else {
+        document.execCommand('createLink', false, url);
+        notesEditable.querySelectorAll('a[href]').forEach((a) => {
+          if (!a.target) a.target = '_blank';
+          if (!a.rel) a.rel = 'noopener noreferrer';
+        });
+      }
+    }
+
+    // Bare "example.com" or "example.com/page" is treated as https --
+    // friendlier than requiring the scheme to be typed every time. A bare
+    // email address becomes a mailto: link. Anything already carrying a
+    // recognised scheme is left as-is.
+    function normalizeNotesLinkUrl(raw) {
+      const trimmed = (raw || '').trim();
+      if (!trimmed) return null;
+      if (/^(https?:|mailto:)/i.test(trimmed)) return trimmed;
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return `mailto:${trimmed}`;
+      return `https://${trimmed}`;
+    }
     container.querySelector('#notes-cancel-button').addEventListener('click', () => {
       notesEditor.hidden = true;
       notesView.hidden = false;
@@ -572,6 +626,15 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
           const cell = row.cells[col.id];
           const status = cell ? cell.status : 'not_done';
           if (!selected.has(status)) return false;
+          // Further narrows the 'note' subset by the cell's own comment
+          // text, by request -- a column filter also matching 'issue'/
+          // 'cancelled' etc. in the same breath is untouched by this (it
+          // only ever applies to a cell whose status is actually 'note').
+          const noteText = columnNoteTextFilters.get(col.id);
+          if (status === 'note' && noteText) {
+            const reason = ((cell && cell.reason) || '').toLowerCase();
+            if (!reason.includes(noteText)) return false;
+          }
         }
         return true;
       });
@@ -637,6 +700,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
           const columnId = Number(btn.dataset.columnId);
           if (!columnStatusFilters.has(columnId)) columnStatusFilters.set(columnId, new Set());
           const selected = columnStatusFilters.get(columnId);
+          const noteText = columnNoteTextFilters.get(columnId) || '';
           const popup = document.createElement('div');
           popup.className = 'rt-status-filter-popup';
           popup.innerHTML = `
@@ -644,19 +708,45 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
               (s) =>
                 `<label class="rt-status-filter-option"><input type="checkbox" value="${s}"${selected.has(s) ? ' checked' : ''} /> ${STATUS_SYMBOLS[s]} ${STATUS_LABELS[s]}</label>`
             ).join('')}
+            <label class="rt-status-filter-note-text"${selected.has('note') ? '' : ' hidden'}>Note contains
+              <input type="text" class="rt-status-filter-note-input" value="${escapeHtml(noteText)}" placeholder="Search note text..." />
+            </label>
             <button type="button" class="link-button rt-status-filter-clear">Clear</button>
           `;
+          const noteTextField = popup.querySelector('.rt-status-filter-note-text');
+          const noteTextInput = popup.querySelector('.rt-status-filter-note-input');
+          noteTextInput.addEventListener('input', () => {
+            const val = noteTextInput.value.trim().toLowerCase();
+            if (val) columnNoteTextFilters.set(columnId, val);
+            else columnNoteTextFilters.delete(columnId);
+            renderTbodyRows(columns, rows);
+          });
           popup.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
             cb.addEventListener('change', () => {
               if (cb.checked) selected.add(cb.value);
               else selected.delete(cb.value);
               btn.textContent = `Filter${statusFilterCountLabel(columnId)}`;
+              // The note-text field only makes sense (and is only shown)
+              // once the Note status is actually part of this filter --
+              // unticking it drops any leftover search text too, so a
+              // later re-tick starts clean rather than silently reapplying
+              // a stale filter the user can no longer see.
+              if (cb.value === 'note') {
+                noteTextField.hidden = !cb.checked;
+                if (!cb.checked) {
+                  columnNoteTextFilters.delete(columnId);
+                  noteTextInput.value = '';
+                }
+              }
               renderTbodyRows(columns, rows);
             });
           });
           popup.querySelector('.rt-status-filter-clear').addEventListener('click', () => {
             selected.clear();
+            columnNoteTextFilters.delete(columnId);
             popup.querySelectorAll('input[type="checkbox"]').forEach((cb) => (cb.checked = false));
+            noteTextInput.value = '';
+            noteTextField.hidden = true;
             btn.textContent = 'Filter';
             renderTbodyRows(columns, rows);
           });

@@ -5090,6 +5090,31 @@ tr.row-text-highlight-blue td {
   font-size: 0.75rem;
   margin-top: 0.15rem;
 }
+/* "Note contains" search, by request -- only shown in the popup while that
+   column's own Note checkbox is ticked (see wireStatusFilterButtons() in
+   rollout-tracker-client.js). Same compact label/field styling as the
+   status options just above it. */
+.rt-status-filter-note-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.78rem;
+  font-weight: normal;
+  color: var(--fg);
+  text-transform: none;
+  margin-top: 0.1rem;
+}
+.rt-status-filter-note-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.78rem;
+  font-weight: 400;
+}
 /* Drag-to-reorder columns, by request. Cursor/visual feedback only on a
    Tracker Manager's own view -- [draggable="false"] (everyone else, see
    renderGrid() in rollout-tracker-client.js) gets neither. */
