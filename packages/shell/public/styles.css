@@ -6998,25 +6998,20 @@ textarea.pgr-field {
 .tm-hours-table td:not(:first-child) {
   width: 4.5rem;
 }
-/* The Total column specifically (second-to-last now that HH:MM is the
-   table's real last column, see below) -- wider than a plain resource
+/* The Total column specifically (the table's real last column -- the
+   separate trailing HH:MM column this rule used to share with is gone,
+   see times/client.js's own formatHours(), by request: "show all times...
+   as HH:MM instead of decimal xx.x" made the Total column itself HH:MM, so
+   the second column was just repeating it) -- wider than a plain resource
    column and never wrapping, so the Billable table's own "worked (toBill)"
    pair (the only place that pair shows up visibly at all, by request)
    reads on one line instead of stacking. Comes after the :not(:first-child)
    rule above so it wins at equal specificity. Widening every table's own
    Total column the same way keeps them lined up with each other, same
    reasoning as the rest of this fixed-layout scheme. */
-.tm-hours-table th:nth-last-child(2),
-.tm-hours-table td:nth-last-child(2) {
-  width: 7rem;
-  white-space: nowrap;
-}
-/* HH:MM column, by request -- the actual last column now. Short, fixed-
-   width digits (e.g. "19:48"), so the default 4.5rem from the
-   :not(:first-child) rule above is already plenty; just keep it from
-   wrapping. */
 .tm-hours-table th:last-child,
 .tm-hours-table td:last-child {
+  width: 7rem;
   white-space: nowrap;
 }
 .tm-total-row th,
@@ -7063,7 +7058,7 @@ textarea.pgr-field {
    page (the green header/reconciliation rows, the red mismatch cells). */
 .tm-total-row th,
 .tm-total-row td,
-.tm-hours-table tbody td:nth-last-child(2) {
+.tm-hours-table tbody td:last-child {
   background: color-mix(in srgb, #2563eb 18%, white);
   color: #1a1a1a;
 }
@@ -7085,21 +7080,21 @@ textarea.pgr-field {
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .tm-total-row th,
   :root:not([data-theme="light"]) .tm-total-row td,
-  :root:not([data-theme="light"]) .tm-hours-table tbody td:nth-last-child(2) {
+  :root:not([data-theme="light"]) .tm-hours-table tbody td:last-child {
     background: color-mix(in srgb, #6b7280 95%, #14161a);
     color: #eef0f3;
   }
 }
 :root[data-theme="dark"] .tm-total-row th,
 :root[data-theme="dark"] .tm-total-row td,
-:root[data-theme="dark"] .tm-hours-table tbody td:nth-last-child(2) {
+:root[data-theme="dark"] .tm-hours-table tbody td:last-child {
   background: color-mix(in srgb, #6b7280 75%, #14161a);
   color: #eef0f3;
 }
 /* "Recorded less Billable" row's own Total-column cell, by request --
    excluded from the blue Total-column shading above (more specific
-   selector than the plain tbody td:nth-last-child(2) rule, so it wins). */
-.tm-hours-table tbody tr.tm-no-total-shading td:nth-last-child(2) {
+   selector than the plain tbody td:last-child rule, so it wins). */
+.tm-hours-table tbody tr.tm-no-total-shading td:last-child {
   background: none;
 }
 /* Billable table's own bracketed toBill figure in the Total column -- not
@@ -7201,7 +7196,7 @@ textarea.pgr-field {
    (same var(--muted) treatment header rows already use), by request. th
    and td both, so the row label cell matches too. The fully-qualified
    selector (not just .tm-reconciliation-row td) is needed to
-   out-specificity .tm-hours-table tbody td:nth-last-child(2) above --
+   out-specificity .tm-hours-table tbody td:last-child above --
    without it, that rule's own blue background would win on just the
    Total-column cell, leaving the rest of the row green. */
 .tm-hours-table tbody tr.tm-reconciliation-row th,
@@ -7259,11 +7254,10 @@ textarea.pgr-field {
    request: one value per row, not per resource, so this is a plain
    label+value table, deliberately its OWN class rather than reusing
    .tm-hours-table -- that class's column-position rules (fixed-width
-   first column, blue Total-column shading on :nth-last-child(2), etc.)
-   all assume a Resources-across-the-top, multi-column shape this table
-   doesn't have; with only two columns, :nth-last-child(2) would actually
-   land on the label column instead, which is exactly the kind of bug
-   reusing that class here would invite. */
+   first column, blue Total-column shading on :last-child, etc.) all
+   assume a Resources-across-the-top, multi-column shape this table
+   doesn't have; this table's own 3-column (label/Hours/%) shape is
+   exactly the kind of mismatch reusing that class here would invite. */
 .tm-overall-summary-table {
   border-collapse: collapse;
   width: fit-content;

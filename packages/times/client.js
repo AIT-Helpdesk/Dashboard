@@ -323,8 +323,7 @@ export function mount(container) {
           totalCell = `<td class="col-center">${totalText}</td>`;
         }
       }
-      const hmsCell = opts.total !== false ? `<td class="col-center">${formatHms(total)}</td>` : '<td></td>';
-      return `<tr${opts.strong ? ' class="tm-total-row"' : ''}><th>${smallCapsHtml(label)}</th>${cells}${totalCell}${hmsCell}</tr>`;
+      return `<tr${opts.strong ? ' class="tm-total-row"' : ''}><th>${smallCapsHtml(label)}</th>${cells}${totalCell}</tr>`;
     }
 
     // First name only, by request -- full name still available on hover
@@ -378,7 +377,7 @@ export function mount(container) {
             opts.drillDownUrl && rowTotal > 0
               ? `<button type="button" class="tm-drill-cell" data-url="${escapeHtml(opts.drillDownUrl(row, null))}">${rowTotalText}</button>`
               : rowTotalText;
-          return `<tr><th>${rowLabelHtml(row[nameKey])}</th>${cells}<td class="col-center">${rowTotalCell}</td><td class="col-center">${formatHms(rowTotal)}</td></tr>`;
+          return `<tr><th>${rowLabelHtml(row[nameKey])}</th>${cells}<td class="col-center">${rowTotalCell}</td></tr>`;
         })
         .join('');
     }
@@ -403,7 +402,7 @@ export function mount(container) {
       const grandText = `<strong>${formatHours(grand)}</strong>`;
       const grandCell =
         kind && grand > 0 ? `<button type="button" class="tm-drill-cell" data-url="${escapeHtml(drillDownUrl(kind, null, null, billable))}">${grandText}</button>` : grandText;
-      return `<tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th>${cells}<td class="col-center">${grandCell}</td><td class="col-center">${formatHms(grand)}</td></tr>`;
+      return `<tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th>${cells}<td class="col-center">${grandCell}</td></tr>`;
     }
 
     // New row, by request -- "for every table from AIT TIME Tickets down,
@@ -411,12 +410,11 @@ export function mount(container) {
     // "percentage of a resource's own Total Hours" (Table 1's own Total
     // Hours row) reading the Hours Summary box already uses, just one
     // figure per resource column here instead of one overall figure --
-    // these tables are one column per resource, not the Hours/HH:MM/%
-    // triad the Hours Summary table uses, so this is its own row rather
-    // than a third column. `worked` (true), when given, reads the .worked
-    // half of a {worked, toBill} pair (the Billable/Non-Billable tables'
-    // own cell shape) instead of a plain number -- same "worked, not
-    // toBill" convention their own HH:MM column already uses.
+    // these tables are one column per resource, not the Hours/% pair the
+    // Hours Summary table uses, so this is its own row rather than a
+    // second column. `worked` (true), when given, reads the .worked half
+    // of a {worked, toBill} pair (the Billable/Non-Billable tables' own
+    // cell shape) instead of a plain number.
     function pctOfTotalHoursRowHtml(totals, worked) {
       const valueFor = (r) => {
         const t = totals.get(r.resourceId);
@@ -526,10 +524,6 @@ export function mount(container) {
     // Shared by Billable and Non-Billable -- same {worked, toBill}-per-cell
     // shape either way (see server.js's own buildClientContractSplitHours()
     // comment), just a different half of the same isNonBillable split.
-    // HH:MM (the new right-hand column, by request, on every table) reads
-    // the row's own Total figure -- for this table that's the primary
-    // (worked) half of the Total column's pair, not the bracketed toBill
-    // figure.
     // `billable` ('true'/'false'), when given, makes every non-zero cell
     // clickable -- same drillDownUrl('contract', ..., billable) shape the
     // plain Recorded table above uses, just with the extra billable-flag
@@ -542,14 +536,14 @@ export function mount(container) {
             .map((r) => billableCellHtml(row.hours[r.resourceId], billable !== undefined ? drillDownUrl('contract', row.contractName, r, billable) : undefined))
             .join('');
           const rowTotalUrl = billable !== undefined ? drillDownUrl('contract', row.contractName, null, billable) : undefined;
-          return `<tr><th>${rowLabelHtml(row.contractName)}</th>${cells}${billableTotalCellHtml(rowTotal, true, false, rowTotalUrl)}<td class="col-center">${formatHms(rowTotal.worked)}</td></tr>`;
+          return `<tr><th>${rowLabelHtml(row.contractName)}</th>${cells}${billableTotalCellHtml(rowTotal, true, false, rowTotalUrl)}</tr>`;
         })
         .join('');
       const totals = billableTotalByResource(rows);
       const grandTotal = sumCells([...totals.values()]);
       const totalRow = `<tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th>${data.resources
         .map((r) => billableCellHtml(totals.get(r.resourceId), billable !== undefined ? drillDownUrl('contract', null, r, billable) : undefined))
-        .join('')}${billableTotalCellHtml(grandTotal, true, grandTotalMismatch, billable !== undefined ? drillDownUrl('contract', null, null, billable) : undefined)}<td class="col-center">${formatHms(grandTotal.worked)}</td></tr>`;
+        .join('')}${billableTotalCellHtml(grandTotal, true, grandTotalMismatch, billable !== undefined ? drillDownUrl('contract', null, null, billable) : undefined)}</tr>`;
       const pctRow = pctOfTotalHoursRowHtml(totals, true);
       return { rowsHtml, totalRow, pctRow, totals, grandTotal };
     }
@@ -571,7 +565,7 @@ export function mount(container) {
     const recordedLessBillableGrandTotal = recordedGrandTotal - clientContractsBillableTable.grandTotal.worked;
     const recordedLessBillableRow = `<tr class="tm-no-total-shading"><th>${smallCapsHtml('Recorded less Billable')}</th>${data.resources
       .map((r, i) => `<td class="col-center">${formatHours(recordedLessBillableCells[i])}</td>`)
-      .join('')}<td class="col-center"><strong>${formatHours(recordedLessBillableGrandTotal)}</strong></td><td class="col-center">${formatHms(recordedLessBillableGrandTotal)}</td></tr>`;
+      .join('')}<td class="col-center"><strong>${formatHours(recordedLessBillableGrandTotal)}</strong></td></tr>`;
 
     // Non-Billable's own grand total, compared against Recorded-less-
     // Billable above -- a real disagreement (beyond floating-point residue)
@@ -595,7 +589,7 @@ export function mount(container) {
       const valueFor = (r) => r[key] - (aittimeTotalByResource.get(r.resourceId) || 0);
       const cells = data.resources.map((r) => `<td class="col-center">${formatHours(valueFor(r))}</td>`).join('');
       const total = data.resources.reduce((s, r) => s + valueFor(r), 0);
-      return `<tr><th>${smallCapsHtml(label)}</th>${cells}<td class="col-center"><strong>${formatHours(total)}</strong></td><td class="col-center">${formatHms(total)}</td></tr>`;
+      return `<tr><th>${smallCapsHtml(label)}</th>${cells}<td class="col-center"><strong>${formatHours(total)}</strong></td></tr>`;
     }
     // % row for the "... less AITTIME" table, by request -- based on
     // Recorded Hours less AITTIME (the activity figure), not Total Hours
@@ -643,7 +637,7 @@ export function mount(container) {
         pctBase === null
           ? '<td class="col-center"></td>'
           : `<td class="col-center${pctRedBackground ? ' tm-pct-shade-red' : ''}">${formatPct(pctBase > 0 ? (hours / pctBase) * 100 : 0)}</td>`;
-      return `<tr><th>${smallCapsHtml(label)}</th><td class="col-center">${formatHours(hours)}</td><td class="col-center">${formatHms(hours)}</td>${pctCell}</tr>`;
+      return `<tr><th>${smallCapsHtml(label)}</th><td class="col-center">${formatHours(hours)}</td>${pctCell}</tr>`;
     }
     function formatPct(n) {
       return `${(Math.round((n + Number.EPSILON) * 10) / 10).toFixed(1)}%`;
@@ -756,7 +750,7 @@ export function mount(container) {
       <div class="tm-table-group">
       <table class="tm-overall-summary-table">
         <thead>
-          <tr><th class="tm-corner-label">${smallCapsHtml('Hours Summary')}</th><th class="col-center">${smallCapsHtml('Hours')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th><th class="col-center">%**</th></tr>
+          <tr><th class="tm-corner-label">${smallCapsHtml('Hours Summary')}</th><th class="col-center">${smallCapsHtml('Hours')}</th><th class="col-center">%**</th></tr>
         </thead>
         <tbody>
           ${overallSummaryRow('Total Tech Hours (at work)', totalTechHours, null)}
@@ -775,7 +769,7 @@ export function mount(container) {
       <div class="tm-table-scroll">
         <table class="tm-hours-table">
           <thead>
-            <tr><th class="tm-corner-label">${smallCapsHtml('Staff Hours')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+            <tr><th class="tm-corner-label">${smallCapsHtml('Staff Hours')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
           </thead>
           <tbody>
             <tr><th>${smallCapsHtml('Normal Hours (per day)')}</th>${data.resources.map((r) => `<td class="col-center">${formatHours(r.normalHoursPerDay)}</td>`).join('')}<td></td><td></td></tr>
@@ -795,7 +789,7 @@ export function mount(container) {
       <div class="tm-table-scroll">
         <table class="tm-hours-table">
           <thead>
-            <tr><th class="tm-corner-label">${smallCapsHtml('AIT Time Tickets')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+            <tr><th class="tm-corner-label">${smallCapsHtml('AIT Time Tickets')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
           </thead>
           <tbody>
             ${aittimeRowsHtml}
@@ -809,7 +803,7 @@ export function mount(container) {
       <div class="tm-table-scroll">
         <table class="tm-hours-table">
           <thead>
-            <tr><th></th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+            <tr><th></th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
           </thead>
           <tbody>
             ${lessAittimeRow('Total Hours less AITTIME', 'totalHours')}
@@ -828,7 +822,7 @@ export function mount(container) {
       <div class="tm-table-scroll">
         <table class="tm-hours-table">
           <thead>
-            <tr><th class="tm-corner-label">${smallCapsHtml('Total Client Hours Recorded')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+            <tr><th class="tm-corner-label">${smallCapsHtml('Total Client Hours Recorded')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
           </thead>
           <tbody>
             ${clientContractsRowsHtml}
@@ -846,7 +840,7 @@ export function mount(container) {
       <div class="tm-table-scroll">
         <table class="tm-hours-table">
           <thead>
-            <tr><th class="tm-corner-label">${smallCapsHtml('Total Client Hours Billable')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+            <tr><th class="tm-corner-label">${smallCapsHtml('Total Client Hours Billable')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
           </thead>
           <tbody>
             ${clientContractsBillableTable.rowsHtml}
@@ -865,7 +859,7 @@ export function mount(container) {
       <div class="tm-table-scroll">
         <table class="tm-hours-table">
           <thead>
-            <tr><th class="tm-corner-label">${smallCapsHtml('Total Client Hours Non-Billable')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+            <tr><th class="tm-corner-label">${smallCapsHtml('Total Client Hours Non-Billable')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
           </thead>
           <tbody>
             ${clientContractsNonBillableTable.rowsHtml}
@@ -945,7 +939,7 @@ export function mount(container) {
           const totalHtml = mismatch ? `<span class="tm-mismatch">${totalText}</span>` : totalText;
           const rowHtml = `<tr class="tm-reconciliation-row"><th>${smallCapsHtml(label)}</th>${data.resources
             .map((r) => `<td class="col-center">${formatHours(totals.get(r.resourceId) || 0)}</td>`)
-            .join('')}<td class="col-center"><strong>${totalHtml}</strong></td><td class="col-center">${formatHms(grandTotal)}</td></tr>`;
+            .join('')}<td class="col-center"><strong>${totalHtml}</strong></td></tr>`;
           return { rowHtml, grandTotal };
         }
 
@@ -993,7 +987,7 @@ export function mount(container) {
           <div class="tm-table-scroll">
             <table class="tm-hours-table">
               <thead>
-                <tr><th class="tm-corner-label">${smallCapsHtml('Work Type - Billable')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+                <tr><th class="tm-corner-label">${smallCapsHtml('Work Type - Billable')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
               </thead>
               <tbody>
                 ${fixedBillable.rowsHtml}
@@ -1010,7 +1004,7 @@ export function mount(container) {
           <div class="tm-table-scroll">
             <table class="tm-hours-table">
               <thead>
-                <tr><th class="tm-corner-label">${smallCapsHtml('Billable was Unticked')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+                <tr><th class="tm-corner-label">${smallCapsHtml('Billable was Unticked')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
               </thead>
               <tbody>
                 ${fixedUnticked.rowsHtml}
@@ -1028,7 +1022,7 @@ export function mount(container) {
           <div class="tm-table-scroll">
             <table class="tm-hours-table">
               <thead>
-                <tr><th class="tm-corner-label">${smallCapsHtml('Work Type - Unbillable')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+                <tr><th class="tm-corner-label">${smallCapsHtml('Work Type - Unbillable')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
               </thead>
               <tbody>
                 ${other.rowsHtml}
@@ -1042,7 +1036,7 @@ export function mount(container) {
           <div class="tm-table-scroll">
             <table class="tm-hours-table">
               <thead>
-                <tr><th class="tm-corner-label">${smallCapsHtml('Accrue--ING by Status')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+                <tr><th class="tm-corner-label">${smallCapsHtml('Accrue--ING by Status')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
               </thead>
               <tbody>
                 ${accrueIng.rowsHtml}
@@ -1064,7 +1058,7 @@ export function mount(container) {
           <div class="tm-table-scroll">
             <table class="tm-hours-table">
               <thead>
-                <tr><th class="tm-corner-label">${smallCapsHtml('Ambient iT Tickets')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th><th class="col-center">${smallCapsHtml('HH:MM')}</th></tr>
+                <tr><th class="tm-corner-label">${smallCapsHtml('Ambient iT Tickets')}</th>${headerCells}<th class="col-center">${smallCapsHtml('Total')}</th></tr>
               </thead>
               <tbody>
                 ${ambientItTickets.rowsHtml}
@@ -1093,25 +1087,28 @@ export function mount(container) {
     });
   }
 
+  // HH:MM everywhere on this page, by request ("show all times... as HH:MM
+  // instead of decimal xx.x") -- this WAS the decimal formatter (2 decimal
+  // places); every call site on this page already just drops its output
+  // straight into a cell, so repointing the one function covers all of
+  // them without touching each call site. Same rounding/rollover
+  // convention the page's own former dedicated HH:MM column (and Ticket
+  // Times' own formatHours()) already used -- round to the nearest minute,
+  // roll over into the next hour rather than ever showing :60. The
+  // separate HH:MM column every table used to carry alongside the decimal
+  // Total is gone now too (see every removed `smallCapsHtml('HH:MM')`
+  // header and matching cell on this page) -- it would just be showing the
+  // same text twice next to the Total column now that Total IS HH:MM.
   function formatHours(n) {
-    const rounded = Math.round((n + Number.EPSILON) * 100) / 100;
-    return rounded.toFixed(2);
+    const totalMinutes = Math.round(((n || 0) + Number.EPSILON) * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
   // For the Billable $ box -- AUD, 2 decimal places, thousands separator.
   function formatCurrency(n) {
     return `$${(n || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  }
-
-  // h:mm, same rounding/rollover convention Ticket Times' own formatHours()
-  // uses (round to the nearest minute, roll over into the next hour rather
-  // than ever showing :60) -- used here only for the HH:MM column, which
-  // translates each row's own Total figure into this format.
-  function formatHms(hours) {
-    const totalMinutes = Math.round((hours || 0) * 60);
-    const h = Math.floor(totalMinutes / 60);
-    const m = totalMinutes % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
   function escapeHtml(str) {
