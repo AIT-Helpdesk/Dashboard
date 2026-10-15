@@ -248,7 +248,7 @@ Every `kind` was confirmed against the live dev server by summing the popup's ow
 | Offset Hours | `TimeEntries.offsetHours` |
 | Start Time / End Time | `TimeEntries.startDateTime` / `endDateTime` -- distinct fields from `dateWorked`, a real time-of-day, not just the calendar date |
 
-**Per-column filtering, client-side, no framework**: a text input under each header cell; typing filters rows by a case-insensitive substring match against that column's own already-rendered cell text, every active filter ANDed together. Rows sorted newest-first by default.
+**Per-column filtering, client-side, no framework**: a text input under each header cell; typing filters rows by a case-insensitive substring match against that column's own already-rendered cell text, every active filter ANDed together. Rows sorted by **Start Time, newest first**, by request (originally Worked Date) -- sorted server-side on the real `startDateTime` ISO value before it's turned into a locale-formatted display string (sorting the formatted string itself wouldn't give chronological order); an entry with no real Start Time at all falls back to `dateWorked` so it still lands roughly in the right place instead of all collapsing to one tied bucket.
 
 ## % of Total Hours row
 
