@@ -86,23 +86,43 @@ function shapeAuditRow(row) {
 }
 
 // The Notes field's rich text stays deliberately basic (bold/italic/
-// underline/strikethrough/lists -- see rollout-tracker-client.js's own
-// toolbar), so the allowlist can be just as small. Every tag not in this
-// list -- and EVERY attribute on every tag, allowed or not -- is stripped
-// entirely, which is what actually matters here: an attribute is the only
-// place an onclick=/onerror=/javascript: href could live, so refusing to
-// keep any attribute at all (rather than trying to allowlist individual
-// safe ones) closes off that whole class of stored-XSS in one rule,
-// without needing a full HTML-parser dependency for a field this narrow
-// in scope. Written to notes.json only through this -- never trust the
-// browser's own execCommand output to already be clean.
-const NOTES_ALLOWED_TAGS = new Set(['b', 'strong', 'i', 'em', 'u', 's', 'strike', 'ul', 'ol', 'li', 'br', 'div', 'p']);
+// underline/strikethrough/lists/links -- see rollout-tracker-client.js's
+// own toolbar), so the allowlist can be just as small. Every tag not in
+// this list -- and EVERY attribute on every tag, allowed or not -- is
+// stripped entirely, which is what actually matters here: an attribute is
+// the only place an onclick=/onerror=/javascript: href could live, so
+// refusing to keep any attribute at all (rather than trying to allowlist
+// individual safe ones) closes off that whole class of stored-XSS in one
+// rule, without needing a full HTML-parser dependency for a field this
+// narrow in scope. Written to notes.json only through this -- never trust
+// the browser's own execCommand output to already be clean.
+//
+// `a` is the one tag that NEEDS an attribute (href) to mean anything, so
+// it gets its own narrow carve-out below rather than joining the blanket
+// "no attributes, ever" rule the rest of this list follows: its href is
+// extracted, scheme-checked against SAFE_HREF_SCHEME (http(s)/mailto only
+// -- a javascript:/data: URI in href is the exact stored-XSS vector this
+// sanitizer exists to block), and target="_blank"/rel="noopener noreferrer"
+// are always force-set server-side, regardless of what the client sent
+// (defense in depth -- rollout-tracker-client.js's own insertNotesLink()
+// already sets these too, but this is the actual trust boundary). A
+// missing or unsafe href drops the link but keeps the text, rather than
+// dropping the whole tag and losing content.
+const NOTES_ALLOWED_TAGS = new Set(['b', 'strong', 'i', 'em', 'u', 's', 'strike', 'ul', 'ol', 'li', 'br', 'div', 'p', 'a']);
+const SAFE_HREF_SCHEME = /^(https?:|mailto:)/i;
 function sanitizeNotesHtml(html) {
   if (typeof html !== 'string') return '';
-  return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g, (match, tagName) => {
+  return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g, (match, tagName, attrs) => {
     const tag = tagName.toLowerCase();
     if (!NOTES_ALLOWED_TAGS.has(tag)) return '';
-    return match.startsWith('</') ? `</${tag}>` : `<${tag}>`;
+    if (match.startsWith('</')) return `</${tag}>`;
+    if (tag === 'a') {
+      const hrefMatch = attrs.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+      const rawHref = (hrefMatch ? hrefMatch[1] ?? hrefMatch[2] : '').replace(/&amp;/g, '&').trim();
+      if (!SAFE_HREF_SCHEME.test(rawHref)) return '<a>';
+      return `<a href="${rawHref.replace(/"/g, '&quot;')}" target="_blank" rel="noopener noreferrer">`;
+    }
+    return `<${tag}>`;
   });
 }
 
