@@ -277,11 +277,21 @@ export function mount(container) {
 
     // Shared URL builder for every time-entry drill-down link on this
     // page, by request -- extended from just the Total Client Hours
-    // Recorded table to every non-zero real-entry-sum cell. `kind`/`label`
-    // match server.js's own /entries-view dispatch exactly; `billable`
-    // ('true'/'false') is omitted for kinds that don't need it.
+    // Recorded table to every non-zero real-entry-sum cell, AND (a
+    // follow-up request) every totals row/column too: `r` being null/
+    // undefined means "every resource in this report" (sent as
+    // `resourceIds`, a comma-separated list, rather than one `resourceId`)
+    // -- used for a named row's own Total column and a table's grand
+    // total. `label` being null/undefined means "every label this kind
+    // covers" (server.js's own per-kind filter just skips the label check
+    // when it's absent) -- used for the bottom Total row's per-resource
+    // cells and the grand total. `kind`/`label` match server.js's own
+    // /entries-view dispatch exactly; `billable` ('true'/'false') is
+    // omitted for kinds that don't need it.
     function drillDownUrl(kind, label, r, billable) {
-      const qs = new URLSearchParams({ from: data.from, to: data.to, resourceId: r.resourceId, kind });
+      const qs = new URLSearchParams({ from: data.from, to: data.to, kind });
+      if (r) qs.set('resourceId', r.resourceId);
+      else qs.set('resourceIds', data.resources.map((res) => res.resourceId).join(','));
       if (label !== undefined && label !== null) qs.set('label', label);
       if (billable !== undefined) qs.set('billable', billable);
       return `/api/times/entries-view?${qs.toString()}`;
@@ -289,7 +299,8 @@ export function mount(container) {
 
     // `opts.drillDownKind`, when given, makes every non-zero cell in a
     // summaryRow() (Table 1's own per-metric rows) clickable the same way
-    // namedRowsHtml() cells are, below.
+    // namedRowsHtml() cells are, below -- including, by a follow-up
+    // request, the row's own Total column (all resources, same kind).
     function summaryRow(label, key, opts = {}) {
       const cells = data.resources
         .map((r) => {
@@ -302,7 +313,16 @@ export function mount(container) {
         })
         .join('');
       const total = sumOf(key);
-      const totalCell = opts.total !== false ? `<td class="col-center"><strong>${formatHours(total)}</strong></td>` : '<td></td>';
+      let totalCell = '<td></td>';
+      if (opts.total !== false) {
+        const totalText = `<strong>${formatHours(total)}</strong>`;
+        if (opts.drillDownKind && total > 0) {
+          const url = drillDownUrl(opts.drillDownKind, null, null);
+          totalCell = `<td class="col-center"><button type="button" class="tm-drill-cell" data-url="${escapeHtml(url)}">${totalText}</button></td>`;
+        } else {
+          totalCell = `<td class="col-center">${totalText}</td>`;
+        }
+      }
       const hmsCell = opts.total !== false ? `<td class="col-center">${formatHms(total)}</td>` : '<td></td>';
       return `<tr${opts.strong ? ' class="tm-total-row"' : ''}><th>${smallCapsHtml(label)}</th>${cells}${totalCell}${hmsCell}</tr>`;
     }
@@ -335,7 +355,10 @@ export function mount(container) {
     // cell in that table a clickable button opening a new window with the
     // real individual TimeEntries behind that figure -- by request,
     // starting with just the Total Client Hours Recorded table (see its
-    // own call below) rather than every table on the page.
+    // own call below) rather than every table on the page. The row's own
+    // Total column is clickable too now (a follow-up request) -- calls the
+    // same `opts.drillDownUrl(row, null)`, whose `r === null` makes
+    // drillDownUrl() query every resource in the report rather than one.
     function namedRowsHtml(rows, nameKey, opts = {}) {
       return rows
         .map((row) => {
@@ -350,15 +373,37 @@ export function mount(container) {
               return `<td class="col-center">${formatHours(value)}</td>`;
             })
             .join('');
-          return `<tr><th>${rowLabelHtml(row[nameKey])}</th>${cells}<td class="col-center"><strong>${formatHours(rowTotal)}</strong></td><td class="col-center">${formatHms(rowTotal)}</td></tr>`;
+          const rowTotalText = `<strong>${formatHours(rowTotal)}</strong>`;
+          const rowTotalCell =
+            opts.drillDownUrl && rowTotal > 0
+              ? `<button type="button" class="tm-drill-cell" data-url="${escapeHtml(opts.drillDownUrl(row, null))}">${rowTotalText}</button>`
+              : rowTotalText;
+          return `<tr><th>${rowLabelHtml(row[nameKey])}</th>${cells}<td class="col-center">${rowTotalCell}</td><td class="col-center">${formatHms(rowTotal)}</td></tr>`;
         })
         .join('');
     }
-    function totalRowHtml(totals) {
+    // `kind`/`billable`, when given, make this bottom Total row's own
+    // per-resource cells (every named row's own total, for ONE resource --
+    // label omitted so drillDownUrl() matches every label this kind
+    // covers) and its grand-total cell (every named row, every resource)
+    // clickable too -- a follow-up request extending the same drill-down
+    // already on each table's individual cells and row totals.
+    function totalRowHtml(totals, kind, billable) {
       const grand = [...totals.values()].reduce((s, h) => s + h, 0);
-      return `<tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th>${data.resources
-        .map((r) => `<td class="col-center">${formatHours(totals.get(r.resourceId) || 0)}</td>`)
-        .join('')}<td class="col-center"><strong>${formatHours(grand)}</strong></td><td class="col-center">${formatHms(grand)}</td></tr>`;
+      const cells = data.resources
+        .map((r) => {
+          const value = totals.get(r.resourceId) || 0;
+          if (kind && value > 0) {
+            const url = drillDownUrl(kind, null, r, billable);
+            return `<td class="col-center"><button type="button" class="tm-drill-cell" data-url="${escapeHtml(url)}">${formatHours(value)}</button></td>`;
+          }
+          return `<td class="col-center">${formatHours(value)}</td>`;
+        })
+        .join('');
+      const grandText = `<strong>${formatHours(grand)}</strong>`;
+      const grandCell =
+        kind && grand > 0 ? `<button type="button" class="tm-drill-cell" data-url="${escapeHtml(drillDownUrl(kind, null, null, billable))}">${grandText}</button>` : grandText;
+      return `<tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th>${cells}<td class="col-center">${grandCell}</td><td class="col-center">${formatHms(grand)}</td></tr>`;
     }
 
     // New row, by request -- "for every table from AIT TIME Tickets down,
@@ -394,14 +439,14 @@ export function mount(container) {
     const aittimeRowsHtml = namedRowsHtml(data.aittime, 'title', {
       drillDownUrl: (row, r) => drillDownUrl('aittime-title', row.title, r),
     });
-    const aittimeTotalRow = totalRowHtml(aittimeTotalByResource);
+    const aittimeTotalRow = totalRowHtml(aittimeTotalByResource, 'aittime-title');
     const aittimePctRow = pctOfTotalHoursRowHtml(aittimeTotalByResource);
 
     const clientContractsTotals = totalByResource(data.clientContracts);
     const clientContractsRowsHtml = namedRowsHtml(data.clientContracts, 'contractName', {
       drillDownUrl: (row, r) => drillDownUrl('contract', row.contractName, r),
     });
-    const clientContractsTotalRow = totalRowHtml(clientContractsTotals);
+    const clientContractsTotalRow = totalRowHtml(clientContractsTotals, 'contract');
     const clientContractsPctRow = pctOfTotalHoursRowHtml(clientContractsTotals);
 
     // Work-Type Reconciliation -- NOT fetched as part of the main load, by
@@ -413,7 +458,11 @@ export function mount(container) {
     // data.workTypeBillable itself.
     function workTypeTableHtml(rows, drillDownOpts) {
       const totals = totalByResource(rows);
-      return { rowsHtml: namedRowsHtml(rows, 'workType', drillDownOpts), totalRow: totalRowHtml(totals), pctRow: pctOfTotalHoursRowHtml(totals) };
+      return {
+        rowsHtml: namedRowsHtml(rows, 'workType', drillDownOpts),
+        totalRow: totalRowHtml(totals, drillDownOpts.kind, drillDownOpts.billable),
+        pctRow: pctOfTotalHoursRowHtml(totals),
+      };
     }
 
     // Total Client Hours Billable -- same rows as Total Client Hours
@@ -436,18 +485,21 @@ export function mount(container) {
         url && c.worked > 0 ? `<button type="button" class="tm-drill-cell" data-url="${escapeHtml(url)}">${formatHours(c.worked)}</button>` : formatHours(c.worked);
       return `<td class="col-center" title="To bill: ${formatHours(c.toBill)}">${valueHtml}</td>`;
     }
-    function billableTotalCellHtml(cell, strong, mismatch) {
+    function billableTotalCellHtml(cell, strong, mismatch, url) {
       const c = cell || { worked: 0, toBill: 0 };
       // The bracketed toBill figure stays un-bold and smaller, by request,
       // even when the worked figure next to it is bold (tm-total-bracket
       // explicitly resets font-weight rather than just inheriting <strong>).
       // `mismatch` (Non-Billable's own grand total only, see
       // buildWorkedToBillTable() below) turns the worked figure red, by
-      // request, when it disagrees with Recorded-minus-Billable.
+      // request, when it disagrees with Recorded-minus-Billable. `url`
+      // (a follow-up request, same as every other total cell on this page)
+      // makes the worked figure itself a drill-down button when present.
       const workedText = formatHours(c.worked);
       const worked = mismatch ? `<span class="tm-mismatch">${workedText}</span>` : workedText;
       const bracket = `<span class="tm-total-bracket">(${formatHours(c.toBill)})</span>`;
-      const workedHtml = strong ? `<strong>${worked}</strong>` : worked;
+      const workedPlain = strong ? `<strong>${worked}</strong>` : worked;
+      const workedHtml = url && c.worked > 0 ? `<button type="button" class="tm-drill-cell" data-url="${escapeHtml(url)}">${workedPlain}</button>` : workedPlain;
       return `<td class="col-center">${workedHtml} ${bracket}</td>`;
     }
     function billableTotalByResource(rows) {
@@ -489,14 +541,15 @@ export function mount(container) {
           const cells = data.resources
             .map((r) => billableCellHtml(row.hours[r.resourceId], billable !== undefined ? drillDownUrl('contract', row.contractName, r, billable) : undefined))
             .join('');
-          return `<tr><th>${rowLabelHtml(row.contractName)}</th>${cells}${billableTotalCellHtml(rowTotal, true)}<td class="col-center">${formatHms(rowTotal.worked)}</td></tr>`;
+          const rowTotalUrl = billable !== undefined ? drillDownUrl('contract', row.contractName, null, billable) : undefined;
+          return `<tr><th>${rowLabelHtml(row.contractName)}</th>${cells}${billableTotalCellHtml(rowTotal, true, false, rowTotalUrl)}<td class="col-center">${formatHms(rowTotal.worked)}</td></tr>`;
         })
         .join('');
       const totals = billableTotalByResource(rows);
       const grandTotal = sumCells([...totals.values()]);
       const totalRow = `<tr class="tm-total-row"><th>${smallCapsHtml('Total')}</th>${data.resources
-        .map((r) => billableCellHtml(totals.get(r.resourceId)))
-        .join('')}${billableTotalCellHtml(grandTotal, true, grandTotalMismatch)}<td class="col-center">${formatHms(grandTotal.worked)}</td></tr>`;
+        .map((r) => billableCellHtml(totals.get(r.resourceId), billable !== undefined ? drillDownUrl('contract', null, r, billable) : undefined))
+        .join('')}${billableTotalCellHtml(grandTotal, true, grandTotalMismatch, billable !== undefined ? drillDownUrl('contract', null, null, billable) : undefined)}<td class="col-center">${formatHms(grandTotal.worked)}</td></tr>`;
       const pctRow = pctOfTotalHoursRowHtml(totals, true);
       return { rowsHtml, totalRow, pctRow, totals, grandTotal };
     }
@@ -854,15 +907,21 @@ export function mount(container) {
         // its own billable flag). Table 3: Accrue--ING by status,
         // unchanged.
         const fixedBillable = workTypeTableHtml(wt.workTypeFixedBillable, {
+          kind: 'work-type',
+          billable: 'true',
           drillDownUrl: (row, r) => drillDownUrl('work-type', row.workType, r, 'true'),
         });
         const fixedUnticked = workTypeTableHtml(wt.workTypeFixedUnticked, {
+          kind: 'work-type',
+          billable: 'false',
           drillDownUrl: (row, r) => drillDownUrl('work-type', row.workType, r, 'false'),
         });
         const other = workTypeTableHtml(wt.workTypeOther, {
+          kind: 'work-type-other',
           drillDownUrl: (row, r) => drillDownUrl('work-type-other', row.workType, r),
         });
         const accrueIng = workTypeTableHtml(wt.workTypeAccrueIng, {
+          kind: 'accrue-status',
           drillDownUrl: (row, r) => drillDownUrl('accrue-status', row.workType, r),
         });
 
@@ -917,6 +976,7 @@ export function mount(container) {
         // Ambient + Client, together, is what should equal ALL ticket
         // time; the Ambient table alone would never match it.
         const ambientItTickets = workTypeTableHtml(wt.ambientItTickets, {
+          kind: 'ambient-bucket',
           drillDownUrl: (row, r) => drillDownUrl('ambient-bucket', row.workType, r),
         });
         // totalRecordedHours -- the outer render() scope's own Hours
