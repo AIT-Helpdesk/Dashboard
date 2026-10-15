@@ -176,8 +176,17 @@ function deriveAppStatus(appType) {
   return 'No recent backup data';
 }
 
-async function fetchApplications(customerId) {
-  const page = await dattoGet(`/${customerId}/applications`);
+// `days`, when passed, requests `?daysUntil=<days>` -- confirmed against
+// the real API this genuinely extends `backupHistory` beyond Datto's
+// default 10-day window (e.g. `daysUntil=30` returns 30 daily entries, one
+// per "BetweenNdAndN+1d" window), which is what Datto's own Partner
+// Portal uses to draw its "Backup Status" chart (a green/red/grey bar per
+// day, 30 days). Left undefined for the bulk ~230+-client aggregate pass
+// (computeServiceAggregate() only ever needs TODAY's status, so the
+// smaller default payload is the right one there); only the per-client
+// popup (getApplicationsHistory() below) asks for the larger window.
+async function fetchApplications(customerId, days) {
+  const page = await dattoGet(`/${customerId}/applications${days ? `?daysUntil=${days}` : ''}`);
   // Paginated envelope ({ pagination, items }), per the API's own
   // convention for every endpoint except /domains and /seats -- one page is
   // enough here (a handful of app types per client, never more than fits on
@@ -193,6 +202,19 @@ async function fetchApplications(customerId) {
           healthy: status === 'Perfect',
           usedBytes: a.usedBytes ?? null,
           lastFullyProtectedTime: a.lastFullyProtectedTime && EPOCH_LIKE.test(String(a.lastFullyProtectedTime)) ? Number(a.lastFullyProtectedTime) : null,
+          // Oldest -> newest, so the client can draw it left-to-right same
+          // as Datto's own chart. `daysAgo` parsed straight out of the
+          // window's own name (confirmed stable/sortable: "Between12dAnd13d"
+          // -> 12) rather than trusting array order, which wasn't
+          // guaranteed sorted in the raw response (confirmed against real
+          // data -- see this function's own history, it came back
+          // unsorted).
+          history: days
+            ? (a.backupHistory || [])
+                .map((h) => ({ daysAgo: Number((h.timeWindow || '').match(/^Between(\d+)d/)?.[1] ?? NaN), status: h.status }))
+                .filter((h) => !Number.isNaN(h.daysAgo))
+                .sort((x, y) => y.daysAgo - x.daysAgo)
+            : undefined,
         };
       })
     )
@@ -219,13 +241,23 @@ async function fetchSeats(customerId) {
 // seats) share this exact cache instead of re-fetching.
 const DETAIL_CACHE_TTL_MS = 20 * 60 * 1000;
 const applicationsCache = new Map(); // customerId -> { data, expiresAt }
+const applicationsHistoryCache = new Map(); // customerId -> { data, expiresAt } -- the 30-day variant, separate cache (different payload shape/size, different caller)
 const seatsCache = new Map(); // customerId -> { data, expiresAt }
+const HISTORY_DAYS = 30; // matches Datto's own Partner Portal "Backup Status" chart window
 
 async function getApplications(customerId, force) {
   const cached = applicationsCache.get(customerId);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
   const data = await fetchApplications(customerId);
   applicationsCache.set(customerId, { data, expiresAt: Date.now() + DETAIL_CACHE_TTL_MS });
+  return data;
+}
+
+async function getApplicationsHistory(customerId, force) {
+  const cached = applicationsHistoryCache.get(customerId);
+  if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
+  const data = await fetchApplications(customerId, HISTORY_DAYS);
+  applicationsHistoryCache.set(customerId, { data, expiresAt: Date.now() + DETAIL_CACHE_TTL_MS });
   return data;
 }
 
@@ -237,8 +269,12 @@ async function getSeats(customerId, force) {
   return data;
 }
 
+// The per-client popup's own detail -- uses the 30-day history variant
+// (getApplicationsHistory(), not the plain getApplications() the bulk
+// aggregate uses), by request ("can you get me something similar" --
+// Datto's own 30-day Backup Status chart).
 async function getDetail(customerId, force) {
-  const [applications, seats] = await Promise.all([getApplications(customerId, force), getSeats(customerId, force)]);
+  const [applications, seats] = await Promise.all([getApplicationsHistory(customerId, force), getSeats(customerId, force)]);
   return { applications, seats };
 }
 
@@ -575,5 +611,6 @@ router.get('/accepted-failures', (req, res) => {
 // future Check Client section) without a second HTTP round trip.
 router.getWidgetBucket = getWidgetBucket;
 router.getServiceAggregate = getServiceAggregate;
+router.getApplicationsHistory = getApplicationsHistory;
 
 module.exports = router;
