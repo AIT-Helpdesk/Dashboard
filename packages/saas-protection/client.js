@@ -552,16 +552,43 @@ export function mount(container) {
     `;
   }
 
+  // Datto's own 4 confirmed statuses (sampled across every currently
+  // non-100% client in the account, ~280+ real backupHistory entries) --
+  // "Backup With Issues" (minor, amber) is a genuinely different status
+  // from "Backup With Lots Of Issues" (severe, red), not a duplicate.
+  // Tooltip wording matches what's shown in Datto's own Partner Portal, by
+  // request. A status Datto returns that ISN'T one of these four (none
+  // seen in that sample, but the API is never guaranteed exhaustive) falls
+  // back to red with Datto's own raw text rather than silently mislabeling
+  // it as something it isn't.
+  const HISTORY_STATUS_INFO = {
+    Perfect: { cls: 'ok', label: 'Backup Successful' },
+    'Backup With Issues': { cls: 'minor', label: 'Backup Successful with Some Issues' },
+    'Backup With Lots Of Issues': { cls: 'issue', label: 'Backup Successful with Lots of Issues' },
+    'Insufficient History': { cls: 'none', label: 'No data' },
+  };
+
   function backupHistoryBarsHtml(history) {
     const byDaysAgo = new Map((history || []).map((h) => [h.daysAgo, h.status]));
     const bars = [];
     for (let daysAgo = 29; daysAgo >= 0; daysAgo--) {
       const status = byDaysAgo.get(daysAgo);
-      const cls = !status ? 'saas-history-bar--none' : status === 'Perfect' ? 'saas-history-bar--ok' : 'saas-history-bar--issue';
-      const when = daysAgo === 0 ? 'Today' : `${daysAgo} day${daysAgo === 1 ? '' : 's'} ago`;
-      bars.push(`<span class="saas-history-bar ${cls}" title="${escapeHtml(`${when}: ${status || 'No data'}`)}"></span>`);
+      const info = status ? HISTORY_STATUS_INFO[status] || { cls: 'issue', label: status } : { cls: 'none', label: 'No data' };
+      const dateText = formatDate(dateForDaysAgo(daysAgo));
+      bars.push(`<span class="saas-history-bar saas-history-bar--${info.cls}" title="${escapeHtml(`${info.label} ${dateText}`)}"></span>`);
     }
     return bars.join('');
+  }
+
+  // AEST-anchored, same "today" convention every date-scoped page on this
+  // dashboard uses -- `daysAgo` comes straight from Datto's own
+  // "BetweenNdAndN+1d" time window (see getApplicationsHistory() in
+  // server.js), day-granularity only (Datto's API carries no hour/minute
+  // for these), so the tooltip shows a date, not a fabricated time.
+  function dateForDaysAgo(daysAgo) {
+    const d = new Date(Date.now() + 10 * 60 * 60 * 1000);
+    d.setUTCDate(d.getUTCDate() - daysAgo);
+    return d.toISOString().slice(0, 10);
   }
 
   function appRowHtml(a) {

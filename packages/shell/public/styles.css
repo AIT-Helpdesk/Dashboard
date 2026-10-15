@@ -4360,6 +4360,13 @@ td.ticket-number a:hover {
 .saas-history-bar--ok {
   background: #16a34a;
 }
+/* "Backup With Issues" -- a confirmed, genuinely distinct status from
+   "Backup With Lots Of Issues" (--issue, below), not a duplicate --
+   amber, same #f59e0b already used dashboard-wide (.cell-flag-orange
+   etc.), by request. */
+.saas-history-bar--minor {
+  background: #f59e0b;
+}
 .saas-history-bar--issue {
   background: #dc2626;
 }
