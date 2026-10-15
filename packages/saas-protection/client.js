@@ -491,6 +491,30 @@ export function mount(container) {
     return overlay;
   }
 
+  // Datto's /seats endpoint carries no backup date of its own (confirmed --
+  // checked that endpoint directly, its own detailedBackupStats endpoint
+  // -- currently 502ing on Datto's own side -- and their activity-log
+  // endpoint, none expose one), so there's no TRUE per-seat last-backup
+  // time available from this API at all -- only per-APPLICATION TYPE (the
+  // Applications table/Backup Status chart above). By request, this maps
+  // each seat's own seatType to the application type that actually backs
+  // it up and shows THAT application's last successful backup instead --
+  // not seat-specific, but the closest real, non-fabricated date available
+  // for that row. Confirmed against real seatType values across ~40
+  // clients: SharedMailbox and User are both mailbox-identified (a
+  // "User" seat's own mainId is an email address) and map to Exchange;
+  // Site/TeamSite map to SharePoint; Team maps to Teams. No OneDrive-typed
+  // seat was observed in that sample, so there's nothing to map it from
+  // yet -- an unmapped/unrecognised seatType just shows blank rather than
+  // guessing.
+  const SEAT_TYPE_TO_APP_TYPE = {
+    SharedMailbox: 'Office365Exchange',
+    User: 'Office365Exchange',
+    Site: 'Office365SharePoint',
+    TeamSite: 'Office365SharePoint',
+    Team: 'Office365Teams',
+  };
+
   function clientDetailBodyHtml(data) {
     const appsHtml = data.applications.length
       ? `<table class="saas-protection-detail-table">
@@ -499,18 +523,26 @@ export function mount(container) {
         </table>`
       : '<p class="status">No application backup stats available.</p>';
 
+    const lastBackupByAppType = new Map(data.applications.map((a) => [a.appType, a.lastFullyProtectedTime]));
+
     const seatsHtml = data.seats.length
       ? `<table class="saas-protection-detail-table">
-          <thead><tr><th>Mailbox / Site</th><th>Type</th><th>Status</th><th>Added</th></tr></thead>
+          <thead><tr><th>Mailbox / Site</th><th>Type</th><th>Status</th><th>Added</th><th>Last Successful Backup</th></tr></thead>
           <tbody>${data.seats
-            .map(
-              (s) => `<tr>
+            .map((s) => {
+              const appType = SEAT_TYPE_TO_APP_TYPE[s.seatType];
+              const lastBackup = appType ? lastBackupByAppType.get(appType) : null;
+              const lastBackupCellTitle = appType
+                ? `title="From this seat's own ${escapeHtml(appTypeLabel(appType))} application backup -- Datto doesn't track a per-seat backup time"`
+                : '';
+              return `<tr>
             <td>${escapeHtml(s.name || s.mainId)}</td>
             <td>${escapeHtml(s.seatType || '')}</td>
             <td${s.seatState !== 'Active' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(s.seatState || '')}</td>
             <td class="ticket-number">${formatDate(s.dateAdded)}</td>
-          </tr>`
-            )
+            <td class="ticket-number" ${lastBackupCellTitle}>${lastBackup ? formatDateTime(new Date(lastBackup).toISOString()) : ''}</td>
+          </tr>`;
+            })
             .join('')}</tbody>
         </table>`
       : '<p class="status">No seats found.</p>';
