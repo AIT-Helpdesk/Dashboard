@@ -412,7 +412,7 @@ export function mount(container) {
   // Check Client/Contract Checks already use for their own Info/History
   // popups, reused here rather than building a new one.
   async function openClientModal(client) {
-    const overlay = openModal(`${client.clientName} -- SaaS Protection`);
+    const overlay = openModal(`${client.clientName} -- SaaS Protection`, true);
     try {
       const res = await fetch(`/api/saas-protection/detail?customerId=${encodeURIComponent(client.customerId)}`);
       const data = await res.json();

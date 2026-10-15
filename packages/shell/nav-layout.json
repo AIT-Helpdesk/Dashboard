@@ -22,6 +22,10 @@
       },
       {
         "type": "page",
+        "id": "saas-protection"
+      },
+      {
+        "type": "page",
         "id": "subscriptions-expiring"
       },
       {
@@ -359,10 +363,6 @@
     "id": "amber-only",
     "label": "Amber Only",
     "children": [
-      {
-        "type": "page",
-        "id": "saas-protection"
-      },
       {
         "type": "page",
         "id": "voice-scheduler"
