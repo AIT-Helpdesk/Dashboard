@@ -1313,16 +1313,25 @@ router.get('/entries-view', async (req, res) => {
     const workTypeCodes = billingCodeIds.length > 0 ? await fetchByFieldIn(client.billingCodes, 'id', billingCodeIds) : [];
     const workTypeNameById = new Map(workTypeCodes.map((c) => [c.id, c.name]));
 
+    // Start Time, newest first, by request -- sorted on the raw
+    // startDateTime (ISO, ascending-lexicographic = chronological) BEFORE
+    // buildEntryRow() below turns it into a locale-formatted display
+    // string (which wouldn't sort correctly as plain text). Entries with
+    // no real Start Time at all (e.startDateTime null/undefined -- same
+    // condition buildEntryRow()'s own startTime field already checks)
+    // fall back to dateWorked so they still land in roughly the right
+    // place instead of all collapsing to one tied "earliest" bucket.
+    matching.sort((a, b) => {
+      const aKey = a.startDateTime || a.dateWorked || '';
+      const bKey = b.startDateTime || b.dateWorked || '';
+      return aKey < bKey ? 1 : aKey > bKey ? -1 : 0;
+    });
+
     const rows = [];
     for (const e of matching) {
       const entryResourceName = resourceNameById.get(e.resourceID) || `Resource #${e.resourceID}`;
       rows.push(await buildEntryRow(e, ctx, workTypeNameById, entryResourceName));
     }
-
-    // Newest first -- reading a list of "what made up this total" starts
-    // more usefully from the most recent entry, same reasoning every
-    // other list-of-real-records page on this dashboard defaults to.
-    rows.sort((a, b) => (a.workedDate < b.workedDate ? 1 : a.workedDate > b.workedDate ? -1 : 0));
 
     const titleLabel = label || (kind === 'ticket-hours' ? 'Ticket Hours' : kind === 'leave' ? 'Leave Hours' : KIND_ALL_LABELS[kind] || kind);
     const title = `${titleLabel} – ${pageResourceName} (${from} to ${to})`;
