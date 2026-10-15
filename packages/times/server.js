@@ -12,6 +12,7 @@ const {
   fetchWorkTypeModifiers,
   fetchBillingItemsByTimeEntryId,
   resolveChargeableValue,
+  mapWithConcurrency,
 } = require('@dashboard/autotask-client');
 // A technician's normal working day, by request -- "7.6 for all (for now)".
 // Flat and global for everyone EXCEPT the real per-resource overrides
@@ -842,6 +843,74 @@ async function computeOverallTotals(client, from, to, team) {
   return { totalTechHours, totalClientHours, totalClientHoursBillable };
 }
 
+// Per-resource version of computeOverallTotals() above, for Check-Up's own
+// 13-week-per-resource trend charts, by request -- same three figures
+// (Total Tech Hours/Total Client Hours/Total Client Hours Billable), same
+// underlying building blocks, just split by resourceId AND by week instead
+// of summed into one team-wide scalar per week. `weeks` is an array of
+// {from, to} date-key pairs (oldest first) -- each week genuinely needs its
+// own date-bounded TimeEntries fetch to bucket correctly (there's no way to
+// fetch once and re-slice, since resolveResourcesWithData()'s own query IS
+// the date filter), so this runs every week with bounded concurrency
+// (mapWithConcurrency, not 13 sequential round trips, not fully parallel
+// either -- same defensive-concurrency reasoning every other bounded fetch
+// on this dashboard uses) rather than awaiting them one at a time.
+// `clientContracts`/`clientContractsBillable` already key `row.hours` by
+// resourceId (confirmed -- see buildClientContractHours()'s own comment),
+// so per-resource sums fall out of the exact same two function calls
+// computeOverallTotals() already makes; nothing new to compute, just a
+// different final reduction.
+async function computePerResourceWeeklyTotals(client, weeks, team) {
+  async function oneWeek({ from, to }) {
+    const fromIso = `${from}T00:00:00.000Z`;
+    const toIso = `${to}T00:00:00.000Z`;
+    const { selected, leaveEntries, ticketEntries } = await resolveResourcesWithData(client, fromIso, toIso, team);
+    if (selected.length === 0) return { from, to, byResource: new Map() };
+
+    const publicHolidayHoursByResource = await fetchPublicHolidayHoursByResource(client, selected, fromIso, toIso);
+    const leaveByResource = new Map();
+    for (const e of leaveEntries) leaveByResource.set(e.resourceID, (leaveByResource.get(e.resourceID) || 0) + (e.hoursWorked || 0));
+
+    const clientCtx = await fetchClientTicketContext(client, [...new Set(ticketEntries.map((e) => e.ticketID))]);
+    const clientContracts = clientCtx ? buildClientContractHours(clientCtx, ticketEntries) : [];
+    const clientContractsBillable = clientCtx ? buildClientContractSplitHours(clientCtx, ticketEntries, true) : [];
+
+    const clientHoursByResource = new Map();
+    for (const row of clientContracts) {
+      for (const [id, h] of Object.entries(row.hours)) clientHoursByResource.set(Number(id), (clientHoursByResource.get(Number(id)) || 0) + (h || 0));
+    }
+    const billableHoursByResource = new Map();
+    for (const row of clientContractsBillable) {
+      for (const [id, cell] of Object.entries(row.hours)) billableHoursByResource.set(Number(id), (billableHoursByResource.get(Number(id)) || 0) + (cell?.worked || 0));
+    }
+
+    const byResource = new Map();
+    for (const r of selected) {
+      const leaveHours = leaveByResource.get(r.id) || 0;
+      const publicHolidayHours = publicHolidayHoursByResource.get(r.id) || 0;
+      const totalNormalHours = sumNormalHoursForRange(r.name, from, to);
+      const totalTechHours = totalNormalHours - leaveHours - publicHolidayHours;
+      byResource.set(r.id, {
+        totalTechHours,
+        totalClientHours: clientHoursByResource.get(r.id) || 0,
+        totalClientHoursBillable: billableHoursByResource.get(r.id) || 0,
+      });
+    }
+    return { from, to, byResource };
+  }
+
+  // Concurrency 1 (fully sequential across weeks), not bounded-parallel --
+  // confirmed the hard way: each week ALREADY fires several of its own
+  // Promise.all'd Autotask calls internally (resolveResourcesWithData's
+  // leave/ticket/membership queries, public holidays, ticket context), so
+  // running just 3 weeks at once was enough on its own to trip a real 429
+  // from Autotask within ~4 seconds. One week at a time keeps this well
+  // under whatever that ceiling actually is, at the cost of this being a
+  // genuinely slow (expect tens of seconds) on-demand fetch -- acceptable
+  // for a Show-button section nobody loads by default.
+  return mapWithConcurrency(weeks, 1, oneWeek);
+}
+
 // Work-Type Reconciliation -- deliberately NOT fetched as part of the main
 // report above, by request ("we can not retrieve it by default so the
 // page is faster"): it needs its own real TimeEntries fetch (the main
@@ -1022,6 +1091,22 @@ function renderEntriesPage(title, rows) {
 </html>`;
 }
 
+// HH:MM, by request ("show all times on 'Time Summaries' page AND POPUPS as
+// HH:MM instead of decimal xx.x") -- same rounding/rollover convention
+// times/client.js's own formatHours() uses (round to the nearest minute,
+// roll over into the next hour rather than ever showing :60). This page's
+// entries-view popup is plain server-rendered HTML (renderEntriesPage()
+// below), not a client.js module, so it needs its own copy rather than
+// importing the client-side one -- same "small helper duplicated per
+// package" convention every other shared-shape-but-separately-rendered
+// formatter on this dashboard already follows.
+function formatHms(hours) {
+  const totalMinutes = Math.round(((hours || 0) + Number.EPSILON) * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
 // One row per real TimeEntries record, same column shape regardless of
 // which "kind" of drill-down produced it -- `ticket` is null for leave
 // entries (no ticket at all), every field null-safe for that case. Work
@@ -1038,15 +1123,15 @@ async function buildEntryRow(e, ctx, workTypeNameById, resourceName) {
     workedDate: e.dateWorked ? e.dateWorked.slice(0, 10) : '',
     activityTitle: ticket ? ticket.title || '' : '',
     summaryNote: e.summaryNotes || '',
-    estimate: ticket && ticket.estimatedHours !== null && ticket.estimatedHours !== undefined ? ticket.estimatedHours : '',
+    estimate: ticket && ticket.estimatedHours !== null && ticket.estimatedHours !== undefined ? formatHms(ticket.estimatedHours) : '',
     status: ticket ? ctx.statusLabels.get(ticket.status) || '' : '',
     workType: workTypeCodeId !== null && workTypeCodeId !== undefined ? workTypeNameById.get(workTypeCodeId) || '' : '',
     contract: ticket && ticket.contractID ? ctx.contractNameById.get(ticket.contractID) || '' : '',
     resource: resourceName,
-    workedHours: (e.hoursWorked || 0).toFixed(2),
-    billableHours: e.isNonBillable === true ? '' : (e.hoursToBill || 0).toFixed(2),
-    nonBillableHours: e.isNonBillable === true ? (e.hoursToBill || 0).toFixed(2) : '',
-    offsetHours: e.offsetHours || 0,
+    workedHours: formatHms(e.hoursWorked || 0),
+    billableHours: e.isNonBillable === true ? '' : formatHms(e.hoursToBill || 0),
+    nonBillableHours: e.isNonBillable === true ? formatHms(e.hoursToBill || 0) : '',
+    offsetHours: formatHms(e.offsetHours || 0),
     startTime: e.startDateTime ? new Date(e.startDateTime).toLocaleString() : '',
     endTime: e.endDateTime ? new Date(e.endDateTime).toLocaleString() : '',
   };
@@ -1252,6 +1337,7 @@ router.get('/entries-view', async (req, res) => {
 // convention this dashboard already uses elsewhere (e.g. contract-
 // services/server.js) -- Tickets Dashboard's own server.js uses both.
 router.computeOverallTotals = computeOverallTotals;
+router.computePerResourceWeeklyTotals = computePerResourceWeeklyTotals;
 router.TEAM_SERVICE_DESK = TEAM_SERVICE_DESK;
 // About Me's own Client Hours Utilization/Client Billable Hours cards
 // (that page's own server.js) reuse these two directly rather than
