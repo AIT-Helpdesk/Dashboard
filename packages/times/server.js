@@ -1069,23 +1069,71 @@ async function buildEntryRow(e, ctx, workTypeNameById, resourceName) {
 // (matches Total Recorded Hours)" reconciliation rows) are deliberately
 // NOT wired up to this at all, client-side -- there's no single coherent
 // entry list a subtraction/multi-table-sum could point at.
+// "All X" fallback title per kind, used whenever `label` is omitted (a
+// totals row/column drill-down -- see below) -- 'ticket-hours'/'leave'
+// already had their own fallback (they never carry a label at all), the
+// rest didn't need one until totals became drillable too.
+const KIND_ALL_LABELS = {
+  contract: 'All Contracts',
+  'work-type': 'All Work Types',
+  'work-type-other': 'All Work Types',
+  'aittime-title': 'All AIT Time Tickets',
+  'accrue-status': 'All Statuses',
+  'ambient-bucket': 'All',
+};
+
 router.get('/entries-view', async (req, res) => {
   const range = validateDateRange(req, res);
   if (!range) return;
   const { from, to } = range;
 
-  const resourceId = parseInt(req.query.resourceId, 10);
+  // `resourceId` (one resource) or `resourceIds` (comma-separated, every
+  // resource in the report) -- the latter is how a totals ROW or the
+  // bottom totals ROW/grand total gets here (see drillDownUrl() in
+  // client.js: `r === null` sends `resourceIds` instead of one
+  // `resourceId`), by request ("add this to all the totals rows and
+  // columns"). `label` empty/absent means "every label this kind covers"
+  // -- same totals-drill-down extension, applied per kind below.
+  const resourceIdRaw = req.query.resourceId;
+  const resourceIdsRaw = (req.query.resourceIds || '').toString();
+  const resourceId = resourceIdRaw !== undefined ? parseInt(resourceIdRaw, 10) : null;
+  const resourceIds = resourceIdsRaw
+    ? resourceIdsRaw
+        .split(',')
+        .map((s) => parseInt(s, 10))
+        .filter(Number.isInteger)
+    : null;
   const kind = (req.query.kind || '').toString();
   const label = (req.query.label || '').toString();
   const billable = (req.query.billable || 'all').toString(); // 'all' | 'true' | 'false'
-  if (!Number.isInteger(resourceId)) return res.status(400).send('Query param "resourceId" is required.');
+  if (!(Number.isInteger(resourceId) || (resourceIds && resourceIds.length > 0))) {
+    return res.status(400).send('Query param "resourceId" or "resourceIds" is required.');
+  }
   if (!kind) return res.status(400).send('Query param "kind" is required.');
+
+  const resourceFilterClause = resourceIds ? { op: 'in', field: 'resourceID', value: resourceIds } : { op: 'eq', field: 'resourceID', value: resourceId };
 
   try {
     const client = await getClient();
     const fromIso = `${from}T00:00:00.000Z`;
     const toIso = `${to}T00:00:00.000Z`;
-    const resourceName = await resolveResourceName(client, resourceId);
+
+    // Single-resource: the existing cached lookup. All-resources: one bulk
+    // fetch instead of N individual ones -- each row still shows its OWN
+    // entry's real resource name (buildEntryRow() below), not a blanket
+    // "All Resources" label, so the result reads exactly like a normal
+    // drill-down list that just happens to span everyone.
+    let resourceNameById;
+    let pageResourceName;
+    if (resourceIds) {
+      const resources = await fetchByFieldIn(client.resources, 'id', resourceIds);
+      resourceNameById = new Map(resources.map((r) => [r.id, [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || `Resource #${r.id}`]));
+      pageResourceName = 'All Resources';
+    } else {
+      const name = await resolveResourceName(client, resourceId);
+      resourceNameById = new Map([[resourceId, name]]);
+      pageResourceName = name;
+    }
 
     let matching;
     let ctx = null;
@@ -1097,7 +1145,7 @@ router.get('/entries-view', async (req, res) => {
       matching =
         timeOffBillingCodeIds.length > 0
           ? await listAll(client.timeEntries, [
-              { op: 'eq', field: 'resourceID', value: resourceId },
+              resourceFilterClause,
               { op: 'gte', field: 'dateWorked', value: fromIso },
               { op: 'lte', field: 'dateWorked', value: toIso },
               { op: 'in', field: 'billingCodeID', value: timeOffBillingCodeIds },
@@ -1105,7 +1153,7 @@ router.get('/entries-view', async (req, res) => {
           : [];
     } else {
       const entries = await listAll(client.timeEntries, [
-        { op: 'eq', field: 'resourceID', value: resourceId },
+        resourceFilterClause,
         { op: 'gte', field: 'dateWorked', value: fromIso },
         { op: 'lte', field: 'dateWorked', value: toIso },
         { op: 'exist', field: 'ticketID' },
@@ -1122,7 +1170,7 @@ router.get('/entries-view', async (req, res) => {
         matching = entries.filter((e) => {
           const ticket = ctx.ticketById.get(e.ticketID);
           if (!ticket || isAmbientItCompany(ctx.companyNameById, ticket.companyID)) return false;
-          if (clientContractRowLabel(ticket.contractID ? ctx.contractNameById.get(ticket.contractID) : null) !== label) return false;
+          if (label && clientContractRowLabel(ticket.contractID ? ctx.contractNameById.get(ticket.contractID) : null) !== label) return false;
           if (billable === 'true' && e.isNonBillable === true) return false;
           if (billable === 'false' && e.isNonBillable !== true) return false;
           return true;
@@ -1135,7 +1183,7 @@ router.get('/entries-view', async (req, res) => {
           const ticket = ctx.ticketById.get(e.ticketID);
           if (!ticket || isAmbientItCompany(ctx.companyNameById, ticket.companyID)) return false;
           const workType = e.billingCodeID !== null && e.billingCodeID !== undefined ? nameById.get(e.billingCodeID) || `Work Type #${e.billingCodeID}` : 'No Work Type';
-          if (workType !== label) return false;
+          if (label && workType !== label) return false;
           if (kind === 'work-type') {
             if (billable === 'true' && e.isNonBillable === true) return false;
             if (billable === 'false' && e.isNonBillable !== true) return false;
@@ -1145,7 +1193,10 @@ router.get('/entries-view', async (req, res) => {
       } else if (kind === 'aittime-title') {
         const aittimeTickets = await fetchAittimeTickets(client);
         const titleByTicketId = new Map(aittimeTickets.map((t) => [t.id, t.title]));
-        matching = entries.filter((e) => titleByTicketId.get(e.ticketID) === label);
+        matching = entries.filter((e) => {
+          const title = titleByTicketId.get(e.ticketID);
+          return label ? title === label : title !== undefined;
+        });
       } else if (kind === 'accrue-status') {
         const billingCodeIds = [...new Set(entries.map((e) => e.billingCodeID).filter((id) => id !== null && id !== undefined))];
         const codes = billingCodeIds.length > 0 ? await fetchByFieldIn(client.billingCodes, 'id', billingCodeIds) : [];
@@ -1157,7 +1208,7 @@ router.get('/entries-view', async (req, res) => {
           if (workType !== ACCRUE_ING_WORK_TYPE) return false;
           const statusLabel = ctx.statusLabels.get(ticket.status);
           const bucket = statusLabel && ACCRUE_ING_COMPLETE_STATUS_LABELS.has(statusLabel) ? ACCRUE_ING_ROW_COMPLETE : ACCRUE_ING_ROW_OTHER;
-          return bucket === label;
+          return label ? bucket === label : true;
         });
       } else if (kind === 'ambient-bucket') {
         const aittimeTickets = await fetchAittimeTickets(client);
@@ -1166,7 +1217,7 @@ router.get('/entries-view', async (req, res) => {
           const ticket = ctx.ticketById.get(e.ticketID);
           if (!ticket || !isAmbientItCompany(ctx.companyNameById, ticket.companyID)) return false;
           const bucket = aittimeTicketIds.has(e.ticketID) ? AMBIENT_TICKETS_ROW_AITTIME : AMBIENT_TICKETS_ROW_OTHER;
-          return bucket === label;
+          return label ? bucket === label : true;
         });
       } else {
         return res.status(400).send(`Unknown "kind": ${escapeHtml(kind)}`);
@@ -1179,7 +1230,8 @@ router.get('/entries-view', async (req, res) => {
 
     const rows = [];
     for (const e of matching) {
-      rows.push(await buildEntryRow(e, ctx, workTypeNameById, resourceName));
+      const entryResourceName = resourceNameById.get(e.resourceID) || `Resource #${e.resourceID}`;
+      rows.push(await buildEntryRow(e, ctx, workTypeNameById, entryResourceName));
     }
 
     // Newest first -- reading a list of "what made up this total" starts
@@ -1187,8 +1239,8 @@ router.get('/entries-view', async (req, res) => {
     // other list-of-real-records page on this dashboard defaults to.
     rows.sort((a, b) => (a.workedDate < b.workedDate ? 1 : a.workedDate > b.workedDate ? -1 : 0));
 
-    const titleLabel = label || (kind === 'ticket-hours' ? 'Ticket Hours' : kind === 'leave' ? 'Leave Hours' : kind);
-    const title = `${titleLabel} – ${resourceName} (${from} to ${to})`;
+    const titleLabel = label || (kind === 'ticket-hours' ? 'Ticket Hours' : kind === 'leave' ? 'Leave Hours' : KIND_ALL_LABELS[kind] || kind);
+    const title = `${titleLabel} – ${pageResourceName} (${from} to ${to})`;
     res.type('html').send(renderEntriesPage(title, rows));
   } catch (err) {
     console.error(err);
