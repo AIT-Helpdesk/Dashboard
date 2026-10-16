@@ -86,12 +86,42 @@ function safeConfigSummary(config) {
   if (!config) return config;
   return { method: config.method, url: config.url, baseURL: config.baseURL };
 }
+// Autotask's own 429 (rate limited) has NO retry anywhere in this file up
+// to now -- every call site (the ~5 req/s concurrency cap mapWithConcurrency()
+// documents above, and every page's own internal sequencing) only ever
+// reduces how much gets fired at once; none of that helps once the account-
+// wide limit still gets tripped by something ELSE happening on the account
+// at the same moment (confirmed live: "429 errors everywhere" even after
+// Check-Up's own per-feature concurrency/caching fixes -- a manual retry a
+// few seconds later always just worked, meaning the account-wide window
+// had simply reset by then). Same exponential-backoff-with-jitter shape
+// @dashboard/saas-protection's own dattoGet() already proves out for a
+// different API's 429, honoring a real Retry-After header when the
+// response sends one, otherwise falling back to a capped exponential
+// schedule. 6 attempts, same cap dattoGet() uses.
+const AUTOTASK_429_MAX_ATTEMPTS = 6;
+
 function installErrorSanitizer(axiosInstance) {
   if (!axiosInstance || axiosInstance.__errorSanitizerInstalled) return;
   axiosInstance.__errorSanitizerInstalled = true;
   axiosInstance.interceptors.response.use(
     (response) => response,
-    (error) => {
+    async (error) => {
+      // Retry BEFORE any sanitizing below -- replaying the request needs
+      // the real, unredacted error.config (headers, body, baseURL intact),
+      // and this has to happen first every time regardless of which
+      // call site eventually sees the final rejection.
+      if (error?.response?.status === 429 && error.config) {
+        const attempt = (error.config.__autotask429RetryCount || 0) + 1;
+        if (attempt <= AUTOTASK_429_MAX_ATTEMPTS) {
+          error.config.__autotask429RetryCount = attempt;
+          const retryAfterHeader = error.response.headers?.['retry-after'];
+          const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : null;
+          const backoffMs = retryAfterMs ?? Math.min(1000 * 2 ** (attempt - 1), 15000) + Math.random() * 500;
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          return axiosInstance.request(error.config);
+        }
+      }
       try {
         if (error?.config) error.config = safeConfigSummary(error.config);
         if (error?.response?.config) error.response.config = safeConfigSummary(error.response.config);
