@@ -457,10 +457,10 @@ function externalLinkHtml(link) {
 // these are real fixed personal schedules known outside any system this
 // dashboard already reads, not data this page could otherwise derive.
 const JETT_HOURS = [
-  { day: 'Mon', start: '9:00am', end: '5:00pm', hours: '7.5 hrs' },
-  { day: 'Tue', start: '11:00am', end: '5:00pm', hours: '5.5 hrs' },
+  { day: 'Mon', start: '10:00am', end: '4:00pm', hours: '5.5 hrs' },
+  { day: 'Tue', start: '11:00am', end: '4:00pm', hours: '4.5 hrs' },
   { day: 'Wed', start: '9:00am', end: '1:00pm', hours: '4 hrs' },
-  { day: 'Thu', start: '10:00am', end: '5:00pm', hours: '6.5 hrs' },
+  { day: 'Thu', start: '10:00am', end: '4:00pm', hours: '5.5 hrs' },
   { day: 'Fri', start: '10:00am', end: '4:00pm', hours: '5.5 hrs' },
 ];
 const PETER_HOURS_TEXT = 'Usually works Mon - Wed; with Thu & Fri Off; Occasionally varies when Peter helps out when we have people away.';
