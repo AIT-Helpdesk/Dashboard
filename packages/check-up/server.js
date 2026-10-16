@@ -28,6 +28,31 @@ router.use(express.json());
 // document (integration service accounts, not real people).
 const API_USER_LICENSE_TYPE = 7;
 
+// Surfaces Autotask's own real validation message (err.response.data, e.g.
+// Surfaces Autotask's own real validation message straight into the
+// response -- by request, after a production 400 came back to the
+// browser as nothing but axios's generic "Request failed with status
+// code 400". First attempt at this checked `err.response` directly (the
+// plain-axios shape @dashboard/saas-protection's own dattoGet() callers
+// use for Datto's API), which turned out to be the WRONG shape here --
+// confirmed against autotask-node's own dist/utils/errors.js:
+// createAutotaskError() never lets a raw axios error reach this file at
+// all. It re-classifies every failed call into its own AutotaskError
+// subclass first (ValidationError for a 400/422), whose constructor
+// keeps the real per-field detail on `.validationErrors` (pulled from
+// `response.data.errors`/`.validationErrors`) and only re-attaches the
+// original raw axios error as `.originalError` (NOT `.response` --
+// that's why the first attempt silently fell through to the generic
+// message every time). `.validationErrors` is checked first since it's
+// already the specific, pre-extracted detail; `.originalError.response`
+// is the fallback for anything that detail didn't cover.
+function errorDetail(err) {
+  if (err.validationErrors) return `Autotask validation error (${err.statusCode || '?'}): ${JSON.stringify(err.validationErrors)}`;
+  const response = err.response || err.originalError?.response;
+  if (response) return `Autotask API returned HTTP ${response.status}: ${JSON.stringify(response.data)}`;
+  return err.message;
+}
+
 // Current AEST week (Monday..Sunday), Support Desk team -- moved verbatim
 // from @dashboard/tickets-dashboard's own server.js (see that package's
 // git history for the fuller original comment on why this pulls in Time
@@ -259,7 +284,7 @@ router.get('/daily-figures', async (req, res) => {
     res.json({ date: dayKey, resources });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: errorDetail(err) });
   }
 });
 
@@ -285,7 +310,7 @@ router.get('/this-week-figures', async (req, res) => {
     res.json({ from, to, resources });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: errorDetail(err) });
   }
 });
 
@@ -346,7 +371,7 @@ router.get('/resource-trends', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: errorDetail(err) });
   }
 });
 
@@ -356,7 +381,7 @@ router.get('/weekly-hours-pct', async (req, res) => {
     res.json({ weeklyHoursPct: await fetchWeeklyHoursPct(client) });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: errorDetail(err) });
   }
 });
 
@@ -366,7 +391,7 @@ router.get('/handler-options', async (req, res) => {
     res.json(await fetchHandlerOptions(client));
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: errorDetail(err) });
   }
 });
 
@@ -393,7 +418,7 @@ router.put('/handler', async (req, res) => {
     res.json({ handler: state });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: errorDetail(err) });
   }
 });
 
