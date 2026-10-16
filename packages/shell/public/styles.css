@@ -3691,9 +3691,17 @@ td.ticket-number {
 .check-up-trend-legend-swatch--tickets {
   background: #16a34a;
 }
+/* Shared by all three sets of boxes on this page (Daily Figures, This
+   Week, 13-Week Trends). Fixed-width columns (not minmax(...,1fr), which
+   stretched cards to fill the row and left a short last row sitting
+   flush left with blank space after it) + justify-content: center, by
+   request ("centre the sets of boxes on the page") -- the standard CSS
+   Grid technique for a row of uniform-size cards that centers as a group
+   instead of either stretching or hugging one edge. */
 .check-up-trend-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, 260px);
+  justify-content: center;
   gap: 0.75rem;
 }
 .check-up-trend-card {
