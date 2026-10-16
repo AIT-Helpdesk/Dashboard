@@ -208,7 +208,13 @@ export function mount(container) {
   function renderWidgets(data, force) {
     widgetsEl.hidden = false;
     widgetsEl.innerHTML = '';
-    allBackupsCardEl = placeholderCard('All Backups', () => openWidgetModal('all', 'All Backups'));
+    // Card itself stays "All Backups" (the two-colour ring really is every
+    // application-type check, success + failure) -- only the popup's own
+    // heading changes, by request, since its content is actually narrower
+    // than that: every FAILING app across every client with at least one
+    // real failure (aggregate.failingClients -- allFailed + someFailed
+    // combined), not literally every backup the card's own donut counts.
+    allBackupsCardEl = placeholderCard('All Backups', () => openWidgetModal('all', 'All Failed Backups'));
     widgetsEl.appendChild(allBackupsCardEl);
     allFailedCardEl = placeholderCard('All Backups Failed', () => openWidgetModal('allFailed', 'All Backups Failed'));
     widgetsEl.appendChild(allFailedCardEl);
@@ -360,11 +366,14 @@ export function mount(container) {
   // always kept current anyway, since both loadAcceptedFailuresCount() and
   // a successful Accept (see acceptFailure()) write straight into it.
   async function openAcceptedFailuresModal() {
-    const overlay = openModal('Accepted Failures', true);
+    const overlay = openModal('Accepted Failures', true, copyButtonHtml());
     try {
       const items = lastAcceptedFailures || (await fetchAcceptedFailures()).items;
       lastAcceptedFailures = items;
-      overlay.querySelector('.history-modal-body').innerHTML = acceptedFailuresBodyHtml(items);
+      const body = overlay.querySelector('.history-modal-body');
+      body.innerHTML = acceptedFailuresBodyHtml(items);
+      if (items.length > 0) wireCopyButton(overlay, () => acceptedFailuresToText(items), () => acceptedFailuresToHtml(items));
+      else hideCopyButton(overlay);
     } catch (err) {
       overlay.querySelector('.history-modal-body').innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
     }
@@ -373,12 +382,11 @@ export function mount(container) {
   function acceptedFailuresBodyHtml(items) {
     if (items.length === 0) return '<p class="status">No accepted failures right now.</p>';
     return `<table class="saas-protection-detail-table">
-      <thead><tr><th>Client</th><th>Domain</th><th>Application</th><th>Accepted From</th><th>Accepted Until</th><th>By</th></tr></thead>
+      <thead><tr><th>Client</th><th>Application</th><th>Accepted From</th><th>Accepted Until</th><th>By</th></tr></thead>
       <tbody>${items
         .map(
           (i) => `<tr>
         <td>${escapeHtml(i.clientName || '')}</td>
-        <td>${escapeHtml(i.domain || '')}</td>
         <td>${escapeHtml(appTypeLabel(i.appType))}</td>
         <td class="ticket-number">${formatDate(i.startDate)}</td>
         <td class="ticket-number">${formatDate(i.endDate)}</td>
@@ -408,6 +416,13 @@ export function mount(container) {
   function servicesCellHtml(c) {
     if (c.activeServicesCount == null) return '';
     return `${c.activeServicesWithRecentBackupCount ?? 0} / ${c.activeServicesCount}`;
+  }
+
+  // Shared by the grouped resource-group-header's own "count" span and
+  // the Copy builders below, so the two stay in sync -- same wording and
+  // field reads, not two separately-maintained copies.
+  function seatsServicesText(c) {
+    return `Seats: ${c.seatsUsed ?? ''} | Services Backed Up: ${servicesCellHtml(c)}`;
   }
 
   // Column-header totals, by request -- sums over whatever's currently on
@@ -462,20 +477,34 @@ export function mount(container) {
   // body content. `wide` (the five widget popups, not the per-client one)
   // adds .saas-widget-modal-panel -- ~30% wider than the shared default, by
   // request, since these can carry a per-app Accept control/column the
-  // default 30rem width crowds.
-  function openModal(title, wide) {
+  // default 30rem width crowds. `headerExtraHtml` (the Copy button, on the
+  // three popups that have one) lives INSIDE .history-modal-panel-header,
+  // not the scrollable body -- that header is already sticky (top: 0,
+  // see styles.css), so the button rides along with it for free, with no
+  // separate sticky-offset math needed to keep it visible while scrolling
+  // (by request). Table headers staying visible too (also by request) is
+  // handled the same way, just one level down -- see .saas-protection-
+  // detail-table thead th in styles.css, which also keys off this header's
+  // real rendered height via --modal-header-h, set right below.
+  function openModal(title, wide, headerExtraHtml) {
     const overlay = document.createElement('div');
     overlay.className = 'history-modal-overlay';
     overlay.innerHTML = `
       <div class="history-modal-panel${wide ? ' saas-widget-modal-panel' : ''}">
         <div class="history-modal-panel-header">
           <span>${escapeHtml(title)}</span>
-          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+          <div class="history-modal-header-actions">
+            ${headerExtraHtml || ''}
+            <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+          </div>
         </div>
         <div class="history-modal-body"><p class="status loading">Loading...</p></div>
       </div>
     `;
     document.body.appendChild(overlay);
+    const panelEl = overlay.querySelector('.history-modal-panel');
+    const headerEl = overlay.querySelector('.history-modal-panel-header');
+    panelEl.style.setProperty('--modal-header-h', `${headerEl.offsetHeight}px`);
     const close = () => {
       overlay.remove();
       document.removeEventListener('keydown', onKeydown);
@@ -644,13 +673,27 @@ export function mount(container) {
   // re-fetching, until a real Refresh (or, for 'all', a successful Accept,
   // which patches this cache directly -- see onFailureAccepted()).
   async function openWidgetModal(bucket, title) {
-    const overlay = openModal(title, true);
+    // Every widget popup gets a Copy button now, by request ("make the
+    // other popup windows copy buttons the same") -- 'succeeded' uses its
+    // own flat builders (succeededToText/Html, below) since it has no
+    // per-app `apps` data to group by client (see getWidgetBucket()'s own
+    // comment on why -- 'all'/'allFailed'/'someFailed' share failuresToText/
+    // Html instead.
+    const hasCopyButton = true;
+    const overlay = openModal(title, true, hasCopyButton ? copyButtonHtml() : '');
     try {
       const data = widgetDetailCache.get(bucket) || (await fetchWidgetDetail(bucket));
       widgetDetailCache.set(bucket, data);
       const body = overlay.querySelector('.history-modal-body');
       body.innerHTML = widgetDetailBodyHtml(data);
       if (data.clients.length > 0 && data.clients[0].apps !== null) wireAcceptButtons(body);
+      if (data.clients.length > 0) {
+        const getText = bucket === 'succeeded' ? () => succeededToText(data.clients) : () => failuresToText(data.clients, bucket);
+        const getHtml = bucket === 'succeeded' ? () => succeededToHtml(data.clients) : () => failuresToHtml(data.clients, bucket);
+        wireCopyButton(overlay, getText, getHtml);
+      } else {
+        hideCopyButton(overlay);
+      }
     } catch (err) {
       overlay.querySelector('.history-modal-body').innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
     }
@@ -680,17 +723,24 @@ export function mount(container) {
     // getServiceAggregate()'s own `failingClients` in server.js), not
     // every application type the way the per-client popup above shows.
     // 'succeeded': `apps` is null (server never fetched it, by design --
-    // see getWidgetBucket()'s own comment), so this is just the same flat
-    // client/domain/backup% list the main table already shows, for a quick
-    // overview without leaving the popup.
+    // see getWidgetBucket()'s own comment), so this is just a flat
+    // client/backup% list, for a quick overview without leaving the popup.
+    // Domain left out of every popup table here, by request -- the main
+    // table (clientRowsHtml() above) still shows it, these just don't.
+    // Seats/Services Backed Up ARE shown here, by request -- both already
+    // ride along on every client object (seatsUsed/activeServicesCount/
+    // activeServicesWithRecentBackupCount come straight from buildReport()
+    // in server.js, same fields the main table's own clientRowsHtml()
+    // reads), so this is a client.js-only change, no new data to fetch.
     if (data.clients[0].apps === null) {
       return `${truncatedNote}<table class="saas-protection-detail-table">
-        <thead><tr><th>Client</th><th>Domain</th><th>Backup %</th></tr></thead>
+        <thead><tr><th>Client</th><th>Seats</th><th>Services Backed Up</th><th>Backup %</th></tr></thead>
         <tbody>${data.clients
           .map(
             (c) => `<tr>
           <td>${escapeHtml(c.clientName)}</td>
-          <td>${escapeHtml(c.domain)}</td>
+          <td class="ticket-number">${c.seatsUsed ?? ''}</td>
+          <td class="ticket-number">${servicesCellHtml(c)}</td>
           <td class="ticket-number ${backupPctClass(c.backupPercentage)}">${backupPctText(c.backupPercentage)}</td>
         </tr>`
           )
@@ -705,6 +755,34 @@ export function mount(container) {
     // reason to single out 'all' as the only place able to act on a
     // failure.
     const allowAccept = true;
+
+    // "Some Backups Failed" specifically, by request -- one flat table
+    // (Client as the first column) instead of a separate .resource-group
+    // block per client ('all'/'allFailed' below keep that grouping, since
+    // only this bucket's layout was asked to change). The shade flips only
+    // when the CLIENT changes between rows, not every row -- a client with
+    // 2-3 failing app types here reads as one visual band instead of
+    // alternating mid-client (see .saas-flat-client-table in styles.css,
+    // which overrides the dashboard-wide per-row zebra rule for this one).
+    if (data.bucket === 'someFailed') {
+      let shade = false;
+      let prevCustomerId = null;
+      const rows = data.clients
+        .map((c) => {
+          if (c.customerId !== prevCustomerId) {
+            shade = !shade;
+            prevCustomerId = c.customerId;
+          }
+          const rowClass = shade ? 'saas-client-shade' : '';
+          return (c.apps || []).map((a) => appFailureRowHtml(c, a, allowAccept, clientLeadingCellsHtml(c), rowClass)).join('');
+        })
+        .join('');
+      return `${truncatedNote}<table class="saas-protection-detail-table saas-flat-client-table">
+        <thead><tr class="shaded-row"><th>Client</th><th>Seats</th><th>Services Backed Up</th><th>Application</th><th>Status</th><th>Last Successful Backup</th>${allowAccept ? '<th>Accept Until</th>' : ''}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+
     return (
       truncatedNote +
       data.clients
@@ -717,13 +795,233 @@ export function mount(container) {
             : '<p class="status error">Couldn\'t load application detail for this client.</p>';
           return `
             <div class="resource-group">
-              <div class="resource-group-header"><span>${escapeHtml(c.clientName)}</span><span class="count">${escapeHtml(c.domain)}</span></div>
+              <div class="resource-group-header"><span>${escapeHtml(c.clientName)}</span><span class="count">${escapeHtml(seatsServicesText(c))}</span></div>
               ${appsHtml}
             </div>
           `;
         })
         .join('')
     );
+  }
+
+  function clientLeadingCellsHtml(c) {
+    return `<td>${escapeHtml(c.clientName)}</td><td class="ticket-number">${c.seatsUsed ?? ''}</td><td class="ticket-number">${servicesCellHtml(c)}</td>`;
+  }
+
+  // Lives in .history-modal-header-actions (see openModal()'s own comment)
+  // rather than in the scrollable body, so it stays visible on scroll for
+  // free via the header's existing sticky positioning.
+  function copyButtonHtml() {
+    return '<button type="button" class="button-link button-link--small saas-copy-btn">Copy</button>';
+  }
+
+  // "Clients Succeeded" -- same flat Client/Seats/Services Backed Up/
+  // Backup % table as the visible popup (the apps === null branch above),
+  // not the failingClients shape every other bucket's copy builder deals
+  // with.
+  function succeededToText(clients) {
+    const header = ['Client', 'Seats', 'Services Backed Up', 'Backup %'];
+    const lines = [header.join('\t')];
+    for (const c of clients) {
+      lines.push([c.clientName, c.seatsUsed ?? '', servicesCellHtml(c), backupPctText(c.backupPercentage)].join('\t'));
+    }
+    return lines.join('\n');
+  }
+
+  function succeededToHtml(clients) {
+    const rows = clients.map((c) => [
+      escapeHtml(c.clientName),
+      escapeHtml(c.seatsUsed ?? ''),
+      escapeHtml(servicesCellHtml(c)),
+      escapeHtml(backupPctText(c.backupPercentage)),
+    ]);
+    return copyTableHtml(['Client', 'Seats', 'Services Backed Up', 'Backup %'], rows);
+  }
+
+  // Plain-text/HTML pair for the clipboard write (see copyRichText()
+  // below) -- real columns either way (tab-separated for text/plain,
+  // a genuine HTML <table> for text/html). Mirrors whichever layout the
+  // popup itself is showing, by request ("same format as the displayed
+  // window") -- "Some Backups Failed" is a flat table on screen (Client/
+  // Seats/Services Backed Up as real columns, one row per failing app),
+  // while "All Backups"/"All Backups Failed" group by client on screen
+  // (a heading + Seats/Services line per client, then that client's own
+  // small table) -- so the copy for THOSE two is one same-shaped section
+  // per client, not one giant flat table. Accept Until is left out of
+  // every builder below -- it's a live date-picker + button in the popup
+  // table, not a value to copy.
+  function failuresToText(clients, bucket) {
+    if (bucket === 'someFailed') {
+      const header = ['Client', 'Seats', 'Services Backed Up', 'Application', 'Status', 'Last Successful Backup'];
+      const lines = [header.join('\t')];
+      for (const c of clients) {
+        for (const a of c.apps || []) {
+          const lastBackup = a.lastFullyProtectedTime ? formatDateTime(new Date(a.lastFullyProtectedTime).toISOString()) : '';
+          lines.push([c.clientName, c.seatsUsed ?? '', servicesCellHtml(c), appTypeLabel(a.appType), a.status, lastBackup].join('\t'));
+        }
+      }
+      return lines.join('\n');
+    }
+
+    // 'all'/'allFailed' -- one section per client: heading, Seats |
+    // Services Backed Up, then that client's own Application/Status/Last
+    // Successful Backup table, same seatsServicesText() the visible
+    // resource-group-header uses.
+    const lines = [];
+    for (const c of clients) {
+      lines.push(c.clientName);
+      lines.push(seatsServicesText(c));
+      lines.push(['Application', 'Status', 'Last Successful Backup'].join('\t'));
+      for (const a of c.apps || []) {
+        const lastBackup = a.lastFullyProtectedTime ? formatDateTime(new Date(a.lastFullyProtectedTime).toISOString()) : '';
+        lines.push([appTypeLabel(a.appType), a.status, lastBackup].join('\t'));
+      }
+      // Two blank lines, not one -- same "make the gap between clients
+      // read clearly" request as the HTML version's larger heading margin
+      // above, just in a plain-text-safe form.
+      lines.push('', '');
+    }
+    return lines.join('\n').trim();
+  }
+
+  function acceptedFailuresToText(items) {
+    const header = ['Client', 'Application', 'Accepted From', 'Accepted Until', 'By'];
+    const lines = [header.join('\t')];
+    for (const i of items) {
+      lines.push([i.clientName || '', appTypeLabel(i.appType), formatDate(i.startDate), formatDate(i.endDate), i.acceptedByName || ''].join('\t'));
+    }
+    return lines.join('\n');
+  }
+
+  // Every style lives inline, PER CELL, not once on <table>/<thead> --
+  // Outlook/Word's own rendering engine (used for the desktop Outlook
+  // email body, the single most likely destination for this) barely
+  // supports CSS and does not reliably inherit styles down from an
+  // ancestor element, which is what made the first version of this ("do
+  // better", by request) paste as an unstyled, oversized, serif-font
+  // table with heavy default borders -- a classic Outlook-paste rendering
+  // gotcha, not a Chrome bug. Light grey borders + the dashboard's own
+  // header-blue (#eff6ff, same var(--section-header-bg) value, not a new
+  // one-off shade) read cleanly in Outlook, Teams, Word, and Excel alike.
+  const COPY_CELL_STYLE = 'padding:4px 8px;border:1px solid #ccc;font-family:Arial,Helvetica,sans-serif;font-size:10px;text-align:left;';
+  const COPY_HEADER_STYLE = `${COPY_CELL_STYLE}background:#eff6ff;font-weight:600;`;
+
+  // `rows` is an array of already-escaped cell-string arrays. `boldFirstCol`
+  // (default on) bolds the first column -- "identify the client at a
+  // glance", same intent the visible popup tables' own Client column
+  // carries -- but is turned off for the grouped per-client mini-tables
+  // below, which have no Client column of their own (the client name is
+  // the section heading above the table instead).
+  function copyTableHtml(headers, rows, boldFirstCol = true) {
+    const headHtml = headers.map((h) => `<th style="${COPY_HEADER_STYLE}">${escapeHtml(h)}</th>`).join('');
+    const bodyHtml = rows
+      .map((cells) => `<tr>${cells.map((cell, i) => `<td style="${COPY_CELL_STYLE}">${boldFirstCol && i === 0 ? `<b>${cell}</b>` : cell}</td>`).join('')}</tr>`)
+      .join('');
+    return `<table style="border-collapse:collapse;" cellspacing="0"><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+  }
+
+  function failuresToHtml(clients, bucket) {
+    if (bucket === 'someFailed') {
+      const rows = [];
+      for (const c of clients) {
+        for (const a of c.apps || []) {
+          const lastBackup = a.lastFullyProtectedTime ? formatDateTime(new Date(a.lastFullyProtectedTime).toISOString()) : '';
+          rows.push([
+            escapeHtml(c.clientName),
+            escapeHtml(c.seatsUsed ?? ''),
+            escapeHtml(servicesCellHtml(c)),
+            escapeHtml(appTypeLabel(a.appType)),
+            escapeHtml(a.status),
+            escapeHtml(lastBackup),
+          ]);
+        }
+      }
+      return copyTableHtml(['Client', 'Seats', 'Services Backed Up', 'Application', 'Status', 'Last Successful Backup'], rows);
+    }
+
+    // 'all'/'allFailed' -- a bold heading + Seats/Services line per
+    // client, then that client's own small table, same structure the
+    // popup itself shows on screen (.resource-group/.resource-group-header
+    // above), not one flat table. The gap between one client's table and
+    // the next client's heading is a SPACER <div> with an explicit height
+    // (plus a non-breaking space, so it has content and can't collapse to
+    // 0), not `margin` -- margin on a block element next to a <table> is
+    // exactly the CSS that Outlook/Word's own rendering engine (the most
+    // likely destination for this) is notorious for dropping outright,
+    // confirmed the hard way here ("no gap whatsoever"). An explicit-
+    // height div is the standard cross-client-safe way to force vertical
+    // space in HTML that might get pasted into Outlook.
+    const spacer = '<div style="height:18px;line-height:18px;font-size:1px;">&nbsp;</div>';
+    return clients
+      .map((c, i) => {
+        const rows = (c.apps || []).map((a) => {
+          const lastBackup = a.lastFullyProtectedTime ? formatDateTime(new Date(a.lastFullyProtectedTime).toISOString()) : '';
+          return [escapeHtml(appTypeLabel(a.appType)), escapeHtml(a.status), escapeHtml(lastBackup)];
+        });
+        const heading = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;margin:0 0 4px;"><b>${escapeHtml(c.clientName)}</b> -- ${escapeHtml(seatsServicesText(c))}</div>`;
+        return (i === 0 ? '' : spacer) + heading + copyTableHtml(['Application', 'Status', 'Last Successful Backup'], rows, false);
+      })
+      .join('');
+  }
+
+  function acceptedFailuresToHtml(items) {
+    const rows = items.map((i) => [
+      escapeHtml(i.clientName || ''),
+      escapeHtml(appTypeLabel(i.appType)),
+      escapeHtml(formatDate(i.startDate)),
+      escapeHtml(formatDate(i.endDate)),
+      escapeHtml(i.acceptedByName || ''),
+    ]);
+    return copyTableHtml(['Client', 'Application', 'Accepted From', 'Accepted Until', 'By'], rows);
+  }
+
+  // Writes BOTH a plain-text and a styled HTML representation to the
+  // clipboard -- a plain-text-only target (a terminal, a basic input)
+  // still gets the plain fallback automatically; a rich-text target
+  // (email, Teams, Word, a ticket note) gets the smaller/bold styled
+  // version. Falls back to writeText() on a browser with no ClipboardItem
+  // support.
+  async function copyRichText(plainText, html) {
+    if (window.ClipboardItem && navigator.clipboard.write) {
+      const item = new ClipboardItem({
+        'text/plain': new Blob([plainText], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' }),
+      });
+      await navigator.clipboard.write([item]);
+    } else {
+      await navigator.clipboard.writeText(plainText);
+    }
+  }
+
+  // Swaps the button's own label to "Copied!" briefly for feedback -- no
+  // separate flash element, same idea .order-copy-btn's own comment
+  // (styles.css) already notes a dedicated Copy button could use instead
+  // of a colour flash.
+  function wireCopyButton(overlay, getText, getHtml) {
+    const btn = overlay.querySelector('.saas-copy-btn');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      try {
+        await copyRichText(getText(), getHtml());
+        const original = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => {
+          btn.textContent = original;
+        }, 1200);
+      } catch (err) {
+        alert(`Couldn't copy: ${err.message}`);
+      }
+    });
+  }
+
+  // The header always renders the Copy button up front (before the list
+  // is known to be empty -- see openModal()'s own comment on why it has
+  // to live in the header, decided before the fetch resolves). Hide it
+  // rather than leave it wired to copy an empty string once the real
+  // count comes back as zero.
+  function hideCopyButton(overlay) {
+    const btn = overlay.querySelector('.saas-copy-btn');
+    if (btn) btn.hidden = true;
   }
 
   // The yellowy-orange "Failure accepted for X to Y" note, by request --
@@ -735,11 +1033,16 @@ export function mount(container) {
   // side (see computeServiceAggregate() in server.js), so its presence
   // here always means "this was accepted before, and that acceptance has
   // since run out", never a currently-active one.
-  function appFailureRowHtml(c, a, allowAccept) {
+  // `leadingCellsHtml`/`rowClass` are only passed by the "Some Backups
+  // Failed" flat table (the Client cell + its own per-client shade class)
+  // -- the grouped 'all'/'allFailed' rendering calls this with neither,
+  // same as before.
+  function appFailureRowHtml(c, a, allowAccept, leadingCellsHtml, rowClass) {
     const acceptedNote = a.acceptedFailure
       ? `<br><span class="cell-flag-orange saas-accepted-note">Failure accepted for ${formatDate(a.acceptedFailure.startDate)} to ${formatDate(a.acceptedFailure.endDate)}</span>`
       : '';
-    return `<tr>
+    return `<tr${rowClass ? ` class="${rowClass}"` : ''}>
+      ${leadingCellsHtml || ''}
       <td>${escapeHtml(appTypeLabel(a.appType))}</td>
       <td class="${a.healthy ? 'cell-flag-green' : 'cell-flag-red'}">${escapeHtml(a.status)}${acceptedNote}</td>
       <td class="ticket-number">${a.lastFullyProtectedTime ? formatDateTime(new Date(a.lastFullyProtectedTime).toISOString()) : ''}</td>
