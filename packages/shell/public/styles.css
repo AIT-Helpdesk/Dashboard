@@ -3121,6 +3121,60 @@ tbody tr:nth-child(even) {
   background: var(--row-alt-bg);
 }
 
+/* SaaS Protection's "Some Backups Failed" popup, by request -- a flat
+   table (Client as the first column, see appFailureRowHtml()/
+   clientLeadingCellsHtml() in client.js) where the shade flips only when
+   the CLIENT changes between rows, not every row. Overrides the dashboard-
+   wide tbody tr:nth-child(even) rule above for just this table (reset to
+   transparent, shade reapplied via .saas-client-shade instead, computed
+   client.js-side per client rather than by row position). The shade
+   itself is the same "more distinct than --row-alt-bg's own near-white
+   tint" grey .rt-table thead tr.rt-filter-row th already uses, by
+   request ("a bit more distinct") -- not a new one-off shade. */
+.saas-flat-client-table tbody tr {
+  background: transparent !important;
+}
+.saas-flat-client-table tbody tr.saas-client-shade {
+  background: color-mix(in srgb, #6b7280 12%, var(--card)) !important;
+}
+
+/* SaaS Protection's Copy button, by request, lives inside the modal's own
+   title bar (.history-modal-header-actions, next to the close button --
+   see openModal() in client.js) rather than the scrollable body, so it
+   stays visible on scroll via that header's existing `position: sticky`
+   rather than needing its own sticky offset. Also used (empty) by every
+   other popup on this page that has no Copy button -- just the close
+   button alone, same layout either way. */
+.history-modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Table headers staying visible on scroll too, by request -- same idea,
+   one level down: sticky right below the title bar rather than at the
+   very top, using --modal-header-h (set from that header's own real
+   rendered height in openModal(), not a guessed px value, since the
+   title bar's height isn't fixed -- a long "All Backups Failed"/"Some
+   Backups Failed" title can wrap). Applies to every
+   .saas-protection-detail-table on this page, including the several
+   small per-client ones in the grouped 'all'/'allFailed' rendering --
+   each one's own header sticks while its own rows are in view, same as
+   any other sequence of same-class sticky headers. Background set on the
+   <th> itself, not just the <tr> -- a <tr>-only background can fail to
+   paint reliably on a sticky-positioned cell (same gotcha .tm-hours-table
+   thead th's own comment documents), so this can't rely on .shaded-row
+   alone for "Some Backups Failed"'s blue header below. */
+.saas-protection-detail-table thead th {
+  position: sticky;
+  top: var(--modal-header-h, 2.75rem);
+  z-index: 2;
+  background: var(--card);
+}
+.saas-flat-client-table thead tr.shaded-row th {
+  background: var(--section-header-bg) !important;
+}
+
 /* Same blue as .resource-group-header (Completed Tickets' per-technician group
    bar), reused wherever a table needs its header row and/or a totals row
    shaded to stand out -- e.g. Client Financials' summary table. */
