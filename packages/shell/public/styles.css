@@ -3627,6 +3627,174 @@ td.ticket-number {
 :root[data-theme="dark"] .check-up-pct-tile--red {
   background: color-mix(in srgb, #dc2626 55%, var(--card));
 }
+/* 13-Week Trends -- small multiples, one combined chart per Support Desk
+   resource, by request ("plotting of graphs for the last 13 weeks for
+   each 'Service Team' resource... one small chart per resource, all
+   shown at once"). Client Billable Hours % and Tickets Closed share ONE
+   chart per resource (left scale 0-100%, right scale 0-75, blue/green) --
+   a deliberate, explicitly requested exception to the dataviz skill's own
+   "never dual-axis" default; see renderResourceTrends()'s own comment in
+   client.js. Line/dot/axis colors are pinned literal hex (not
+   var(--accent), which is used for other, unrelated blue elements on this
+   page) so "blue = Billable Time, green = Tickets Closed" reads
+   consistently regardless of theme -- same #2563eb/#16a34a already used
+   dashboard-wide for blue/green (Time Summaries' own Total-column blue,
+   every green header/status element). */
+.check-up-trend-heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+/* Now a plain .section-heading (by request, to match the "Daily Figures
+   (Support Desk)"/"This Week (Support Desk)" headings' own look) --
+   margin reset still needed here specifically, since this one sits
+   inside the flex heading row alongside the legend, unlike those two
+   standalone ones. */
+.check-up-trend-heading-row .section-heading {
+  margin: 0;
+}
+.check-up-trend-range {
+  font-weight: normal;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+/* Legend, top of the section next to the heading, by request -- the
+   dependable identity channel for a chart whose two series are
+   distinguished by color alone (marks-and-anatomy.md: "a legend is always
+   present for two or more series"). One legend for the whole grid, not
+   one per card -- every card uses the exact same two colors for the exact
+   same two series. */
+.check-up-trend-legend {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.check-up-trend-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.check-up-trend-legend-swatch {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+}
+.check-up-trend-legend-swatch--billable {
+  background: #2563eb;
+}
+.check-up-trend-legend-swatch--tickets {
+  background: #16a34a;
+}
+.check-up-trend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+.check-up-trend-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  background: var(--card);
+}
+.check-up-trend-card-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.15rem;
+}
+
+/* Daily Figures section, by request -- one .check-up-trend-card per
+   resource (same card shell the trend charts below use, for a matching
+   look), each holding two compact .datto-card tiles side by side. Scoped
+   overrides, not the base .datto-card sizing -- that's built for a single
+   big standalone tile (1rem padding), which would blow out a 260px-wide
+   card at two-up; same "smaller fixed-width variant, scoped to its own
+   grid" convention .wo-handler-pct-grid's own .datto-card override
+   already uses elsewhere on this page. */
+.check-up-daily-figures-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+.check-up-daily-figures-row .datto-card {
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  /* Both tiles already stretch to the same height by default (flex row,
+     align-items: stretch) -- Billable's extra HH:MM line (see
+     .check-up-daily-figures-hours below) makes IT taller, by request
+     ("keep the box the same size as the Billable box"), so Tickets
+     Closed's own single number+label is centered in that same height
+     rather than left sitting at the top with empty space under it. */
+  justify-content: center;
+}
+.check-up-daily-figures-row .check-up-pct-number {
+  font-size: 1.3rem;
+}
+/* Bigger than the Billable %'s own number, by request -- Tickets Closed
+   has only one line of real content (no HH:MM-style second line), so a
+   larger number is what actually fills the tile now that it's the same
+   height as Billable's two-line one. */
+.check-up-daily-figures-row .check-up-pct-number--large {
+  font-size: 2rem;
+}
+.check-up-daily-figures-row .datto-card-label {
+  font-size: 0.75rem;
+}
+/* The actual HH:MM behind the Billable %, by request -- same muted/
+   smaller treatment .datto-card-sub already uses dashboard-wide for a
+   secondary line under a headline number, not a new one-off style. */
+.check-up-daily-figures-hours {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.check-up-trend-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+/* Hairline gridlines -- one-step-off-surface gray, recessive, same mark
+   spec every gridline/axis on this dashboard's dataviz-reviewed charts
+   uses. Three shared gridlines (0/50/100% <-> 0/37/75 tickets) carry BOTH
+   axes' tick labels, rather than two independent grids fighting each
+   other. */
+.check-up-trend-gridline {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.check-up-trend-axis-label {
+  font-size: 0.6rem;
+  fill: var(--muted);
+}
+/* 2px lines, round join/cap -- mark spec (marks-and-anatomy.md). */
+.check-up-trend-line {
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.check-up-trend-line--billable {
+  stroke: #2563eb;
+}
+.check-up-trend-line--tickets {
+  stroke: #16a34a;
+}
+/* 2px surface-color ring around each end-dot, drawn as a larger circle
+   underneath it in the card's own surface color -- separates the dot from
+   the line without drawing a border around it (marks-and-anatomy.md's own
+   "never draw a border around a mark to separate it" rule). */
+.check-up-trend-end-ring {
+  fill: var(--card);
+}
+.check-up-trend-end-dot--billable {
+  fill: #2563eb;
+}
+.check-up-trend-end-dot--tickets {
+  fill: #16a34a;
+}
 /* Check Up's own Helpdesk Handler banner, by request ("a single banner
    across the top") -- full-width bar: bold GREEN "Helpdesk Handler:"
    label plus the dropdown selector (same green text) on one row (the
