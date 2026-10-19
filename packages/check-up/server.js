@@ -6,6 +6,7 @@ const {
   listAll,
   fetchByFieldIn,
   fetchServiceDeskAndProfessionalServicesMembership,
+  fetchRoleHourlyRates,
   mondayOf,
   todayAestKey,
   weekDatesFrom,
@@ -102,16 +103,55 @@ async function fetchWeeklyHoursPct(client) {
 const HANDLER_OPTIONS_CACHE_TTL_MS = 10 * 60 * 1000;
 let handlerOptionsCache = null; // { data, expiresAt }
 
+// Each resource's own current Autotask Role -- used below
+// (computeResourceFiguresForRange) as a simple, no-extra-fetch-per-entry
+// stand-in for the real per-TimeEntry roleID, to turn a resource's
+// billable hours into an estimated $ figure for the Billable Daily/This
+// Week/Last Week squares. Not the full chargeable-$ formula
+// (@dashboard/autotask-client's own resolveChargeableValue(), used by
+// Times/Ticket Times/Completed Tickets) -- that needs a real per-
+// TimeEntry roleID/billingCodeID fetch plus BillingItems/WorkTypeModifiers
+// lookups, real extra Autotask traffic this already-rate-limit-sensitive
+// page's lightweight auto-loading sections don't need (by request,
+// "simple rate estimate" over "fully accurate chargeable value").
+//
+// `Resources.defaultServiceDeskRoleID` looked like the obvious field for
+// this, but confirmed live it's genuinely `null` for 2 of 5 real Support
+// Desk resources (Hamza Mahmood, Romulo Roquim Jr) despite both logging
+// real billable hours -- not usable. `ResourceRoles` (resourceID -> roleID,
+// one row per department a resource belongs to) is populated for all 5,
+// and in every real case checked here every row for a given resource
+// shares the same roleID regardless of which department it's filed
+// under, so picking any one active row's roleID is a safe, consistent
+// per-resource rate.
+async function fetchResourceRoleIds(client, resourceIds) {
+  if (resourceIds.length === 0) return new Map();
+  const rows = await fetchByFieldIn(client.resourceRoles, 'resourceID', resourceIds);
+  const byResource = new Map();
+  for (const row of rows) {
+    if (row.isActive === false) continue;
+    if (!byResource.has(row.resourceID)) byResource.set(row.resourceID, row.roleID);
+  }
+  return byResource;
+}
+
 async function fetchHandlerOptions(client) {
   if (handlerOptionsCache && Date.now() < handlerOptionsCache.expiresAt) return handlerOptionsCache.data;
   const membership = await fetchServiceDeskAndProfessionalServicesMembership(client);
   const allIds = [...new Set([...membership.serviceDesk, ...membership.professionalServices, ...membership.leadership])];
   if (allIds.length === 0) return { serviceDesk: [], professionalServices: [], leadership: [] };
-  const resources = await fetchByFieldIn(client.resources, 'id', allIds);
+  const [resources, roleIdByResource] = await Promise.all([fetchByFieldIn(client.resources, 'id', allIds), fetchResourceRoleIds(client, allIds)]);
   const byId = new Map(
     resources
       .filter((r) => r.licenseType !== API_USER_LICENSE_TYPE)
-      .map((r) => [r.id, { id: r.id, name: [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || `Resource #${r.id}` }])
+      .map((r) => [
+        r.id,
+        {
+          id: r.id,
+          name: [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || `Resource #${r.id}`,
+          roleId: roleIdByResource.get(r.id) ?? null,
+        },
+      ])
   );
   const groupOf = (ids) =>
     [...ids]
@@ -124,6 +164,21 @@ async function fetchHandlerOptions(client) {
     leadership: groupOf(membership.leadership),
   };
   handlerOptionsCache = { data, expiresAt: Date.now() + HANDLER_OPTIONS_CACHE_TTL_MS };
+  return data;
+}
+
+// Role hourly rates (Roles.hourlyRate) for the $ estimate in
+// computeResourceFiguresForRange() below -- same 10-minute cache tier as
+// fetchHandlerOptions() above (real rates, changes rarely, no business
+// being re-fetched on every one of /daily-figures, /this-week-figures,
+// /last-week-figures within the same few seconds).
+const ROLE_RATES_CACHE_TTL_MS = 10 * 60 * 1000;
+let roleRatesCache = null; // { data, expiresAt }
+
+async function getRoleHourlyRates(client) {
+  if (roleRatesCache && Date.now() < roleRatesCache.expiresAt) return roleRatesCache.data;
+  const data = await fetchRoleHourlyRates(client);
+  roleRatesCache = { data, expiresAt: Date.now() + ROLE_RATES_CACHE_TTL_MS };
   return data;
 }
 
@@ -251,8 +306,9 @@ function yesterdayAestKey() {
 // route's job.
 async function computeResourceFiguresForRange(client, from, to) {
   const ranges = [{ from, to }];
-  const [handlerOptions, hoursByRange, ticketsByRange] = await Promise.all([
+  const [handlerOptions, roleRatesById, hoursByRange, ticketsByRange] = await Promise.all([
     fetchHandlerOptions(client),
+    getRoleHourlyRates(client),
     timesRouter.computePerResourceWeeklyTotals(client, ranges, timesRouter.TEAM_SERVICE_DESK),
     fetchWeeklyTicketsClosedByResource(client, ranges),
   ]);
@@ -265,7 +321,9 @@ async function computeResourceFiguresForRange(client, from, to) {
     const billablePct = hours && hours.totalTechHours > 0 ? (hours.totalClientHoursBillable / hours.totalTechHours) * 100 : 0;
     const billableHours = hours?.totalClientHoursBillable || 0;
     const ticketsClosed = ticketsRange.countByResource.get(r.id) || 0;
-    return { id: r.id, name: r.name, billablePct, billableHours, ticketsClosed };
+    const rate = roleRatesById.get(r.roleId) || 0;
+    const billableDollars = billableHours * rate;
+    return { id: r.id, name: r.name, billablePct, billableHours, billableDollars, ticketsClosed };
   });
 }
 
@@ -308,6 +366,47 @@ router.get('/this-week-figures', async (req, res) => {
     const to = todayKey < weekDays[weekDays.length - 1] ? todayKey : weekDays[weekDays.length - 1];
     const resources = await computeResourceFiguresForRange(client, from, to);
     res.json({ from, to, resources });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: errorDetail(err) });
+  }
+});
+
+// The most recently COMPLETED Monday..Sunday week -- same real range as
+// last13Weeks() above's own final week, just surfaced as its own section
+// (by request, "Last week (Support Desk)") rather than only buried as the
+// last point on the 13-week chart. Cached for an hour, same tier/reasoning
+// as /resource-trends below (a completed, settled week "doesn't change
+// much" either) -- unlike /daily-figures and /this-week-figures above,
+// which cover a period still being actively logged against.
+function lastCompletedWeekRange() {
+  const currentMonday = mondayOf(todayAestKey());
+  const sundayDate = new Date(Date.UTC(currentMonday.year, currentMonday.month - 1, currentMonday.day - 1));
+  const mondayDate = new Date(Date.UTC(sundayDate.getUTCFullYear(), sundayDate.getUTCMonth(), sundayDate.getUTCDate() - 6));
+  return { from: mondayDate.toISOString().slice(0, 10), to: sundayDate.toISOString().slice(0, 10) };
+}
+
+const LAST_WEEK_FIGURES_CACHE_TTL_MS = 60 * 60 * 1000;
+let lastWeekFiguresCache = null; // { data, expiresAt }
+let lastWeekFiguresInFlight = null;
+
+router.get('/last-week-figures', async (req, res) => {
+  try {
+    if (lastWeekFiguresCache && Date.now() < lastWeekFiguresCache.expiresAt) return res.json(lastWeekFiguresCache.data);
+    if (lastWeekFiguresInFlight) return res.json(await lastWeekFiguresInFlight);
+
+    const client = await getClient();
+    const { from, to } = lastCompletedWeekRange();
+    lastWeekFiguresInFlight = computeResourceFiguresForRange(client, from, to)
+      .then((resources) => {
+        const data = { from, to, resources };
+        lastWeekFiguresCache = { data, expiresAt: Date.now() + LAST_WEEK_FIGURES_CACHE_TTL_MS };
+        return data;
+      })
+      .finally(() => {
+        lastWeekFiguresInFlight = null;
+      });
+    res.json(await lastWeekFiguresInFlight);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: errorDetail(err) });

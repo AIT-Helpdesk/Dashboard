@@ -95,11 +95,15 @@ async function resolveTicketSplit(client, req) {
     { op: 'exist', field: 'ticketID' },
   ];
 
+  // Deliberately NOT pushed into the TimeEntries filter itself (that would
+  // scope the whole period fetch to just this person, hiding every other
+  // resource's own Accrue- entries on the same ticket) -- enforced instead
+  // as its own condition below, alongside the ticket-wide Accrue- check.
+  let resourceId = null;
   const resourceIdParam = (req.query.resourceId || '').toString();
   if (resourceIdParam) {
-    const resourceId = parseInt(resourceIdParam, 10);
+    resourceId = parseInt(resourceIdParam, 10);
     if (!Number.isInteger(resourceId)) return { error: 'Query param "resourceId" must be a real resource id.' };
-    filter.push({ op: 'eq', field: 'resourceID', value: resourceId });
   }
 
   // Ticket Number -> real ticketID, resolved first so the TimeEntries
@@ -119,11 +123,32 @@ async function resolveTicketSplit(client, req) {
   const periodEntries = await listAll(client.timeEntries, filter);
   if (periodEntries.length === 0) return { from, to, completeTicketIds: [], incompleteTicketIds: [] };
 
-  const periodBillingCodeNameById = await resolveBillingCodeNames(client, periodEntries);
-  const qualifyingTicketIds = new Set();
+  // Condition 1 -- which tickets are even CANDIDATES: touched in the
+  // selected period (any work type, not just Accrue-), scoped to the
+  // selected person's own entries when one is chosen ("that person has
+  // any time entry in the period..."), any resource's entries otherwise
+  // (unchanged base behaviour -- no person picked, no narrowing).
+  const candidateTicketIds = new Set();
   for (const e of periodEntries) {
-    if (resolveWorkType(e.billingCodeID, periodBillingCodeNameById).startsWith('Accrue-')) qualifyingTicketIds.add(e.ticketID);
+    if (resourceId === null || e.resourceID === resourceId) candidateTicketIds.add(e.ticketID);
   }
+  if (candidateTicketIds.size === 0) return { from, to, completeTicketIds: [], incompleteTicketIds: [] };
+
+  // Condition 2 -- of those candidates, does the ticket have an Accrue-
+  // entry from ANY resource in ANY timeframe, not just the selected period
+  // -- by request ("always show when accruing time entries are in ANY
+  // timeframe on the ticket"), applies whether or not a person is
+  // selected. Deliberately a SEPARATE fetch from periodEntries above
+  // (which is bounded by dateWorked), scoped to just the candidate tickets
+  // rather than every ticket Autotask has ever seen.
+  const candidateIds = [...candidateTicketIds];
+  const allTimeEntriesForCandidates = await fetchByFieldIn(client.timeEntries, 'ticketID', candidateIds);
+  const allTimeBillingCodeNameById = await resolveBillingCodeNames(client, allTimeEntriesForCandidates);
+  const ticketIdsWithAnyTimeAccrueEntry = new Set();
+  for (const e of allTimeEntriesForCandidates) {
+    if (resolveWorkType(e.billingCodeID, allTimeBillingCodeNameById).startsWith('Accrue-')) ticketIdsWithAnyTimeAccrueEntry.add(e.ticketID);
+  }
+  const qualifyingTicketIds = new Set(candidateIds.filter((id) => ticketIdsWithAnyTimeAccrueEntry.has(id)));
   if (qualifyingTicketIds.size === 0) return { from, to, completeTicketIds: [], incompleteTicketIds: [] };
 
   const ticketIds = [...qualifyingTicketIds];

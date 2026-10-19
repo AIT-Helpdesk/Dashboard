@@ -506,6 +506,28 @@ async function resolveCompanyName(client, id) {
   }
 }
 
+// A real production hit: Autotask's own API gateway occasionally returns a
+// bare 500 with a Json.NET parse-error body ("Unterminated string. Expected
+// delimiter...") on an otherwise-ordinary query -- confirmed NOT caused by
+// anything this dashboard sends (this is the one shared function every
+// Autotask query on the whole dashboard funnels through; it only ever hands
+// axios a plain {filter, MaxRecords} object, which axios's own JSON.stringify
+// cannot mis-escape regardless of what's in the data). That error class is
+// gateway-side and has been confirmed to clear on a bare retry of the exact
+// same request. 4xx is never retried here -- a validation error is real and
+// retrying it just wastes a round trip for the same rejection.
+const QUERY_RETRY_DELAY_MS = 400;
+async function postQueryWithRetry(axiosInstance, url, body) {
+  try {
+    return await axiosInstance.post(url, body);
+  } catch (err) {
+    const status = err.response?.status;
+    if (!status || status < 500) throw err;
+    await new Promise((resolve) => setTimeout(resolve, QUERY_RETRY_DELAY_MS));
+    return axiosInstance.post(url, body);
+  }
+}
+
 // Autotask's REST API paginates POST /query results via a `pageDetails.nextPageUrl`
 // cursor in the response body -- NOT via a `page` number in the request, despite the
 // SDK's `.list()` wrapper accepting a `page` option (it silently ignores it and
@@ -516,12 +538,12 @@ async function resolveCompanyName(client, id) {
 async function listAll(entity, filter) {
   const all = [];
   const body = { filter, MaxRecords: 500 };
-  let response = await entity.axios.post(`${entity.endpoint}/query`, body);
+  let response = await postQueryWithRetry(entity.axios, `${entity.endpoint}/query`, body);
   all.push(...(response.data?.items || []));
   let nextUrl = response.data?.pageDetails?.nextPageUrl || null;
   // Safety cap in case Autotask ever returns a cursor that doesn't terminate.
   for (let i = 0; i < 100 && nextUrl; i++) {
-    response = await entity.axios.post(nextUrl, body);
+    response = await postQueryWithRetry(entity.axios, nextUrl, body);
     all.push(...(response.data?.items || []));
     nextUrl = response.data?.pageDetails?.nextPageUrl || null;
   }

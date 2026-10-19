@@ -19,6 +19,12 @@ let lastDailyFigures = null;
 // "small/cheap, auto-load" tier as Daily Figures above, not the trends
 // section's own Show-button tier.
 let lastThisWeekFigures = null;
+// Last Week (the most recently COMPLETED Monday..Sunday week) per
+// resource -- cached server-side for an hour (same tier as the 13-week
+// trends below, not Daily/This Week above), so this is never
+// re-fetched in the background on a cached remount, same as
+// lastResourceTrends' own "no background re-fetch" comment.
+let lastLastWeekFigures = null;
 // Separate from lastHandler itself -- "no handler set yet" (a real,
 // legitimate value readHandler() can return) and "haven't fetched at all
 // yet this session" are two different things, and lastHandler alone can't
@@ -61,10 +67,12 @@ export function mount(container) {
       <div id="handler-meta" class="check-up-handler-meta"></div>
     </div>
     <div id="weekly-hours-pct-grid" class="check-up-pct-grid" hidden></div>
-    <h2 class="section-heading">Daily Figures (Support Desk)</h2>
+    <h2 class="section-heading">Billable Daily Figures (Support Desk)</h2>
     <div id="daily-figures-container" class="check-up-trend-grid"></div>
-    <h2 class="section-heading">This Week (Support Desk)</h2>
+    <h2 class="section-heading">Billable This Week (Support Desk)</h2>
     <div id="this-week-figures-container" class="check-up-trend-grid"></div>
+    <h2 class="section-heading">Billable Last Week (Support Desk)</h2>
+    <div id="last-week-figures-container" class="check-up-trend-grid"></div>
     <div id="trends-container"></div>
   `;
 
@@ -76,6 +84,7 @@ export function mount(container) {
   const weeklyHoursPctGridEl = container.querySelector('#weekly-hours-pct-grid');
   const dailyFiguresContainerEl = container.querySelector('#daily-figures-container');
   const thisWeekFiguresContainerEl = container.querySelector('#this-week-figures-container');
+  const lastWeekFiguresContainerEl = container.querySelector('#last-week-figures-container');
   const trendsContainerEl = container.querySelector('#trends-container');
 
   // Sequential, NOT Promise.all/fire-and-forget-in-parallel -- confirmed
@@ -101,6 +110,7 @@ export function mount(container) {
     await load();
     await loadDailyFigures();
     await loadThisWeekFigures();
+    await loadLastWeekFigures();
     await loadResourceTrends();
   }
 
@@ -218,6 +228,23 @@ export function mount(container) {
     }
   }
 
+  // Last Week is cached server-side for an hour (same tier as the 13-week
+  // trends), so -- same reasoning loadResourceTrends()'s own guard uses --
+  // this is a no-op once `lastLastWeekFigures` is set, rather than always
+  // reloading live the way Daily/This Week above do.
+  async function loadLastWeekFigures() {
+    if (lastLastWeekFigures) return;
+    try {
+      const res = await fetch('/api/check-up/last-week-figures');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      lastLastWeekFigures = data;
+      activeRender.lastWeekFigures(data);
+    } catch (err) {
+      lastWeekFiguresContainerEl.innerHTML = `<p class="status error">Error: ${err.message}</p>`;
+    }
+  }
+
   // Resource order/columns come from the same name-sorted Support Desk
   // list /resource-trends itself uses (handlerOptions.serviceDesk,
   // server-side) -- and this reuses .check-up-trend-grid's own grid-
@@ -241,7 +268,7 @@ export function mount(container) {
               <div class="datto-card ${pctColorClass(r.billablePct)}">
                 <div class="check-up-pct-number">${formatPct(r.billablePct)}</div>
                 <div class="check-up-daily-figures-hours">${formatHoursHm(r.billableHours)}</div>
-                <div class="datto-card-label">Billable</div>
+                <div class="datto-card-label">${formatCurrency(r.billableDollars)}</div>
               </div>
               <div class="datto-card">
                 <div class="check-up-pct-number check-up-pct-number--large">${r.ticketsClosed}</div>
@@ -261,6 +288,10 @@ export function mount(container) {
 
   function renderThisWeekFigures(data) {
     renderResourceFiguresGrid(thisWeekFiguresContainerEl, data.resources, formatWeekRange(data.from, data.to));
+  }
+
+  function renderLastWeekFigures(data) {
+    renderResourceFiguresGrid(lastWeekFiguresContainerEl, data.resources, formatWeekRange(data.from, data.to));
   }
 
   // Rebuilds the dropdown's own options (optgroups) -- called once on load
@@ -345,6 +376,16 @@ export function mount(container) {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
+  // Same AUD/2-decimal/thousands-separator convention as @dashboard/times'
+  // own Billable $ box -- this is a simpler estimate (billableHours times
+  // the resource's own default Service Desk role rate, not the full
+  // per-TimeEntry chargeable-$ formula that box uses), so the figure can
+  // genuinely differ from a real invoice when work-type modifiers (Onsite/
+  // Emergency rates) applied, but it's formatted identically.
+  function formatCurrency(n) {
+    return `$${(n || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
   // ONE combined chart per resource, by explicit request (Billable % and
   // Tickets Closed on the same graph, left scale 0-100%, right scale
   // 0-30) -- a deliberate, requested exception to the dataviz skill's own
@@ -363,7 +404,7 @@ export function mount(container) {
     const cards = data.resources.map((r) => trendCardHtml(r.name, r.weeks)).join('');
     trendsContainerEl.innerHTML = `
       <div class="check-up-trend-heading-row">
-        <h2 class="section-heading">13 Week Trend (Support Desk) <span class="check-up-trend-range">${dateRangeSub} (EOW = Sundays)</span></h2>
+        <h2 class="section-heading">Billable 13 Week Trend (Support Desk) <span class="check-up-trend-range">${dateRangeSub} (EOW = Sundays)</span></h2>
         <div class="check-up-trend-legend">
           <span class="check-up-trend-legend-item"><span class="check-up-trend-legend-swatch check-up-trend-legend-swatch--billable"></span>Billable Time</span>
           <span class="check-up-trend-legend-item"><span class="check-up-trend-legend-swatch check-up-trend-legend-swatch--tickets"></span>Tickets Closed</span>
@@ -508,6 +549,7 @@ export function mount(container) {
     weeklyHoursPct: renderWeeklyHoursPct,
     dailyFigures: renderDailyFigures,
     thisWeekFigures: renderThisWeekFigures,
+    lastWeekFigures: renderLastWeekFigures,
   };
 
   if (lastResourceTrends) {
@@ -521,6 +563,7 @@ export function mount(container) {
     renderWeeklyHoursPct(lastWeeklyHoursPct);
     if (lastDailyFigures) renderDailyFigures(lastDailyFigures);
     if (lastThisWeekFigures) renderThisWeekFigures(lastThisWeekFigures);
+    if (lastLastWeekFigures) renderLastWeekFigures(lastLastWeekFigures);
   }
   // Cached values (above) restore instantly on a remount so the page
   // never flashes blank, but every one of them can be stale (especially
