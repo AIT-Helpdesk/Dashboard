@@ -11,13 +11,19 @@ export const label = "Check Up";
 let lastHandlerOptions = null;
 let lastHandler = null;
 let lastWeeklyHoursPct = null;
+// Today -- live, uncached (the % denominator is "8:30am to now", which
+// keeps moving all day, so there's nothing stable to cache client-side
+// either). Fetched fresh on every load/refresh, same tier as Daily
+// Figures/This Week below.
+let lastTodayFigures = null;
 // Daily Figures per resource -- small/cheap (one day, not 13 weeks), so
 // this is fetched alongside weeklyHoursPct in the main load() below, not
 // gated behind the trends section's own Show button.
 let lastDailyFigures = null;
-// This Week (current, in-progress AEST week) per resource -- same
-// "small/cheap, auto-load" tier as Daily Figures above, not the trends
-// section's own Show-button tier.
+// This Week (current AEST week, Monday..yesterday -- never today, which
+// has its own Today section above) per resource -- same "small/cheap,
+// auto-load" tier as Daily Figures above, not the trends section's own
+// Show-button tier.
 let lastThisWeekFigures = null;
 // Last Week (the most recently COMPLETED Monday..Sunday week) per
 // resource -- cached server-side for an hour (same tier as the 13-week
@@ -67,6 +73,8 @@ export function mount(container) {
       <div id="handler-meta" class="check-up-handler-meta"></div>
     </div>
     <div id="weekly-hours-pct-grid" class="check-up-pct-grid" hidden></div>
+    <h2 class="section-heading">Billable Today (Support Desk)</h2>
+    <div id="today-figures-container" class="check-up-trend-grid"></div>
     <h2 class="section-heading">Billable Daily Figures (Support Desk)</h2>
     <div id="daily-figures-container" class="check-up-trend-grid"></div>
     <h2 class="section-heading">Billable This Week (Support Desk)</h2>
@@ -82,6 +90,7 @@ export function mount(container) {
   const handlerSelectEl = container.querySelector('#handler-select');
   const handlerMetaEl = container.querySelector('#handler-meta');
   const weeklyHoursPctGridEl = container.querySelector('#weekly-hours-pct-grid');
+  const todayFiguresContainerEl = container.querySelector('#today-figures-container');
   const dailyFiguresContainerEl = container.querySelector('#daily-figures-container');
   const thisWeekFiguresContainerEl = container.querySelector('#this-week-figures-container');
   const lastWeekFiguresContainerEl = container.querySelector('#last-week-figures-container');
@@ -108,6 +117,7 @@ export function mount(container) {
   // doesn't re-trigger a ~90s fetch every time either.
   async function loadAllFigures() {
     await load();
+    await loadTodayFigures();
     await loadDailyFigures();
     await loadThisWeekFigures();
     await loadLastWeekFigures();
@@ -194,13 +204,33 @@ export function mount(container) {
     }
   }
 
+  // Today -- always a live fetch (server-side /today-figures is
+  // deliberately uncached, see that route's own comment), same "own
+  // container, own inline error, never blocks the rest of the page"
+  // reasoning loadDailyFigures() below follows.
+  async function loadTodayFigures() {
+    try {
+      const res = await fetch('/api/check-up/today-figures');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      lastTodayFigures = data;
+      activeRender.todayFigures(data);
+    } catch (err) {
+      todayFiguresContainerEl.innerHTML = `<p class="status error">Error: ${err.message}</p>`;
+    }
+  }
+
   // Deliberately NOT part of load()'s own Promise.all above -- this is a
   // real (if cheap, one-day-not-13-weeks) live Autotask computation, same
   // kind of call /resource-trends makes, just much smaller. Keeping it
   // separate means a slow/failed daily-figures fetch can't hold up or
   // blank out the rest of the page (Handler/weekly-hours-pct), and a
   // failure here shows inline in its own container rather than taking
-  // over the page's main status line.
+  // over the page's main status line. Server-side, this is now cached
+  // hourly and shared across every browser (see server.js's own
+  // createHourlyCache()) -- the fetch here still runs on every
+  // load/refresh, but usually just reads that shared cache rather than
+  // hitting Autotask again.
   async function loadDailyFigures() {
     try {
       const res = await fetch('/api/check-up/daily-figures');
@@ -215,7 +245,8 @@ export function mount(container) {
 
   // Same reasoning as loadDailyFigures() above -- kept separate from the
   // main load(), own inline error state, never blocks the rest of the
-  // page.
+  // page. Also now hourly-cached server-side and shared across browsers,
+  // same as Daily Figures.
   async function loadThisWeekFigures() {
     try {
       const res = await fetch('/api/check-up/this-week-figures');
@@ -280,6 +311,15 @@ export function mount(container) {
         `
       )
       .join('');
+  }
+
+  // dateSub notes the 8:30am-now window the % denominator actually used
+  // (see server.js's own hoursSince830AmAest()), not just the date -- the
+  // same card shape as Daily/This Week/Last Week otherwise, just a
+  // different, moving range underneath the number.
+  function renderTodayFigures(data) {
+    const dateSub = `${formatDateKey(data.date)} (8:30am-now, ${formatHoursHm(data.elapsedHours)} elapsed)`;
+    renderResourceFiguresGrid(todayFiguresContainerEl, data.resources, dateSub);
   }
 
   function renderDailyFigures(data) {
@@ -547,6 +587,7 @@ export function mount(container) {
     handlerOptions: renderHandlerOptions,
     handler: renderHandler,
     weeklyHoursPct: renderWeeklyHoursPct,
+    todayFigures: renderTodayFigures,
     dailyFigures: renderDailyFigures,
     thisWeekFigures: renderThisWeekFigures,
     lastWeekFigures: renderLastWeekFigures,
@@ -561,6 +602,7 @@ export function mount(container) {
     renderHandlerOptions(lastHandlerOptions);
     renderHandler(lastHandler);
     renderWeeklyHoursPct(lastWeeklyHoursPct);
+    if (lastTodayFigures) renderTodayFigures(lastTodayFigures);
     if (lastDailyFigures) renderDailyFigures(lastDailyFigures);
     if (lastThisWeekFigures) renderThisWeekFigures(lastThisWeekFigures);
     if (lastLastWeekFigures) renderLastWeekFigures(lastLastWeekFigures);
@@ -570,8 +612,10 @@ export function mount(container) {
   // the Handler, which another tab may have changed), so a real,
   // sequential refresh (loadAllFigures()) always runs right after either
   // way -- same call whether or not there was anything cached to restore
-  // first. Daily Figures/This Week always reload too, by request ("Today
-  // does need to reload") -- unlike the 13-week trends above (cached
-  // server-side for an hour), neither is ever served stale on purpose.
+  // first. Today always reloads live; Daily Figures/This Week/Last Week
+  // also always re-fetch here, but now usually just read the hourly
+  // cache server.js shares across every browser rather than hitting
+  // Autotask again -- only the 13-week trends above skip this re-fetch
+  // entirely once loaded.
   loadAllFigures();
 }

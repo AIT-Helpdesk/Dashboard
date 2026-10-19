@@ -11,6 +11,7 @@ const {
   todayAestKey,
   weekDatesFrom,
   aestDayBoundsIso,
+  aestToUtcIso,
   excludeMonitoringAlerts,
 } = require('@dashboard/autotask-client');
 // In-process call into Time Summaries' own report, not a duplicated
@@ -304,7 +305,11 @@ function yesterdayAestKey() {
 // sent as a plain decimal -- by request, the client renders it as HH:MM
 // (same convention Time Summaries' own formatHours() uses), not this
 // route's job.
-async function computeResourceFiguresForRange(client, from, to) {
+// `options.pctDenominatorHours`, when given, replaces each resource's own
+// totalTechHours as the Billable % denominator -- used by /today-figures
+// below, where totalTechHours is near-meaningless for a still-in-progress
+// day (see hoursSince830AmAest()'s own comment for why).
+async function computeResourceFiguresForRange(client, from, to, options = {}) {
   const ranges = [{ from, to }];
   const [handlerOptions, roleRatesById, hoursByRange, ticketsByRange] = await Promise.all([
     fetchHandlerOptions(client),
@@ -318,8 +323,9 @@ async function computeResourceFiguresForRange(client, from, to) {
   const ticketsRange = ticketsByRange[0];
   return resources.map((r) => {
     const hours = hoursRange.byResource.get(r.id);
-    const billablePct = hours && hours.totalTechHours > 0 ? (hours.totalClientHoursBillable / hours.totalTechHours) * 100 : 0;
     const billableHours = hours?.totalClientHoursBillable || 0;
+    const denominator = options.pctDenominatorHours ?? hours?.totalTechHours ?? 0;
+    const billablePct = denominator > 0 ? (billableHours / denominator) * 100 : 0;
     const ticketsClosed = ticketsRange.countByResource.get(r.id) || 0;
     const rate = roleRatesById.get(r.roleId) || 0;
     const billableDollars = billableHours * rate;
@@ -327,45 +333,115 @@ async function computeResourceFiguresForRange(client, from, to) {
   });
 }
 
-// Daily counterpart to /resource-trends below, by request ("Daily figures
-// for each Resource... lined up with the Resources... in the 13 week
-// view") -- just for ONE day instead of 13 weeks. A single day is cheap
-// next to 13 weeks of it, so this loads on page mount rather than behind
-// its own Show button (same "auto-load" tier the team-wide weekly-hours-
-// pct grid is already in, not the heavy-fetch Show-button tier
-// /resource-trends needs).
-router.get('/daily-figures', async (req, res) => {
+// Live, uncached -- Today's own Billable % below has no stable
+// denominator to cache against anyway (it keeps moving all day), so unlike
+// Daily/This Week/Last Week there's nothing to gain from caching this one.
+//
+// Why 8:30am: the real Support Desk start time, used as the % denominator
+// instead of each resource's own totalTechHours (what every other section
+// here uses) -- by request. Early in a still-in-progress day totalTechHours
+// is near zero, so the normal "billable / tech hours worked" formula swings
+// wildly (one 6-minute ticket at 8:35am would read as 100%) rather than
+// reading as "pace against a typical day so far".
+function hoursSince830AmAest() {
+  const [y, m, d] = todayAestKey().split('-').map(Number);
+  const startOfDayMs = new Date(aestToUtcIso(y, m, d, 8, 30)).getTime();
+  return Math.max(0, (Date.now() - startOfDayMs) / (60 * 60 * 1000));
+}
+
+router.get('/today-figures', async (req, res) => {
   try {
     const client = await getClient();
-    const dayKey = yesterdayAestKey();
-    const resources = await computeResourceFiguresForRange(client, dayKey, dayKey);
-    res.json({ date: dayKey, resources });
+    const todayKey = todayAestKey();
+    const elapsedHours = hoursSince830AmAest();
+    const resources = await computeResourceFiguresForRange(client, todayKey, todayKey, { pctDenominatorHours: elapsedHours });
+    res.json({ date: todayKey, elapsedHours, resources });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: errorDetail(err) });
   }
 });
 
-// Current AEST week (Monday..today) -- by request ("this Week figures
-// under the Dailys"). Capped at today, never the week's own Sunday if
-// that hasn't happened yet -- same "current, still-in-progress period"
-// shape fetchWeeklyHoursPct() above already uses for the team-wide
-// figure, just per resource. Always reloads live (never cached) -- it
-// changes as the week goes on, same "Today does need to reload"
-// reasoning /daily-figures above follows, not the 1-hour-cached
-// /resource-trends tier below (that one covers 13 already-COMPLETED
-// weeks, which is a fundamentally different, much more stable kind of
-// data).
+// Shared by /daily-figures, /this-week-figures, and /last-week-figures
+// below -- one hourly cache + in-flight de-duplication shape, computed ONCE
+// server-side and served to every browser that asks (by request: "cache
+// results... to be used across all people's browsers so that... [these]
+// are not reselected more than hourly and only once at that"). Previously
+// Daily Figures/This Week always hit Autotask live on every single page
+// load from every browser; Last Week already had its own hand-written copy
+// of this exact pattern (same as /resource-trends' own getResourceTrends()
+// further below), now generalized here instead of staying duplicated a
+// third time.
+const HOURLY_CACHE_TTL_MS = 60 * 60 * 1000;
+function createHourlyCache(computeFn) {
+  let cache = null; // { data, expiresAt }
+  let inFlight = null;
+  return async function get(force) {
+    if (!force && cache && Date.now() < cache.expiresAt) return cache.data;
+    if (!force && inFlight) return inFlight;
+    inFlight = computeFn()
+      .then((data) => {
+        cache = { data, expiresAt: Date.now() + HOURLY_CACHE_TTL_MS };
+        return data;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    return inFlight;
+  };
+}
+
+// Daily counterpart to /resource-trends below, by request ("Daily figures
+// for each Resource... lined up with the Resources... in the 13 week
+// view") -- just for ONE day instead of 13 weeks.
+const getDailyFigures = createHourlyCache(async () => {
+  const client = await getClient();
+  const dayKey = yesterdayAestKey();
+  const resources = await computeResourceFiguresForRange(client, dayKey, dayKey);
+  return { date: dayKey, resources };
+});
+
+router.get('/daily-figures', async (req, res) => {
+  try {
+    res.json(await getDailyFigures(req.query.force === 'true'));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: errorDetail(err) });
+  }
+});
+
+// Current AEST week, Monday..YESTERDAY -- by request ("make the 'This
+// Week' section only up to today, not including"): a still-in-progress
+// today isn't a real completed-day figure, and now has its own live,
+// uncached "Today" section above instead. On a Monday there's no completed
+// day in the current week yet, so `to` comes back null and the route
+// returns an explicit all-zero row per resource rather than querying a
+// backwards (to < from) range.
+function thisWeekToYesterdayRange() {
+  const monday = mondayOf(todayAestKey());
+  const weekDays = weekDatesFrom(monday, 7);
+  const from = weekDays[0];
+  const yesterdayKey = yesterdayAestKey();
+  if (yesterdayKey < from) return { from, to: null };
+  const to = yesterdayKey < weekDays[weekDays.length - 1] ? yesterdayKey : weekDays[weekDays.length - 1];
+  return { from, to };
+}
+
+const getThisWeekFigures = createHourlyCache(async () => {
+  const client = await getClient();
+  const { from, to } = thisWeekToYesterdayRange();
+  if (!to) {
+    const handlerOptions = await fetchHandlerOptions(client);
+    const resources = handlerOptions.serviceDesk.map((r) => ({ id: r.id, name: r.name, billablePct: 0, billableHours: 0, billableDollars: 0, ticketsClosed: 0 }));
+    return { from, to: from, resources };
+  }
+  const resources = await computeResourceFiguresForRange(client, from, to);
+  return { from, to, resources };
+});
+
 router.get('/this-week-figures', async (req, res) => {
   try {
-    const client = await getClient();
-    const monday = mondayOf(todayAestKey());
-    const weekDays = weekDatesFrom(monday, 7);
-    const from = weekDays[0];
-    const todayKey = todayAestKey();
-    const to = todayKey < weekDays[weekDays.length - 1] ? todayKey : weekDays[weekDays.length - 1];
-    const resources = await computeResourceFiguresForRange(client, from, to);
-    res.json({ from, to, resources });
+    res.json(await getThisWeekFigures(req.query.force === 'true'));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: errorDetail(err) });
@@ -375,10 +451,7 @@ router.get('/this-week-figures', async (req, res) => {
 // The most recently COMPLETED Monday..Sunday week -- same real range as
 // last13Weeks() above's own final week, just surfaced as its own section
 // (by request, "Last week (Support Desk)") rather than only buried as the
-// last point on the 13-week chart. Cached for an hour, same tier/reasoning
-// as /resource-trends below (a completed, settled week "doesn't change
-// much" either) -- unlike /daily-figures and /this-week-figures above,
-// which cover a period still being actively logged against.
+// last point on the 13-week chart.
 function lastCompletedWeekRange() {
   const currentMonday = mondayOf(todayAestKey());
   const sundayDate = new Date(Date.UTC(currentMonday.year, currentMonday.month - 1, currentMonday.day - 1));
@@ -386,27 +459,16 @@ function lastCompletedWeekRange() {
   return { from: mondayDate.toISOString().slice(0, 10), to: sundayDate.toISOString().slice(0, 10) };
 }
 
-const LAST_WEEK_FIGURES_CACHE_TTL_MS = 60 * 60 * 1000;
-let lastWeekFiguresCache = null; // { data, expiresAt }
-let lastWeekFiguresInFlight = null;
+const getLastWeekFigures = createHourlyCache(async () => {
+  const client = await getClient();
+  const { from, to } = lastCompletedWeekRange();
+  const resources = await computeResourceFiguresForRange(client, from, to);
+  return { from, to, resources };
+});
 
 router.get('/last-week-figures', async (req, res) => {
   try {
-    if (lastWeekFiguresCache && Date.now() < lastWeekFiguresCache.expiresAt) return res.json(lastWeekFiguresCache.data);
-    if (lastWeekFiguresInFlight) return res.json(await lastWeekFiguresInFlight);
-
-    const client = await getClient();
-    const { from, to } = lastCompletedWeekRange();
-    lastWeekFiguresInFlight = computeResourceFiguresForRange(client, from, to)
-      .then((resources) => {
-        const data = { from, to, resources };
-        lastWeekFiguresCache = { data, expiresAt: Date.now() + LAST_WEEK_FIGURES_CACHE_TTL_MS };
-        return data;
-      })
-      .finally(() => {
-        lastWeekFiguresInFlight = null;
-      });
-    res.json(await lastWeekFiguresInFlight);
+    res.json(await getLastWeekFigures(req.query.force === 'true'));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: errorDetail(err) });
