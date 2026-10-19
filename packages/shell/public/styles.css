@@ -3589,9 +3589,27 @@ td.ticket-number {
    different-width number ("100%" vs "8%") could leave the two tiles
    visibly different widths. Scoped to just this grid, not a change to
    .datto-card itself (used by other widgets on this page/dashboard that
-   still want their own content-sized width). */
+   still want their own content-sized width). Wider than the original
+   10rem and laid out as a ROW (label + date range on the left, the %
+   beside them on the right), by request -- overrides base .datto-card's
+   own column/centered layout, scoped the same way so every other
+   .datto-card on this dashboard stays untouched. */
 .check-up-pct-grid .datto-card {
-  width: 10rem;
+  width: 15rem;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  text-align: left;
+  /* Less vertical padding than base .datto-card's own 1rem all round --
+     by request, to cut the tile's height now that label+date+number sit
+     side by side instead of stacked (there's no longer a third line's
+     worth of content making the taller padding necessary). */
+  padding: 0.5rem 1rem;
+}
+.check-up-pct-grid .check-up-pct-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 }
 /* Red by default, Orange 40-74%, Green 75%+ (pctColorClass() in
    client.js) -- by request, "Red shaded background... Orange if 40% to
@@ -3644,7 +3662,9 @@ td.ticket-number {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  justify-content: space-between;
+  /* Legend sits right next to the heading, by request -- not pushed to
+     the far right edge the way justify-content: space-between used to. */
+  justify-content: flex-start;
   gap: 0.75rem;
   margin-top: 1.5rem;
   margin-bottom: 0.5rem;
@@ -3716,8 +3736,8 @@ td.ticket-number {
   margin-bottom: 0.15rem;
 }
 
-/* Daily Figures section, by request -- one .check-up-trend-card per
-   resource (same card shell the trend charts below use, for a matching
+/* Today/This Week/Last Week sections, by request -- one .check-up-trend-card
+   per resource (same card shell the trend charts below use, for a matching
    look), each holding two compact .datto-card tiles side by side. Scoped
    overrides, not the base .datto-card sizing -- that's built for a single
    big standalone tile (1rem padding), which would blow out a 260px-wide

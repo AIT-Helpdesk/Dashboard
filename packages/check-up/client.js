@@ -13,23 +13,19 @@ let lastHandler = null;
 let lastWeeklyHoursPct = null;
 // Today -- live, uncached (the % denominator is "8:30am to now", which
 // keeps moving all day, so there's nothing stable to cache client-side
-// either). Fetched fresh on every load/refresh, same tier as Daily
-// Figures/This Week below.
+// either). Fetched fresh on every load/refresh, same tier as This Week
+// below.
 let lastTodayFigures = null;
-// Daily Figures per resource -- small/cheap (one day, not 13 weeks), so
-// this is fetched alongside weeklyHoursPct in the main load() below, not
-// gated behind the trends section's own Show button.
-let lastDailyFigures = null;
-// This Week (current AEST week, Monday..yesterday -- never today, which
-// has its own Today section above) per resource -- same "small/cheap,
-// auto-load" tier as Daily Figures above, not the trends section's own
-// Show-button tier.
+// This Week (current AEST week, Monday..yesterday before 4pm AEST,
+// Monday..today from 4pm onward -- see server.js's own thisWeekRange())
+// per resource -- same "small/cheap, auto-load" tier as Today above,
+// not the trends section's own Show-button tier.
 let lastThisWeekFigures = null;
 // Last Week (the most recently COMPLETED Monday..Sunday week) per
 // resource -- cached server-side for an hour (same tier as the 13-week
-// trends below, not Daily/This Week above), so this is never
-// re-fetched in the background on a cached remount, same as
-// lastResourceTrends' own "no background re-fetch" comment.
+// trends below, not This Week above), so this is never re-fetched in
+// the background on a cached remount, same as lastResourceTrends' own
+// "no background re-fetch" comment.
 let lastLastWeekFigures = null;
 // Separate from lastHandler itself -- "no handler set yet" (a real,
 // legitimate value readHandler() can return) and "haven't fetched at all
@@ -73,13 +69,11 @@ export function mount(container) {
       <div id="handler-meta" class="check-up-handler-meta"></div>
     </div>
     <div id="weekly-hours-pct-grid" class="check-up-pct-grid" hidden></div>
-    <h2 class="section-heading">Billable Today (Support Desk)</h2>
+    <h2 class="section-heading">Billable Today</h2>
     <div id="today-figures-container" class="check-up-trend-grid"></div>
-    <h2 class="section-heading">Billable Daily Figures (Support Desk)</h2>
-    <div id="daily-figures-container" class="check-up-trend-grid"></div>
-    <h2 class="section-heading">Billable This Week (Support Desk)</h2>
+    <h2 class="section-heading">Billable This Week</h2>
     <div id="this-week-figures-container" class="check-up-trend-grid"></div>
-    <h2 class="section-heading">Billable Last Week (Support Desk)</h2>
+    <h2 class="section-heading">Billable Last Week</h2>
     <div id="last-week-figures-container" class="check-up-trend-grid"></div>
     <div id="trends-container"></div>
   `;
@@ -91,21 +85,20 @@ export function mount(container) {
   const handlerMetaEl = container.querySelector('#handler-meta');
   const weeklyHoursPctGridEl = container.querySelector('#weekly-hours-pct-grid');
   const todayFiguresContainerEl = container.querySelector('#today-figures-container');
-  const dailyFiguresContainerEl = container.querySelector('#daily-figures-container');
   const thisWeekFiguresContainerEl = container.querySelector('#this-week-figures-container');
   const lastWeekFiguresContainerEl = container.querySelector('#last-week-figures-container');
   const trendsContainerEl = container.querySelector('#trends-container');
 
   // Sequential, NOT Promise.all/fire-and-forget-in-parallel -- confirmed
-  // the hard way ("429 errors everywhere"): load()/loadDailyFigures()/
+  // the hard way ("429 errors everywhere"): load()/loadTodayFigures()/
   // loadThisWeekFigures() each make their own live Autotask calls, and
-  // firing all three at once (on every mount AND every Refresh click)
-  // roughly tripled this page's concurrent Autotask traffic the moment
-  // Daily Figures/This Week shipped, on top of whatever else the account
-  // is doing elsewhere at that moment. Each one is already individually
-  // fast (a few seconds), so running them one after another instead of
-  // all at once costs a little total wall-clock time in exchange for not
-  // tripping the account-wide rate limit.
+  // firing them all at once (on every mount AND every Refresh click)
+  // roughly tripled this page's concurrent Autotask traffic when these
+  // auto-load sections first shipped, on top of whatever else the
+  // account is doing elsewhere at that moment. Each one is already
+  // individually fast (a few seconds), so running them one after another
+  // instead of all at once costs a little total wall-clock time in
+  // exchange for not tripping the account-wide rate limit.
   // 13-Week Trends now loads automatically too, by request ("remove the
   // Show button and do that automatically after everything else is
   // loaded") -- last in the sequence, since it's the heaviest of the
@@ -118,7 +111,6 @@ export function mount(container) {
   async function loadAllFigures() {
     await load();
     await loadTodayFigures();
-    await loadDailyFigures();
     await loadThisWeekFigures();
     await loadLastWeekFigures();
     await loadResourceTrends();
@@ -207,7 +199,7 @@ export function mount(container) {
   // Today -- always a live fetch (server-side /today-figures is
   // deliberately uncached, see that route's own comment), same "own
   // container, own inline error, never blocks the rest of the page"
-  // reasoning loadDailyFigures() below follows.
+  // reasoning loadThisWeekFigures() below follows.
   async function loadTodayFigures() {
     try {
       const res = await fetch('/api/check-up/today-figures');
@@ -221,32 +213,15 @@ export function mount(container) {
   }
 
   // Deliberately NOT part of load()'s own Promise.all above -- this is a
-  // real (if cheap, one-day-not-13-weeks) live Autotask computation, same
-  // kind of call /resource-trends makes, just much smaller. Keeping it
-  // separate means a slow/failed daily-figures fetch can't hold up or
-  // blank out the rest of the page (Handler/weekly-hours-pct), and a
-  // failure here shows inline in its own container rather than taking
-  // over the page's main status line. Server-side, this is now cached
-  // hourly and shared across every browser (see server.js's own
-  // createHourlyCache()) -- the fetch here still runs on every
-  // load/refresh, but usually just reads that shared cache rather than
-  // hitting Autotask again.
-  async function loadDailyFigures() {
-    try {
-      const res = await fetch('/api/check-up/daily-figures');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      lastDailyFigures = data;
-      activeRender.dailyFigures(data);
-    } catch (err) {
-      dailyFiguresContainerEl.innerHTML = `<p class="status error">Error: ${err.message}</p>`;
-    }
-  }
-
-  // Same reasoning as loadDailyFigures() above -- kept separate from the
-  // main load(), own inline error state, never blocks the rest of the
-  // page. Also now hourly-cached server-side and shared across browsers,
-  // same as Daily Figures.
+  // real live Autotask computation, same kind of call /resource-trends
+  // makes, just much smaller. Keeping it separate means a slow/failed
+  // fetch can't hold up or blank out the rest of the page (Handler/
+  // weekly-hours-pct), and a failure here shows inline in its own
+  // container rather than taking over the page's main status line.
+  // Server-side, this is now cached hourly and shared across every
+  // browser (see server.js's own createHourlyCache()) -- the fetch here
+  // still runs on every load/refresh, but usually just reads that shared
+  // cache rather than hitting Autotask again.
   async function loadThisWeekFigures() {
     try {
       const res = await fetch('/api/check-up/this-week-figures');
@@ -262,7 +237,7 @@ export function mount(container) {
   // Last Week is cached server-side for an hour (same tier as the 13-week
   // trends), so -- same reasoning loadResourceTrends()'s own guard uses --
   // this is a no-op once `lastLastWeekFigures` is set, rather than always
-  // reloading live the way Daily/This Week above do.
+  // reloading live the way Today/This Week above do.
   async function loadLastWeekFigures() {
     if (lastLastWeekFigures) return;
     try {
@@ -283,7 +258,7 @@ export function mount(container) {
   // order, each card here lands in the exact same column as that
   // resource's own trend-chart card below it, by request ("lined up with
   // the Resources... in the 13 week view").
-  // Shared by Daily Figures and This Week below -- identical card shape,
+  // Shared by Today/This Week/Last Week below -- identical card shape,
   // just a different resource list and a different date/range sub-text.
   function renderResourceFiguresGrid(containerEl, resources, dateSub) {
     if (!resources.length) {
@@ -313,17 +288,17 @@ export function mount(container) {
       .join('');
   }
 
-  // dateSub notes the 8:30am-now window the % denominator actually used
-  // (see server.js's own hoursSince830AmAest()), not just the date -- the
-  // same card shape as Daily/This Week/Last Week otherwise, just a
-  // different, moving range underneath the number.
+  // dateSub notes the elapsed window the % denominator actually used (see
+  // server.js's own hoursSince830AmAest()), by request: "19 Oct (just put
+  // this after 4PM)... until then say... 19 Oct (up to hh:mm, {elapsed})"
+  // -- once `cutoffReached` (past 4pm AEST), that denominator has frozen,
+  // so the parenthetical drops off entirely rather than still describing
+  // a moving "now".
   function renderTodayFigures(data) {
-    const dateSub = `${formatDateKey(data.date)} (8:30am-now, ${formatHoursHm(data.elapsedHours)} elapsed)`;
+    const dateSub = data.cutoffReached
+      ? formatDateKey(data.date)
+      : `${formatDateKey(data.date)} (up to ${data.nowLabel}, ${formatHoursHm(data.elapsedHours)} elapsed)`;
     renderResourceFiguresGrid(todayFiguresContainerEl, data.resources, dateSub);
-  }
-
-  function renderDailyFigures(data) {
-    renderResourceFiguresGrid(dailyFiguresContainerEl, data.resources, formatDateKey(data.date));
   }
 
   function renderThisWeekFigures(data) {
@@ -386,16 +361,26 @@ export function mount(container) {
     }
     weeklyHoursPctGridEl.hidden = false;
     const dateSub = escapeHtml(formatWeekRange(weeklyHoursPct.weekFrom, weeklyHoursPct.weekTo));
+    // Title + date range on the left, the % beside them on the right --
+    // by request. .check-up-pct-card-text groups the two left-hand lines
+    // so .check-up-pct-grid's own CSS override (styles.css) can lay the
+    // card out as a row (label+date stacked on the left, number on the
+    // right) without touching base .datto-card, which stays a vertical
+    // card everywhere else on the dashboard.
     weeklyHoursPctGridEl.innerHTML = `
       <div class="datto-card ${pctColorClass(weeklyHoursPct.clientHoursPct)}">
+        <div class="check-up-pct-card-text">
+          <div class="datto-card-label">Client Hours</div>
+          <div class="datto-card-sub">${dateSub}</div>
+        </div>
         <div class="check-up-pct-number">${formatPct(weeklyHoursPct.clientHoursPct)}</div>
-        <div class="datto-card-label">Client Hours</div>
-        <div class="datto-card-sub">${dateSub}</div>
       </div>
       <div class="datto-card ${pctColorClass(weeklyHoursPct.billableHoursPct)}">
+        <div class="check-up-pct-card-text">
+          <div class="datto-card-label">Billable Hours</div>
+          <div class="datto-card-sub">${dateSub}</div>
+        </div>
         <div class="check-up-pct-number">${formatPct(weeklyHoursPct.billableHoursPct)}</div>
-        <div class="datto-card-label">Billable Hours</div>
-        <div class="datto-card-sub">${dateSub}</div>
       </div>
     `;
   }
@@ -406,9 +391,9 @@ export function mount(container) {
 
   // Same HH:MM convention Time Summaries' own formatHours() uses --
   // round to the nearest minute, rolling over into the next hour rather
-  // than ever showing :60. By request, under the Billable % in the Daily
-  // Figures/This Week tiles, so the actual hours behind that % are
-  // visible too, not just the percentage.
+  // than ever showing :60. By request, under the Billable % in the
+  // Today/This Week/Last Week tiles, so the actual hours behind that %
+  // are visible too, not just the percentage.
   function formatHoursHm(n) {
     const totalMinutes = Math.round(((n || 0) + Number.EPSILON) * 60);
     const h = Math.floor(totalMinutes / 60);
@@ -444,7 +429,7 @@ export function mount(container) {
     const cards = data.resources.map((r) => trendCardHtml(r.name, r.weeks)).join('');
     trendsContainerEl.innerHTML = `
       <div class="check-up-trend-heading-row">
-        <h2 class="section-heading">Billable 13 Week Trend (Support Desk) <span class="check-up-trend-range">${dateRangeSub} (EOW = Sundays)</span></h2>
+        <h2 class="section-heading">Billable 13 Week Trend <span class="check-up-trend-range">${dateRangeSub} (EOW = Sundays)</span></h2>
         <div class="check-up-trend-legend">
           <span class="check-up-trend-legend-item"><span class="check-up-trend-legend-swatch check-up-trend-legend-swatch--billable"></span>Billable Time</span>
           <span class="check-up-trend-legend-item"><span class="check-up-trend-legend-swatch check-up-trend-legend-swatch--tickets"></span>Tickets Closed</span>
@@ -588,7 +573,6 @@ export function mount(container) {
     handler: renderHandler,
     weeklyHoursPct: renderWeeklyHoursPct,
     todayFigures: renderTodayFigures,
-    dailyFigures: renderDailyFigures,
     thisWeekFigures: renderThisWeekFigures,
     lastWeekFigures: renderLastWeekFigures,
   };
@@ -603,7 +587,6 @@ export function mount(container) {
     renderHandler(lastHandler);
     renderWeeklyHoursPct(lastWeeklyHoursPct);
     if (lastTodayFigures) renderTodayFigures(lastTodayFigures);
-    if (lastDailyFigures) renderDailyFigures(lastDailyFigures);
     if (lastThisWeekFigures) renderThisWeekFigures(lastThisWeekFigures);
     if (lastLastWeekFigures) renderLastWeekFigures(lastLastWeekFigures);
   }
@@ -612,10 +595,10 @@ export function mount(container) {
   // the Handler, which another tab may have changed), so a real,
   // sequential refresh (loadAllFigures()) always runs right after either
   // way -- same call whether or not there was anything cached to restore
-  // first. Today always reloads live; Daily Figures/This Week/Last Week
-  // also always re-fetch here, but now usually just read the hourly
-  // cache server.js shares across every browser rather than hitting
-  // Autotask again -- only the 13-week trends above skip this re-fetch
-  // entirely once loaded.
+  // first. Today always reloads live; This Week/Last Week also always
+  // re-fetch here, but now usually just read the hourly cache server.js
+  // shares across every browser rather than hitting Autotask again --
+  // only the 13-week trends above skip this re-fetch entirely once
+  // loaded.
   loadAllFigures();
 }
