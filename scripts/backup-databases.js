@@ -54,11 +54,17 @@ function discoverDatabases() {
 // production.
 const BACKUP_ROOT = process.env.WORKSHOP_DASHBOARD_BACKUP_DIR || path.join(__dirname, '..', '..', 'autotask-dashboard-backups');
 
-// How long a completed backup is kept before being pruned. One backup
-// per calendar day is what the scheduled task is meant to produce (see
-// this script's own README section), so this is effectively "keep N
-// days of daily backups".
-const KEEP_DAYS = 30;
+// Tiered (grandfather-father-son) retention, by request: every daily
+// backup is kept for DAILY_RETENTION_DAYS; beyond that, only one backup
+// per calendar week is kept, for a further WEEKLY_RETENTION_DAYS; beyond
+// THAT, only one backup per calendar month is kept, with no further
+// cutoff (monthly backups are never pruned). One backup per calendar day
+// is what the scheduled task is meant to produce (see this script's own
+// README section) -- these tiers just thin out how many of those daily
+// files survive as they age, rather than deleting everything past a
+// single flat cutoff.
+const DAILY_RETENTION_DAYS = 14;
+const WEEKLY_RETENTION_DAYS = 60; // ~2 months, on top of the daily window above
 
 function timestamp() {
   const d = new Date();
@@ -120,18 +126,68 @@ async function backupOne({ name, source }) {
   }
 }
 
+// This script's own filenames already embed the exact moment the backup
+// was taken (see timestamp() above) -- reading the date back out of the
+// name is more reliable than trusting the file's mtime, which a copy,
+// restore-test, or backup/sync tool elsewhere could silently change.
+const FILENAME_DATE_RE = /-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.db$/;
+function parseBackupDate(file) {
+  const m = FILENAME_DATE_RE.exec(file);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+}
+
+// Simple 7-day buckets since the epoch -- NOT calendar/ISO week numbers.
+// Retention just needs "roughly one survivor per week"; exact week
+// boundaries (e.g. always Monday-starting) don't matter for that, and
+// this avoids pulling in ISO-week edge cases for no real benefit.
+const DAY_MS = 24 * 60 * 60 * 1000;
+function weekBucket(date) {
+  return Math.floor(date.getTime() / (7 * DAY_MS));
+}
+function monthBucket(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
 function pruneOld(name) {
   const dir = path.join(BACKUP_ROOT, name);
   if (!fs.existsSync(dir)) return;
-  const cutoff = Date.now() - KEEP_DAYS * 24 * 60 * 60 * 1000;
-  for (const file of fs.readdirSync(dir)) {
-    if (!file.endsWith('.db')) continue; // never touch anything but backups this script itself made
-    const full = path.join(dir, file);
-    const stat = fs.statSync(full);
-    if (stat.mtimeMs < cutoff) {
-      fs.unlinkSync(full);
-      log(`[${name}] pruned old backup (older than ${KEEP_DAYS} days): ${file}`);
+
+  const now = Date.now();
+  const dailyCutoff = now - DAILY_RETENTION_DAYS * DAY_MS;
+  const weeklyCutoff = now - (DAILY_RETENTION_DAYS + WEEKLY_RETENTION_DAYS) * DAY_MS;
+
+  const files = fs
+    .readdirSync(dir)
+    .filter((file) => file.endsWith('.db')) // never touch anything but backups this script itself made
+    .map((file) => ({ file, full: path.join(dir, file), date: parseBackupDate(file) }))
+    .filter((f) => f.date) // ignore anything that doesn't match this script's own naming pattern
+    .sort((a, b) => a.date - b.date); // oldest first, so the KEPT representative of a week/month is its earliest backup
+
+  const keptWeeks = new Set();
+  const keptMonths = new Set();
+
+  for (const f of files) {
+    const t = f.date.getTime();
+    if (t >= dailyCutoff) continue; // inside the daily window -- always kept
+
+    if (t >= weeklyCutoff) {
+      const key = weekBucket(f.date);
+      if (!keptWeeks.has(key)) {
+        keptWeeks.add(key); // first (oldest) backup seen for this week -- it's the one kept
+        continue;
+      }
+    } else {
+      const key = monthBucket(f.date);
+      if (!keptMonths.has(key)) {
+        keptMonths.add(key); // first (oldest) backup seen for this month -- kept indefinitely
+        continue;
+      }
     }
+
+    fs.unlinkSync(f.full);
+    log(`[${name}] pruned (extra backup for its ${t >= weeklyCutoff ? 'week' : 'month'}, already have one kept): ${f.file}`);
   }
 }
 
@@ -155,4 +211,8 @@ async function main() {
   log('Backup run finished successfully.');
 }
 
-main();
+module.exports = { pruneOld, parseBackupDate, weekBucket, monthBucket, BACKUP_ROOT };
+
+if (require.main === module) {
+  main();
+}

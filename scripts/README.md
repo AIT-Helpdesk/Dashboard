@@ -44,10 +44,18 @@ backup attempt (success, failure, or pruned-old-file), on top of the
 same lines being printed to the console -- useful for checking what
 happened without digging through Task Scheduler's own history.
 
-Backups older than 30 days are deleted automatically on each run (only
-files this script itself created, matched by the `.db` extension inside
-its own per-database subfolder -- nothing else in that directory is ever
-touched). Change `KEEP_DAYS` at the top of the script to adjust.
+Old backups are thinned out automatically on each run using a tiered
+(grandfather-father-son) retention, not a single flat cutoff (only files
+this script itself created, matched by the `.db` extension inside its
+own per-database subfolder -- nothing else in that directory is ever
+touched):
+
+- **Daily** -- every backup is kept for the first 14 days.
+- **Weekly** -- beyond that, only one backup per calendar week survives, for a further 2 months.
+- **Monthly** -- beyond that, only one backup per calendar month survives, kept indefinitely (never pruned).
+
+Change `DAILY_RETENTION_DAYS`/`WEEKLY_RETENTION_DAYS` at the top of the
+script to adjust the first two tiers.
 
 ## Running it manually
 
