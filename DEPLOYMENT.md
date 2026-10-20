@@ -295,6 +295,61 @@ Register-ScheduledTask -TaskName "AmbientContractChecksSync" -Action $action -Tr
 Get-ScheduledTask -TaskName "AmbientContractChecksSync"
 ```
 
+## Setting up the Invoice Intake automation (Windows Task Scheduler)
+
+Runs `packages/invoice-intake/ingest.js` (its own `runIngest()`) every 15 minutes, all day, unattended -- watches `Invoices-IN@ambientit.com.au` and files qualifying invoice/receipt attachments into SharePoint with no human step in between. No separate `.env`/connect step needed, same reasoning as Contract Checks' sync above -- `ingest.js` loads the root `.env` directly (see `packages/invoice-intake/README.md` for which `AZURE_INVOICE_INTAKE_*`/`AZURE_INVOICE_INTAKE_SP_*`/`AZURE_OPENAI_INVOICE_*` values need to be real first -- that package's own README "Phase A" is the infra checklist to confirm done before this task is registered). Do this once the main dashboard is already deployed and running.
+
+`@dashboard/invoice-intake` is a brand-new workspace package (same situation as `tc-elite-rollout`/`strety-autotask-sync` when each was first added) -- run `npm install` after pulling, even if you'd normally judge it unnecessary for a given update, so it's actually linked before the scheduled task tries to run it.
+
+### 1. Create the scheduled task
+
+A `-Daily` trigger whose own `Repetition` is overridden from a throwaway `-Once` trigger's `Repetition` object -- same two-step dance the Strety automation's own task above uses for its 30-minute repeat, just spanning the whole day here (15 minutes, ~23h45m) rather than a business-hours window, since the brief has no stated time restriction:
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\apps\autotask-dashboard-git\logs | Out-Null
+
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c node packages\invoice-intake\ingest.js > logs\invoice-intake.log 2>&1' `
+  -WorkingDirectory "C:\apps\autotask-dashboard-git"
+
+$trigger = New-ScheduledTaskTrigger -Daily -At 12:00am
+$repeatSource = New-ScheduledTaskTrigger -Once -At 12:00am -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Hours 23.75)
+$trigger.Repetition = $repeatSource.Repetition
+
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "AmbientInvoiceIntake" -Action $action -Trigger $trigger -Settings $settings `
+  -Description "Every 15 min, all day: file invoice/receipt email attachments into SharePoint (Invoice Intake)"
+```
+
+Runs as SYSTEM by default (no `-User` specified), same reasoning as every other scheduled job above -- only needs filesystem access to its own package folder and outbound HTTPS. The log is overwritten each run (`>` not `>>`) -- `invoice-intake-state.json` (gitignored) is the real durable record of what's been processed; the log is only for diagnosing a failed run.
+
+### 2. Verify it actually works before waiting for the first real run
+
+```powershell
+Start-ScheduledTask -TaskName "AmbientInvoiceIntake"
+Start-Sleep -Seconds 15
+Get-ScheduledTaskInfo -TaskName "AmbientInvoiceIntake"   # LastTaskResult: 0 means success
+Get-Content C:\apps\autotask-dashboard-git\logs\invoice-intake.log
+```
+
+**Changing the schedule later**: same real gotcha as every job above -- `Set-ScheduledTask -Trigger` doesn't reliably swap a trigger in place, so unregister and re-register together as one paste, then re-run the `Get-ScheduledTask` verify step immediately to confirm it actually exists:
+
+```powershell
+Unregister-ScheduledTask -TaskName "AmbientInvoiceIntake" -Confirm:$false
+
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c node packages\invoice-intake\ingest.js > logs\invoice-intake.log 2>&1' `
+  -WorkingDirectory "C:\apps\autotask-dashboard-git"
+$trigger = New-ScheduledTaskTrigger -Daily -At 12:00am
+$repeatSource = New-ScheduledTaskTrigger -Once -At 12:00am -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Hours 23.75)
+$trigger.Repetition = $repeatSource.Repetition
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "AmbientInvoiceIntake" -Action $action -Trigger $trigger -Settings $settings `
+  -Description "Every 15 min, all day: file invoice/receipt email attachments into SharePoint (Invoice Intake)"
+
+Get-ScheduledTask -TaskName "AmbientInvoiceIntake"
+```
+
 ## One-time data sync -- product_mappings' real Microsoft SKU GUIDs
 
 Needed once, the first deploy after this was added (not part of the normal "Updating later" flow below -- `git pull` brings the CODE change, `db.js`'s own `migrateAddMsSkuId()` adds the empty COLUMN automatically on next start, but the real per-row DATA (every SKU's actual `ms_sku_id`, a few corrected/new rows) only exists in this chat session and has to be applied by hand, same reasoning as every other real per-environment `data.db` on this dashboard):

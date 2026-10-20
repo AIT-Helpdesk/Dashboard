@@ -1,0 +1,12 @@
+{
+  "name": "@dashboard/invoice-intake",
+  "version": "1.0.0",
+  "private": true,
+  "main": "ingest.js",
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "pdf-parse": "^2.4.5"
+  }
+}

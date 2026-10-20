@@ -109,3 +109,7 @@ packages/check-up/helpdesk-handler.json
 # whole data/ directory.
 packages/meeting-prep/data/*
 !packages/meeting-prep/data/README.md
+
+# Invoice Intake's own runtime state (last successful run cursor, per-message
+# retry counts) -- same reasoning as Report Ingest's ingest-state.json above.
+packages/invoice-intake/invoice-intake-state.json
