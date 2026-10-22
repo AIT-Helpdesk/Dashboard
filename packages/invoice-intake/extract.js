@@ -84,8 +84,19 @@ async function renderPdfPagesToDataUrls(buffer) {
   }
 }
 
-function imageBufferToDataUrl(buffer, contentType) {
-  return `data:${contentType};base64,${buffer.toString('base64')}`;
+// An attachment's own self-reported Content-Type is NOT trustworthy --
+// confirmed live: some phone/email clients send real JPEG/PNG bytes
+// labelled generically as application/octet-stream, which the vision
+// model's API then rejects outright (it requires a genuine image/* MIME
+// type on the data URL, not just valid image bytes). Every attachment
+// reaching this function has already been qualified by its file extension
+// (ingest.js's QUALIFYING_EXTENSIONS), so derive the MIME type from that
+// extension instead of trusting the declared Content-Type.
+const IMAGE_MIME_BY_EXTENSION = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
+function imageBufferToDataUrl(buffer, filename) {
+  const ext = (/\.([a-z0-9]+)$/i.exec(filename || '')?.[1] || '').toLowerCase();
+  const mime = IMAGE_MIME_BY_EXTENSION[ext] || 'image/jpeg'; // every qualifying non-PDF attachment is one of the three above
+  return `data:${mime};base64,${buffer.toString('base64')}`;
 }
 
 function systemPrompt() {
@@ -131,7 +142,7 @@ async function extractDocument({ buffer, contentType, filename, emailSubject, em
   if (useTextPath) {
     userContent = userContextText({ emailSubject, emailBodyPreview, documentText: textContent });
   } else {
-    const dataUrls = isPdf ? await renderPdfPagesToDataUrls(buffer) : [imageBufferToDataUrl(buffer, contentType)];
+    const dataUrls = isPdf ? await renderPdfPagesToDataUrls(buffer) : [imageBufferToDataUrl(buffer, filename)];
     if (dataUrls.length === 0) throw new Error('Could not render any page/image for the vision extraction path.');
     userContent = [
       { type: 'text', text: userContextText({ emailSubject, emailBodyPreview, documentText: '' }) },
