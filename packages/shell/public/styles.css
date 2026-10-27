@@ -8898,6 +8898,85 @@ tr.accrued-time-yellow-row th {
   color: #dc2626;
 }
 
+/* AI-drafted commentary per section, by request ("AI-Assisted Reporting
+   Brief", Oct 2026) -- an editable textarea sits directly under each
+   section's own widgets, tagged so it reads as clearly AI-generated rather
+   than pulled raw from source systems. .mtg-ai-controls (the Draft/
+   Regenerate button + tag) is TAM-only review chrome, same .no-print scope
+   as every other review-only control on this page -- never part of the
+   client's own exported PDF. */
+.mtg-ai-block {
+  margin-top: 0.75rem;
+}
+.mtg-ai-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+/* Same light-tint-pill shape .mtg-score-badge--ok already uses just above,
+   plain accent colour rather than a good/warn/bad tier -- this tag isn't
+   judging the data, just labelling where the text came from. */
+.mtg-ai-tag {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.mtg-ai-textarea {
+  display: block;
+  width: 100%;
+  min-height: 4.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+/* Hidden on screen -- the textarea above is what the TAM actually edits.
+   Print-only (same hidden-by-default/@media print pattern
+   .mtg-report-appendix-link already uses further down): a <textarea>'s own
+   overflow doesn't print past its visible box the way a plain paragraph's
+   text wrapping does, so this plain copy (kept in sync on every keystroke
+   -- see report/client.js's own wireAiCommentary()) is what actually ends
+   up in the exported PDF. */
+.mtg-ai-commentary-print {
+  display: none;
+  margin: 0;
+}
+@media print {
+  .mtg-ai-commentary-print {
+    display: block;
+  }
+}
+/* The pre-export review gate, by request ("AI drafts, never auto-sends...
+   add a deliberate pause... before the Export to PDF button fires").
+   Warm/amber, same shade .status.loading/.status.warn already use for
+   "needs a look, nothing's actually broken" -- this isn't an error state. */
+.mtg-ai-review-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.75rem 0;
+  padding: 0.75rem 1.1rem;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: color-mix(in srgb, #f59e0b 12%, var(--card));
+}
+.mtg-ai-review-banner p {
+  margin: 0;
+  color: #b45309;
+  font-size: 0.9rem;
+}
+
 /* Report widgets -- gauge / donut / bar / check-icon, hand-built with SVG
    and CSS (no chart library added), by request ("let's formulate some
    results creating widgets like those"). Shown above the fold on every

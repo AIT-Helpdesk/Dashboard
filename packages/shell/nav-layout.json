@@ -5,6 +5,10 @@
   },
   {
     "type": "page",
+    "id": "check-up"
+  },
+  {
+    "type": "page",
     "id": "about-me"
   },
   {
@@ -300,10 +304,6 @@
       {
         "type": "page",
         "id": "tickets-dashboard"
-      },
-      {
-        "type": "page",
-        "id": "check-up"
       },
       {
         "type": "page",
