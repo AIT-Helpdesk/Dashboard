@@ -195,12 +195,15 @@ export function mount(container) {
   // AEST regardless of the viewer's own machine time zone, by request --
   // this is operational data about one Australia-based mailbox/automation,
   // same convention every other operational timestamp on this dashboard
-  // follows (see packages/autotask-client's own toAest()).
+  // follows (see packages/autotask-client's own toAest()). Australia/
+  // Brisbane, not Australia/Sydney -- Queensland has no daylight saving, so
+  // it stays fixed at true AEST (UTC+10) year-round; Sydney shifts to AEDT
+  // (UTC+11) for part of the year, which is what was showing here before.
   function formatAest(iso) {
     if (!iso) return '';
     try {
       return new Intl.DateTimeFormat('en-AU', {
-        timeZone: 'Australia/Sydney',
+        timeZone: 'Australia/Brisbane',
         day: 'numeric',
         month: 'short',
         hour: 'numeric',
