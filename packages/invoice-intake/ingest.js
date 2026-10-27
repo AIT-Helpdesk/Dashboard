@@ -10,9 +10,11 @@
 // contract packages/meeting-prep/ingest.js and packages/contract-checks/
 // sync.js already establish: `runIngest()` exported for a manual re-run,
 // `node packages\invoice-intake\ingest.js` standalone for Task Scheduler
-// (see DEPLOYMENT.md). Deliberately has NO dashboard page of its own (no
-// `dashboardPage` in package.json) -- same shape as
-// packages/strety-autotask-sync, a script, not a UI.
+// (see DEPLOYMENT.md). Every attachment outcome (worked or failed) and
+// every skipped message is also written to db.js's own data.db -- the
+// package DOES now have a dashboard page (the Invoice Intake Log, added
+// Oct 2026 by request), a read-only summary/log view over that same
+// database; this file remains the only thing that ever writes to it.
 //
 // Loads the root .env itself, same as packages/contract-checks/sync.js --
 // harmless when run inside the already-running shell server (which loads
@@ -27,6 +29,7 @@ const mailbox = require('./graph-mailbox-client.js');
 const sp = require('./sharepoint-client.js');
 const { extractDocument } = require('./extract.js');
 const { resolveDocumentDate, buildFilename, dedupeFilename } = require('./filename.js');
+const db = require('./db.js');
 
 const STATE_PATH = path.join(__dirname, 'invoice-intake-state.json');
 
@@ -86,7 +89,10 @@ async function processAttachment({ message, attachment, destFolderExistingNames,
   await sp.uploadFile(driveId, DESTINATION_PATH, finalName, buffer, attachment.contentType);
   destFolderExistingNames.push(finalName); // keeps the dedupe check correct across several attachments in the SAME run
 
-  return finalName;
+  // The extracted fields ride along with finalName so the caller can write
+  // a full 'ok' row to db.js (supplier/customer/description/date), not
+  // just the filename -- the log page shows all of it.
+  return { finalName, supplier, customer: extracted.customer || null, description: extracted.description || null, documentDate: date };
 }
 
 async function runIngest() {
@@ -95,6 +101,7 @@ async function runIngest() {
 
   const state = loadState();
   const runStartedAt = new Date().toISOString();
+  const runId = db.startRun();
 
   const driveId = await sp.resolveDriveId();
   await sp.ensureFolderPath(driveId, DESTINATION_PATH);
@@ -127,6 +134,12 @@ async function runIngest() {
       // the brief ("log it and skip, do not crash").
       console.log(`[skip] "${message.subject}" -- no qualifying PDF/PNG/JPG/JPEG attachment`);
       skippedNoAttachmentCount++;
+      db.recordOutcome(runId, {
+        messageId: message.id,
+        emailSubject: message.subject,
+        status: 'skipped',
+        reason: 'No qualifying PDF/PNG/JPG/JPEG attachment',
+      });
       await mailbox.markRead(message.id);
       await mailbox.moveMessage(message.id, notProcessedFolderId);
       continue;
@@ -134,9 +147,35 @@ async function runIngest() {
 
     try {
       for (const attachment of qualifying) {
-        const finalName = await processAttachment({ message, attachment, destFolderExistingNames, driveId });
-        console.log(`[ok] "${message.subject}" -- ${attachment.name} -> "${finalName}"`);
-        filesWrittenCount++;
+        try {
+          const result = await processAttachment({ message, attachment, destFolderExistingNames, driveId });
+          console.log(`[ok] "${message.subject}" -- ${attachment.name} -> "${result.finalName}"`);
+          filesWrittenCount++;
+          db.recordOutcome(runId, {
+            messageId: message.id,
+            emailSubject: message.subject,
+            attachmentName: attachment.name,
+            status: 'ok',
+            finalFilename: result.finalName,
+            supplier: result.supplier,
+            customer: result.customer,
+            description: result.description,
+            documentDate: result.documentDate,
+          });
+        } catch (attachmentErr) {
+          // Recorded per-attachment (which file, not just which message)
+          // before rethrowing -- the outer catch below still owns the
+          // existing retry/move bookkeeping unchanged, this just also
+          // leaves a row for the log page to show.
+          db.recordOutcome(runId, {
+            messageId: message.id,
+            emailSubject: message.subject,
+            attachmentName: attachment.name,
+            status: 'fail',
+            reason: attachmentErr.response?.data?.error?.message || attachmentErr.message,
+          });
+          throw attachmentErr;
+        }
       }
       await mailbox.markRead(message.id);
       await mailbox.moveMessage(message.id, filedFolderId);
@@ -162,6 +201,15 @@ async function runIngest() {
 
   const message = `Processed ${processedCount} message(s), ${filesWrittenCount} file(s) written, ${skippedNoAttachmentCount} skipped (no attachment), ${failures.length} failed.`;
   console.log(message);
+  db.finishRun(runId, {
+    ok: failures.length === 0,
+    message,
+    processedCount,
+    filesWrittenCount,
+    skippedCount: skippedNoAttachmentCount,
+    failedCount: failures.length,
+  });
+  db.pruneOldRecords();
   return { ok: failures.length === 0, processedCount, filesWrittenCount, skippedNoAttachmentCount, failures, message };
 }
 

@@ -3,10 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "main": "ingest.js",
+  "dashboardPage": {
+    "id": "invoice-intake",
+    "label": "Invoice Intake Log",
+    "client": "client.js",
+    "server": "server.js"
+  },
   "dependencies": {
     "@dashboard/autotask-client": "*",
     "axios": "^1.7.2",
     "dotenv": "^16.4.5",
+    "express": "^4.19.2",
     "pdf-parse": "^2.4.5"
   }
 }

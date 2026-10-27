@@ -1,6 +1,6 @@
 # @dashboard/invoice-intake
 
-A scheduled, unattended job -- **not a dashboard page** (no `dashboardPage` key in `package.json`, same shape as `@dashboard/strety-autotask-sync`). Watches the shared mailbox `Invoices-IN@ambientit.com.au`, pulls PDF/PNG/JPG/JPEG attachments off qualifying emails, reads each document, extracts supplier/customer/description/date, renames it, and uploads it into a SharePoint folder -- by request ("Invoice and receipt intake automation" brief, Oct 2026). No human handling between an email arriving and the file landing in SharePoint.
+A scheduled, unattended job, now paired with a small read-only dashboard page (the **Invoice Intake Log**, added Oct 2026 by request). `ingest.js` watches the shared mailbox `Invoices-IN@ambientit.com.au`, pulls PDF/PNG/JPG/JPEG attachments off qualifying emails, reads each document, extracts supplier/customer/description/date, renames it, and uploads it into a SharePoint folder -- by request ("Invoice and receipt intake automation" brief, Oct 2026). No human handling between an email arriving and the file landing in SharePoint. The dashboard page just shows what happened -- it has no write path of its own into the mailbox or SharePoint.
 
 Run it once by hand (`node packages/invoice-intake/ingest.js`) or on a 15-minute Windows Task Scheduler trigger in production -- see root `DEPLOYMENT.md`'s "Setting up the Invoice Intake automation" section for the real `Register-ScheduledTask` commands.
 
@@ -12,6 +12,8 @@ Run it once by hand (`node packages/invoice-intake/ingest.js`) or on a 15-minute
 - `extract.js` -- reads one attachment's content (text or vision path) and returns `{ supplier, customer, description, documentDate, documentDateConfident }` via a dedicated Azure OpenAI chat deployment.
 - `filename.js` -- pure, credential-free helpers: the date-fallback rule, filename building/sanitising, and dedupe-on-collision. Directly unit-testable with no live credentials (see "Testing" below).
 - `invoice-intake-state.json` (gitignored, runtime state) -- `{ lastRunIso, messageRetryCounts }`, the "since last successful run" cursor and per-message consecutive-failure counter.
+- `db.js` -- the Invoice Intake Log's own SQLite database (`data.db`, gitignored, same `node:sqlite`/WAL pattern as TC Elite Rollout/Workshop/Contract Checks). One `runs` row per `ingest.js` invocation, one `records` row per attachment outcome (`ok`/`fail`) or skipped message -- the durable "what happened" history the log page reads. Written exclusively by `ingest.js`; `server.js` only ever reads it.
+- `server.js`/`client.js` -- the Invoice Intake Log dashboard page itself: two read-only endpoints (`/summary`, `/records?status=`) over `db.js`, and a client rendering stat tiles (last 24h/7 days/all-time worked/failed/skipped counts, last run) plus a filterable table of individual outcomes. 180-day retention (`db.js`'s `pruneOldRecords()`, called at the end of every run) -- the SharePoint uploads themselves are the real permanent record, this log is for recent troubleshooting/visibility, not an archive.
 
 ## Why two separate Entra app registrations, not one
 
@@ -57,5 +59,4 @@ buildFilename({ date: '2026-10-20', supplier: 'Acme Plumbing', customer: 'Smith 
 
 ## Not yet built / open items
 
-- A UI/status surface -- deliberately out of scope, per the brief (a script + a log file, not a page). `logs/invoice-intake.log` (Task Scheduler's own stdout/stderr redirect, same convention as every other scheduled job here) is the troubleshooting surface.
 - The exact SharePoint site/library resolution (see Phase A item 4 above) is unverified against the real tenant -- this is the single highest-risk assumption in this package and should be the very first thing checked once real credentials exist.

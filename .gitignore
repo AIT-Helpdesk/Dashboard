@@ -110,6 +110,20 @@ packages/check-up/helpdesk-handler.json
 packages/meeting-prep/data/*
 !packages/meeting-prep/data/README.md
 
+# Make Report's own AI-drafted-commentary audit trail (packages/report/
+# server.js) -- real logged prompts/responses for real clients, not
+# source, same "live operational data never committed" reasoning as
+# every other file in this section.
+packages/report/report-ai-audit.jsonl
+
 # Invoice Intake's own runtime state (last successful run cursor, per-message
 # retry counts) -- same reasoning as Report Ingest's ingest-state.json above.
 packages/invoice-intake/invoice-intake-state.json
+
+# Invoice Intake's own SQLite database (db.js) -- real per-attachment run
+# history for the Invoice Intake Log dashboard page, not source, same
+# "live operational data never committed" reasoning as every other data.db
+# in this section.
+packages/invoice-intake/data.db
+packages/invoice-intake/data.db-shm
+packages/invoice-intake/data.db-wal
