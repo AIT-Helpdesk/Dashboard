@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { PDFParse } = require('pdf-parse');
+const cheerio = require('cheerio');
 
 // Reads supplier/customer/description/date out of one invoice or receipt
 // attachment. Two paths converge on the same single Azure OpenAI chat call:
@@ -99,16 +100,48 @@ function imageBufferToDataUrl(buffer, filename) {
   return `data:${mime};base64,${buffer.toString('base64')}`;
 }
 
+// Shared between the normal (attachment) extraction prompt and the email-
+// body-as-invoice prompt below -- kept in one place so a rule change (e.g.
+// the Exclaimer exception, added by request Oct 2026) never has to be
+// edited in two prompts that could otherwise drift apart.
+function sharedExtractionRules() {
+  return `- "supplier" is who ISSUED this document (who is being paid) -- read it from the document's own letterhead/branding/content, NEVER from an email sender address or forwarder name (accounts systems, bookkeepers, and forwarding services commonly send these on the supplier's behalf). If the issuer's own letterhead shows it is trading under a different name than its registered legal entity (e.g. "Legal Entity Pty Ltd (Operating as X)", "Legal Entity Pty Ltd T/As X", "trading as X"), use ONLY that trading name X as "supplier" -- not the full legal entity name alongside it. null only if genuinely unreadable.
+- "customer" is who the document was issued TO (the paying party), if clearly identifiable on the document itself or obvious from the accompanying email subject/body given below.
+  EXCEPTION 1: if this document is for registering, purchasing, transferring, or renewing one or more domain names, set "customer" to the domain name itself (e.g. "example.com.au") instead of the paying company name -- the paying company is almost always this MSP itself, which isn't useful here, while the domain name is. If several domains appear, use the main/first one.
+  EXCEPTION 2: if the supplier is Exclaimer (an email signature management company), this invoice/statement typically lists one or more "End User" entries (a column or field naming the actual client the licence line is billed for) -- read that End User value directly off the document and use it as "customer" instead of the billed-to company (which is almost always this MSP's own entity, not useful here). If more than one End User line appears, use the first one.
+  Otherwise null if not clear.
+- "description" is a SHORT (a few words) description of what the document is for, ONLY if something clear and brief is obvious (e.g. from the email subject). null if nothing short and clear comes to mind -- never pad this out or guess at length.
+- "documentDate" is the invoice/receipt date actually printed on the document, as YYYY-MM-DD. Set "documentDateConfident": true only when you can read it clearly; set it false (and documentDate can still be your best guess, or null) whenever the date is ambiguous, unclear, or not visibly printed at all -- a calling system will fall back to the email's received date whenever this is false.`;
+}
+
 function systemPrompt() {
   return `You are reading one invoice or receipt document (a PDF or a photo of a paper receipt -- photos are often skewed, poorly lit, or held in someone's hand) for an MSP's bookkeeping intake pipeline. Extract exactly this JSON shape and nothing else, no markdown fencing:
 
 {"supplier": "..." or null, "customer": "..." or null, "description": "..." or null, "documentDate": "YYYY-MM-DD" or null, "documentDateConfident": true or false}
 
 Rules:
-- "supplier" is who ISSUED this document (who is being paid) -- read it from the document's own letterhead/branding/content, NEVER from an email sender address or forwarder name (accounts systems, bookkeepers, and forwarding services commonly send these on the supplier's behalf). If the issuer's own letterhead shows it is trading under a different name than its registered legal entity (e.g. "Legal Entity Pty Ltd (Operating as X)", "Legal Entity Pty Ltd T/As X", "trading as X"), use ONLY that trading name X as "supplier" -- not the full legal entity name alongside it. null only if genuinely unreadable.
-- "customer" is who the document was issued TO (the paying party), if clearly identifiable on the document itself or obvious from the accompanying email subject/body given below. EXCEPTION: if this document is for registering, purchasing, transferring, or renewing one or more domain names, set "customer" to the domain name itself (e.g. "example.com.au") instead of the paying company name -- the paying company is almost always this MSP itself, which isn't useful here, while the domain name is. If several domains appear, use the main/first one. Otherwise null if not clear.
-- "description" is a SHORT (a few words) description of what the document is for, ONLY if something clear and brief is obvious (e.g. from the email subject). null if nothing short and clear comes to mind -- never pad this out or guess at length.
-- "documentDate" is the invoice/receipt date actually printed on the document, as YYYY-MM-DD. Set "documentDateConfident": true only when you can read it clearly; set it false (and documentDate can still be your best guess, or null) whenever the date is ambiguous, unclear, or not visibly printed at all -- a calling system will fall back to the email's received date whenever this is false.
+${sharedExtractionRules()}
+- Respond with ONLY the JSON object.`;
+}
+
+// Some suppliers send the actual invoice/receipt as the email's own body
+// (HTML or plain text), with no PDF/image attached at all -- by request
+// (Oct 2026), ingest.js falls back to this path only when a message has no
+// qualifying attachment. The extra "isInvoice" gate (absent from the normal
+// attachment prompt, where ingest.js has already qualified the attachment
+// by extension before ever reaching extraction) exists because EVERY
+// attachment-less email reaches this prompt, most of which are not invoices
+// at all -- a plain notification, a reply thread, a marketing email -- and
+// this must say so rather than inventing content.
+function emailBodySystemPrompt() {
+  return `You are looking at the BODY TEXT of an email (not any attachment) for an MSP's bookkeeping intake pipeline, deciding whether the email itself IS an invoice or receipt -- some suppliers send the invoice as the email body/HTML directly, with no PDF attached -- rather than a plain notification, reply thread, marketing message, or an email that merely links/refers to an invoice elsewhere. Extract exactly this JSON shape and nothing else, no markdown fencing:
+
+{"isInvoice": true or false, "supplier": "..." or null, "customer": "..." or null, "description": "..." or null, "documentDate": "YYYY-MM-DD" or null, "documentDateConfident": true or false}
+
+Set "isInvoice" to true ONLY when the email body itself contains real invoice/receipt content -- a billed amount, itemised charges, or a receipt confirmation for a specific purchase. Set it false for a payment reminder with no itemised content, a "your invoice is ready, click here to view it" notification with nothing itemised in the email itself, or anything unrelated -- when false, every other field can be null.
+
+Rules (when isInvoice is true):
+${sharedExtractionRules()}
 - Respond with ONLY the JSON object.`;
 }
 
@@ -119,6 +152,34 @@ function userContextText({ emailSubject, emailBodyPreview, documentText }) {
   ];
   if (documentText) lines.push('', 'Document text:', documentText.slice(0, 8000));
   return lines.join('\n');
+}
+
+// Graph's message.body comes back as raw HTML (contentType: 'html') for
+// virtually every real-world email -- stripped to plain text before either
+// going to the model (cleaner signal than raw markup) or into the quick
+// fallback PDF (email-pdf.js). Table cells (<td>/<th>) get a " | "
+// separator rather than running straight into the next cell with no gap at
+// all (cheerio's own .text() otherwise concatenates "End UserLicenceAmount"
+// into one unreadable word) -- this matters for the Exclaimer "End User"
+// column case specifically, on the rare chance that invoice arrives as the
+// email body itself rather than a PDF attachment. <br>/<p>/<tr>/<div>
+// closes become newlines, same reasoning as packages/m365-environment/
+// server.js's own cellText() helper (which solves the identical problem
+// for <br> inside one cell, not between cells).
+function htmlToPlainText(html) {
+  if (!html) return '';
+  const withBreaks = html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(td|th)>/gi, ' | ')
+    .replace(/<\/(p|tr|div|li)>/gi, '\n');
+  const $ = cheerio.load(`<div>${withBreaks}</div>`);
+  return $('div')
+    .text()
+    .replace(/\r/g, '')
+    .replace(/ \| \s*\n/g, '\n') // trailing cell separator right before a row-end newline reads oddly otherwise
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 async function extractDocument({ buffer, contentType, filename, emailSubject, emailBodyPreview }) {
@@ -165,4 +226,33 @@ async function extractDocument({ buffer, contentType, filename, emailSubject, em
   };
 }
 
-module.exports = { extractionModelConfigured, extractDocument, extractPdfText, renderPdfPagesToDataUrls };
+// The email-body-as-invoice fallback (ingest.js, by request Oct 2026).
+// Text-only -- no vision path needed, since there's no image/PDF to
+// render, just the body text itself.
+async function extractFromEmailBody({ bodyText, emailSubject }) {
+  if (!extractionModelConfigured()) {
+    throw new Error('Azure OpenAI (invoice extraction) is not configured -- see .env.example (AZURE_OPENAI_INVOICE_*).');
+  }
+  const messages = [
+    { role: 'system', content: emailBodySystemPrompt() },
+    { role: 'user', content: `Email subject: ${emailSubject || '(none)'}\n\nEmail body:\n${(bodyText || '').slice(0, 8000)}` },
+  ];
+  const result = await chatJson(messages);
+  return {
+    isInvoice: !!result.isInvoice,
+    supplier: result.supplier || null,
+    customer: result.customer || null,
+    description: result.description || null,
+    documentDate: result.documentDate || null,
+    documentDateConfident: !!result.documentDateConfident,
+  };
+}
+
+module.exports = {
+  extractionModelConfigured,
+  extractDocument,
+  extractFromEmailBody,
+  htmlToPlainText,
+  extractPdfText,
+  renderPdfPagesToDataUrls,
+};

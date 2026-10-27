@@ -27,8 +27,9 @@ const { isoDateAest } = require('@dashboard/autotask-client');
 
 const mailbox = require('./graph-mailbox-client.js');
 const sp = require('./sharepoint-client.js');
-const { extractDocument } = require('./extract.js');
+const { extractDocument, extractFromEmailBody, htmlToPlainText } = require('./extract.js');
 const { resolveDocumentDate, buildFilename, dedupeFilename } = require('./filename.js');
+const { buildPdfFromEmailBody } = require('./email-pdf.js');
 const db = require('./db.js');
 
 const STATE_PATH = path.join(__dirname, 'invoice-intake-state.json');
@@ -64,6 +65,26 @@ function extensionOf(name) {
   return m ? m[1].toLowerCase() : '';
 }
 
+// Shared by both filing paths below (a real attachment, or the email-body
+// fallback) -- builds the filename, dedupes it against this run's own
+// uploads so far, uploads the bytes, and returns the fields the caller
+// writes to db.js. Required per the brief: still file it, under a clearly
+// recognisable placeholder, rather than skip or block, whenever the model
+// couldn't confidently read a supplier.
+async function fileExtractedDocument({ extracted, receivedDateTime, buffer, contentType, ext, destFolderExistingNames, driveId }) {
+  const receivedDateAestKey = isoDateAest(receivedDateTime);
+  const date = resolveDocumentDate(extracted, receivedDateAestKey);
+  const supplier = extracted.supplier || 'Unknown Supplier';
+
+  const desiredName = buildFilename({ date, supplier, customer: extracted.customer, description: extracted.description, ext });
+  const finalName = dedupeFilename(desiredName, destFolderExistingNames);
+
+  await sp.uploadFile(driveId, DESTINATION_PATH, finalName, buffer, contentType);
+  destFolderExistingNames.push(finalName); // keeps the dedupe check correct across several attachments/emails in the SAME run
+
+  return { finalName, supplier, customer: extracted.customer || null, description: extracted.description || null, documentDate: date };
+}
+
 async function processAttachment({ message, attachment, destFolderExistingNames, driveId }) {
   const ext = extensionOf(attachment.name);
   const buffer = await mailbox.downloadAttachmentBytes(message.id, attachment.id);
@@ -76,23 +97,63 @@ async function processAttachment({ message, attachment, destFolderExistingNames,
     emailBodyPreview: message.bodyPreview,
   });
 
-  const receivedDateAestKey = isoDateAest(message.receivedDateTime);
-  const date = resolveDocumentDate(extracted, receivedDateAestKey);
-  // Required per the brief: still file it, under a clearly recognisable
-  // placeholder, rather than skip or block, whenever the model couldn't
-  // confidently read a supplier.
-  const supplier = extracted.supplier || 'Unknown Supplier';
+  return fileExtractedDocument({ extracted, receivedDateTime: message.receivedDateTime, buffer, contentType: attachment.contentType, ext, destFolderExistingNames, driveId });
+}
 
-  const desiredName = buildFilename({ date, supplier, customer: extracted.customer, description: extracted.description, ext });
-  const finalName = dedupeFilename(desiredName, destFolderExistingNames);
+// The attachment_name value this fallback writes to db.js/shows in the log
+// page's Attachment column -- a fixed, recognisable label (by request, Oct
+// 2026) rather than a real filename, since there never was one.
+const EMAIL_BODY_ATTACHMENT_LABEL = 'Used Email Body';
 
-  await sp.uploadFile(driveId, DESTINATION_PATH, finalName, buffer, attachment.contentType);
-  destFolderExistingNames.push(finalName); // keeps the dedupe check correct across several attachments in the SAME run
+// Only called for a message with NO qualifying attachment -- some suppliers
+// send the actual invoice as the email body/HTML itself, by request (Oct
+// 2026). Returns null (meaning "genuinely nothing to file, fall through to
+// the normal skip path") whenever the body is empty, the body fetch fails,
+// the extraction call itself fails, or the model decides this isn't
+// actually an invoice -- deliberately swallowed here rather than treated as
+// a retryable failure, since the overwhelming majority of attachment-less
+// emails are not invoices at all and shouldn't get stuck retrying forever.
+async function tryEmailBodyAsInvoice(message) {
+  let body;
+  try {
+    body = await mailbox.getMessageBody(message.id);
+  } catch (err) {
+    console.error(`[warn] "${message.subject}" -- could not fetch email body for the no-attachment fallback: ${err.message}`);
+    return null;
+  }
+  const bodyText = body?.contentType === 'html' ? htmlToPlainText(body.content) : body?.content || '';
+  if (!bodyText.trim()) return null;
 
-  // The extracted fields ride along with finalName so the caller can write
-  // a full 'ok' row to db.js (supplier/customer/description/date), not
-  // just the filename -- the log page shows all of it.
-  return { finalName, supplier, customer: extracted.customer || null, description: extracted.description || null, documentDate: date };
+  let extracted;
+  try {
+    extracted = await extractFromEmailBody({ bodyText, emailSubject: message.subject });
+  } catch (err) {
+    console.error(`[warn] "${message.subject}" -- email-body invoice check failed: ${err.message}`);
+    return null;
+  }
+  if (!extracted.isInvoice) return null;
+  return { extracted, bodyText };
+}
+
+async function processEmailBodyAsInvoice({ message, extracted, bodyText, destFolderExistingNames, driveId }) {
+  const buffer = await buildPdfFromEmailBody({ subject: message.subject, receivedDateTime: message.receivedDateTime, bodyText });
+  return fileExtractedDocument({ extracted, receivedDateTime: message.receivedDateTime, buffer, contentType: 'application/pdf', ext: 'pdf', destFolderExistingNames, driveId });
+}
+
+// Shared retry bookkeeping -- identical rule for an attachment failure and
+// an email-body-fallback failure: leave the message unread for retry, but
+// give up (move to ^NOT PROCESSED) after MAX_CONSECUTIVE_FAILURES straight
+// failures. Returns true when the caller should move the message to
+// notProcessedFolderId and clear its retry counter.
+function bumpRetryCount(state, message) {
+  const retryCount = (state.messageRetryCounts[message.id] || 0) + 1;
+  state.messageRetryCounts[message.id] = retryCount;
+  if (retryCount >= MAX_CONSECUTIVE_FAILURES) {
+    console.error(`[fail] "${message.subject}" -- giving up after ${retryCount} consecutive failures, moving to ^NOT PROCESSED`);
+    delete state.messageRetryCounts[message.id];
+    return true;
+  }
+  return false;
 }
 
 async function runIngest() {
@@ -156,19 +217,71 @@ async function runIngest() {
     );
 
     if (qualifying.length === 0) {
-      // Inline-body invoice with no real attachment, or only non-matching
-      // attachments (e.g. a tiny logo) -- log and move on, never error, per
-      // the brief ("log it and skip, do not crash").
-      console.log(`[skip] "${message.subject}" -- no qualifying PDF/PNG/JPG/JPEG attachment`);
-      skippedNoAttachmentCount++;
-      db.recordOutcome(runId, {
-        messageId: message.id,
-        emailSubject: message.subject,
-        status: 'skipped',
-        reason: 'No qualifying PDF/PNG/JPG/JPEG attachment',
-      });
-      await mailbox.markRead(message.id);
-      await mailbox.moveMessage(message.id, notProcessedFolderId);
+      // Before giving up: some suppliers send the actual invoice/receipt as
+      // the email body itself, with nothing attached -- by request (Oct
+      // 2026). tryEmailBodyAsInvoice() returns null for the overwhelming
+      // majority of attachment-less mail (not an invoice at all), which
+      // falls straight through to the pre-existing skip/^NOT PROCESSED path
+      // below, unchanged.
+      const emailBodyAttempt = await tryEmailBodyAsInvoice(message);
+      if (!emailBodyAttempt) {
+        // Inline-body invoice with no real attachment, or only non-matching
+        // attachments (e.g. a tiny logo) -- log and move on, never error,
+        // per the brief ("log it and skip, do not crash").
+        console.log(`[skip] "${message.subject}" -- no qualifying PDF/PNG/JPG/JPEG attachment`);
+        skippedNoAttachmentCount++;
+        db.recordOutcome(runId, {
+          messageId: message.id,
+          emailSubject: message.subject,
+          status: 'skipped',
+          reason: 'No qualifying PDF/PNG/JPG/JPEG attachment',
+        });
+        await mailbox.markRead(message.id);
+        await mailbox.moveMessage(message.id, notProcessedFolderId);
+        continue;
+      }
+
+      try {
+        const result = await processEmailBodyAsInvoice({
+          message,
+          extracted: emailBodyAttempt.extracted,
+          bodyText: emailBodyAttempt.bodyText,
+          destFolderExistingNames,
+          driveId,
+        });
+        console.log(`[ok] "${message.subject}" -- email body -> "${result.finalName}"`);
+        filesWrittenCount++;
+        db.recordOutcome(runId, {
+          messageId: message.id,
+          emailSubject: message.subject,
+          attachmentName: EMAIL_BODY_ATTACHMENT_LABEL,
+          status: 'ok',
+          finalFilename: result.finalName,
+          supplier: result.supplier,
+          customer: result.customer,
+          description: result.description,
+          documentDate: result.documentDate,
+        });
+        await mailbox.markRead(message.id);
+        await mailbox.moveMessage(message.id, filedFolderId);
+        delete state.messageRetryCounts[message.id];
+        processedCount++;
+      } catch (err) {
+        const reason = err.response?.data?.error?.message || err.message;
+        console.error(`[fail] "${message.subject}" -- ${reason}`);
+        failures.push({ subject: message.subject, reason });
+        db.recordOutcome(runId, {
+          messageId: message.id,
+          emailSubject: message.subject,
+          attachmentName: EMAIL_BODY_ATTACHMENT_LABEL,
+          status: 'fail',
+          reason,
+        });
+        if (bumpRetryCount(state, message)) {
+          await mailbox.moveMessage(message.id, notProcessedFolderId).catch(() => {});
+        }
+        // Left unread either way -- picked up again next run unless it was just moved to ^NOT PROCESSED above.
+      }
       continue;
     }
 
@@ -212,12 +325,8 @@ async function runIngest() {
       const reason = err.response?.data?.error?.message || err.message;
       console.error(`[fail] "${message.subject}" -- ${reason}`);
       failures.push({ subject: message.subject, reason });
-      const retryCount = (state.messageRetryCounts[message.id] || 0) + 1;
-      state.messageRetryCounts[message.id] = retryCount;
-      if (retryCount >= MAX_CONSECUTIVE_FAILURES) {
-        console.error(`[fail] "${message.subject}" -- giving up after ${retryCount} consecutive failures, moving to ^NOT PROCESSED`);
+      if (bumpRetryCount(state, message)) {
         await mailbox.moveMessage(message.id, notProcessedFolderId).catch(() => {});
-        delete state.messageRetryCounts[message.id];
       }
       // Left unread either way -- picked up again next run unless it was just moved to ^NOT PROCESSED above.
     }

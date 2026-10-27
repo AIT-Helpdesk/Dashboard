@@ -113,6 +113,23 @@ async function getMessage(messageId) {
   }
 }
 
+// Full body content -- NOT included in listQualifyingMessages()'s/getMessage()'s
+// own $select (bodyPreview there is truncated to ~255 chars and strips
+// formatting) -- fetched separately, and only when a message has no
+// qualifying attachment, since most messages never need it. Used by
+// ingest.js's "is the email itself the invoice" fallback (by request, Oct
+// 2026): some suppliers send the full invoice as the email body/HTML with
+// nothing attached. Returns { contentType: 'html'|'text', content }, the
+// same shape Graph's own message.body already uses.
+async function getMessageBody(messageId) {
+  const token = await getToken();
+  const data = await graphGet(
+    token,
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(MAILBOX)}/messages/${encodeURIComponent(messageId)}?$select=body`
+  );
+  return data.body || null;
+}
+
 async function listAttachments(messageId) {
   const token = await getToken();
   let url =
@@ -202,6 +219,7 @@ module.exports = {
   mailboxIntakeConfigured,
   listQualifyingMessages,
   getMessage,
+  getMessageBody,
   listAttachments,
   downloadAttachmentBytes,
   markRead,
