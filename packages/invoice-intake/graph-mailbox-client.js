@@ -58,12 +58,23 @@ async function graphPost(token, url, body) {
   return res.data;
 }
 
-// "Unprocessed" = still unread, OR arrived since the last successful run --
-// the OR covers a message whose isRead flag got touched some other way
-// (someone opens the shared mailbox directly) without this job losing track
-// of it. $select keeps the per-message payload small; attachments are
-// fetched separately per-message below (listing attachments inline on every
-// page would bloat the list response for messages this job skips anyway).
+// "Unprocessed" = still unread, OR arrived since the last successful run.
+// NOTE this does NOT reliably catch a message that FAILED processing and
+// was then marked read by something else (a human opening the shared
+// mailbox, Outlook's own "mark as read on preview") before the next run --
+// once that happens, its receivedDateTime is also already older than the
+// cursor (ingest.js's own state.lastRunIso, advanced every run regardless
+// of outcome), so NEITHER clause matches on any later run and it silently
+// stops being retried. ingest.js's own runIngest() closes that gap by
+// explicitly re-fetching (getMessage() below) anything still in its retry
+// counter that this query didn't return, so a failed message keeps being
+// retried by id regardless of read state until it succeeds or exhausts
+// MAX_CONSECUTIVE_FAILURES -- confirmed in production (Oct 2026): real
+// invoices were getting stuck in the Inbox, invisible to this filter,
+// while a run logged "0 processed/0 failed" with no trace of them. $select
+// keeps the per-message payload small; attachments are fetched separately
+// per-message below (listing attachments inline on every page would bloat
+// the list response for messages this job skips anyway).
 async function listQualifyingMessages(sinceIso) {
   const token = await getToken();
   const filter = `(isRead eq false) or (receivedDateTime gt ${sinceIso})`;
@@ -78,6 +89,28 @@ async function listQualifyingMessages(sinceIso) {
     url = data['@odata.nextLink'] || null;
   }
   return all;
+}
+
+// Explicit re-fetch by id, same $select shape as listQualifyingMessages()
+// above so its result is a drop-in addition to that list -- the fix for
+// the gap documented on listQualifyingMessages() itself: a message known
+// to have failed before (ingest.js's own state.messageRetryCounts) but
+// that the filtered query above no longer returns. Returns null (not a
+// thrown error) on a 404 -- the message was moved or deleted by something
+// else since it last failed (a human manually filed it away), which means
+// there's genuinely nothing left here to retry, not a real failure.
+async function getMessage(messageId) {
+  const token = await getToken();
+  try {
+    return await graphGet(
+      token,
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(MAILBOX)}/messages/${encodeURIComponent(messageId)}` +
+        `?$select=id,subject,bodyPreview,receivedDateTime,hasAttachments`
+    );
+  } catch (err) {
+    if (err.response?.status === 404) return null;
+    throw err;
+  }
 }
 
 async function listAttachments(messageId) {
@@ -168,6 +201,7 @@ async function moveMessage(messageId, destinationFolderId) {
 module.exports = {
   mailboxIntakeConfigured,
   listQualifyingMessages,
+  getMessage,
   listAttachments,
   downloadAttachmentBytes,
   markRead,

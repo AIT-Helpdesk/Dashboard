@@ -117,6 +117,33 @@ async function runIngest() {
 
   const messages = await mailbox.listQualifyingMessages(state.lastRunIso);
 
+  // Closes a real gap confirmed in production (Oct 2026): a message that
+  // FAILED last run is only retried while it stays unread AND its
+  // receivedDateTime is still after the cursor -- both of which stop
+  // holding the moment it gets marked read by anything else (a human
+  // opening the shared mailbox) once the cursor has since moved past its
+  // arrival time, which it always has by the next run. That silently
+  // drops it from listQualifyingMessages() above forever -- never
+  // retried again, never escalated to ^NOT PROCESSED either, with no
+  // further trace in the log. state.messageRetryCounts already tracks
+  // exactly which messages are mid-retry; explicitly re-fetching by id
+  // anything in there that the query above didn't already return
+  // guarantees a failed message keeps being retried regardless of read
+  // state, until it succeeds or hits MAX_CONSECUTIVE_FAILURES below. A
+  // 404 (getMessage() returns null) means it was moved/deleted by
+  // something else since -- nothing left to retry, so its counter is
+  // just dropped rather than treated as another failure.
+  const alreadyQueued = new Set(messages.map((m) => m.id));
+  for (const retryId of Object.keys(state.messageRetryCounts)) {
+    if (alreadyQueued.has(retryId)) continue;
+    const stuck = await mailbox.getMessage(retryId);
+    if (stuck) {
+      messages.push(stuck);
+    } else {
+      delete state.messageRetryCounts[retryId];
+    }
+  }
+
   let processedCount = 0;
   let skippedNoAttachmentCount = 0;
   let filesWrittenCount = 0;
