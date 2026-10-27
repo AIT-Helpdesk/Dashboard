@@ -224,6 +224,21 @@ function writeHandler(state) {
 // Show button client-side -- same "don't slow down the default page load"
 // convention Time Summaries' own Work-Type Reconciliation section uses.
 
+// Right-hand (Tickets Closed) axis scale on each trend chart, by request
+// -- configurable via .env's 13_WEEK_TREND_TICKET_COUNT_SCALE rather than
+// a hardcoded constant, so it can be raised/lowered as real ticket volume
+// changes without a code change. 30 is the original hardcoded value,
+// kept as the default when the env var is unset, blank, or not a valid
+// positive number -- client.js (dualLineChartSvg()) draws to whatever
+// value this resolves to, read once here and sent down with every
+// /resource-trends response rather than trusted directly from the
+// browser.
+const DEFAULT_TICKET_COUNT_SCALE = 30;
+function resolveTicketCountScale() {
+  const n = Number(process.env['13_WEEK_TREND_TICKET_COUNT_SCALE']);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_TICKET_COUNT_SCALE;
+}
+
 // 13 full Monday..Sunday weeks, oldest first, ending with the most
 // recently COMPLETED Sunday -- "EOW = Sundays", by request. Never
 // includes the current, still-in-progress week -- that used to cap at
@@ -518,7 +533,7 @@ async function computeResourceTrends(client) {
     }),
   }));
 
-  return { weeks, resources: series };
+  return { weeks, resources: series, ticketCountScale: resolveTicketCountScale() };
 }
 
 // 1-hour cache, by request ("the 13 week view data doesn't change much...

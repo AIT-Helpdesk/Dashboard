@@ -426,7 +426,12 @@ export function mount(container) {
     // week (see last13Weeks() in server.js), by request, so this is
     // genuinely "week by week", never a partial in-progress week.
     const dateRangeSub = escapeHtml(formatWeekRange(data.weeks[0].from, data.weeks[data.weeks.length - 1].to));
-    const cards = data.resources.map((r) => trendCardHtml(r.name, r.weeks)).join('');
+    // Server-resolved (.env's 13_WEEK_TREND_TICKET_COUNT_SCALE, see
+    // server.js's resolveTicketCountScale()) -- the || 30 fallback only
+    // matters against an old cached /resource-trends response from before
+    // this field existed, not a real day-to-day case.
+    const ticketScale = data.ticketCountScale || 30;
+    const cards = data.resources.map((r) => trendCardHtml(r.name, r.weeks, ticketScale)).join('');
     trendsContainerEl.innerHTML = `
       <div class="check-up-trend-heading-row">
         <h2 class="section-heading">Billable 13 Week Trend <span class="check-up-trend-range">${dateRangeSub} (EOW = Sundays)</span></h2>
@@ -439,14 +444,14 @@ export function mount(container) {
     `;
   }
 
-  function trendCardHtml(name, weeks) {
+  function trendCardHtml(name, weeks, ticketScale) {
     const pointLabels = weeks.map((w) => formatWeekRange(w.from, w.to));
     const billableValues = weeks.map((w) => w.billablePct);
     const ticketValues = weeks.map((w) => w.ticketsClosed);
     return `
       <div class="check-up-trend-card">
         <div class="check-up-trend-card-title">${escapeHtml(name)}</div>
-        ${dualLineChartSvg(billableValues, ticketValues, pointLabels)}
+        ${dualLineChartSvg(billableValues, ticketValues, pointLabels, ticketScale)}
       </div>
     `;
   }
@@ -464,7 +469,7 @@ export function mount(container) {
   // (same pragmatic approach SaaS Protection's own 30-day Backup Status
   // chart already uses for compact per-point data, no JS tooltip layer
   // needed).
-  function dualLineChartSvg(billableValues, ticketValues, pointLabels) {
+  function dualLineChartSvg(billableValues, ticketValues, pointLabels, ticketScale) {
     const width = 260;
     // Twice the original 112, by request ("make those charts about twice
     // their current height so the movement stands out better") -- only
@@ -480,13 +485,14 @@ export function mount(container) {
     const plotHeight = height - topPad - bottomPad;
     const n = billableValues.length;
     const xAt = (i) => leftPad + (n > 1 ? (i / (n - 1)) * plotWidth : plotWidth / 2);
-    // Fixed scales, by request -- 0-100 for Billable %, 0-30 for Tickets
-    // Closed -- not derived from the data, so every tile shares the same
-    // two reference scales.
+    // Fixed scales, by request -- 0-100 for Billable %, 0-ticketScale for
+    // Tickets Closed (configurable via .env's
+    // 13_WEEK_TREND_TICKET_COUNT_SCALE, see server.js) -- not derived from
+    // the data, so every tile shares the same two reference scales.
     const yAt = (v, max) => topPad + (1 - Math.max(0, Math.min(1, v / max))) * plotHeight;
 
     const billablePoints = billableValues.map((v, i) => ({ x: xAt(i), y: yAt(v, 100), v }));
-    const ticketPoints = ticketValues.map((v, i) => ({ x: xAt(i), y: yAt(v, 30), v }));
+    const ticketPoints = ticketValues.map((v, i) => ({ x: xAt(i), y: yAt(v, ticketScale), v }));
     const pathOf = (points) => points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
 
     // Three shared horizontal gridlines (baseline/middle/top), each
@@ -499,7 +505,7 @@ export function mount(container) {
         return `
           <line x1="${leftPad}" y1="${y}" x2="${(leftPad + plotWidth).toFixed(1)}" y2="${y}" class="check-up-trend-gridline" />
           <text x="${(leftPad - 4).toFixed(1)}" y="${y}" dy="0.32em" text-anchor="end" class="check-up-trend-axis-label check-up-trend-axis-label--billable">${Math.round(f * 100)}%</text>
-          <text x="${(leftPad + plotWidth + 4).toFixed(1)}" y="${y}" dy="0.32em" text-anchor="start" class="check-up-trend-axis-label check-up-trend-axis-label--tickets">${Math.round(f * 30)}</text>
+          <text x="${(leftPad + plotWidth + 4).toFixed(1)}" y="${y}" dy="0.32em" text-anchor="start" class="check-up-trend-axis-label check-up-trend-axis-label--tickets">${Math.round(f * ticketScale)}</text>
         `;
       })
       .join('');
