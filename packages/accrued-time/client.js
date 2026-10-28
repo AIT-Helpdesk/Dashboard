@@ -484,11 +484,11 @@ export function mount(container) {
         <td>${escapeHtml(r.clientName)}</td>
         <td>${escapeHtml(r.ticketTitle)}</td>
         <td>${escapeHtml(r.status)}</td>
-        <td class="col-center">${formatHours(r.accrueIng)}</td>
-        <td class="col-center accrued-time-end-col">${formatHours(r.accrueEnd)}</td>
-        <td class="col-center accrued-time-end-col">${formatHours(r.accrueEndNoBill)}</td>
-        <td class="col-center">${formatHours(r.standardSupport)}</td>
-        <td class="col-center"${otherTitle}>${formatHours(r.other)}</td>
+        <td class="col-center">${formatHms(r.accrueIng)}</td>
+        <td class="col-center accrued-time-end-col">${formatHms(r.accrueEnd)}</td>
+        <td class="col-center accrued-time-end-col">${formatHms(r.accrueEndNoBill)}</td>
+        <td class="col-center">${formatHms(r.standardSupport)}</td>
+        <td class="col-center"${otherTitle}>${formatHms(r.other)}</td>
       </tr>
     `;
   }
@@ -499,14 +499,10 @@ export function mount(container) {
     return `<a href="${escapeHtml(r.ticketUrl)}" class="ticket-link" target="_blank" rel="noopener noreferrer">${label}</a>`;
   }
 
-  function formatHours(n) {
-    return (n || 0).toFixed(2);
-  }
-
-  // h:mm, for the "Diff" figure next to Mismatches -- same rounding/
-  // rollover convention @dashboard/times' own formatHms() uses (round to
-  // the nearest minute, roll over into the next hour rather than ever
-  // showing :60).
+  // HH:MM, used for every time figure on this page (table columns and the
+  // Diff figure next to Mismatches alike), by request -- round to the
+  // nearest minute, roll over into the next hour rather than ever showing
+  // :60, same convention @dashboard/times' own formatHms() uses.
   function formatHms(hours) {
     const totalMinutes = Math.round((hours || 0) * 60);
     const h = Math.floor(totalMinutes / 60);
