@@ -47,10 +47,13 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
   // asked.
   const columnNoteTextFilters = new Map();
   let currentVisibleRowIds = [];
-  // Set while a column header drag is in progress -- module-call-scope
-  // (not per-render), so it survives the dragstart->drop round trip
-  // regardless of how many times the grid re-renders in between.
-  let draggedColumnId = null;
+  // Set while a header drag is in progress -- module-call-scope (not
+  // per-render), so it survives the dragstart->drop round trip regardless
+  // of how many times the grid/detail sheet re-renders in between. Shared
+  // by both the master grid's own columns AND a compound column's own
+  // stages within its detail sheet (see wireHeaderDragReorder below) --
+  // a drag is inherently one-at-a-time, so one variable covers both.
+  let draggedHeaderId = null;
   // Compound-column detail-sheet state -- which one (if any) is currently
   // open below the master grid, its own Show All (separate from the
   // master grid's), and the last detail payload loaded (so the column
@@ -61,6 +64,15 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
   let openDetailColumnId = null;
   let showAllDetail = false;
   let lastDetailData = null;
+  // The row-level mirror of the three above, for a compound ROW's own
+  // detail sheet (by request -- "Need Compound Rows as well as Compound
+  // Columns"). Only ever one detail sheet shown at a time, columns or
+  // rows alike -- opening one clears the other's open-id (see loadGrid()
+  // below, which is the one place that decides what detailContainer
+  // actually shows).
+  let openDetailRowId = null;
+  let showAllRowDetail = false;
+  let lastRowDetailData = null;
   // Set from loadGrid()'s own GET /'s `isManager` field on every load --
   // buildAddStageSection() below reads this to hide Add Stage from a
   // non-manager, same "server decides, client just reflects it" gate the
@@ -117,6 +129,11 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         <div class="section-heading">Add ${escapeHtml(rowNoun)}</div>
         <div class="rt-form-body">
           <input type="text" id="new-row-name" placeholder="${escapeHtml(rowNoun)} name" />
+          <label><input type="radio" name="new-row-kind" value="simple" checked /> Simple</label>
+          <label><input type="radio" name="new-row-kind" value="compound" /> Compound (has its own sub-rows)</label>
+          <div id="new-row-subrows-fields" hidden>
+            <input type="text" id="new-row-subrows" placeholder="Sub-rows, comma-separated (e.g. Site A, Site B)" />
+          </div>
           <p id="add-row-error" class="status error" hidden></p>
           <div class="rt-form-actions">
             <button type="button" id="save-row-button" class="button-link">Save</button>
@@ -142,6 +159,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         <div class="rt-form-body">
           <input type="text" id="new-column-label" placeholder="Column label" />
           <label><input type="radio" name="new-column-kind" value="simple" checked /> Simple</label>
+          <label><input type="radio" name="new-column-kind" value="text" /> Text (free-text field, no status)</label>
           <label><input type="radio" name="new-column-kind" value="compound" /> Compound (has its own stages)</label>
           <div id="new-column-stages-fields" hidden>
             <input type="text" id="new-column-status-stages" placeholder="Status stages, comma-separated (e.g. Installed, Verified)" />
@@ -432,6 +450,11 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     container.querySelector('#cancel-row-button').addEventListener('click', () => {
       addRowForm.hidden = true;
     });
+    container.querySelectorAll('input[name="new-row-kind"]').forEach((radio) => {
+      radio.addEventListener('change', () => {
+        container.querySelector('#new-row-subrows-fields').hidden = !container.querySelector('input[name="new-row-kind"][value="compound"]').checked;
+      });
+    });
     container.querySelector('#save-row-button').addEventListener('click', async () => {
       const errorEl = container.querySelector('#add-row-error');
       errorEl.hidden = true;
@@ -441,16 +464,29 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         errorEl.textContent = `${rowNoun} name is required.`;
         return;
       }
+      const kind = container.querySelector('input[name="new-row-kind"]:checked').value;
+      const subRows = [];
+      if (kind === 'compound') {
+        subRows.push(...container.querySelector('#new-row-subrows').value.split(',').map((s) => s.trim()).filter(Boolean));
+        if (subRows.length === 0) {
+          errorEl.hidden = false;
+          errorEl.textContent = 'A compound row needs at least one sub-row.';
+          return;
+        }
+      }
       try {
         const res = await fetch(`${apiBase}/rows`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, kind, subRows }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
         addRowForm.hidden = true;
         container.querySelector('#new-row-name').value = '';
+        container.querySelector('#new-row-subrows').value = '';
+        container.querySelector('input[name="new-row-kind"][value="simple"]').checked = true;
+        container.querySelector('#new-row-subrows-fields').hidden = true;
         await loadGrid();
       } catch (err) {
         errorEl.hidden = false;
@@ -531,7 +567,9 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         errorEl.textContent = 'Column label is required.';
         return;
       }
-      const kind = container.querySelector('input[name="new-column-kind"]:checked').value;
+      const uiKind = container.querySelector('input[name="new-column-kind"]:checked').value; // 'simple' | 'text' | 'compound'
+      const kind = uiKind === 'compound' ? 'compound' : 'simple';
+      const cellType = uiKind === 'text' ? 'text' : 'status';
       const stages = [];
       if (kind === 'compound') {
         const statusLabels = container.querySelector('#new-column-status-stages').value.split(',').map((s) => s.trim()).filter(Boolean);
@@ -548,7 +586,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         const res = await fetch(`${apiBase}/columns`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ label: columnLabel, kind, stages }),
+          body: JSON.stringify({ label: columnLabel, kind, cellType, stages }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -578,7 +616,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
         renderGrid(data);
         isManager = !!data.isManager;
-        renderDetailButtons(data.columns);
+        renderDetailButtons(data.columns, data.rows);
         addColumnButton.hidden = !isManager;
         if (openDetailColumnId && !data.columns.some((c) => c.id === openDetailColumnId)) {
           // The open detail column got filtered out of view (fully
@@ -588,6 +626,14 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
           detailContainer.innerHTML = '';
         } else if (openDetailColumnId) {
           await loadDetail(openDetailColumnId);
+        } else if (openDetailRowId && !data.rows.some((r) => r.id === openDetailRowId && r.kind === 'compound')) {
+          // Same reasoning, the row-level mirror -- the open detail row
+          // got filtered out of view, or (shouldn't normally happen, but
+          // cheap to guard) is no longer compound.
+          openDetailRowId = null;
+          detailContainer.innerHTML = '';
+        } else if (openDetailRowId) {
+          await loadRowDetail(openDetailRowId);
         }
         if (data.isManager) {
           loadCompletionState();
@@ -633,7 +679,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             ${columns
               .map(
                 (col) =>
-                  `<th class="rt-col-header" draggable="${data.isManager ? 'true' : 'false'}" data-column-id="${col.id}">${col.kind === 'simple' ? `<button type="button" class="rt-bulk-col-btn" data-column-id="${col.id}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ` : ''}${escapeHtml(col.label)}</th>`
+                  `<th class="rt-col-header" draggable="${data.isManager ? 'true' : 'false'}" data-column-id="${col.id}">${col.kind === 'simple' ? `<button type="button" class="rt-bulk-col-btn" data-column-id="${col.id}" data-cell-type="${col.cellType}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ` : ''}${escapeHtml(col.label)}</th>`
               )
               .join('')}
           </tr>
@@ -642,7 +688,12 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             ${columns
               .map(
                 (col) =>
-                  `<th class="rt-status-filter-cell" data-column-id="${col.id}"><button type="button" class="link-button rt-status-filter-btn" data-column-id="${col.id}">Filter${statusFilterCountLabel(col.id)}</button></th>`
+                  // A text column has no real status to filter by (its
+                  // cell_status is always the placeholder, see
+                  // cell_type's own comment in rollout-tracker-db.js) --
+                  // no Filter button at all, rather than one that could
+                  // never actually match anything.
+                  `<th class="rt-status-filter-cell" data-column-id="${col.id}">${col.cellType === 'text' ? '' : `<button type="button" class="link-button rt-status-filter-btn" data-column-id="${col.id}">Filter${statusFilterCountLabel(col.id)}</button>`}</th>`
               )
               .join('')}
           </tr>
@@ -665,7 +716,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       renderTbodyRows(columns, rows);
       wireRowNameFilterInput(table, columns, rows);
       wireStatusFilterButtons(table, columns, rows);
-      wireColumnDragReorder(table, columns);
+      wireHeaderDragReorder(table, columns.map((c) => c.id), 'columnId', `${apiBase}/columns/order`, loadGrid);
     }
 
     function statusFilterCountLabel(columnId) {
@@ -723,13 +774,17 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
               .map(
                 (row) => `
             <tr>
-              <td><button type="button" class="rt-bulk-row-btn" data-row-id="${row.id}" title="Set every column in this row to the same value">⚙</button> <button type="button" class="rt-rename-btn" data-row-id="${row.id}" data-row-name="${escapeHtml(row.name)}" title="Rename">${RENAME_ICON_SVG}</button> ${escapeHtml(row.name)}</td>
+              <td>
+                <button type="button" class="rt-rename-btn" data-row-id="${row.id}" data-row-name="${escapeHtml(row.name)}" title="Rename">${RENAME_ICON_SVG}</button>
+                ${escapeHtml(row.name)}
+                ${row.kind === 'simple' ? ` <button type="button" class="rt-bulk-row-btn" data-row-id="${row.id}" title="Set every column in this row to the same value">⚙</button>` : ''}
+              </td>
               ${columns.map((col) => masterCellHtml(row, col)).join('')}
             </tr>`
               )
               .join('')
           : `<tr><td colspan="${columns.length + 1}" class="status">No ${rowNoun.toLowerCase()}s matching these filters.</td></tr>`;
-      // Only the two buttons that live INSIDE tbody rows (and so get
+      // Only the buttons that live INSIDE tbody rows (and so get
       // destroyed/recreated every time this runs) need re-wiring here --
       // see renderGrid()'s own comment for why wireCellInteractions/
       // wireBulkColumnButtons are wired exactly once, there, instead.
@@ -844,40 +899,48 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     // from the server's own now-updated sort_order, same "server is the
     // one source of truth, just reload" convention every other write on
     // this page already follows.
-    function wireColumnDragReorder(table, columns) {
+    // Shared by the master grid's own columns (idAttr 'columnId', PUT
+    // .../columns/order) and a compound column's own stages within its
+    // detail sheet (idAttr 'stageId', PUT .../columns/:columnId/stages/
+    // order, by request -- "Need to be able to move the columns on a
+    // compound tab like they can on the main table"). `ids` is the full
+    // set of header ids in their current order; `onDone` re-loads
+    // whichever view needs to reflect the server's own now-updated
+    // sort_order afterward (loadGrid or loadDetail).
+    function wireHeaderDragReorder(table, ids, idAttr, url, onDone) {
       table.querySelectorAll('th.rt-col-header[draggable="true"]').forEach((th) => {
         th.addEventListener('dragstart', () => {
-          draggedColumnId = Number(th.dataset.columnId);
+          draggedHeaderId = Number(th.dataset[idAttr]);
           th.classList.add('rt-col-dragging');
         });
         th.addEventListener('dragend', () => th.classList.remove('rt-col-dragging'));
         th.addEventListener('dragover', (e) => {
           e.preventDefault();
-          if (Number(th.dataset.columnId) !== draggedColumnId) th.classList.add('rt-col-drag-over');
+          if (Number(th.dataset[idAttr]) !== draggedHeaderId) th.classList.add('rt-col-drag-over');
         });
         th.addEventListener('dragleave', () => th.classList.remove('rt-col-drag-over'));
         th.addEventListener('drop', async (e) => {
           e.preventDefault();
           th.classList.remove('rt-col-drag-over');
-          const targetColumnId = Number(th.dataset.columnId);
-          if (draggedColumnId === null || draggedColumnId === targetColumnId) return;
-          const order = columns.map((c) => c.id);
-          const fromIndex = order.indexOf(draggedColumnId);
-          const toIndex = order.indexOf(targetColumnId);
+          const targetId = Number(th.dataset[idAttr]);
+          if (draggedHeaderId === null || draggedHeaderId === targetId) return;
+          const order = ids.slice();
+          const fromIndex = order.indexOf(draggedHeaderId);
+          const toIndex = order.indexOf(targetId);
           order.splice(fromIndex, 1);
-          order.splice(toIndex, 0, draggedColumnId);
-          draggedColumnId = null;
+          order.splice(toIndex, 0, draggedHeaderId);
+          draggedHeaderId = null;
           try {
-            const res = await fetch(`${apiBase}/columns/order`, {
+            const res = await fetch(url, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ order }),
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-            await loadGrid();
+            await onDone();
           } catch (err) {
-            alert(`Error reordering columns: ${err.message}`);
+            alert(`Error reordering: ${err.message}`);
           }
         });
       });
@@ -886,46 +949,90 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     // A simple column's cell is directly editable; a compound column's
     // cell is its own auto-computed rollup -- never directly editable,
     // same tcr-cell--editable split tc-elite-rollout/client.js uses for
-    // its own master grid. The note explains why clicking it opens
+    // its own master grid. A simple TEXT column (by request -- "Add
+    // column on the main page should have Text column capability like
+    // the compound pages") is also directly editable, but as free text
+    // rather than a status dropdown -- same tcr-cell--text split a
+    // compound column's own text-type stage already uses, just at the
+    // master-grid level. The note explains why a non-editable cell opens
     // history instead of an editor (see wireCellInteractions below).
     function masterCellHtml(row, col) {
       const cell = row.cells[col.id] || { status: 'not_done', reason: null };
-      const editable = col.kind === 'simple';
-      const note = col.kind === 'compound' ? ' -- derived from its own detail sheet; click its Show Detail button below to edit.' : '';
+      // A TEXT column's cell is untouched by a row's own kind -- always
+      // directly editable regardless (see rollout-tracker-db.js's own
+      // seedNewRow comment for why).
+      if (col.kind === 'simple' && col.cellType === 'text') {
+        return `<td class="rt-cell rt-cell--text rt-cell--editable" data-kind="cell-text" data-row-id="${row.id}" data-column-id="${col.id}" data-reason="${escapeHtml(cell.reason || '')}" data-label="${escapeHtml(col.label)}" data-row-name="${escapeHtml(row.name)}">${escapeHtml(cell.reason || '')}</td>`;
+      }
+      // A STATUS-type simple column's cell for a COMPOUND row is a
+      // derived rollup over that row's own sub-rows, by request ("Need
+      // Compound Rows as well as Compound Columns") -- the row-level
+      // mirror of a compound column's own never-editable cell, just
+      // transposed.
+      const rowIsCompoundHere = col.cellType === 'status' && row.kind === 'compound';
+      const editable = col.kind === 'simple' && !rowIsCompoundHere;
+      const note = col.kind === 'compound'
+        ? ' -- derived from its own detail sheet; click its Show Detail button below to edit.'
+        : rowIsCompoundHere
+          ? ' -- derived from its own sub-rows; click its own Show Detail button to edit.'
+          : '';
       return `<td class="rt-cell rt-cell--${cell.status}${editable ? ' rt-cell--editable' : ''}" data-kind="cell" data-row-id="${row.id}" data-column-id="${col.id}" data-status="${cell.status}" data-reason="${escapeHtml(cell.reason || '')}" data-note="${escapeHtml(note)}" data-label="${escapeHtml(col.label)}" data-row-name="${escapeHtml(row.name)}">${STATUS_SYMBOLS[cell.status]}</td>`;
     }
 
-    // One "Show/Hide <label> Detail" toggle per compound column, below the
-    // master table -- mirrors tc-elite-rollout/client.js's own
-    // renderDetailButtons(). Only ever one sheet open at a time (clicking
-    // a different column's toggle closes whichever was open).
-    function renderDetailButtons(columns) {
+    // One "Show/Hide <label> Detail" toggle per compound column AND per
+    // compound row, below the master table -- mirrors tc-elite-rollout/
+    // client.js's own renderDetailButtons() for columns; a compound
+    // row's own toggle lives here too, by request ("make these buttons
+    // below as well like the Show buttons for the compound columns" --
+    // originally an inline per-row toggle). Only ever one sheet open at a
+    // time (clicking a different toggle -- column or row -- closes
+    // whichever was open).
+    function renderDetailButtons(columns, rows) {
       const compoundColumns = columns.filter((c) => c.kind === 'compound');
-      if (compoundColumns.length === 0) {
+      const compoundRows = rows.filter((r) => r.kind === 'compound');
+      if (compoundColumns.length === 0 && compoundRows.length === 0) {
         detailButtonsContainer.innerHTML = '';
         return;
       }
-      detailButtonsContainer.innerHTML = compoundColumns
-        .map(
-          (c) =>
-            `<button type="button" class="button-link button-link--small rt-detail-toggle${openDetailColumnId === c.id ? ' rt-detail-toggle--active' : ''}" data-column-id="${c.id}">${openDetailColumnId === c.id ? 'Hide' : 'Show'} ${escapeHtml(c.label)} Detail</button>`
-        )
-        .join(' ');
+      const columnButtonsHtml = compoundColumns.map(
+        (c) =>
+          `<button type="button" class="button-link button-link--small rt-detail-toggle${openDetailColumnId === c.id ? ' rt-detail-toggle--active' : ''}" data-kind="column" data-id="${c.id}">${openDetailColumnId === c.id ? 'Hide' : 'Show'} ${escapeHtml(c.label)} Detail</button>`
+      );
+      const rowButtonsHtml = compoundRows.map(
+        (r) =>
+          `<button type="button" class="button-link button-link--small rt-detail-toggle${openDetailRowId === r.id ? ' rt-detail-toggle--active' : ''}" data-kind="row" data-id="${r.id}">${openDetailRowId === r.id ? 'Hide' : 'Show'} ${escapeHtml(r.name)} Detail</button>`
+      );
+      detailButtonsContainer.innerHTML = [...columnButtonsHtml, ...rowButtonsHtml].join(' ');
       detailButtonsContainer.querySelectorAll('.rt-detail-toggle').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          const columnId = Number(btn.dataset.columnId);
-          if (openDetailColumnId === columnId) {
-            openDetailColumnId = null;
-            detailContainer.innerHTML = '';
+          const id = Number(btn.dataset.id);
+          if (btn.dataset.kind === 'column') {
+            if (openDetailColumnId === id) {
+              openDetailColumnId = null;
+              detailContainer.innerHTML = '';
+            } else {
+              openDetailColumnId = id;
+              openDetailRowId = null; // only one detail sheet at a time, columns or rows alike
+              // Fresh sheet, fresh default -- start hidden-by-default same
+              // as the master grid does on page load, not whatever this or
+              // a previously-viewed sheet's toggle happened to be left at.
+              showAllDetail = false;
+            }
           } else {
-            openDetailColumnId = columnId;
-            // Fresh sheet, fresh default -- start hidden-by-default same
-            // as the master grid does on page load, not whatever this or
-            // a previously-viewed sheet's toggle happened to be left at.
-            showAllDetail = false;
-            await loadDetail(columnId);
+            if (openDetailRowId === id) {
+              openDetailRowId = null;
+              detailContainer.innerHTML = '';
+            } else {
+              openDetailRowId = id;
+              openDetailColumnId = null;
+              showAllRowDetail = false;
+            }
           }
-          renderDetailButtons(columns);
+          // Routed through loadGrid() rather than loading the detail +
+          // re-rendering this button bank directly -- it already does
+          // both of those (see its own openDetailColumnId/openDetailRowId
+          // branches).
+          await loadGrid();
         });
       });
     }
@@ -966,7 +1073,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         <thead>
           <tr class="shaded-row">
             <th>${escapeHtml(rowNoun)} (${rows.length}/${totalRows})</th>
-            ${stages.map((s) => `<th><button type="button" class="rt-bulk-col-btn" data-stage-id="${s.id}" data-stage-type="${s.type}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ${escapeHtml(s.label)}</th>`).join('')}
+            ${stages.map((s) => `<th class="rt-col-header" draggable="${isManager ? 'true' : 'false'}" data-stage-id="${s.id}"><button type="button" class="rt-bulk-col-btn" data-stage-id="${s.id}" data-cell-type="${s.type}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ${escapeHtml(s.label)}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -985,6 +1092,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       wireCellInteractions(table);
       wireBulkRowButtons(table, 'detail', column.id);
       wireBulkColumnButtons(table, 'detail');
+      wireHeaderDragReorder(table, stages.map((s) => s.id), 'stageId', `${apiBase}/columns/${column.id}/stages/order`, () => loadDetail(column.id));
     }
 
     // Add Stage -- Tracker Manager-only, same reasoning as Add Column.
@@ -1085,23 +1193,188 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       return `<td class="rt-cell rt-cell--${status} rt-cell--editable" data-kind="stage-status" data-row-id="${row.id}" data-stage-id="${stage.id}" data-status="${status}" data-reason="${escapeHtml(cell.reason || '')}" data-label="${escapeHtml(stage.label)}" data-row-name="${escapeHtml(row.name)}">${STATUS_SYMBOLS[status]}</td>`;
     }
 
+    // ---- Compound rows -- the row-level mirror of the compound-column
+    // detail-sheet rendering above, transposed (by request -- "Need
+    // Compound Rows as well as Compound Columns"). Shares the one
+    // detailContainer below the master grid with the column-detail
+    // rendering above -- only ever one sheet showing at a time (see
+    // loadGrid()'s own openDetailColumnId/openDetailRowId branches).
+
+    async function loadRowDetail(rowId) {
+      detailContainer.innerHTML = '<p class="status">Loading...</p>';
+      try {
+        const res = await fetch(`${apiBase}/rows/${rowId}/detail${showAllRowDetail ? '?all=true' : ''}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        lastRowDetailData = data;
+        renderRowDetail(data);
+      } catch (err) {
+        detailContainer.innerHTML = `<p class="status error">Error: ${err.message}</p>`;
+      }
+    }
+
+    function renderRowDetail(data) {
+      const { row, columns, subRows, totalSubRows } = data;
+      const heading = document.createElement('div');
+      heading.className = 'section-heading section-heading--scorecard';
+      heading.textContent = `${row.name} -- Detail`;
+      detailContainer.innerHTML = '';
+      detailContainer.appendChild(heading);
+      detailContainer.appendChild(buildAddSubRowSection(row));
+
+      if (subRows.length === 0) {
+        const message = showAllRowDetail
+          ? 'No sub-rows yet.'
+          : `Nothing outstanding on this sheet (0/${totalSubRows}) -- everything tracked is Done, N/A, or Cancelled. Try Show All to see everything.`;
+        detailContainer.appendChild(Object.assign(document.createElement('p'), { className: 'status', textContent: message }));
+        return;
+      }
+
+      // Columns here are already filtered by the server to just the
+      // status-type-simple ones -- a sub-row never targets a text or
+      // compound column (see rollout-tracker-db.js's own sub_rows
+      // comment). Column headers are NOT draggable here -- column order
+      // is a single global concept owned by the master grid's own
+      // header drag, not something a row's own detail sheet reorders
+      // independently.
+      const table = document.createElement('table');
+      table.className = 'rt-table';
+      table.innerHTML = `
+        <thead>
+          <tr class="shaded-row">
+            <th>Sub-rows (${subRows.length}/${totalSubRows})</th>
+            ${columns
+              .map(
+                (c) =>
+                  `<th class="rt-col-header" draggable="false" data-column-id="${c.id}"><button type="button" class="rt-bulk-col-btn" data-column-id="${c.id}" title="Set every currently visible sub-row in this column to the same value">⚙</button> ${escapeHtml(c.label)}</th>`
+              )
+              .join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${subRows
+            .map(
+              (subRow) => `
+            <tr>
+              <td><button type="button" class="rt-bulk-row-btn" data-sub-row-id="${subRow.id}" title="Set every column in this sub-row to the same value">⚙</button> ${escapeHtml(subRow.label)}</td>
+              ${columns.map((col) => subRowCellHtml(subRow, col)).join('')}
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      `;
+      detailContainer.appendChild(table);
+      wireCellInteractions(table);
+      wireSubRowBulkButtons(table, row.id);
+      wireColumnAcrossSubRowsBulkButtons(table, row.id);
+    }
+
+    // Add Sub-Row -- Tracker Manager-only, same reasoning as Add Stage.
+    // Built fresh on every renderRowDetail() call, same "never more than
+    // one of these live at once" reasoning as buildAddStageSection above.
+    function buildAddSubRowSection(row) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'rt-add-stage'; // same visual treatment as Add Stage, reused rather than a near-duplicate class
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button-link button-link--small';
+      button.textContent = 'Add Sub-Row';
+      button.hidden = !isManager;
+      wrapper.appendChild(button);
+
+      const showAllLabel = document.createElement('label');
+      showAllLabel.className = 'rt-detail-show-all';
+      showAllLabel.innerHTML = `<input type="checkbox" class="rt-detail-show-all-toggle"${showAllRowDetail ? ' checked' : ''} /> Show All`;
+      wrapper.appendChild(showAllLabel);
+      showAllLabel.querySelector('.rt-detail-show-all-toggle').addEventListener('change', (e) => {
+        showAllRowDetail = e.target.checked;
+        loadRowDetail(row.id);
+      });
+
+      const form = document.createElement('div');
+      form.className = 'resource-group';
+      form.hidden = true;
+      form.innerHTML = `
+        <div class="section-heading">Add Sub-Row to ${escapeHtml(row.name)}</div>
+        <div class="rt-form-body">
+          <input type="text" class="rt-new-sub-row-label" placeholder="Sub-row name" />
+          <p class="status error rt-add-sub-row-error" hidden></p>
+          <div class="rt-form-actions">
+            <button type="button" class="button-link rt-save-sub-row-button">Save</button>
+            <button type="button" class="rt-cancel-sub-row-button">Cancel</button>
+          </div>
+        </div>
+      `;
+      wrapper.appendChild(form);
+
+      button.addEventListener('click', () => {
+        form.hidden = false;
+        form.querySelector('.rt-new-sub-row-label').focus();
+      });
+      form.querySelector('.rt-cancel-sub-row-button').addEventListener('click', () => {
+        form.hidden = true;
+      });
+      form.querySelector('.rt-save-sub-row-button').addEventListener('click', async () => {
+        const errorEl = form.querySelector('.rt-add-sub-row-error');
+        errorEl.hidden = true;
+        const label = form.querySelector('.rt-new-sub-row-label').value.trim();
+        if (!label) {
+          errorEl.hidden = false;
+          errorEl.textContent = 'Sub-row name is required.';
+          return;
+        }
+        try {
+          const res = await fetch(`${apiBase}/rows/${row.id}/sub-rows`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label }),
+          });
+          const resData = await res.json();
+          if (!res.ok) throw new Error(resData.error || `Request failed (${res.status})`);
+          form.hidden = true;
+          // loadGrid() re-fetches the master grid AND, since
+          // openDetailRowId is still this row, reloads this detail sheet
+          // too -- a freshly added sub-row can change the master rollup
+          // for columns that were previously fully done on this row.
+          await loadGrid();
+        } catch (err) {
+          errorEl.hidden = false;
+          errorEl.textContent = `Error: ${err.message}`;
+        }
+      });
+
+      return wrapper;
+    }
+
+    // Always a status cell -- a sub-row never targets a text or compound
+    // column (see rollout-tracker-db.js's own sub_rows comment), so
+    // unlike stageCellHtml there's no text branch to make here.
+    function subRowCellHtml(subRow, col) {
+      const cell = subRow.cells[col.id] || {};
+      const status = cell.status || 'not_done';
+      return `<td class="rt-cell rt-cell--${status} rt-cell--editable" data-kind="sub-row-cell" data-sub-row-id="${subRow.id}" data-column-id="${col.id}" data-status="${status}" data-reason="${escapeHtml(cell.reason || '')}" data-label="${escapeHtml(col.label)}" data-row-name="${escapeHtml(subRow.label)}">${STATUS_SYMBOLS[status]}</td>`;
+    }
+
     function historyContextFor(td) {
       return {
         kind: td.dataset.kind,
         rowId: td.dataset.rowId,
         columnId: td.dataset.columnId,
         stageId: td.dataset.stageId,
+        subRowId: td.dataset.subRowId,
         label: td.dataset.label,
         rowName: td.dataset.rowName,
       };
     }
 
-    // 'stage-status'/'stage-text' both live on /stages/.../history; a
-    // plain master-grid cell (kind 'cell') lives on /cells/.../history.
+    // 'stage-status'/'stage-text' both live on /stages/.../history;
+    // 'sub-row-cell' lives on /sub-rows/.../history; a plain master-grid
+    // cell (kind 'cell' or 'cell-text') lives on /cells/.../history.
     function historyUrlFor(ctx) {
-      return ctx.kind === 'stage-status' || ctx.kind === 'stage-text'
-        ? `${apiBase}/stages/${ctx.rowId}/${ctx.stageId}/history`
-        : `${apiBase}/cells/${ctx.rowId}/${ctx.columnId}/history`;
+      if (ctx.kind === 'stage-status' || ctx.kind === 'stage-text') return `${apiBase}/stages/${ctx.rowId}/${ctx.stageId}/history`;
+      if (ctx.kind === 'sub-row-cell') return `${apiBase}/sub-rows/${ctx.subRowId}/${ctx.columnId}/history`;
+      return `${apiBase}/cells/${ctx.rowId}/${ctx.columnId}/history`;
     }
 
     // Click-to-edit for an editable cell; a non-editable cell (only ever
@@ -1213,7 +1486,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
           body.innerHTML = '<p class="status">No history found.</p>';
           return;
         }
-        const isText = ctx.kind === 'stage-text';
+        const isText = ctx.kind === 'stage-text' || ctx.kind === 'cell-text';
         body.innerHTML = `<ul class="history-modal-list">${data.history.map((entry) => historyEntryHtml(entry, isText)).join('')}</ul>`;
       } catch (err) {
         overlay.querySelector('.history-modal-body').innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
@@ -1240,12 +1513,12 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       const kind = td.dataset.kind;
       const originalHtml = td.innerHTML;
 
-      if (kind === 'stage-text') {
+      if (kind === 'stage-text' || kind === 'cell-text') {
         td.innerHTML = `<input type="text" class="rt-inline-input" value="${escapeHtml(td.dataset.reason || '')}" />`;
         const input = td.querySelector('input');
         input.focus();
         input.select();
-        const commit = () => saveStageText(td, input.value.trim(), originalHtml);
+        const commit = () => (kind === 'stage-text' ? saveStageText(td, input.value.trim(), originalHtml) : saveCellText(td, input.value.trim(), originalHtml));
         input.addEventListener('blur', commit);
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') input.blur();
@@ -1287,6 +1560,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         }
         const reason = STATUSES_WITH_COMMENT.includes(status) ? reasonValue || null : null;
         if (kind === 'cell') saveCell(td, status, reason, originalHtml);
+        else if (kind === 'sub-row-cell') saveSubRowCell(td, status, reason, originalHtml);
         else saveStageStatus(td, status, reason, originalHtml);
       });
     }
@@ -1294,6 +1568,47 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     async function saveCell(td, status, reason, originalHtml) {
       try {
         const res = await fetch(`${apiBase}/cells/${td.dataset.rowId}/${td.dataset.columnId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status, reason }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        await loadGrid();
+      } catch (err) {
+        td.innerHTML = originalHtml;
+        alert(`Error saving: ${err.message}`);
+      }
+    }
+
+    // Master-grid equivalent of saveStageText below, for a simple TEXT
+    // column's own cell (kind 'cell-text') -- same "just send { reason },
+    // update the cell in place, no full reload needed" shape.
+    async function saveCellText(td, value, originalHtml) {
+      try {
+        const res = await fetch(`${apiBase}/cells/${td.dataset.rowId}/${td.dataset.columnId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        td.dataset.reason = value;
+        td.textContent = value;
+      } catch (err) {
+        td.innerHTML = originalHtml;
+        alert(`Error saving: ${err.message}`);
+      }
+    }
+
+    // The sub-row mirror of saveStageStatus below -- a sub-row edit can
+    // change the parent ROW's own master rollup, so (same reasoning) both
+    // the grid and this same detail sheet need a fresh fetch, via
+    // loadGrid() (which already reloads whichever detail sheet, column
+    // or row, is currently open).
+    async function saveSubRowCell(td, status, reason, originalHtml) {
+      try {
+        const res = await fetch(`${apiBase}/sub-rows/${td.dataset.subRowId}/${td.dataset.columnId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status, reason }),
@@ -1408,7 +1723,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             return;
           }
           const visibleRowIds = kind === 'master' ? currentVisibleRowIds : lastDetailData.rows.map((r) => r.id);
-          const isText = btn.dataset.stageType === 'text';
+          const isText = btn.dataset.cellType === 'text';
           const saveLabel = `Set Column (${visibleRowIds.length} visible)`;
           let editor;
           if (isText) {
@@ -1425,9 +1740,15 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             editor.querySelector('.rt-save').addEventListener('click', async () => {
               try {
                 const text = editor.querySelector('.rt-bulk-col-text').value.trim();
-                await fetchBulkStageColumn(btn.dataset.stageId, null, text || null, visibleRowIds);
-                editor.remove();
-                await loadDetail(openDetailColumnId);
+                if (kind === 'master') {
+                  await fetchBulkColumnText(btn.dataset.columnId, text || null, visibleRowIds);
+                  editor.remove();
+                  await loadGrid();
+                } else {
+                  await fetchBulkStageColumn(btn.dataset.stageId, null, text || null, visibleRowIds);
+                  editor.remove();
+                  await loadDetail(openDetailColumnId);
+                }
               } catch (err) {
                 alert(`Error: ${err.message}`);
               }
@@ -1511,6 +1832,19 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
     }
 
+    // Master-grid equivalent of fetchBulkStageColumn's own text branch,
+    // for a simple TEXT column's "Set Column" bulk editor -- same
+    // endpoint as fetchBulkColumn above, just without a status.
+    async function fetchBulkColumnText(columnId, text, rowIds) {
+      const res = await fetch(`${apiBase}/columns/${columnId}/bulk-cells`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: text, rowIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    }
+
     async function fetchBulkStages(columnId, rowId, status, reason) {
       const res = await fetch(`${apiBase}/columns/${columnId}/rows/${rowId}/bulk-stages`, {
         method: 'PATCH',
@@ -1526,6 +1860,81 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, reason, rowIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    }
+
+    // ---- Compound rows -- bulk actions within a row's own detail sheet,
+    // the sub-row mirror of wireBulkRowButtons/wireBulkColumnButtons'
+    // own 'detail' branches above (transposed: sub-row <-> real row,
+    // column <-> stage). Kept as their own dedicated functions rather
+    // than folded into those two as a third `kind` -- the entities
+    // differ enough (no stage type to branch on; sub-rows never target a
+    // text column at all) that shoehorning them in would make those two
+    // functions' own branching harder to follow, not easier.
+
+    // "Set this sub-row" -- every status-type-simple column, for one
+    // sub-row.
+    function wireSubRowBulkButtons(table, parentRowId) {
+      table.querySelectorAll('.rt-bulk-row-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const existing = btn.parentElement.querySelector('.rt-bulk-row-editor');
+          if (existing) {
+            existing.remove();
+            return;
+          }
+          const subRowId = btn.dataset.subRowId;
+          const editor = buildBulkEditor('Set Row', async (status, reason) => {
+            await fetchBulkSubRow(parentRowId, subRowId, status, reason);
+            await loadGrid();
+          });
+          btn.insertAdjacentElement('afterend', editor);
+        });
+      });
+    }
+
+    // "Set this column" -- one status-type-simple column, across every
+    // (visible) sub-row of this one compound row.
+    function wireColumnAcrossSubRowsBulkButtons(table, parentRowId) {
+      table.querySelectorAll('.rt-bulk-col-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const existing = btn.parentElement.querySelector('.rt-bulk-row-editor');
+          if (existing) {
+            existing.remove();
+            return;
+          }
+          const visibleSubRowIds = lastRowDetailData.subRows.map((sr) => sr.id);
+          const saveLabel = `Set Column (${visibleSubRowIds.length} visible)`;
+          const editor = buildBulkEditor(saveLabel, async (status, reason) => {
+            await fetchBulkColumnAcrossSubRows(parentRowId, btn.dataset.columnId, status, reason, visibleSubRowIds);
+            await loadGrid();
+          });
+          // Same reasoning as wireBulkColumnButtons' own editor -- not
+          // actually inside a draggable header here (column headers in a
+          // row's own detail sheet are draggable="false"), but harmless
+          // and consistent either way.
+          editor.setAttribute('draggable', 'false');
+          btn.insertAdjacentElement('afterend', editor);
+        });
+      });
+    }
+
+    async function fetchBulkSubRow(rowId, subRowId, status, reason) {
+      const res = await fetch(`${apiBase}/rows/${rowId}/sub-rows/${subRowId}/bulk-cells`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    }
+
+    async function fetchBulkColumnAcrossSubRows(rowId, columnId, status, reason, subRowIds) {
+      const res = await fetch(`${apiBase}/rows/${rowId}/columns/${columnId}/bulk-status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, reason, subRowIds }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);

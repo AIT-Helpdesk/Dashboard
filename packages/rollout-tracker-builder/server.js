@@ -134,7 +134,11 @@ router.post('/publish', (req, res) => {
     // dashboard follows.
     const actor = { email: req.session.user.email, name: req.session.user.name };
     const trackerDb = createRolloutTrackerDb(path.join(pageDir, 'data.db'));
-    for (const name of rowNames) trackerDb.addRow(name, actor);
+    // Always 'simple' -- same reasoning as the 'simple'/'status' column
+    // seeding just below: the builder only ever types plain row names at
+    // creation time; a compound row (with its own sub-rows) is added
+    // afterward via that tracker's own Add {rowNoun} form.
+    for (const name of rowNames) trackerDb.addRow(name, 'simple', [], actor);
     const existingKeys = new Set();
     for (const colLabel of columnLabels) {
       const baseKey = colLabel
@@ -146,11 +150,12 @@ router.post('/publish', (req, res) => {
       let n = 2;
       while (existingKeys.has(key)) key = `${baseKey}_${n++}`;
       existingKeys.add(key);
-      // 'simple', no initial stages -- the builder only ever types plain
-      // column labels at creation time; a compound column (with its own
-      // stages) is added afterward via that tracker's own Add Column
-      // button, same as every other tracker built this way.
-      trackerDb.addColumn(colLabel, key, 'simple', [], actor);
+      // 'simple'/'status', no initial stages -- the builder only ever
+      // types plain status columns at creation time; a compound column
+      // (with its own stages) or a text column is added afterward via
+      // that tracker's own Add Column button, same as every other
+      // tracker built this way.
+      trackerDb.addColumn(colLabel, key, 'simple', 'status', [], actor);
     }
 
     // Makes it immediately servable AND mounts its own /api/<id> router --
