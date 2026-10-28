@@ -13,6 +13,17 @@ const {
 } = require('./rollout-tracker-nav.js');
 const { isTrackerManager } = require('./rollout-tracker-permissions.js');
 
+// Compound columns and their own detail-sheet "stages" -- ported from
+// tc-elite-rollout/server.js (by request, Oct 2026), so every tracker
+// built with Rollout Tracker Builder gets the same "simple column or
+// compound column (with its own stages)" choice TC Elite Rollout's own
+// Add Column already had. Stage edits (PATCH .../stages/:rowId/:stageId,
+// the two bulk-stage routes) are open to every signed-in user, same as an
+// ordinary simple-column cell edit -- only STRUCTURAL changes (adding the
+// column/stage itself) are Tracker Manager-gated below, matching the
+// existing "adding a row stays open to everyone, adding a column doesn't"
+// split this file already follows.
+
 // Shared, generic rollout-tracker router factory -- extracted from
 // tc-elite-rollout's own server.js, simple-column subset only (see
 // rollout-tracker-db.js's own comment for why no stages/compound
@@ -74,6 +85,30 @@ function applyDefaultFilter(columns, rows) {
   return { columns: visibleColumns, rows: visibleRows };
 }
 
+// Same "what's waiting to be done" default filtering as applyDefaultFilter
+// above, scoped to one compound column's own detail sheet -- rows only (a
+// detail sheet has no separate "columns" to hide beyond its own stages).
+// Only status-type stages count -- text-type ones are informational and
+// never "outstanding" in their own right, same exclusion the rollup
+// itself uses (see computeRollupStatus() in rollout-tracker-db.js).
+function applyDetailDefaultFilter(stages, rows) {
+  const statusStageIds = stages.filter((s) => s.type === 'status').map((s) => s.id);
+  return rows.filter((r) =>
+    statusStageIds.some((stageId) => {
+      const cell = r.cells[stageId];
+      return cell && !RESOLVED_STATUSES.includes(cell.status);
+    })
+  );
+}
+
+// Validates the optional `rowIds` a stage's "Set Column" bulk request can
+// send to restrict to a specific set of rows (in practice: whichever rows
+// client.js currently has rendered on that detail sheet).
+function isValidOptionalStageRowIds(body) {
+  if (body.rowIds === undefined) return true;
+  return Array.isArray(body.rowIds) && body.rowIds.every((id) => Number.isInteger(id));
+}
+
 function shapeAuditRow(row) {
   return {
     changedAt: row.changed_at,
@@ -127,9 +162,25 @@ function sanitizeNotesHtml(html) {
 }
 
 function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
-  const { db, addRow, addColumn, reorderColumns, setCell, bulkSetRow, bulkSetColumn, renameRow, deleteRow, getGrid, getCellHistory } = createRolloutTrackerDb(
-    path.join(storageDir, 'data.db')
-  );
+  const {
+    db,
+    addRow,
+    addColumn,
+    addStage,
+    reorderColumns,
+    setCell,
+    setStage,
+    bulkSetRow,
+    bulkSetColumn,
+    bulkSetStages,
+    bulkSetStageColumn,
+    renameRow,
+    deleteRow,
+    getGrid,
+    getColumnDetail,
+    getCellHistory,
+    getStageHistory,
+  } = createRolloutTrackerDb(path.join(storageDir, 'data.db'));
   // The generated package folder's own name IS this tracker's page id --
   // Rollout Tracker Builder names the folder exactly `<slug>-tracker` and
   // that same slug is this page's dashboardPage.id (see
@@ -244,7 +295,14 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
   });
 
   // Tracker Manager-only -- changing what's tracked affects everyone
-  // looking at this tracker (see rollout-tracker-permissions.js).
+  // looking at this tracker (see rollout-tracker-permissions.js). `kind`
+  // is 'simple' (the pre-existing behaviour, default if omitted for
+  // backward compatibility with any caller still sending just `label`)
+  // or 'compound' -- an initial stage list, each { label, type:
+  // 'status'|'text' }, same shape tc-elite-rollout's own POST /columns
+  // accepts. A compound column needs at least one real (non-blank-label)
+  // stage, same validation tc-elite-rollout/client.js's own Add Column
+  // form enforces client-side.
   router.post('/columns', (req, res) => {
     try {
       if (!isTrackerManager(req)) {
@@ -252,10 +310,63 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       }
       const label = (req.body?.label || '').trim();
       if (!label) return res.status(400).json({ error: 'Column label is required.' });
+      const kind = req.body?.kind === 'compound' ? 'compound' : 'simple';
+      const stages = Array.isArray(req.body?.stages) ? req.body.stages : [];
+      if (kind === 'compound' && stages.filter((s) => s && String(s.label || '').trim()).length === 0) {
+        return res.status(400).json({ error: 'A compound column needs at least one stage.' });
+      }
       const existingKeys = new Set(db.prepare('SELECT key FROM columns').all().map((c) => c.key));
       const key = uniqueKey(slugify(label), existingKeys);
-      const columnId = addColumn(label, key, actorFrom(req));
-      res.status(201).json({ id: columnId, key, label });
+      const columnId = addColumn(label, key, kind, stages, actorFrom(req));
+      res.status(201).json({ id: columnId, key, label, kind });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // One compound column's own detail grid -- every row x every stage of
+  // that one column. Used when a "Show <X> Detail" button below the
+  // master table is clicked. Viewable by anyone who can see the master
+  // grid (same as an ordinary cell) -- only adding the column/a stage is
+  // Tracker Manager-gated, not viewing/editing an already-added one.
+  // ?all=true bypasses the default filter, same convention as GET /.
+  router.get('/columns/:columnId/detail', (req, res) => {
+    try {
+      const columnId = Number(req.params.columnId);
+      const column = db.prepare('SELECT * FROM columns WHERE id = ?').get(columnId);
+      if (!column) return res.status(404).json({ error: 'Column not found.' });
+      if (column.kind !== 'compound') return res.status(400).json({ error: 'Column has no detail sheet -- it is not compound.' });
+
+      const detail = getColumnDetail(columnId);
+      const totalRows = detail.rows.length; // captured before filtering, same reasoning as GET / above
+      const rows = req.query.all === 'true' ? detail.rows : applyDetailDefaultFilter(detail.stages, detail.rows);
+      res.json({ column: detail.column, stages: detail.stages, rows, totalRows, rowNoun });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Add a stage to an already-existing compound column -- Tracker
+  // Manager-only, same reasoning as POST /columns above. Seeds every
+  // existing row and recomputes rollups per addStage()/seedNewStage() in
+  // rollout-tracker-db.js.
+  router.post('/columns/:columnId/stages', (req, res) => {
+    try {
+      if (!isTrackerManager(req)) {
+        return res.status(403).json({ error: 'Only a Tracker Manager can add a stage.' });
+      }
+      const columnId = Number(req.params.columnId);
+      const column = db.prepare('SELECT * FROM columns WHERE id = ?').get(columnId);
+      if (!column) return res.status(404).json({ error: 'Column not found.' });
+      if (column.kind !== 'compound') return res.status(400).json({ error: 'Only compound columns can have stages.' });
+
+      const label = (req.body?.label || '').trim();
+      if (!label) return res.status(400).json({ error: 'Stage label is required.' });
+      const type = req.body?.type === 'text' ? 'text' : 'status';
+      const stage = addStage(columnId, label, type, actorFrom(req));
+      res.status(201).json({ id: stage.id, key: stage.key, label, type });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
@@ -297,6 +408,9 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     try {
       const rowId = Number(req.params.rowId);
       const columnId = Number(req.params.columnId);
+      const column = db.prepare('SELECT * FROM columns WHERE id = ?').get(columnId);
+      if (!column) return res.status(404).json({ error: 'Column not found.' });
+      if (column.kind !== 'simple') return res.status(400).json({ error: 'This column is compound -- edit its stages instead, not the cell directly.' });
       const status = req.body?.status;
       if (!STATUSES.includes(status)) return res.status(400).json({ error: `Invalid status. Must be one of: ${STATUSES.join(', ')}.` });
       const rawReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
@@ -307,6 +421,112 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const result = setCell(rowId, columnId, status, reason, actorFrom(req));
       if (result === null) return res.status(404).json({ error: `No such ${rowNoun.toLowerCase()}/column.` });
       res.json(result);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update one stage's value -- a status (+ optional/required comment)
+  // for type='status' stages, or free text (stored in `reason`, status
+  // left null) for type='text' stages. Triggers a rollup recompute for
+  // the parent column afterward. Open to every signed-in user, same as
+  // an ordinary simple-cell edit above -- editing an already-added
+  // stage's value isn't a structural change (adding the stage itself is,
+  // see POST /columns/:columnId/stages above).
+  router.patch('/stages/:rowId/:stageId', (req, res) => {
+    try {
+      const rowId = Number(req.params.rowId);
+      const stageId = Number(req.params.stageId);
+      const stage = db.prepare('SELECT * FROM stages WHERE id = ?').get(stageId);
+      if (!stage) return res.status(404).json({ error: 'Stage not found.' });
+
+      let status;
+      let reason;
+      if (stage.type === 'text') {
+        status = null;
+        reason = (req.body && req.body.reason) || null;
+      } else {
+        status = req.body?.status;
+        if (!STATUSES.includes(status)) return res.status(400).json({ error: `Invalid status. Must be one of: ${STATUSES.join(', ')}.` });
+        const rawReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+        if (status === 'note' && !rawReason) {
+          return res.status(400).json({ error: 'A Note requires a comment.' });
+        }
+        reason = STATUSES_WITH_COMMENT.includes(status) ? rawReason || null : null;
+      }
+
+      const result = setStage(rowId, stageId, status, reason, actorFrom(req));
+      if (result === undefined) return res.status(404).json({ error: 'Stage not found.' });
+      if (result === null) return res.status(404).json({ error: `No such ${rowNoun.toLowerCase()}/stage.` });
+      res.json(result);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Set every STATUS-type stage's status for one row, within one compound
+  // column's detail sheet, in one go -- the detail-sheet equivalent of
+  // PATCH /rows/:rowId/bulk-cells above. text-type stages are silently
+  // skipped (see bulkSetStages() in rollout-tracker-db.js).
+  router.patch('/columns/:columnId/rows/:rowId/bulk-stages', (req, res) => {
+    try {
+      const columnId = Number(req.params.columnId);
+      const rowId = Number(req.params.rowId);
+      const column = db.prepare('SELECT * FROM columns WHERE id = ?').get(columnId);
+      if (!column) return res.status(404).json({ error: 'Column not found.' });
+      if (column.kind !== 'compound') return res.status(400).json({ error: 'Only compound columns have a detail sheet to bulk-set.' });
+      const row = db.prepare('SELECT id FROM rows WHERE id = ?').get(rowId);
+      if (!row) return res.status(404).json({ error: `No such ${rowNoun.toLowerCase()}.` });
+      const status = req.body?.status;
+      if (!STATUSES.includes(status)) return res.status(400).json({ error: `Invalid status. Must be one of: ${STATUSES.join(', ')}.` });
+      const rawReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      if (status === 'note' && !rawReason) {
+        return res.status(400).json({ error: 'A Note requires a comment.' });
+      }
+      const reason = STATUSES_WITH_COMMENT.includes(status) ? rawReason || null : null;
+      const stageIds = bulkSetStages(rowId, columnId, status, reason, actorFrom(req));
+      res.json({ status, reason, stageIds });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Set one stage's value for a set of rows in one go -- the column-based
+  // mirror of PATCH .../rows/:rowId/bulk-stages above (which sets a whole
+  // row within one detail sheet). Optional `rowIds` restricts to just
+  // those (client.js sends whichever rows are currently rendered on that
+  // sheet); omit it for every row. DOES accept text-type stages (setting
+  // every row's free-text field to the same string), same status/text
+  // shaping PATCH .../stages/:rowId/:stageId above uses per stage.type.
+  router.patch('/stages/:stageId/bulk-status', (req, res) => {
+    try {
+      const stageId = Number(req.params.stageId);
+      const stage = db.prepare('SELECT * FROM stages WHERE id = ?').get(stageId);
+      if (!stage) return res.status(404).json({ error: 'Stage not found.' });
+
+      const body = req.body || {};
+      if (!isValidOptionalStageRowIds(body)) return res.status(400).json({ error: 'rowIds must be an array of integers.' });
+
+      let status;
+      let reason;
+      if (stage.type === 'text') {
+        status = null;
+        reason = body.reason || null;
+      } else {
+        status = body.status;
+        if (!STATUSES.includes(status)) return res.status(400).json({ error: `Invalid status. Must be one of: ${STATUSES.join(', ')}.` });
+        const rawReason = typeof body.reason === 'string' ? body.reason.trim() : '';
+        if (status === 'note' && !rawReason) {
+          return res.status(400).json({ error: 'A Note requires a comment.' });
+        }
+        reason = STATUSES_WITH_COMMENT.includes(status) ? rawReason || null : null;
+      }
+
+      const rowIds = bulkSetStageColumn(stageId, status, reason, actorFrom(req), body.rowIds || null);
+      res.json({ status, reason, rowIds });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
@@ -334,6 +554,9 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
   router.patch('/columns/:columnId/bulk-cells', (req, res) => {
     try {
       const columnId = Number(req.params.columnId);
+      const column = db.prepare('SELECT * FROM columns WHERE id = ?').get(columnId);
+      if (!column) return res.status(404).json({ error: 'Column not found.' });
+      if (column.kind !== 'simple') return res.status(400).json({ error: 'This column is compound -- edit its stages instead, not the whole column directly.' });
       const status = req.body?.status;
       if (!STATUSES.includes(status)) return res.status(400).json({ error: `Invalid status. Must be one of: ${STATUSES.join(', ')}.` });
       if (!isValidOptionalRowIds(req.body)) return res.status(400).json({ error: 'rowIds must be an array of integers.' });
@@ -496,6 +719,18 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const rowId = Number(req.params.rowId);
       const columnId = Number(req.params.columnId);
       const history = getCellHistory(rowId, columnId);
+      res.json({ history: history.map(shapeAuditRow) });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/stages/:rowId/:stageId/history', (req, res) => {
+    try {
+      const rowId = Number(req.params.rowId);
+      const stageId = Number(req.params.stageId);
+      const history = getStageHistory(rowId, stageId);
       res.json({ history: history.map(shapeAuditRow) });
     } catch (err) {
       console.error(err);

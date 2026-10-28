@@ -5450,6 +5450,50 @@ tr.row-text-highlight-blue td {
   font-size: 0.75rem;
 }
 
+/* Compound-column detail sheets -- ported from tc-elite-rollout's own
+   .tcr-detail-buttons/.tcr-detail-toggle--active/.tcr-add-stage/
+   .tcr-detail-show-all (same visual language, own .rt-* class family,
+   consistent with every other rule in this block -- see that family's
+   own intro comment above). */
+.rt-detail-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.rt-detail-toggle--active {
+  background: var(--accent);
+  color: white;
+}
+
+.rt-add-stage {
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+/* Matches the master grid's own Show All exactly -- that one is a plain
+   <label> inside .date-form, picking up font-size/color from ".date-form
+   label" (0.85rem, var(--muted)) rather than its own rule; this one lives
+   outside .date-form (it's scoped to one detail sheet, not the page
+   header), so those same two values are set explicitly here instead. */
+.rt-detail-show-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: normal;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* A text-type stage's cell -- free text, not a status symbol, so it
+   drops the bold/centred styling every other .rt-cell carries. */
+.rt-cell--text {
+  font-weight: 400;
+  color: var(--fg);
+  text-align: left;
+}
+
 .rt-form-body {
   padding: 0.75rem 1rem 1rem;
   display: flex;

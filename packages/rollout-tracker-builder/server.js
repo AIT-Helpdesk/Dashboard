@@ -146,7 +146,11 @@ router.post('/publish', (req, res) => {
       let n = 2;
       while (existingKeys.has(key)) key = `${baseKey}_${n++}`;
       existingKeys.add(key);
-      trackerDb.addColumn(colLabel, key, actor);
+      // 'simple', no initial stages -- the builder only ever types plain
+      // column labels at creation time; a compound column (with its own
+      // stages) is added afterward via that tracker's own Add Column
+      // button, same as every other tracker built this way.
+      trackerDb.addColumn(colLabel, key, 'simple', [], actor);
     }
 
     // Makes it immediately servable AND mounts its own /api/<id> router --
