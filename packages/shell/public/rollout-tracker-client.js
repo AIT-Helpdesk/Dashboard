@@ -1978,7 +1978,16 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     }
 
     function wireRenameButtons(table) {
-      table.querySelectorAll('.rt-rename-btn').forEach((btn) => {
+      // Scoped to tbody specifically, not the whole table -- a real bug
+      // otherwise: the master grid's own column-header rename buttons
+      // (wireRenameColumnButtons below) share the same .rt-rename-btn
+      // CSS class for styling, and querying the whole `table` here would
+      // also match those, double-wiring them. Since each click handler
+      // toggles its own editor closed when one's already open, the
+      // SECOND listener firing on the SAME click immediately removed the
+      // editor the first one had just created -- the column rename
+      // button appeared to do nothing at all.
+      table.querySelector('tbody').querySelectorAll('.rt-rename-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           const existing = btn.parentElement.querySelector('.rt-rename-editor');
           if (existing) {
