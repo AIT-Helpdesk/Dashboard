@@ -79,6 +79,13 @@ packages/*-tracker/data.db-shm
 packages/*-tracker/data.db-wal
 packages/*-tracker/notes.json
 
+# One specific throwaway tracker (built via Rollout Tracker Builder while
+# testing compound rows/columns), by explicit request -- "Training test is
+# never to be pushed" -- the whole package, not just its runtime data,
+# unlike every other tracker above. A real tracker someone builds is still
+# meant to be committed as source; this one specifically is not.
+packages/training-test-tracker-tracker/
+
 # Dashboard-wide Help button's own admin-authored text (registry.js's
 # readPageHelpText()/writePageHelpText(), packages/shell/server.js's
 # /api/help/text/:pageId) -- real, live content typed by whoever's editing

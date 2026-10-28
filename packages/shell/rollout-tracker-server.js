@@ -2,7 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { createRolloutTrackerDb } = require('./rollout-tracker-db.js');
-const { readNavLayout, writeNavLayout } = require('./registry.js');
+const { readNavLayout, writeNavLayout, unregisterPage } = require('./registry.js');
 const {
   TRACKERS_CATEGORY_ID,
   TRACKERS_CATEGORY_LABEL,
@@ -215,6 +215,7 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     bulkSetSubRow,
     bulkSetColumnAcrossSubRows,
     renameRow,
+    renameColumn,
     deleteRow,
     getGrid,
     getColumnDetail,
@@ -381,6 +382,29 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const key = uniqueKey(slugify(label), existingKeys);
       const columnId = addColumn(label, key, kind, cellType, stages, actorFrom(req));
       res.status(201).json({ id: columnId, key, label, kind, cellType });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Renames a column -- Tracker Manager-only, same reasoning as Add
+  // Column/reordering (a shared, structural change everyone viewing this
+  // tracker sees). No duplicate check, unlike PATCH /rows/:rowId/name --
+  // columns.label has never been required to be unique (only columns.key
+  // is), so renaming to match another column's existing label is
+  // allowed, same as Add Column already allows at creation time.
+  router.patch('/columns/:columnId/label', (req, res) => {
+    try {
+      if (!isTrackerManager(req)) {
+        return res.status(403).json({ error: 'Only a Tracker Manager can rename a column.' });
+      }
+      const columnId = Number(req.params.columnId);
+      const label = (req.body?.label || '').trim();
+      if (!label) return res.status(400).json({ error: 'Column label is required.' });
+      const newLabel = renameColumn(columnId, label, actorFrom(req));
+      if (newLabel === null) return res.status(404).json({ error: 'Column not found.' });
+      res.json({ label: newLabel });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
@@ -916,7 +940,13 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
   // not just hidden client-side, same "never trust the client alone"
   // rule every admin-gated action on this dashboard follows. Removes the
   // sidebar entry outright (not moved -- there's nowhere left to move it
-  // to) and deletes the package folder from disk.
+  // to), unregisters it from the live in-memory page registry (a real
+  // bug otherwise -- confirmed the hard way: without this, re-creating a
+  // tracker under the exact same name afterward hits Rollout Tracker
+  // Builder's own "already exists" guard, which checks this same
+  // in-memory list, not just the filesystem -- same unregisterPage()
+  // call Tab Page Builder's own DELETE route already makes for the same
+  // reason, see registry.js), and deletes the package folder from disk.
   //
   // Checkpointing the WAL and closing `db` FIRST matters on Windows: this
   // router's `db` has held data.db (and its WAL/SHM sidecars) open since
@@ -943,6 +973,7 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
 
       removePageNode(tree, pageId);
       writeNavLayout(tree);
+      unregisterPage(pageId);
 
       db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
       db.close();

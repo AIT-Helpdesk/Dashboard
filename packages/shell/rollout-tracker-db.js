@@ -968,6 +968,20 @@ function createRolloutTrackerDb(dbPath) {
     return newName;
   }
 
+  // The column-level mirror of renameRow() above -- by request ("need
+  // the capability to edit a column name"). No duplicate-label check
+  // needed, unlike renameRow()'s dedupe (rows.name is UNIQUE; columns.key
+  // is the only unique identifier a column has -- columns.label never has
+  // been, and still isn't, required to be). Returns the new label, or
+  // null if no such column exists (caller returns 404).
+  function renameColumn(columnId, newLabel, actor) {
+    const column = db.prepare('SELECT label FROM columns WHERE id = ?').get(columnId);
+    if (!column) return null;
+    db.prepare('UPDATE columns SET label = $label WHERE id = $id').run({ $label: newLabel, $id: columnId });
+    recordAudit({ columnId, oldStatus: column.label, newStatus: newLabel, actor });
+    return newLabel;
+  }
+
   // Hard delete -- same reasoning as tc-elite-rollout's own deleteClient():
   // for removing a mistaken/test row, not recording a real one's removal.
   // Purges stage_status rows (a row with any compound-column stages would
@@ -1114,6 +1128,7 @@ function createRolloutTrackerDb(dbPath) {
     bulkSetSubRow,
     bulkSetColumnAcrossSubRows,
     renameRow,
+    renameColumn,
     deleteRow,
     getGrid,
     getColumnDetail,

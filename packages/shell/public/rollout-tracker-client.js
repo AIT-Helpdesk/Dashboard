@@ -686,7 +686,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             ${columns
               .map(
                 (col) =>
-                  `<th class="rt-col-header" draggable="${data.isManager ? 'true' : 'false'}" data-column-id="${col.id}">${col.kind === 'simple' ? `<button type="button" class="rt-bulk-col-btn" data-column-id="${col.id}" data-cell-type="${col.cellType}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ` : ''}${escapeHtml(col.label)}</th>`
+                  `<th class="rt-col-header" draggable="${data.isManager ? 'true' : 'false'}" data-column-id="${col.id}">${col.kind === 'simple' ? `<button type="button" class="rt-bulk-col-btn" data-column-id="${col.id}" data-cell-type="${col.cellType}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ` : ''}${escapeHtml(col.label)}${data.isManager ? ` <button type="button" class="rt-rename-btn rt-rename-col-btn" data-column-id="${col.id}" data-column-label="${escapeHtml(col.label)}" title="Rename column">${RENAME_ICON_SVG}</button>` : ''}</th>`
               )
               .join('')}
           </tr>
@@ -726,6 +726,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       // DO need re-wiring every time, inside renderTbodyRows() itself.
       wireCellInteractions(table);
       wireBulkColumnButtons(table, 'master');
+      wireRenameColumnButtons(table);
       renderTbodyRows(columns, rows);
       wireRowNameFilterInput(table, columns, rows);
       wireColumnTextFilterInputs(table, columns, rows);
@@ -2010,6 +2011,75 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: newName }),
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+              editor.remove();
+              await loadGrid();
+            } catch (err) {
+              alert(`Error: ${err.message}`);
+            }
+          }
+
+          editor.querySelector('.rt-cancel').addEventListener('click', () => editor.remove());
+          editor.querySelector('.rt-save').addEventListener('click', save);
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') editor.remove();
+          });
+        });
+      });
+    }
+
+    // The column-level mirror of wireRenameButtons above, for the master
+    // grid's own column headers -- Tracker Manager-only (the button
+    // itself is only ever rendered for a manager, same "server decides,
+    // client just reflects it" gate every other structural action here
+    // uses), by request ("need the capability to edit a column name").
+    // Wired once, in renderGrid() -- this button lives in <thead>, which
+    // survives a tbody-only refresh untouched, same reasoning
+    // wireBulkColumnButtons/wireHeaderDragReorder are wired there instead
+    // of inside renderTbodyRows().
+    function wireRenameColumnButtons(table) {
+      table.querySelectorAll('.rt-rename-col-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const existing = btn.parentElement.querySelector('.rt-rename-editor');
+          if (existing) {
+            existing.remove();
+            return;
+          }
+          const columnId = btn.dataset.columnId;
+          const editor = document.createElement('div');
+          editor.className = 'rt-bulk-row-editor rt-rename-editor';
+          // Not actually a drag start risk here (dragstart only fires on
+          // mousedown+move, not a plain click), but explicit all the
+          // same -- same reasoning wireBulkColumnButtons' own editor
+          // already sets this for, landing inside this same draggable
+          // <th>.
+          editor.setAttribute('draggable', 'false');
+          editor.innerHTML = `
+            <input type="text" class="rt-inline-input rt-rename-input" value="${escapeHtml(btn.dataset.columnLabel)}" />
+            <div class="rt-form-actions">
+              <button type="button" class="button-link button-link--small rt-save">Save</button>
+              <button type="button" class="rt-cancel">Cancel</button>
+            </div>
+          `;
+          btn.insertAdjacentElement('afterend', editor);
+          const input = editor.querySelector('.rt-rename-input');
+          input.focus();
+          input.select();
+
+          async function save() {
+            const newLabel = input.value.trim();
+            if (!newLabel) {
+              alert('Column label cannot be blank.');
+              return;
+            }
+            try {
+              const res = await fetch(`${apiBase}/columns/${columnId}/label`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ label: newLabel }),
               });
               const data = await res.json();
               if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
