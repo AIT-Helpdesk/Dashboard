@@ -5285,7 +5285,8 @@ tr.row-text-highlight-blue td {
   text-transform: none;
   letter-spacing: normal;
 }
-.rt-row-filter-input {
+.rt-row-filter-input,
+.rt-column-text-filter-input {
   width: 100%;
   box-sizing: border-box;
   padding: 0.15rem 0.4rem;

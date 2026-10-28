@@ -46,6 +46,12 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
   // na/cancelled/issue's own optional comments, matching exactly what was
   // asked.
   const columnNoteTextFilters = new Map();
+  // columnId -> wildcard search text, for a simple TEXT column's own
+  // filter-row input -- the column-level mirror of rowNameFilterText
+  // above (same wildcard semantics, same "narrows what loadGrid()
+  // already loaded, no extra round trip" convention), by request ("Text
+  // columns need a wildcard search capability like the item column").
+  const columnTextFilters = new Map();
   let currentVisibleRowIds = [];
   // Set while a header drag is in progress -- module-call-scope (not
   // per-render), so it survives the dragstart->drop round trip regardless
@@ -215,6 +221,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       rowNameFilterText = '';
       columnStatusFilters.clear();
       columnNoteTextFilters.clear();
+      columnTextFilters.clear();
       loadGrid();
     });
 
@@ -691,9 +698,15 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
                   // A text column has no real status to filter by (its
                   // cell_status is always the placeholder, see
                   // cell_type's own comment in rollout-tracker-db.js) --
-                  // no Filter button at all, rather than one that could
-                  // never actually match anything.
-                  `<th class="rt-status-filter-cell" data-column-id="${col.id}">${col.cellType === 'text' ? '' : `<button type="button" class="link-button rt-status-filter-btn" data-column-id="${col.id}">Filter${statusFilterCountLabel(col.id)}</button>`}</th>`
+                  // a wildcard text search instead, same convention the
+                  // row-name column's own input above already uses, by
+                  // request ("Text columns need a wildcard search
+                  // capability like the item column").
+                  `<th class="rt-status-filter-cell" data-column-id="${col.id}">${
+                    col.cellType === 'text'
+                      ? `<input type="text" class="rt-column-text-filter-input" data-column-id="${col.id}" placeholder="e.g. Acme* (wildcards with *)" value="${escapeHtml(columnTextFilters.get(col.id) || '')}" />`
+                      : `<button type="button" class="link-button rt-status-filter-btn" data-column-id="${col.id}">Filter${statusFilterCountLabel(col.id)}</button>`
+                  }</th>`
               )
               .join('')}
           </tr>
@@ -715,6 +728,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       wireBulkColumnButtons(table, 'master');
       renderTbodyRows(columns, rows);
       wireRowNameFilterInput(table, columns, rows);
+      wireColumnTextFilterInputs(table, columns, rows);
       wireStatusFilterButtons(table, columns, rows);
       wireHeaderDragReorder(table, columns.map((c) => c.id), 'columnId', `${apiBase}/columns/order`, loadGrid);
     }
@@ -735,6 +749,14 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       return rows.filter((row) => {
         if (rowNameFilterText && !matchesWildcard(row.name, rowNameFilterText)) return false;
         for (const col of columns) {
+          if (col.cellType === 'text') {
+            const textFilter = columnTextFilters.get(col.id);
+            if (textFilter) {
+              const cell = row.cells[col.id];
+              if (!matchesWildcard((cell && cell.reason) || '', textFilter)) return false;
+            }
+            continue; // no status to check below for a text column
+          }
           const selected = columnStatusFilters.get(col.id);
           if (!selected || selected.size === 0) continue;
           const cell = row.cells[col.id];
@@ -797,6 +819,20 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       input.addEventListener('input', () => {
         rowNameFilterText = input.value.trim();
         renderTbodyRows(columns, rows);
+      });
+    }
+
+    // The column-level mirror of wireRowNameFilterInput above, one per
+    // simple TEXT column's own filter-row input.
+    function wireColumnTextFilterInputs(table, columns, rows) {
+      table.querySelectorAll('.rt-column-text-filter-input').forEach((input) => {
+        input.addEventListener('input', () => {
+          const columnId = Number(input.dataset.columnId);
+          const value = input.value.trim();
+          if (value) columnTextFilters.set(columnId, value);
+          else columnTextFilters.delete(columnId);
+          renderTbodyRows(columns, rows);
+        });
       });
     }
 
