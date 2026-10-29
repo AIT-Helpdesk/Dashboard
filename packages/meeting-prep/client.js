@@ -307,7 +307,7 @@ export function mount(container) {
     if (!confirm('This will pull new report PDFs from SharePoint\'s Incoming folder, parse them, and move the originals into Processed/. Continue?')) return;
     ingestButton.disabled = true;
     ingestStatusEl.hidden = false;
-    ingestStatusEl.className = 'status';
+    ingestStatusEl.className = 'status loading';
     ingestStatusEl.textContent = 'Processing incoming reports -- this can take a little while...';
     try {
       const res = await fetch('/api/meeting-prep/ingest', { method: 'POST' });
