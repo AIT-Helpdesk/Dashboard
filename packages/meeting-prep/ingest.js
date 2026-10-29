@@ -53,6 +53,24 @@ function normalizeClientName(s) {
     .replace(/\b(pty ltd|pty|ltd|inc|llc|co)\b/g, '')
     .replace(/&/g, 'and')
     .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    // Site-tier/location qualifiers Datto RMM's own naming doesn't always
+    // carry the same way Autotask's company name does -- confirmed against
+    // real company records: a franchise's head-office site is named
+    // "<Name> (HO)" in Autotask but just "<Name>" in RMM, and an
+    // unmonitored site is "<Name> - On Demand" in RMM with nothing on the
+    // Autotask side. Left unstripped, neither side's name matches the
+    // other EXACTLY, so matching fell through to the substring stage below
+    // -- where the bare parent/holding company (e.g. "Sleepy's" itself,
+    // with no site name at all) is a substring of every one of its own
+    // sites' names, and either won a wrong single match silently or
+    // created a false "ambiguous" rejection next to the real site. Real
+    // bug, confirmed: stripping these here lets both sides land on an
+    // exact match instead, so the substring stage's "Sleepy's"-vs-everyone
+    // problem never gets a chance to come up for these.
+    .replace(/\bho\b/g, '')
+    .replace(/\bon demand\b/g, '')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -72,6 +90,55 @@ function matchCompanyByName(rawName, companies) {
     if (candidates.length > 1) return null; // ambiguous -- don't guess
   }
   return null;
+}
+
+// -- Fuzzy fallback, by request -- tried only once matchCompanyByName's own
+// exact/substring cascade has already failed, as a last attempt before
+// filing the report away for a human to look at (see NOT_PROCESSED_NO_MATCH
+// below). Classic Levenshtein edit distance, scored as a 0..1 similarity (1
+// - distance / the longer of the two normalized names) against every
+// company; only ever returns a single company, and only when it's both
+// close enough on its own (>= FUZZY_MIN_SIMILARITY) AND clearly closer than
+// the runner-up (>= FUZZY_MIN_MARGIN ahead) -- never guesses between two
+// companies that are both nearly as close a fit.
+const FUZZY_MIN_SIMILARITY = 0.9;
+const FUZZY_MIN_MARGIN = 0.03;
+
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      curr[j] = a[i - 1] === b[j - 1] ? prev[j - 1] : 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
+function fuzzyMatchCompany(rawName, companies) {
+  const norm = normalizeClientName(rawName);
+  if (!norm) return null;
+  const scored = companies
+    .map((c) => {
+      const cn = normalizeClientName(c.companyName);
+      if (!cn) return null;
+      const similarity = 1 - levenshtein(norm, cn) / Math.max(norm.length, cn.length);
+      return { company: c, similarity };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.similarity - a.similarity);
+
+  const best = scored[0];
+  if (!best || best.similarity < FUZZY_MIN_SIMILARITY) return null;
+  const runnerUp = scored[1];
+  if (runnerUp && best.similarity - runnerUp.similarity < FUZZY_MIN_MARGIN) return null; // too close to guess
+  return best.company;
 }
 
 const COMPANIES_CACHE_TTL_MS = 20 * 60 * 1000; // 20 min -- same convention as this dashboard's other short-lived external-list caches
@@ -172,6 +239,27 @@ function writeReportJson(clientSlug, isoDate, kind, data) {
   fs.writeFileSync(path.join(dir, `${kind}.json`), JSON.stringify(data, null, 2));
 }
 
+// -- "Not Processed" side folders, by request ------------------------------
+// Datto's own "On Demand" sites aren't continuously monitored, so most of
+// their reports render as a literal "No Data" placeholder instead of a real
+// table -- every parser here was only ever built against a site WITH real
+// data, so these always fail to parse. Rather than burn a parse attempt
+// (and a needsAttention slot) on every single one of these every run,
+// detected straight off the filename's own client-name half and filed away
+// unparsed. A client name that still doesn't resolve to exactly one company
+// (even after the fuzzy fallback above) gets the same treatment under its
+// own folder -- both are terminal outcomes, moved out of Incoming/ and
+// marked processed so they're never re-flagged, instead of sitting in
+// Incoming/ and getting re-checked (and re-failing) on every future run.
+const NOT_PROCESSED_ON_DEMAND_PATH = 'Inbox/Not Processed - On Demand';
+const NOT_PROCESSED_NO_MATCH_PATH = 'Inbox/Not Processed - No Match';
+const ON_DEMAND_RE = /\bon demand\b/i;
+
+async function moveToNotProcessed(driveId, item, destPath) {
+  const destFolderId = await sp.ensureFolderPath(driveId, destPath);
+  await sp.moveItem(driveId, item.id, destFolderId);
+}
+
 async function runIngest() {
   const driveId = await sp.resolveDriveId();
   const companies = await fetchActiveCompanies();
@@ -183,6 +271,8 @@ async function runIngest() {
   let processedCount = 0;
   let ignoredCount = 0;
   let skippedUnhandledExtCount = 0;
+  let onDemandCount = 0;
+  let noMatchCount = 0;
   const needsAttention = []; // { filename, source, reason }
 
   for (const source of sourceFolders) {
@@ -232,15 +322,33 @@ async function runIngest() {
       }
 
       const { kind, clientName } = resolved;
+
+      if (ON_DEMAND_RE.test(clientName)) {
+        try {
+          await moveToNotProcessed(driveId, item, NOT_PROCESSED_ON_DEMAND_PATH);
+          state.processedItemIds[item.id] = { outcome: 'on-demand', filename: item.name, clientName, at: new Date().toISOString() };
+          onDemandCount++;
+        } catch (err) {
+          needsAttention.push({ filename: item.name, source: source.name, reason: `On-demand site, but moving to "${NOT_PROCESSED_ON_DEMAND_PATH}" failed: ${err.message}` });
+        }
+        continue;
+      }
+
       const parser = loadParser(kind);
       if (!parser) {
         needsAttention.push({ filename: item.name, source: source.name, reason: `No parser yet for kind "${kind}" (packages/meeting-prep/parsers/${kind}.js)` });
         continue;
       }
 
-      const company = matchCompanyByName(clientName, companies);
+      const company = matchCompanyByName(clientName, companies) || fuzzyMatchCompany(clientName, companies);
       if (!company) {
-        needsAttention.push({ filename: item.name, source: source.name, reason: `Client name "${clientName}" did not resolve to exactly one active Autotask company` });
+        try {
+          await moveToNotProcessed(driveId, item, NOT_PROCESSED_NO_MATCH_PATH);
+          state.processedItemIds[item.id] = { outcome: 'no-match', filename: item.name, clientName, at: new Date().toISOString() };
+          noMatchCount++;
+        } catch (err) {
+          needsAttention.push({ filename: item.name, source: source.name, reason: `Client name "${clientName}" did not resolve to a company, even fuzzy, but moving to "${NOT_PROCESSED_NO_MATCH_PATH}" failed: ${err.message}` });
+        }
         continue;
       }
 
@@ -297,13 +405,13 @@ async function runIngest() {
     }
   }
 
-  const message = `Processed ${processedCount}, ignored ${ignoredCount}, ${needsAttention.length} needing attention.`;
-  state.lastRun = { at: new Date().toISOString(), ok: true, message, processedCount, ignoredCount, needsAttention };
+  const message = `Processed ${processedCount}, ignored ${ignoredCount}, moved ${onDemandCount} on-demand (${NOT_PROCESSED_ON_DEMAND_PATH}) and ${noMatchCount} unmatched (${NOT_PROCESSED_NO_MATCH_PATH}), ${needsAttention.length} needing attention.`;
+  state.lastRun = { at: new Date().toISOString(), ok: true, message, processedCount, ignoredCount, onDemandCount, noMatchCount, needsAttention };
   saveState(state);
-  return { ok: true, processedCount, ignoredCount, skippedUnhandledExtCount, needsAttention, message };
+  return { ok: true, processedCount, ignoredCount, skippedUnhandledExtCount, onDemandCount, noMatchCount, needsAttention, message };
 }
 
-module.exports = { runIngest, isoDateFromCreateDate, matchCompanyByName, normalizeClientName };
+module.exports = { runIngest, isoDateFromCreateDate, matchCompanyByName, fuzzyMatchCompany, normalizeClientName };
 
 if (require.main === module) {
   runIngest()

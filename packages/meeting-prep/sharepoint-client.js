@@ -150,9 +150,20 @@ async function ensureFolderPath(driveId, relativePath) {
 // move (no copy+delete dance needed, unlike the interactive SharePoint MCP
 // connector's own flakier sharepoint_move_item noted elsewhere this
 // session -- this is a direct, single Graph REST call).
+//
+// Real bug, confirmed live: a report can legitimately get delivered twice
+// for the same client/date (e.g. Datto re-sending), landing a second file
+// of the identical name in Incoming/ after the first copy already moved
+// into Processed/<Client>/<date>/ under that exact name. With no
+// conflictBehavior, Graph's default on a same-name move is 'fail' (409) --
+// and since a failed move leaves the item unmarked/unmoved, every future
+// run re-attempts the exact same move and fails the exact same way
+// forever. 'rename' (same non-destructive idea as ensureChildFolder's own
+// 409 handling above, just letting Graph pick " (1)" etc. instead of
+// erroring) keeps both copies rather than guessing which one to overwrite.
 async function moveItem(driveId, itemId, destinationFolderId, newName) {
   const token = await getToken();
-  const body = { parentReference: { id: destinationFolderId } };
+  const body = { parentReference: { id: destinationFolderId }, '@microsoft.graph.conflictBehavior': 'rename' };
   if (newName) body.name = newName;
   return graphPatch(token, `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}`, body);
 }
