@@ -8144,6 +8144,32 @@ tr.accrued-time-yellow-row th {
   max-width: min(50rem, 95vw);
 }
 
+/* Contract Checks -- "Terminating Annual/Monthly" & "Renewing Annual"
+   buttons, in the page title's own old spot, by request. Same blue-pill
+   default as every other .button-link.button-link--small on this
+   dashboard; .cc-subs-expiring-btn--alert (count > 0) swaps to the same
+   red this page's own .cc-mark-renewals-btn above already uses -- the
+   identical #dc2626 color-mix tint, just given its own selector (two
+   classes, enough to win over the plain .button-link--small rule) since
+   these buttons live in .page-header, not .date-form, so that other
+   selector's extra specificity doesn't reach them. */
+.cc-subs-expiring-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.cc-subs-expiring-btn.cc-subs-expiring-btn--alert {
+  background: color-mix(in srgb, #dc2626 15%, transparent);
+  color: #dc2626;
+}
+
+/* Sized for its own Client/Subscription/Status/Auto-Renews/Term/Expires/
+   Days table -- same reasoning as .cc-mark-renewals-modal-panel above. */
+.history-modal-panel.cc-subs-expiring-modal-panel {
+  width: 45rem;
+  max-width: min(45rem, 95vw);
+}
+
 .about-me-columns {
   display: grid;
   /* 3fr/2fr -- left column 3/5, right column 2/5, by request (was 2fr/1fr,

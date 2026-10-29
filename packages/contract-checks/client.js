@@ -117,7 +117,11 @@ export function mount(container) {
   container.innerHTML = `
     <div class="contract-checks-page">
     <header class="page-header">
-      <h1>Contract Checks</h1>
+      <div class="cc-subs-expiring-buttons">
+        <button type="button" class="button-link button-link--small cc-subs-expiring-btn" data-category="terminating-annual">Terminating Annual (0)</button>
+        <button type="button" class="button-link button-link--small cc-subs-expiring-btn" data-category="terminating-monthly">Terminating Monthly (0)</button>
+        <button type="button" class="button-link button-link--small cc-subs-expiring-btn" data-category="renewing-annual">Renewing Annual (0)</button>
+      </div>
       <form id="filter-form" class="date-form date-form--stacked">
         <div class="date-form-row">
           <label for="all-dates-input" class="inline-checkbox-label">
@@ -189,6 +193,30 @@ export function mount(container) {
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
+  // In the page title's own old spot, by request -- see loadSubsExpiringCounts()/
+  // openSubsExpiringModal() further down for what these actually show.
+  const subsExpiringButtonEls = new Map([...container.querySelectorAll('.cc-subs-expiring-btn')].map((el) => [el.dataset.category, el]));
+  // Declared here (not down next to the functions that use them) and
+  // BEFORE loadSubsExpiringCounts() is called below -- confirmed the hard
+  // way this ordering matters: loadSubsExpiringCounts() used to be called
+  // right after this map was built, but these were `const`s declared much
+  // later in this same mount() function body. A `const` is hoisted but
+  // stays in the temporal dead zone until its own declaration line
+  // actually runs, so that early, un-awaited call hit a silent
+  // ReferenceError the instant it tried to build the fetch URL -- caught
+  // by its own try/catch, but then renderSubsExpiringButtons() (outside
+  // that catch) threw the SAME kind of error reading SUBS_EXPIRING_CATEGORIES,
+  // which nothing was there to catch at all, so the buttons never updated
+  // from their "(0)" HTML placeholders and never got a title either --
+  // exactly the symptom reported ("all zero, nothing on hover").
+  const SUBS_EXPIRING_WINDOW = '7';
+  const SUBS_EXPIRING_CATEGORIES = [
+    { key: 'terminating-annual', label: 'Terminating Annual', match: (r) => !r.autoRenews && termType(r.term) === 'Annual' },
+    { key: 'terminating-monthly', label: 'Terminating Monthly', match: (r) => !r.autoRenews && termType(r.term) === 'Monthly' },
+    { key: 'renewing-annual', label: 'Renewing Annual', match: (r) => r.autoRenews && termType(r.term) === 'Annual' },
+  ];
+  let subsExpiringRows = [];
+  let subsExpiringLoadError = null;
 
   // Bulk-close row selection, by request -- mount-scope (not module-scope
   // like lastData etc.), so it resets on a fresh page visit but survives
@@ -265,6 +293,8 @@ export function mount(container) {
 
   changeReportButton.addEventListener('click', () => openChangeReportModal());
   markRenewalsButton.addEventListener('click', () => openMarkRenewalsModal());
+  subsExpiringButtonEls.forEach((el, key) => el.addEventListener('click', () => openSubsExpiringModal(key)));
+  loadSubsExpiringCounts();
 
   async function load() {
     const allDates = allDatesInput.checked;
@@ -1357,6 +1387,148 @@ export function mount(container) {
   // and step two (the results) both live in the SAME modal instance rather
   // than opening a second one, so Escape/click-outside/the close button all
   // still just work without extra wiring.
+  // "Terminating Annual (#)" / "Terminating Monthly (#)" / "Renewing Annual
+  // (#)" buttons, in the page title's own old spot, by request -- reuses
+  // Subscriptions Expiring's own /api/subscriptions-expiring endpoint and
+  // categorisation (termType() below mirrors that page's client.js exactly)
+  // rather than duplicating the Ingram subscription-period lookup here.
+  // Window fixed at 7 days -- confirmed with Amber as Subscriptions
+  // Expiring's own default view -- not adjustable from this page; the
+  // other windows/"Expired Recently" stay exclusive to that page itself.
+  // SUBS_EXPIRING_WINDOW/CATEGORIES/subsExpiringRows/subsExpiringLoadError
+  // are declared up near subsExpiringButtonEls, not here -- see that
+  // declaration's own comment for why.
+
+  // Always fetched fresh on mount -- not wired into Refresh/Check IM for
+  // More, since those drive this page's own Ingram order data, not
+  // Autotask subscription expiry.
+  async function loadSubsExpiringCounts() {
+    try {
+      const res = await fetch(`/api/subscriptions-expiring?window=${SUBS_EXPIRING_WINDOW}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+      subsExpiringRows = (data && data.rows) || [];
+      subsExpiringLoadError = null;
+    } catch (err) {
+      subsExpiringRows = [];
+      subsExpiringLoadError = err.message;
+      console.error('Subscriptions Expiring counts failed to load:', err);
+    }
+    renderSubsExpiringButtons();
+  }
+
+  // Blue pill (matches Change Report) at 0, red pill (matches Mark
+  // Renewals as Done) above 0 -- by request, the same "nothing to act on"
+  // vs. "something needs attention" distinction .cc-mark-renewals-btn's
+  // own red already carries on this page.
+  function renderSubsExpiringButtons() {
+    for (const cat of SUBS_EXPIRING_CATEGORIES) {
+      const btn = subsExpiringButtonEls.get(cat.key);
+      if (!btn) continue;
+      const count = subsExpiringRows.filter(cat.match).length;
+      btn.textContent = subsExpiringLoadError ? `${cat.label} (?)` : `${cat.label} (${count})`;
+      btn.classList.toggle('cc-subs-expiring-btn--alert', !subsExpiringLoadError && count > 0);
+      btn.title = subsExpiringLoadError ? `Couldn't load Subscriptions Expiring data: ${subsExpiringLoadError}` : '';
+    }
+  }
+
+  function openSubsExpiringModal(categoryKey) {
+    const cat = SUBS_EXPIRING_CATEGORIES.find((c) => c.key === categoryKey);
+    if (!cat) return;
+    const rows = [...subsExpiringRows]
+      .filter(cat.match)
+      .sort((a, b) => a.clientName.localeCompare(b.clientName) || a.name.localeCompare(b.name));
+
+    const bodyHtml = subsExpiringLoadError
+      ? `<p class="status error">Couldn't load Subscriptions Expiring data: ${escapeHtml(subsExpiringLoadError)}</p>`
+      : rows.length === 0
+        ? '<p class="status">Nothing in this category right now.</p>'
+        : subsExpiringTableHtml(rows);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel wsp-qa-modal-panel cc-subs-expiring-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>${escapeHtml(cat.label)} (${subsExpiringLoadError ? '?' : rows.length})</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          ${bodyHtml}
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+  }
+
+  // Same table shape (and same term/day formatting) as Subscriptions
+  // Expiring's own section() -- reproduced here rather than imported, since
+  // that page's client.js exports nothing beyond id/label/mount().
+  function subsExpiringTableHtml(rows) {
+    return `
+      <table class="contract-checks-table">
+        <thead>
+          <tr><th>Client</th><th>Subscription</th><th>Status</th><th>Auto-Renews</th><th>Term</th><th>Expires</th><th>Days</th></tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (r) => `
+            <tr>
+              <td>${escapeHtml(r.clientName)}</td>
+              <td>${escapeHtml(r.name)}</td>
+              <td${r.status === 'pending' ? ' class="cell-flag-blue"' : ''}>${escapeHtml(r.status === 'hold' ? 'On Hold' : capitalize(r.status))}</td>
+              <td class="${r.autoRenews ? 'cell-flag-green' : 'cell-flag-red'}">${r.autoRenews ? 'Yes' : 'No'}</td>
+              <td class="ticket-number">${formatPeriod(r.term)}</td>
+              <td class="ticket-number">${formatDate(r.expirationDate)}</td>
+              <td class="ticket-number">${formatDays(r.daysUntilExpiry)}</td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  // Ingram's term shape is {type: 'month'|'year'|..., duration: N} -- same
+  // bucketing Subscriptions Expiring's own termType()/formatPeriod() use.
+  function termType(term) {
+    if (term?.type === 'year') return 'Annual';
+    if (term?.type === 'month') return 'Monthly';
+    return 'Other';
+  }
+
+  function formatPeriod(period) {
+    if (!period) return '';
+    const { type, duration } = period;
+    if (duration === 1) {
+      if (type === 'month') return 'Monthly';
+      if (type === 'year') return 'Annual';
+      if (type === 'day') return 'Daily';
+    }
+    return `${duration} ${type}${duration === 1 ? '' : 's'}`;
+  }
+
+  // "in 3 days" / "Today" / "3 days ago" -- same as Subscriptions Expiring's
+  // own formatDays().
+  function formatDays(days) {
+    if (days === 0) return 'Today';
+    if (days > 0) return `in ${days} day${days === 1 ? '' : 's'}`;
+    return `${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago`;
+  }
+
   function openChangeReportModal() {
     const overlay = document.createElement('div');
     overlay.className = 'history-modal-overlay';
