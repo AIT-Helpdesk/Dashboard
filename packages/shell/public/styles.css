@@ -4518,6 +4518,14 @@ td.ticket-number a:hover {
   text-decoration: underline;
 }
 
+/* An Inactive client on a client-picker list (Client Summary/Activity/
+   Financials, M365 Environment's own "ambiguous match" button), by request
+   -- grey instead of the usual blue link color, so an inactive company
+   reads as de-emphasised at a glance, same grey as .muted elsewhere. */
+.link-button--inactive {
+  color: var(--muted);
+}
+
 .cell-flag-red {
   color: #dc2626 !important;
   font-weight: 600;

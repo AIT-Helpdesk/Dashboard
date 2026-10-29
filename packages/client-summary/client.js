@@ -95,7 +95,7 @@ export function mount(container) {
         <table>
           <tbody>
             ${data.matches
-              .map((m) => `<tr><td><button type="button" class="link-button" data-company-id="${m.id}">${escapeHtml(m.companyName)}</button></td></tr>`)
+              .map((m) => `<tr><td><button type="button" class="link-button${m.isActive ? '' : ' link-button--inactive'}" data-company-id="${m.id}">${matchLabelHtml(m)}</button></td></tr>`)
               .join('')}
           </tbody>
         </table>
@@ -369,5 +369,13 @@ export function mount(container) {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  // Classification + Active/Inactive after the name on every client-picker
+  // list on this dashboard, by request -- same convention this page's own
+  // header badge already uses for a single resolved client.
+  function matchLabelHtml(m) {
+    const statusBadge = m.isActive ? '<span class="cell-flag-green">Active</span>' : '<span class="cell-flag-red">Inactive</span>';
+    return `${escapeHtml(m.companyName)} ${statusBadge}${m.classification ? ` -- ${escapeHtml(m.classification)}` : ''}`;
   }
 }

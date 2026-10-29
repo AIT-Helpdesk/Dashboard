@@ -461,28 +461,45 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
 
   // Drag-to-reorder columns, by request -- Tracker Manager-only, same
   // reasoning as POST /columns above ("changing what's tracked affects
-  // everyone looking at this tracker"). The client sends the FULL new
-  // order (every column id, once each) after a drop, rather than a
-  // single "move this one to index N" -- simpler to validate (it has to
-  // be exactly a permutation of the real current column ids, nothing
-  // added/dropped/duplicated) and immune to two managers reordering at
-  // once racing each other into an inconsistent half-applied state the
-  // way a relative move could.
+  // everyone looking at this tracker"). The client sends the new order
+  // for every column it can SEE, once each, rather than a single "move
+  // this one to index N" -- simpler to validate (every id given has to be
+  // a real current column id, with no duplicates) and immune to two
+  // managers reordering at once racing each other into an inconsistent
+  // half-applied state the way a relative move could.
+  //
+  // Real bug, confirmed: this used to require `order` to contain EVERY
+  // column, full stop -- but applyDefaultFilter() (GET '/' above) hides a
+  // fully-resolved column from the grid entirely whenever "Show All" is
+  // off, so the browser never learns that hidden column's id and can't
+  // include it. Dragging to reorder the columns actually on screen then
+  // always failed with "order must contain every existing column id
+  // exactly once" the moment any one column was fully done. `order` is
+  // now allowed to be a SUBSET (still a real column id each, still no
+  // duplicates) -- any column not mentioned (hidden by the filter) keeps
+  // its current absolute position, and the mentioned ones are slotted
+  // into the new order relative to each other without disturbing it.
   router.put('/columns/order', (req, res) => {
     try {
       if (!isTrackerManager(req)) {
         return res.status(403).json({ error: 'Only a Tracker Manager can reorder columns.' });
       }
       const order = req.body?.order;
-      if (!Array.isArray(order) || !order.every((id) => Number.isInteger(id))) {
-        return res.status(400).json({ error: 'order must be an array of column ids.' });
+      if (!Array.isArray(order) || order.length === 0 || !order.every((id) => Number.isInteger(id))) {
+        return res.status(400).json({ error: 'order must be a non-empty array of column ids.' });
       }
-      const existingIds = db.prepare('SELECT id FROM columns').all().map((c) => c.id);
-      const sameSet = order.length === existingIds.length && existingIds.every((id) => order.includes(id)) && new Set(order).size === order.length;
-      if (!sameSet) {
-        return res.status(400).json({ error: 'order must contain every existing column id exactly once.' });
+      if (new Set(order).size !== order.length) {
+        return res.status(400).json({ error: 'order must not contain the same column id more than once.' });
       }
-      reorderColumns(order);
+      const existingIds = db.prepare('SELECT id FROM columns ORDER BY sort_order, id').all().map((c) => c.id);
+      const existingSet = new Set(existingIds);
+      if (!order.every((id) => existingSet.has(id))) {
+        return res.status(400).json({ error: 'order must only contain existing column ids.' });
+      }
+      const mentioned = new Set(order);
+      let i = 0;
+      const fullOrder = existingIds.map((id) => (mentioned.has(id) ? order[i++] : id));
+      reorderColumns(fullOrder);
       res.json({ ok: true });
     } catch (err) {
       console.error(err);

@@ -7,7 +7,7 @@ Dashboard page: type a client name, see a single-client "at a glance" landing pa
 
 ## Company resolution
 
-Identical pattern to Client Financials: `resolveSingleCompany()` (`@dashboard/autotask-client`) resolves the client-name wildcard to exactly one company. Zero matches returns `status: 'not-found'`. More than one returns `status: 'ambiguous'` with a `matches: [{id, companyName}]` list -- `client.js` renders each as a clickable button; clicking one re-requests with `companyId` set, resolving that exact company directly rather than re-running the still-ambiguous wildcard.
+Identical pattern to Client Financials: `resolveSingleCompany()` (`@dashboard/autotask-client`) resolves the client-name wildcard to exactly one company. Zero matches returns `status: 'not-found'`. More than one returns `status: 'ambiguous'` with a `matches: [{id, companyName, classification, isActive}]` list -- `client.js` renders each as a clickable button, with its Classification and Active/Inactive status after the name so the right one can be told apart at a glance; clicking one re-requests with `companyId` set, resolving that exact company directly rather than re-running the still-ambiguous wildcard.
 
 ## Company details header
 

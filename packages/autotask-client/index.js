@@ -585,9 +585,31 @@ async function resolveSingleCompany(client, clientSearch, companyId) {
   const matches = await listAll(client.companies, matchFilter);
   if (matches.length === 0) return { status: 'not-found' };
   if (matches.length > 1) {
+    // Classification/Active-Status looked up only on this (rare) ambiguous
+    // path, never on the common single-match path -- by request, every
+    // client-picker list on the dashboard shows each candidate's
+    // Classification and Status so the right one can be told apart at a
+    // glance, same convention as Client Summary's own header.
+    const classificationLabels = await getPicklistLabels(client.companies, 'classification');
+    // Tiered, by request -- Active-with-a-Classification first, then
+    // Active-with-no-Classification, then every Inactive (regardless of its
+    // own Classification) last; alphabetical by company name within each
+    // tier. A flat list, not sectioned/headed -- the tiering is purely the
+    // sort order client.js renders straight down one table.
+    function tierOf(c) {
+      if (!c.isActive) return 2;
+      return c.classification ? 0 : 1;
+    }
     return {
       status: 'ambiguous',
-      matches: matches.map((c) => ({ id: c.id, companyName: c.companyName })).sort((a, b) => a.companyName.localeCompare(b.companyName)),
+      matches: matches
+        .map((c) => ({
+          id: c.id,
+          companyName: c.companyName,
+          classification: classificationLabels.get(c.classification) || null,
+          isActive: c.isActive,
+        }))
+        .sort((a, b) => tierOf(a) - tierOf(b) || a.companyName.localeCompare(b.companyName)),
     };
   }
   return { status: 'ok', company: matches[0] };
