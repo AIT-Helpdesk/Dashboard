@@ -839,6 +839,18 @@ router.get('/components', async (req, res) => {
       if (!siteTerm) return res.status(400).json({ error: 'Unknown clientId.' });
     }
 
+    // A clientId pick (the Search Clients dropdown) is already an exact,
+    // unambiguous company -- always matched exactly below, regardless of
+    // the free-text field's own "Exact" checkbox (that checkbox only makes
+    // sense for a WILDCARD search term, not a specific company already
+    // resolved to one real name). Real bug, confirmed: with the checkbox
+    // off (its default), picking one site from the dropdown could still
+    // pull in another site's reports too, whenever one name is a
+    // substring of the other -- matchesWildcard()'s own prefix/suffix/
+    // substring behaviour, e.g. picking "Sleepy's" on its own would also
+    // match every "Sleepy's <site>" company's reports.
+    const matchExact = exact || !freeTextSite;
+
     // "Do honour the Classification Selector" -- applies to BOTH the
     // dropdown-picked client and a free-text/wildcard search, per request.
     let allowedNames = null;
@@ -852,7 +864,7 @@ router.get('/components', async (req, res) => {
     // here, before any live source is even touched -- nothing below this
     // line can ever prevent these from being computed. withTimeout() above
     // is what guarantees they also can't be prevented from being SENT.
-    const components = loadFileReportComponents(siteTerm, exact, allowedNames);
+    const components = loadFileReportComponents(siteTerm, matchExact, allowedNames);
 
     // TEMPORARILY DISABLED (2026-09-23): the live Autotask ticket-counts
     // component was hitting Autotask's own API rate limit (repeated 429s
@@ -866,7 +878,7 @@ router.get('/components', async (req, res) => {
       if (!dattoRmm.hasDattoCredentials()) return null;
       try {
         const allDevices = await withTimeout(getCachedDattoDevices(req.query.refresh === 'true'), 'Datto RMM devices');
-        return buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exact, allowedNames);
+        return buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, matchExact, allowedNames);
       } catch (err) {
         console.error('Meeting Prep: Datto RMM live devices failed:', err.message);
         return null;
@@ -882,11 +894,35 @@ router.get('/components', async (req, res) => {
   }
 });
 
+// Every client-slug directory actually sitting under data/ right now --
+// cheap, a plain readdir with no JSON parsing, same "images" exclusion
+// loadFileReportComponents() above already uses (its own unrelated flat
+// naming scheme, not a client). Used by /clients below to keep the dropdown
+// to clients Report Ingest has actually produced something for, by
+// request -- picking a company with no reports on disk always rendered an
+// empty page anyway.
+function listClientSlugsWithReports() {
+  try {
+    return new Set(
+      fs
+        .readdirSync(REPORT_DATA_DIR, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && d.name !== 'images')
+        .map((d) => d.name)
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 // Feeds the searchable client-picker dropdown next to the free-text
 // Client / Site field -- names only (no ids the UI doesn't need), sorted,
-// filtered by the same Classification codes /components itself honours.
-// `classification` absent or 'all' returns every active customer/prospect
-// company, matching /components' own "no constraint" behaviour for 'all'.
+// filtered by the same Classification codes /components itself honours,
+// AND to only those with at least one report file already on disk (see
+// listClientSlugsWithReports() above) -- the free-text Client / Site field
+// right next to it still searches every company regardless, this is just
+// the dropdown's own narrower list. `classification` absent or 'all'
+// returns every active customer/prospect company with reports, matching
+// /components' own "no constraint" behaviour for 'all'.
 router.get('/clients', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
@@ -896,7 +932,9 @@ router.get('/clients', async (req, res) => {
       classification && classification !== 'all'
         ? await getCompaniesForClassification(client, classification)
         : await fetchActiveCompaniesForClassification(client);
+    const slugsWithReports = listClientSlugsWithReports();
     const clients = companies
+      .filter((c) => slugsWithReports.has(slugify(c.companyName)))
       .map((c) => ({ id: c.id, companyName: c.companyName }))
       .sort((a, b) => a.companyName.localeCompare(b.companyName));
     res.json({ clients });
