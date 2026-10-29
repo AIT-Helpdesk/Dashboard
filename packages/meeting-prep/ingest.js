@@ -17,7 +17,7 @@ const { PDFParse } = require('pdf-parse');
 const CFB = require('cfb');
 
 const sp = require('./sharepoint-client.js');
-const { resolveTitleAndClient, resolveInkyClientAndKind } = require('./ingest-title-map.js');
+const { resolveTitleAndClient } = require('./ingest-title-map.js');
 const { slugify } = require('./slug.js');
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -239,6 +239,20 @@ function writeReportJson(clientSlug, isoDate, kind, data) {
   fs.writeFileSync(path.join(dir, `${kind}.json`), JSON.stringify(data, null, 2));
 }
 
+// Used by an accumulating kind (see accumulationPeriod above) to fold a new
+// day into whatever's already on disk for its period -- null the first run
+// of a new period, same as any other "nothing written yet" case elsewhere
+// in this file.
+function readReportJsonIfExists(clientSlug, folder, kind) {
+  const file = path.join(DATA_DIR, clientSlug, folder, `${kind}.json`);
+  if (!fs.existsSync(file)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 // -- "Not Processed" side folders, by request ------------------------------
 // Datto's own "On Demand" sites aren't continuously monitored, so most of
 // their reports render as a literal "No Data" placeholder instead of a real
@@ -251,8 +265,8 @@ function writeReportJson(clientSlug, isoDate, kind, data) {
 // own folder -- both are terminal outcomes, moved out of Incoming/ and
 // marked processed so they're never re-flagged, instead of sitting in
 // Incoming/ and getting re-checked (and re-failing) on every future run.
-const NOT_PROCESSED_ON_DEMAND_PATH = 'Inbox/Not Processed - On Demand';
-const NOT_PROCESSED_NO_MATCH_PATH = 'Inbox/Not Processed - No Match';
+const NOT_PROCESSED_ON_DEMAND_PATH = 'Not Processed/On Demand';
+const NOT_PROCESSED_NO_MATCH_PATH = 'Not Processed/No Match';
 const ON_DEMAND_RE = /\bon demand\b/i;
 
 async function moveToNotProcessed(driveId, item, destPath) {
@@ -282,15 +296,11 @@ async function runIngest() {
       if (state.processedItemIds[item.id]) continue; // already handled in a prior run
 
       // Two source shapes: a bare report PDF (every Datto/Dark Web ID
-      // report), or INKY's own report EMAIL (.msg, the actual PDF report
-      // sitting inside it as an attachment -- see extractMsgPdfAttachment()
-      // above). Each gets its own filename resolver (INKY's is "<Client
-      // Name> - Email Security Report.msg", client name FIRST -- the
-      // opposite order from every PDF source's "<Title> - <Client Name>",
-      // so it needs its own matcher, not a variant of
-      // resolveTitleAndClient()) and its own text-extraction step, then
-      // converge on the same { kind, clientName } / parsed-text shape for
-      // everything after this. Anything else (e.g. the real
+      // report), resolved by filename via resolveTitleAndClient() below --
+      // or INKY's own report EMAIL (.msg, the actual PDF report sitting
+      // inside it as an attachment, see extractMsgPdfAttachment() above),
+      // resolved from the PDF's OWN content instead of its filename (see
+      // the isMsg branch below for why). Anything else (e.g. the real
       // "SiteDeviceCountExport - <Client>.csv" exports sitting alongside
       // the Datto PDFs) is a different kind of export entirely, by
       // request -- left untouched in Incoming, not even recorded in
@@ -302,42 +312,74 @@ async function runIngest() {
         continue;
       }
 
-      const resolved = isPdf ? resolveTitleAndClient(item.name) : resolveInkyClientAndKind(item.name);
-      if (!resolved) {
-        const reason = isPdf
-          ? 'Unrecognized report title -- no TITLE_TO_KIND entry (ingest-title-map.js)'
-          : 'Unrecognized filename shape for an INKY report -- expected "<Client Name> - Email Security Report.msg" (ingest-title-map.js\'s resolveInkyClientAndKind())';
-        needsAttention.push({ filename: item.name, source: source.name, reason });
-        continue;
-      }
-      if (resolved.ignored) {
-        // Deliberately excluded (e.g. Monitoring Performance, by request) --
-        // recorded as processed so it's never re-checked or re-flagged, but
-        // left in place in Incoming/ (not moved) since nothing was
-        // generated from it -- moving it would misleadingly claim it was
-        // handled.
-        state.processedItemIds[item.id] = { outcome: 'ignored', filename: item.name, at: new Date().toISOString() };
-        ignoredCount++;
-        continue;
-      }
+      let kind, clientName, parser, data;
 
-      const { kind, clientName } = resolved;
-
-      if (ON_DEMAND_RE.test(clientName)) {
-        try {
-          await moveToNotProcessed(driveId, item, NOT_PROCESSED_ON_DEMAND_PATH);
-          state.processedItemIds[item.id] = { outcome: 'on-demand', filename: item.name, clientName, at: new Date().toISOString() };
-          onDemandCount++;
-        } catch (err) {
-          needsAttention.push({ filename: item.name, source: source.name, reason: `On-demand site, but moving to "${NOT_PROCESSED_ON_DEMAND_PATH}" failed: ${err.message}` });
+      if (isMsg) {
+        // Real bug, confirmed live: INKY's own filename (and apparently its
+        // email Subject, since that's normally where a saved .msg's default
+        // filename comes from) does NOT reliably carry the per-client name
+        // the way resolveInkyClientAndKind() used to assume -- every real
+        // file here was named "Ambient IT Customers - Email Security Report
+        // (N).msg", the SAME name for every client with Windows' own
+        // save-a-duplicate "(N)" suffix on top, not a per-client name at
+        // all. There's only one INKY report kind, so the filename was never
+        // actually needed to pick a kind either -- the real, reliable
+        // per-client identity was always available from the PDF's own "for
+        // <Site Name> <Weekday>..." header (parse()'s own `site` field,
+        // confirmed against 4 real samples), so that's read AFTER parsing
+        // instead of guessed at from the filename beforehand.
+        kind = 'email-security';
+        parser = loadParser(kind);
+        if (!parser) {
+          needsAttention.push({ filename: item.name, source: source.name, reason: `No parser yet for kind "${kind}" (packages/meeting-prep/parsers/${kind}.js)` });
+          continue;
         }
-        continue;
-      }
+        try {
+          const buffer = await sp.downloadFileContent(driveId, item.id);
+          const pdfBuffer = extractMsgPdfAttachment(buffer);
+          const text = await extractPdfText(pdfBuffer);
+          data = parser.parse(text);
+          if (!data || typeof data !== 'object') throw new Error('parser returned no data');
+        } catch (err) {
+          needsAttention.push({ filename: item.name, source: source.name, reason: `Parse failed: ${err.message}` });
+          continue;
+        }
+        clientName = data.site;
+      } else {
+        const resolved = resolveTitleAndClient(item.name);
+        if (!resolved) {
+          needsAttention.push({ filename: item.name, source: source.name, reason: 'Unrecognized report title -- no TITLE_TO_KIND entry (ingest-title-map.js)' });
+          continue;
+        }
+        if (resolved.ignored) {
+          // Deliberately excluded (e.g. Monitoring Performance, by request) --
+          // recorded as processed so it's never re-checked or re-flagged, but
+          // left in place in Incoming/ (not moved) since nothing was
+          // generated from it -- moving it would misleadingly claim it was
+          // handled.
+          state.processedItemIds[item.id] = { outcome: 'ignored', filename: item.name, at: new Date().toISOString() };
+          ignoredCount++;
+          continue;
+        }
 
-      const parser = loadParser(kind);
-      if (!parser) {
-        needsAttention.push({ filename: item.name, source: source.name, reason: `No parser yet for kind "${kind}" (packages/meeting-prep/parsers/${kind}.js)` });
-        continue;
+        ({ kind, clientName } = resolved);
+
+        if (ON_DEMAND_RE.test(clientName)) {
+          try {
+            await moveToNotProcessed(driveId, item, NOT_PROCESSED_ON_DEMAND_PATH);
+            state.processedItemIds[item.id] = { outcome: 'on-demand', filename: item.name, clientName, at: new Date().toISOString() };
+            onDemandCount++;
+          } catch (err) {
+            needsAttention.push({ filename: item.name, source: source.name, reason: `On-demand site, but moving to "${NOT_PROCESSED_ON_DEMAND_PATH}" failed: ${err.message}` });
+          }
+          continue;
+        }
+
+        parser = loadParser(kind);
+        if (!parser) {
+          needsAttention.push({ filename: item.name, source: source.name, reason: `No parser yet for kind "${kind}" (packages/meeting-prep/parsers/${kind}.js)` });
+          continue;
+        }
       }
 
       const company = matchCompanyByName(clientName, companies) || fuzzyMatchCompany(clientName, companies);
@@ -352,16 +394,22 @@ async function runIngest() {
         continue;
       }
 
-      let data;
-      try {
-        const buffer = await sp.downloadFileContent(driveId, item.id);
-        const pdfBuffer = isPdf ? buffer : extractMsgPdfAttachment(buffer);
-        const text = await extractPdfText(pdfBuffer);
-        data = parser.parse(text);
-        if (!data || typeof data !== 'object') throw new Error('parser returned no data');
-      } catch (err) {
-        needsAttention.push({ filename: item.name, source: source.name, reason: `Parse failed: ${err.message}` });
-        continue;
+      // The PDF path's own data was deliberately left until AFTER the
+      // company match above (same reasoning the on-demand/no-match checks
+      // already rely on -- cheap filename checks before ever spending a
+      // download+parse on a file that's about to be filed away unprocessed
+      // anyway); the .msg/INKY path above already has `data`, since its
+      // own clientName could only ever come FROM parsing it.
+      if (!data) {
+        try {
+          const buffer = await sp.downloadFileContent(driveId, item.id);
+          const text = await extractPdfText(buffer);
+          data = parser.parse(text);
+          if (!data || typeof data !== 'object') throw new Error('parser returned no data');
+        } catch (err) {
+          needsAttention.push({ filename: item.name, source: source.name, reason: `Parse failed: ${err.message}` });
+          continue;
+        }
       }
 
       const isoDate = isoDateFromCreateDate(data.createDate);
@@ -387,13 +435,28 @@ async function runIngest() {
       data.sourceUrl = item.webUrl;
       const clientSlug = slugify(company.companyName);
 
+      // A kind that declares accumulationPeriod (currently just
+      // email-security, by request -- see that parser's own comment) folds
+      // this one day into the running total for its calendar month, under
+      // a "YYYY-MM" folder, instead of writing a fresh date folder every
+      // run. The SOURCE file in SharePoint still moves into Processed/ under
+      // its own real per-day date regardless -- only the local data/*.json
+      // this writes groups by month; the daily source PDFs/emails stay
+      // individually archived so history isn't lost.
+      const writeFolder = parser.accumulationPeriod === 'month' ? isoDate.slice(0, 7) : isoDate;
+      let dataToWrite = data;
+      if (parser.accumulationPeriod === 'month') {
+        const existing = readReportJsonIfExists(clientSlug, writeFolder, kind);
+        dataToWrite = parser.mergeDaily(existing, data);
+      }
+
       try {
-        writeReportJson(clientSlug, isoDate, kind, data);
+        writeReportJson(clientSlug, writeFolder, kind, dataToWrite);
         const destFolderId = await sp.ensureFolderPath(driveId, `Processed/${company.companyName}/${isoDate}`);
         const moved = await sp.moveItem(driveId, item.id, destFolderId);
-        if (moved.webUrl && moved.webUrl !== data.sourceUrl) {
-          data.sourceUrl = moved.webUrl;
-          writeReportJson(clientSlug, isoDate, kind, data);
+        if (moved.webUrl && moved.webUrl !== item.webUrl) {
+          dataToWrite.sourceUrl = moved.webUrl;
+          writeReportJson(clientSlug, writeFolder, kind, dataToWrite);
         }
       } catch (err) {
         needsAttention.push({ filename: item.name, source: source.name, reason: `Written locally but SharePoint move failed: ${err.message}` });

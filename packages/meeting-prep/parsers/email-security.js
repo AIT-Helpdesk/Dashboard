@@ -174,4 +174,112 @@ function parse(text) {
   return { site, createDate, overview, threatSummary, topThreatCategories, messageReportSummary, linkClickBreakdown };
 }
 
-module.exports = { parse };
+// INKY delivers one of these PER DAY, each covering only that single day --
+// by request, daily runs accumulate into ONE file per calendar month
+// instead of the usual one-file-per-report-date, so Meeting Prep shows a
+// running month-to-date total rather than whichever single day happened to
+// run last. `accumulationPeriod` tells ingest.js to fold a new day into the
+// month's existing file (via mergeDaily below, month folder = createDate's
+// own "YYYY-MM") instead of writing a fresh date folder every run.
+const accumulationPeriod = 'month';
+
+const sum = (a, b) => (a || 0) + (b || 0);
+const pctOf = (count, total) => (total > 0 ? Math.round((count / total) * 1000) / 10 : 0);
+
+// `existing` is this month's own email-security.json as already on disk
+// (null the first time this month runs); `incoming` is one new day's
+// freshly parsed parse() result. Every plain count sums across days --
+// including uniqueRecipients, which is a running total of recipient
+// INSTANCES across the month, not a deduplicated distinct-people count:
+// INKY's own daily summary never names individual recipients, so there's
+// nothing here to dedupe a repeat recipient against. The few percentages
+// this component shows are recomputed from the summed counts afterward
+// instead of carried over from any one day, since a single day's own
+// percentage has no meaning once more days are folded in.
+function mergeDaily(existing, incoming) {
+  if (!existing) {
+    return {
+      site: incoming.site,
+      periodStart: incoming.createDate,
+      periodEnd: incoming.createDate,
+      accumulatedDays: 1,
+      sourceUrl: incoming.sourceUrl,
+      overview: incoming.overview,
+      threatSummary: incoming.threatSummary,
+      topThreatCategories: incoming.topThreatCategories,
+      messageReportSummary: incoming.messageReportSummary,
+      linkClickBreakdown: incoming.linkClickBreakdown,
+    };
+  }
+
+  const overview = {
+    messagesProcessed: sum(existing.overview.messagesProcessed, incoming.overview.messagesProcessed),
+    uniqueRecipients: sum(existing.overview.uniqueRecipients, incoming.overview.uniqueRecipients),
+    aaaDetectionCount: sum(existing.overview.aaaDetectionCount, incoming.overview.aaaDetectionCount),
+  };
+
+  const threatSummary = {
+    neutral: sum(existing.threatSummary.neutral, incoming.threatSummary.neutral),
+    caution: sum(existing.threatSummary.caution, incoming.threatSummary.caution),
+    danger: sum(existing.threatSummary.danger, incoming.threatSummary.danger),
+  };
+
+  const messageReportSummary = {
+    neutral: sum(existing.messageReportSummary.neutral, incoming.messageReportSummary.neutral),
+    caution: sum(existing.messageReportSummary.caution, incoming.messageReportSummary.caution),
+    danger: sum(existing.messageReportSummary.danger, incoming.messageReportSummary.danger),
+  };
+
+  // Same label, different day -- summed by label, so a category that only
+  // showed up on some days still carries its true month-to-date total, not
+  // an average. Re-percented against the new combined total and re-sorted,
+  // since a per-day pct is meaningless once merged.
+  const categoryTotals = new Map();
+  for (const row of [...(existing.topThreatCategories || []), ...(incoming.topThreatCategories || [])]) {
+    categoryTotals.set(row.label, (categoryTotals.get(row.label) || 0) + row.count);
+  }
+  const categorySum = [...categoryTotals.values()].reduce((s, v) => s + v, 0);
+  const topThreatCategories = [...categoryTotals.entries()]
+    .map(([label, count]) => ({ label, count, pct: pctOf(count, categorySum) }))
+    .sort((a, b) => b.count - a.count);
+
+  // Link Click Breakdown is a funnel -- each stage's own percentage is of
+  // the stage before it (confirmed against the real PDF's "(of N ...)"
+  // text, see parseLinkClickBreakdown()'s own comment above), not of one
+  // fixed total throughout, so each is recomputed against its own real
+  // predecessor rather than reused from either day.
+  const totalInboundMessages = sum(existing.linkClickBreakdown.totalInboundMessages, incoming.linkClickBreakdown.totalInboundMessages);
+  const messagesWithLinks = sum(existing.linkClickBreakdown.messagesWithLinks, incoming.linkClickBreakdown.messagesWithLinks);
+  const messagesWithLinksClicked = sum(existing.linkClickBreakdown.messagesWithLinksClicked, incoming.linkClickBreakdown.messagesWithLinksClicked);
+  const unsafeLinksClicked = sum(existing.linkClickBreakdown.unsafeLinksClicked, incoming.linkClickBreakdown.unsafeLinksClicked);
+  const linksFollowed = sum(existing.linkClickBreakdown.linksFollowed, incoming.linkClickBreakdown.linksFollowed);
+  const unsafeLinksFollowed = sum(existing.linkClickBreakdown.unsafeLinksFollowed, incoming.linkClickBreakdown.unsafeLinksFollowed);
+  const linkClickBreakdown = {
+    totalInboundMessages,
+    messagesWithLinks,
+    messagesWithLinksPct: pctOf(messagesWithLinks, totalInboundMessages),
+    messagesWithLinksClicked,
+    messagesWithLinksClickedPct: pctOf(messagesWithLinksClicked, messagesWithLinks),
+    unsafeLinksClicked,
+    unsafeLinksClickedPct: pctOf(unsafeLinksClicked, messagesWithLinksClicked),
+    linksFollowed,
+    linksFollowedPct: pctOf(linksFollowed, messagesWithLinks),
+    unsafeLinksFollowed,
+    unsafeLinksFollowedPct: pctOf(unsafeLinksFollowed, linksFollowed),
+  };
+
+  return {
+    site: incoming.site || existing.site,
+    periodStart: existing.periodStart,
+    periodEnd: incoming.createDate,
+    accumulatedDays: (existing.accumulatedDays || 1) + 1,
+    sourceUrl: incoming.sourceUrl,
+    overview,
+    threatSummary,
+    topThreatCategories,
+    messageReportSummary,
+    linkClickBreakdown,
+  };
+}
+
+module.exports = { parse, accumulationPeriod, mergeDaily };
