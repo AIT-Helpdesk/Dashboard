@@ -99,33 +99,54 @@ function applyDefaultFilter(columns, rows) {
 }
 
 // Same "what's waiting to be done" default filtering as applyDefaultFilter
-// above, scoped to one compound column's own detail sheet -- rows only (a
-// detail sheet has no separate "columns" to hide beyond its own stages).
+// above, scoped to one compound column's own detail sheet -- now also
+// hides a fully-resolved STAGE (not just rows), the stage-side mirror of
+// applyDefaultFilter's own visibleColumns. Confirmed missing (Oct 2026):
+// the detail sheet kept showing every stage even when every row's cell
+// for it was Done/N/A/Cancelled, unlike the master grid's own columns.
 // Only status-type stages count -- text-type ones are informational and
 // never "outstanding" in their own right, same exclusion the rollup
-// itself uses (see computeRollupStatus() in rollout-tracker-db.js).
+// itself uses (see computeRollupStatus() in rollout-tracker-db.js), and
+// are never hidden here either, same as applyDefaultFilter's own
+// text-column rule.
 function applyDetailDefaultFilter(stages, rows) {
-  const statusStageIds = stages.filter((s) => s.type === 'status').map((s) => s.id);
-  return rows.filter((r) =>
-    statusStageIds.some((stageId) => {
-      const cell = r.cells[stageId];
+  const statusStages = stages.filter((s) => s.type === 'status');
+  const visibleStages = stages.filter((s) => {
+    if (s.type !== 'status') return true;
+    return rows.some((r) => {
+      const cell = r.cells[s.id];
+      return cell && !RESOLVED_STATUSES.includes(cell.status);
+    });
+  });
+  const visibleRows = rows.filter((r) =>
+    statusStages.some((s) => {
+      const cell = r.cells[s.id];
       return cell && !RESOLVED_STATUSES.includes(cell.status);
     })
   );
+  return { stages: visibleStages, rows: visibleRows };
 }
 
 // The sub-row mirror of applyDetailDefaultFilter above, for a compound
-// ROW's own detail sheet -- every column here is already filtered to
-// status-type-simple ones by getRowDetail() itself, so (unlike the
-// column-side version) there's no type to filter by here, just the
-// "outstanding somewhere" check.
+// ROW's own detail sheet -- same fix, now also hides a fully-resolved
+// COLUMN here, not just sub-rows. Every column here is already filtered
+// to status-type-simple ones by getRowDetail() itself, so (unlike the
+// stage-side version) there's no type to check, just the "outstanding
+// somewhere" test, applied to columns as well as sub-rows.
 function applyRowDetailDefaultFilter(columns, subRows) {
-  return subRows.filter((sr) =>
+  const visibleColumns = columns.filter((col) =>
+    subRows.some((sr) => {
+      const cell = sr.cells[col.id];
+      return cell && !RESOLVED_STATUSES.includes(cell.status);
+    })
+  );
+  const visibleSubRows = subRows.filter((sr) =>
     columns.some((col) => {
       const cell = sr.cells[col.id];
       return cell && !RESOLVED_STATUSES.includes(cell.status);
     })
   );
+  return { columns: visibleColumns, subRows: visibleSubRows };
 }
 
 // Validates the optional `rowIds` a stage's "Set Column" bulk request can
@@ -426,8 +447,9 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
 
       const detail = getColumnDetail(columnId);
       const totalRows = detail.rows.length; // captured before filtering, same reasoning as GET / above
-      const rows = req.query.all === 'true' ? detail.rows : applyDetailDefaultFilter(detail.stages, detail.rows);
-      res.json({ column: detail.column, stages: detail.stages, rows, totalRows, rowNoun });
+      const { stages, rows } =
+        req.query.all === 'true' ? { stages: detail.stages, rows: detail.rows } : applyDetailDefaultFilter(detail.stages, detail.rows);
+      res.json({ column: detail.column, stages, rows, totalRows, rowNoun });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
@@ -510,8 +532,12 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
   // Drag-to-reorder a compound column's own stages, within its detail
   // sheet -- the stage-level mirror of PUT /columns/order above ("move
   // the columns on a compound tab like they can on the main table"). Same
-  // Tracker Manager gate and "client sends the full new order, validated
-  // as exactly a permutation of the real current stage ids" shape.
+  // Tracker Manager gate. `order` is a SUBSET, same fix and same reason
+  // as PUT /columns/order's own comment -- now that applyDetailDefaultFilter
+  // above can hide a fully-resolved stage when Show All is off, requiring
+  // the full set here would hit the exact same "order must contain every
+  // existing [x]" failure the column-level route already had to fix once
+  // a stage the client never saw got left out of a drag.
   router.put('/columns/:columnId/stages/order', (req, res) => {
     try {
       if (!isTrackerManager(req)) {
@@ -522,15 +548,21 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       if (!column) return res.status(404).json({ error: 'Column not found.' });
       if (column.kind !== 'compound') return res.status(400).json({ error: 'Only compound columns have stages to reorder.' });
       const order = req.body?.order;
-      if (!Array.isArray(order) || !order.every((id) => Number.isInteger(id))) {
-        return res.status(400).json({ error: 'order must be an array of stage ids.' });
+      if (!Array.isArray(order) || order.length === 0 || !order.every((id) => Number.isInteger(id))) {
+        return res.status(400).json({ error: 'order must be a non-empty array of stage ids.' });
       }
-      const existingIds = db.prepare('SELECT id FROM stages WHERE column_id = ?').all(columnId).map((s) => s.id);
-      const sameSet = order.length === existingIds.length && existingIds.every((id) => order.includes(id)) && new Set(order).size === order.length;
-      if (!sameSet) {
-        return res.status(400).json({ error: 'order must contain every existing stage of this column exactly once.' });
+      if (new Set(order).size !== order.length) {
+        return res.status(400).json({ error: 'order must not contain the same stage id more than once.' });
       }
-      reorderStages(order);
+      const existingIds = db.prepare('SELECT id FROM stages WHERE column_id = ? ORDER BY sort_order, id').all(columnId).map((s) => s.id);
+      const existingSet = new Set(existingIds);
+      if (!order.every((id) => existingSet.has(id))) {
+        return res.status(400).json({ error: 'order must only contain existing stage ids of this column.' });
+      }
+      const mentioned = new Set(order);
+      let i = 0;
+      const fullOrder = existingIds.map((id) => (mentioned.has(id) ? order[i++] : id));
+      reorderStages(fullOrder);
       res.json({ ok: true });
     } catch (err) {
       console.error(err);
@@ -558,8 +590,9 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
 
       const detail = getRowDetail(rowId);
       const totalSubRows = detail.subRows.length; // captured before filtering, same reasoning as GET / above
-      const subRows = req.query.all === 'true' ? detail.subRows : applyRowDetailDefaultFilter(detail.columns, detail.subRows);
-      res.json({ row: detail.row, columns: detail.columns, subRows, totalSubRows, rowNoun });
+      const { columns, subRows } =
+        req.query.all === 'true' ? { columns: detail.columns, subRows: detail.subRows } : applyRowDetailDefaultFilter(detail.columns, detail.subRows);
+      res.json({ row: detail.row, columns, subRows, totalSubRows, rowNoun });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });

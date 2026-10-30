@@ -173,16 +173,27 @@ router.get('/columns/:columnId/detail', (req, res) => {
     let clients = clientRows.map((c) => ({ id: c.id, name: c.name, cells: cellsByClient.get(c.id) || {} }));
     const totalClients = clients.length; // captured before filtering, same reasoning as GET / above
 
+    let shapedStages = stages.map((s) => ({ id: s.id, key: s.key, label: s.label, type: s.type }));
+
     // Same "what's waiting to be done" default filtering as the master
-    // grid (applyDefaultFilter above), just scoped to one column's own
-    // stages instead of every column -- rows only (a detail sheet has no
-    // separate "columns" to hide beyond its own stages, and hiding a
-    // whole STAGE by request wasn't asked for here, only rows). Only
+    // grid (applyDefaultFilter above), scoped to one column's own stages
+    // instead of every column -- now also hides a fully-resolved STAGE
+    // (not just rows), the stage-side mirror of applyDefaultFilter's own
+    // visibleColumns. Confirmed missing (Oct 2026): a stage stayed
+    // visible on this detail sheet even once every client's cell for it
+    // was Done/N/A/Cancelled, unlike the master grid's own columns. Only
     // status-type stages count -- text-type ones (WHO, Domain, Comment)
     // are informational and never "outstanding" in their own right, same
-    // exclusion the rollup itself uses.
+    // exclusion the rollup itself uses, and are never hidden here either.
     if (req.query.all !== 'true') {
-      const statusStageIds = stages.filter((s) => s.type === 'status').map((s) => s.id);
+      const statusStageIds = shapedStages.filter((s) => s.type === 'status').map((s) => s.id);
+      shapedStages = shapedStages.filter((s) => {
+        if (s.type !== 'status') return true;
+        return clients.some((c) => {
+          const cell = c.cells[s.id];
+          return cell && !RESOLVED_STATUSES.includes(cell.status);
+        });
+      });
       clients = clients.filter((c) =>
         statusStageIds.some((stageId) => {
           const cell = c.cells[stageId];
@@ -193,7 +204,7 @@ router.get('/columns/:columnId/detail', (req, res) => {
 
     res.json({
       column: { id: column.id, key: column.key, label: column.label },
-      stages: stages.map((s) => ({ id: s.id, key: s.key, label: s.label, type: s.type })),
+      stages: shapedStages,
       clients,
       totalClients,
     });
