@@ -158,6 +158,41 @@ function createRolloutTrackerDb(dbPath) {
       PRIMARY KEY (sub_row_id, column_id)
     );
 
+    -- Free-text "columns" a Tracker Manager can add directly inside ONE
+    -- compound row's own detail sheet -- by request ("allow independent
+    -- adding of text columns to the subsheet, not other columns"), the
+    -- row-level mirror of 'stages', but scoped the OTHER way: 'stages' is
+    -- scoped to one compound COLUMN and shared by every row; this is
+    -- scoped to one compound ROW and shared by every one of ITS sub-rows,
+    -- never the main grid or any other row's own sub-table. Text-only (no
+    -- 'type' to pick -- status stays owned by the main grid's own
+    -- status-type simple columns, which is what feeds this row's rollup).
+    CREATE TABLE IF NOT EXISTS sub_row_columns (
+      id INTEGER PRIMARY KEY,
+      parent_row_id INTEGER NOT NULL REFERENCES rows(id),
+      key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      created_by_email TEXT NOT NULL,
+      created_by_name TEXT NOT NULL,
+      UNIQUE(parent_row_id, key)
+    );
+
+    -- Current free-text value per (sub-row, sub_row_column) -- the
+    -- sub_row_columns mirror of sub_row_status, but text-only throughout
+    -- (unlike stage_status, there's no 'status' value ever stored here at
+    -- all, just the value itself -- nothing feeds a rollup from this).
+    CREATE TABLE IF NOT EXISTS sub_row_column_value (
+      sub_row_id INTEGER NOT NULL REFERENCES sub_rows(id),
+      sub_row_column_id INTEGER NOT NULL REFERENCES sub_row_columns(id),
+      value TEXT,
+      updated_at TEXT NOT NULL,
+      updated_by_email TEXT NOT NULL,
+      updated_by_name TEXT NOT NULL,
+      PRIMARY KEY (sub_row_id, sub_row_column_id)
+    );
+
     CREATE TABLE IF NOT EXISTS audit_log (
       id INTEGER PRIMARY KEY,
       changed_at TEXT NOT NULL,
@@ -223,8 +258,16 @@ function createRolloutTrackerDb(dbPath) {
   }
   migrateAddAuditSubRowId();
 
+  function migrateAddAuditSubRowColumnId() {
+    const current = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_log'`).get();
+    if (!current || current.sql.includes('sub_row_column_id')) return;
+    db.exec('ALTER TABLE audit_log ADD COLUMN sub_row_column_id INTEGER');
+  }
+  migrateAddAuditSubRowColumnId();
+
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_stage_cell ON audit_log(row_id, stage_id, changed_at)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_subrow_cell ON audit_log(sub_row_id, column_id, changed_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audit_subrowcol_cell ON audit_log(sub_row_id, sub_row_column_id, changed_at)');
 
   function nowIso() {
     return new Date().toISOString();
@@ -255,10 +298,21 @@ function createRolloutTrackerDb(dbPath) {
   // every page on this dashboard already reads it in (requireAuth
   // guarantees a signed-in session before any generated tracker's router
   // ever runs).
-  function recordAudit({ rowId = null, columnId = null, stageId = null, subRowId = null, oldStatus = null, newStatus = null, oldReason = null, newReason = null, actor }) {
+  function recordAudit({
+    rowId = null,
+    columnId = null,
+    stageId = null,
+    subRowId = null,
+    subRowColumnId = null,
+    oldStatus = null,
+    newStatus = null,
+    oldReason = null,
+    newReason = null,
+    actor,
+  }) {
     db.prepare(
-      `INSERT INTO audit_log (changed_at, changed_by_email, changed_by_name, row_id, column_id, stage_id, sub_row_id, old_status, new_status, old_reason, new_reason)
-       VALUES ($changedAt, $email, $name, $rowId, $columnId, $stageId, $subRowId, $oldStatus, $newStatus, $oldReason, $newReason)`
+      `INSERT INTO audit_log (changed_at, changed_by_email, changed_by_name, row_id, column_id, stage_id, sub_row_id, sub_row_column_id, old_status, new_status, old_reason, new_reason)
+       VALUES ($changedAt, $email, $name, $rowId, $columnId, $stageId, $subRowId, $subRowColumnId, $oldStatus, $newStatus, $oldReason, $newReason)`
     ).run({
       $changedAt: nowIso(),
       $email: actor.email,
@@ -267,6 +321,7 @@ function createRolloutTrackerDb(dbPath) {
       $columnId: columnId,
       $stageId: stageId,
       $subRowId: subRowId,
+      $subRowColumnId: subRowColumnId,
       $oldStatus: oldStatus,
       $newStatus: newStatus,
       $oldReason: oldReason,
@@ -400,6 +455,19 @@ function createRolloutTrackerDb(dbPath) {
     recordAudit({ subRowId, columnId, newStatus: 'not_done', actor });
   }
 
+  // The sub_row_columns mirror of seedOneSubRowStatus above -- every
+  // sub-row always gets a sub_row_column_value row (blank), for every
+  // sub_row_column of its OWN parent row, the moment both exist, same "an
+  // UPDATE-only PATCH would otherwise 404 on first use" reasoning. Never
+  // writes a status -- this table has none.
+  function seedOneSubRowColumnValue(subRowId, subRowColumnId, actor) {
+    db.prepare(
+      `INSERT INTO sub_row_column_value (sub_row_id, sub_row_column_id, value, updated_at, updated_by_email, updated_by_name)
+       VALUES ($subRowId, $subRowColumnId, NULL, $updatedAt, $email, $name)`
+    ).run({ $subRowId: subRowId, $subRowColumnId: subRowColumnId, $updatedAt: nowIso(), $email: actor.email, $name: actor.name });
+    recordAudit({ subRowId, subRowColumnId, actor });
+  }
+
   // Seeds every EXISTING column for one newly-added row -- mirrors
   // tc-elite-rollout's own seedNewClient(), extended for both compound
   // columns AND compound rows. `kind` is this NEW row's own kind;
@@ -524,6 +592,11 @@ function createRolloutTrackerDb(dbPath) {
         seedOneSubRowStatus(subRowId, col.id, actor);
         recomputeRowRollup(rowId, col.id, actor);
       }
+      // This row's own sub_row_columns (text-only, scoped to this one
+      // row's detail sheet -- see sub_row_columns' own schema comment) --
+      // no rollup implications, just a blank value seeded.
+      const subRowColumns = db.prepare('SELECT id FROM sub_row_columns WHERE parent_row_id = ?').all(rowId);
+      for (const src of subRowColumns) seedOneSubRowColumnValue(subRowId, src.id, actor);
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
@@ -664,6 +737,37 @@ function createRolloutTrackerDb(dbPath) {
     return { id: subRowId, key };
   }
 
+  // Adds one text-only "sub-row column" to an already-existing compound
+  // row -- the "Add Column" action on that row's own detail sheet, by
+  // request ("allow independent adding of text columns to the subsheet,
+  // not other columns"). Scoped to just this one row (see sub_row_columns'
+  // own schema comment) -- never touches the main grid, other rows, or
+  // any status logic. Seeds a blank value across every existing sub-row.
+  // Returns { id, key }.
+  function addSubRowColumn(rowId, label, actor) {
+    const existingKeys = new Set(db.prepare('SELECT key FROM sub_row_columns WHERE parent_row_id = ?').all(rowId).map((r) => r.key));
+    const key = uniqueKey(slugify(label), existingKeys);
+    const maxSort = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM sub_row_columns WHERE parent_row_id = ?').get(rowId).m;
+    const info = db
+      .prepare(
+        `INSERT INTO sub_row_columns (parent_row_id, key, label, sort_order, created_at, created_by_email, created_by_name)
+         VALUES ($rowId, $key, $label, $sortOrder, $createdAt, $email, $name)`
+      )
+      .run({ $rowId: rowId, $key: key, $label: label.trim(), $sortOrder: maxSort + 1, $createdAt: nowIso(), $email: actor.email, $name: actor.name });
+    const subRowColumnId = Number(info.lastInsertRowid);
+    recordAudit({ rowId, subRowColumnId, actor });
+    db.exec('BEGIN');
+    try {
+      const subRows = db.prepare('SELECT id FROM sub_rows WHERE parent_row_id = ?').all(rowId);
+      for (const sr of subRows) seedOneSubRowColumnValue(sr.id, subRowColumnId, actor);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    return { id: subRowColumnId, key };
+  }
+
   // Re-numbers every column's sort_order to match `orderedColumnIds`'
   // own position (0, 1, 2, ...) -- by request ("Dragging a column left or
   // right... Each column will need to be numbered to retain order after
@@ -766,6 +870,25 @@ function createRolloutTrackerDb(dbPath) {
     recordAudit({ subRowId, columnId, oldStatus: existing.status, newStatus: status, oldReason: existing.reason, newReason: reason, actor });
     recomputeRowRollup(subRow.parent_row_id, columnId, actor);
     return { status, reason };
+  }
+
+  // The sub_row_columns mirror of setSubRowCell above -- updates one
+  // sub-row's free-text value for one of its own row's sub_row_columns.
+  // No rollup to recompute -- purely informational, same as a text-type
+  // stage's own value. Returns { value } written, or null if no such
+  // sub-row/sub-row-column value exists (caller returns 404); undefined
+  // if the sub-row itself doesn't exist.
+  function setSubRowColumnValue(subRowId, subRowColumnId, value, actor) {
+    const subRow = db.prepare('SELECT * FROM sub_rows WHERE id = ?').get(subRowId);
+    if (!subRow) return undefined;
+    const existing = db.prepare('SELECT * FROM sub_row_column_value WHERE sub_row_id = ? AND sub_row_column_id = ?').get(subRowId, subRowColumnId);
+    if (!existing) return null;
+    db.prepare(
+      `UPDATE sub_row_column_value SET value = $value, updated_at = $updatedAt, updated_by_email = $email, updated_by_name = $name
+       WHERE sub_row_id = $subRowId AND sub_row_column_id = $subRowColumnId`
+    ).run({ $value: value, $updatedAt: nowIso(), $email: actor.email, $name: actor.name, $subRowId: subRowId, $subRowColumnId: subRowColumnId });
+    recordAudit({ subRowId, subRowColumnId, oldReason: existing.value, newReason: value, actor });
+    return { value };
   }
 
   // Sets every SIMPLE STATUS column's cell for one row to the same
@@ -1069,17 +1192,40 @@ function createRolloutTrackerDb(dbPath) {
     const columns = db.prepare(`SELECT * FROM columns WHERE kind = 'simple' AND cell_type = 'status' ORDER BY sort_order, id`).all();
     const subRowRows = db.prepare('SELECT * FROM sub_rows WHERE parent_row_id = ? ORDER BY sort_order, id').all(rowId);
     const subRowStatusRows = db.prepare(`SELECT srs.* FROM sub_row_status srs JOIN sub_rows sr ON sr.id = srs.sub_row_id WHERE sr.parent_row_id = ?`).all(rowId);
+    // This row's own sub_row_columns (text-only, see their schema
+    // comment) -- never filtered/hidden (purely informational, same rule
+    // every other text field on this dashboard follows), and kept in a
+    // SEPARATE textCells map per sub-row rather than merged into `cells`
+    // -- sub_row_columns.id and columns.id are independent sequences and
+    // can collide numerically, so mixing them into one keyed-by-id map
+    // would risk one silently overwriting the other.
+    const subRowColumns = db.prepare('SELECT * FROM sub_row_columns WHERE parent_row_id = ? ORDER BY sort_order, id').all(rowId);
+    const subRowColumnValueRows = db
+      .prepare(`SELECT v.* FROM sub_row_column_value v JOIN sub_rows sr ON sr.id = v.sub_row_id WHERE sr.parent_row_id = ?`)
+      .all(rowId);
 
     const cellsBySubRow = new Map();
     for (const r of subRowStatusRows) {
       if (!cellsBySubRow.has(r.sub_row_id)) cellsBySubRow.set(r.sub_row_id, {});
       cellsBySubRow.get(r.sub_row_id)[r.column_id] = { status: r.status, reason: r.reason };
     }
-    const subRows = subRowRows.map((sr) => ({ id: sr.id, key: sr.key, label: sr.label, cells: cellsBySubRow.get(sr.id) || {} }));
+    const textCellsBySubRow = new Map();
+    for (const r of subRowColumnValueRows) {
+      if (!textCellsBySubRow.has(r.sub_row_id)) textCellsBySubRow.set(r.sub_row_id, {});
+      textCellsBySubRow.get(r.sub_row_id)[r.sub_row_column_id] = { value: r.value };
+    }
+    const subRows = subRowRows.map((sr) => ({
+      id: sr.id,
+      key: sr.key,
+      label: sr.label,
+      cells: cellsBySubRow.get(sr.id) || {},
+      textCells: textCellsBySubRow.get(sr.id) || {},
+    }));
 
     return {
       row: { id: row.id, name: row.name },
       columns: columns.map((c) => ({ id: c.id, key: c.key, label: c.label })),
+      subRowColumns: subRowColumns.map((c) => ({ id: c.id, key: c.key, label: c.label })),
       subRows,
       totalSubRows: subRows.length,
     };
@@ -1101,6 +1247,13 @@ function createRolloutTrackerDb(dbPath) {
     return db.prepare('SELECT * FROM audit_log WHERE sub_row_id = ? AND column_id = ? ORDER BY changed_at DESC LIMIT 200').all(subRowId, columnId);
   }
 
+  // Same, for one sub-row's value in one of its row's own sub_row_columns.
+  function getSubRowColumnHistory(subRowId, subRowColumnId) {
+    return db
+      .prepare('SELECT * FROM audit_log WHERE sub_row_id = ? AND sub_row_column_id = ? ORDER BY changed_at DESC LIMIT 200')
+      .all(subRowId, subRowColumnId);
+  }
+
   return {
     db,
     nowIso,
@@ -1116,11 +1269,13 @@ function createRolloutTrackerDb(dbPath) {
     addColumn,
     addStage,
     addSubRow,
+    addSubRowColumn,
     reorderColumns,
     reorderStages,
     setCell,
     setStage,
     setSubRowCell,
+    setSubRowColumnValue,
     bulkSetRow,
     bulkSetColumn,
     bulkSetStages,
@@ -1136,6 +1291,7 @@ function createRolloutTrackerDb(dbPath) {
     getCellHistory,
     getStageHistory,
     getSubRowHistory,
+    getSubRowColumnHistory,
   };
 }
 

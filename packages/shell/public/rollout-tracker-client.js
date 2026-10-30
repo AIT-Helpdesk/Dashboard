@@ -1251,13 +1251,14 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     }
 
     function renderRowDetail(data) {
-      const { row, columns, subRows, totalSubRows } = data;
+      const { row, columns, subRowColumns, subRows, totalSubRows } = data;
       const heading = document.createElement('div');
       heading.className = 'section-heading section-heading--scorecard';
       heading.textContent = `${row.name} -- Detail`;
       detailContainer.innerHTML = '';
       detailContainer.appendChild(heading);
       detailContainer.appendChild(buildAddSubRowSection(row));
+      detailContainer.appendChild(buildAddSubRowColumnSection(row));
 
       if (subRows.length === 0) {
         const message = showAllRowDetail
@@ -1273,7 +1274,10 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       // comment). Column headers are NOT draggable here -- column order
       // is a single global concept owned by the master grid's own
       // header drag, not something a row's own detail sheet reorders
-      // independently.
+      // independently. subRowColumns are this ONE row's own text-only
+      // columns (see rollout-tracker-db.js's own sub_row_columns comment)
+      // -- rendered after the shared status columns, also not draggable
+      // (no reorder support for these yet).
       const table = document.createElement('table');
       table.className = 'rt-table';
       table.innerHTML = `
@@ -1286,6 +1290,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
                   `<th class="rt-col-header" draggable="false" data-column-id="${c.id}"><button type="button" class="rt-bulk-col-btn" data-column-id="${c.id}" title="Set every currently visible sub-row in this column to the same value">⚙</button> ${escapeHtml(c.label)}</th>`
               )
               .join('')}
+            ${subRowColumns.map((c) => `<th class="rt-col-header" draggable="false">${escapeHtml(c.label)}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -1295,6 +1300,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             <tr>
               <td><button type="button" class="rt-bulk-row-btn" data-sub-row-id="${subRow.id}" title="Set every column in this sub-row to the same value">⚙</button> ${escapeHtml(subRow.label)}</td>
               ${columns.map((col) => subRowCellHtml(subRow, col)).join('')}
+              ${subRowColumns.map((src) => subRowColumnCellHtml(subRow, src)).join('')}
             </tr>`
             )
             .join('')}
@@ -1384,6 +1390,77 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       return wrapper;
     }
 
+    // Add [Text] Column -- the text-only mirror of buildAddStageSection
+    // above, scoped to just this one row's own detail sheet, by request
+    // ("allow independent adding of text columns to the subsheet, not
+    // other columns"). No type picker -- every sub-row column is text,
+    // so there's nothing to choose (status stays owned by the shared
+    // simple columns rendered just before these).
+    function buildAddSubRowColumnSection(row) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'rt-add-stage';
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button-link button-link--small';
+      button.textContent = 'Add Column';
+      button.hidden = !isManager;
+      wrapper.appendChild(button);
+
+      const form = document.createElement('div');
+      form.className = 'resource-group';
+      form.hidden = true;
+      form.innerHTML = `
+        <div class="section-heading">Add Column to ${escapeHtml(row.name)}</div>
+        <div class="rt-form-body">
+          <input type="text" class="rt-new-sub-row-column-label" placeholder="Column label (free text)" />
+          <p class="status error rt-add-sub-row-column-error" hidden></p>
+          <div class="rt-form-actions">
+            <button type="button" class="button-link rt-save-sub-row-column-button">Save</button>
+            <button type="button" class="rt-cancel-sub-row-column-button">Cancel</button>
+          </div>
+        </div>
+      `;
+      wrapper.appendChild(form);
+
+      button.addEventListener('click', () => {
+        form.hidden = false;
+        form.querySelector('.rt-new-sub-row-column-label').focus();
+      });
+      form.querySelector('.rt-cancel-sub-row-column-button').addEventListener('click', () => {
+        form.hidden = true;
+      });
+      form.querySelector('.rt-save-sub-row-column-button').addEventListener('click', async () => {
+        const errorEl = form.querySelector('.rt-add-sub-row-column-error');
+        errorEl.hidden = true;
+        const label = form.querySelector('.rt-new-sub-row-column-label').value.trim();
+        if (!label) {
+          errorEl.hidden = false;
+          errorEl.textContent = 'Column label is required.';
+          return;
+        }
+        try {
+          const res = await fetch(`${apiBase}/rows/${row.id}/sub-columns`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label }),
+          });
+          const resData = await res.json();
+          if (!res.ok) throw new Error(resData.error || `Request failed (${res.status})`);
+          form.hidden = true;
+          // Purely informational -- no rollup to recompute -- so a plain
+          // loadRowDetail() is enough, no need for the master grid itself
+          // to reload the way an actual status/sub-row change needs.
+          await loadRowDetail(row.id);
+        } catch (err) {
+          errorEl.hidden = false;
+          errorEl.textContent = `Error: ${err.message}`;
+        }
+      });
+
+      return wrapper;
+    }
+
     // Always a status cell -- a sub-row never targets a text or compound
     // column (see rollout-tracker-db.js's own sub_rows comment), so
     // unlike stageCellHtml there's no text branch to make here.
@@ -1393,6 +1470,15 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       return `<td class="rt-cell rt-cell--${status} rt-cell--editable" data-kind="sub-row-cell" data-sub-row-id="${subRow.id}" data-column-id="${col.id}" data-status="${status}" data-reason="${escapeHtml(cell.reason || '')}" data-label="${escapeHtml(col.label)}" data-row-name="${escapeHtml(subRow.label)}">${STATUS_SYMBOLS[status]}</td>`;
     }
 
+    // Always a free-text cell -- every sub-row column is text-only (see
+    // buildAddSubRowColumnSection's own comment), so unlike subRowCellHtml
+    // above there's no status branch here, same shape as stageCellHtml's
+    // own text branch.
+    function subRowColumnCellHtml(subRow, subRowColumn) {
+      const cell = subRow.textCells[subRowColumn.id] || {};
+      return `<td class="rt-cell rt-cell--text rt-cell--editable" data-kind="sub-row-column-text" data-sub-row-id="${subRow.id}" data-sub-row-column-id="${subRowColumn.id}" data-reason="${escapeHtml(cell.value || '')}" data-label="${escapeHtml(subRowColumn.label)}" data-row-name="${escapeHtml(subRow.label)}">${escapeHtml(cell.value || '')}</td>`;
+    }
+
     function historyContextFor(td) {
       return {
         kind: td.dataset.kind,
@@ -1400,16 +1486,19 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         columnId: td.dataset.columnId,
         stageId: td.dataset.stageId,
         subRowId: td.dataset.subRowId,
+        subRowColumnId: td.dataset.subRowColumnId,
         label: td.dataset.label,
         rowName: td.dataset.rowName,
       };
     }
 
     // 'stage-status'/'stage-text' both live on /stages/.../history;
-    // 'sub-row-cell' lives on /sub-rows/.../history; a plain master-grid
+    // 'sub-row-cell' lives on /sub-rows/.../history; 'sub-row-column-text'
+    // lives on /sub-rows/.../sub-columns/.../history; a plain master-grid
     // cell (kind 'cell' or 'cell-text') lives on /cells/.../history.
     function historyUrlFor(ctx) {
       if (ctx.kind === 'stage-status' || ctx.kind === 'stage-text') return `${apiBase}/stages/${ctx.rowId}/${ctx.stageId}/history`;
+      if (ctx.kind === 'sub-row-column-text') return `${apiBase}/sub-rows/${ctx.subRowId}/sub-columns/${ctx.subRowColumnId}/history`;
       if (ctx.kind === 'sub-row-cell') return `${apiBase}/sub-rows/${ctx.subRowId}/${ctx.columnId}/history`;
       return `${apiBase}/cells/${ctx.rowId}/${ctx.columnId}/history`;
     }
@@ -1523,7 +1612,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
           body.innerHTML = '<p class="status">No history found.</p>';
           return;
         }
-        const isText = ctx.kind === 'stage-text' || ctx.kind === 'cell-text';
+        const isText = ctx.kind === 'stage-text' || ctx.kind === 'cell-text' || ctx.kind === 'sub-row-column-text';
         body.innerHTML = `<ul class="history-modal-list">${data.history.map((entry) => historyEntryHtml(entry, isText)).join('')}</ul>`;
       } catch (err) {
         overlay.querySelector('.history-modal-body').innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
@@ -1550,12 +1639,16 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       const kind = td.dataset.kind;
       const originalHtml = td.innerHTML;
 
-      if (kind === 'stage-text' || kind === 'cell-text') {
+      if (kind === 'stage-text' || kind === 'cell-text' || kind === 'sub-row-column-text') {
         td.innerHTML = `<input type="text" class="rt-inline-input" value="${escapeHtml(td.dataset.reason || '')}" />`;
         const input = td.querySelector('input');
         input.focus();
         input.select();
-        const commit = () => (kind === 'stage-text' ? saveStageText(td, input.value.trim(), originalHtml) : saveCellText(td, input.value.trim(), originalHtml));
+        const commit = () => {
+          if (kind === 'stage-text') return saveStageText(td, input.value.trim(), originalHtml);
+          if (kind === 'sub-row-column-text') return saveSubRowColumnText(td, input.value.trim(), originalHtml);
+          return saveCellText(td, input.value.trim(), originalHtml);
+        };
         input.addEventListener('blur', commit);
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') input.blur();
@@ -1672,6 +1765,28 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         // both the grid and this same detail sheet need a fresh fetch,
         // not just this one cell.
         await loadGrid();
+      } catch (err) {
+        td.innerHTML = originalHtml;
+        alert(`Error saving: ${err.message}`);
+      }
+    }
+
+    // The sub_row_columns mirror of saveStageText/saveCellText above --
+    // body is { value } (not { reason }, matching the PATCH route's own
+    // shape), but the cell's own dataset still uses `reason` to store the
+    // current value, same as every other text cell, so the shared
+    // click-to-edit code in openCellEditor above needs no special-casing.
+    async function saveSubRowColumnText(td, value, originalHtml) {
+      try {
+        const res = await fetch(`${apiBase}/sub-rows/${td.dataset.subRowId}/sub-columns/${td.dataset.subRowColumnId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        td.dataset.reason = value;
+        td.textContent = value;
       } catch (err) {
         td.innerHTML = originalHtml;
         alert(`Error saving: ${err.message}`);

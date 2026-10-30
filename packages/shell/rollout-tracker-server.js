@@ -224,11 +224,13 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     addColumn,
     addStage,
     addSubRow,
+    addSubRowColumn,
     reorderColumns,
     reorderStages,
     setCell,
     setStage,
     setSubRowCell,
+    setSubRowColumnValue,
     bulkSetRow,
     bulkSetColumn,
     bulkSetStages,
@@ -244,6 +246,7 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     getCellHistory,
     getStageHistory,
     getSubRowHistory,
+    getSubRowColumnHistory,
   } = createRolloutTrackerDb(path.join(storageDir, 'data.db'));
   // The generated package folder's own name IS this tracker's page id --
   // Rollout Tracker Builder names the folder exactly `<slug>-tracker` and
@@ -592,7 +595,10 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const totalSubRows = detail.subRows.length; // captured before filtering, same reasoning as GET / above
       const { columns, subRows } =
         req.query.all === 'true' ? { columns: detail.columns, subRows: detail.subRows } : applyRowDetailDefaultFilter(detail.columns, detail.subRows);
-      res.json({ row: detail.row, columns, subRows, totalSubRows, rowNoun });
+      // subRowColumns (this row's own text-only "sub-row columns") are
+      // never filtered -- purely informational, same as every other text
+      // field, so always sent in full regardless of Show All.
+      res.json({ row: detail.row, columns, subRowColumns: detail.subRowColumns, subRows, totalSubRows, rowNoun });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
@@ -623,6 +629,33 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     }
   });
 
+  // Add a text-only "sub-row column" to an already-existing compound
+  // row's own detail sheet -- Tracker Manager-only, same reasoning as
+  // POST /rows/:rowId/sub-rows above. By request ("allow independent
+  // adding of text columns to the subsheet, not other columns") -- scoped
+  // to just this one row, never the main grid or any other row's own
+  // sub-table. Seeds a blank value across every existing sub-row per
+  // addSubRowColumn() in rollout-tracker-db.js.
+  router.post('/rows/:rowId/sub-columns', (req, res) => {
+    try {
+      if (!isTrackerManager(req)) {
+        return res.status(403).json({ error: 'Only a Tracker Manager can add a column.' });
+      }
+      const rowId = Number(req.params.rowId);
+      const row = db.prepare('SELECT * FROM rows WHERE id = ?').get(rowId);
+      if (!row) return res.status(404).json({ error: `No such ${rowNoun.toLowerCase()}.` });
+      if (row.kind !== 'compound') return res.status(400).json({ error: `Only a compound ${rowNoun.toLowerCase()} can have its own sub-row columns.` });
+
+      const label = (req.body?.label || '').trim();
+      if (!label) return res.status(400).json({ error: 'Column label is required.' });
+      const subRowColumn = addSubRowColumn(rowId, label, actorFrom(req));
+      res.status(201).json({ id: subRowColumn.id, key: subRowColumn.key, label });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Update one sub-row's status for one status-type-simple column --
   // open to every signed-in user, same reasoning as PATCH
   // /stages/:rowId/:stageId above (editing an already-added sub-row's
@@ -647,6 +680,29 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const reason = STATUSES_WITH_COMMENT.includes(status) ? rawReason || null : null;
 
       const result = setSubRowCell(subRowId, columnId, status, reason, actorFrom(req));
+      if (result === undefined) return res.status(404).json({ error: 'Sub-row not found.' });
+      if (result === null) return res.status(404).json({ error: 'No such sub-row/column.' });
+      res.json(result);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update one sub-row's value for one of its own row's sub_row_columns --
+  // the sub_row_columns mirror of PATCH /sub-rows/:subRowId/:columnId
+  // above, open to every signed-in user for the same reason (editing an
+  // already-added column's value isn't a structural change). Just free
+  // text -- no status, no rollup.
+  router.patch('/sub-rows/:subRowId/sub-columns/:subRowColumnId', (req, res) => {
+    try {
+      const subRowId = Number(req.params.subRowId);
+      const subRowColumnId = Number(req.params.subRowColumnId);
+      const subRowColumn = db.prepare('SELECT id FROM sub_row_columns WHERE id = ?').get(subRowColumnId);
+      if (!subRowColumn) return res.status(404).json({ error: 'Column not found.' });
+
+      const value = typeof req.body?.value === 'string' ? req.body.value : null;
+      const result = setSubRowColumnValue(subRowId, subRowColumnId, value, actorFrom(req));
       if (result === undefined) return res.status(404).json({ error: 'Sub-row not found.' });
       if (result === null) return res.status(404).json({ error: 'No such sub-row/column.' });
       res.json(result);
@@ -1108,6 +1164,19 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const subRowId = Number(req.params.subRowId);
       const columnId = Number(req.params.columnId);
       const history = getSubRowHistory(subRowId, columnId);
+      res.json({ history: history.map(shapeAuditRow) });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The sub_row_columns mirror of the history route just above.
+  router.get('/sub-rows/:subRowId/sub-columns/:subRowColumnId/history', (req, res) => {
+    try {
+      const subRowId = Number(req.params.subRowId);
+      const subRowColumnId = Number(req.params.subRowColumnId);
+      const history = getSubRowColumnHistory(subRowId, subRowColumnId);
       res.json({ history: history.map(shapeAuditRow) });
     } catch (err) {
       console.error(err);
