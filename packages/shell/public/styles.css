@@ -8310,10 +8310,11 @@ tr.accrued-time-yellow-row th {
 /* Widened for the "Mark Renewals as Done" popup's own small table (Client/
    Order #/Product/Created plus a leading checkbox column) -- the default
    .history-modal-panel's 30rem max-width (styles.css, further down) is
-   sized for a simple form, not a table. */
+   sized for a simple form, not a table. ~30% wider again on top of that,
+   by request (50rem -> 65rem). */
 .history-modal-panel.cc-mark-renewals-modal-panel {
-  width: 50rem;
-  max-width: min(50rem, 95vw);
+  width: 65rem;
+  max-width: min(65rem, 95vw);
 }
 
 /* Contract Checks -- "Terminating Annual/Monthly" & "Renewing Annual"
