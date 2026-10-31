@@ -1149,9 +1149,25 @@ export function mount(container) {
       </tr>`;
       })
       .join('');
+    // Link to the real Tech Cover contract itself, by request -- next to
+    // the Service Name header, not its own column (every line here
+    // belongs to the same one contract, so there's nothing per-row to
+    // show). Labelled plainly "Contract", never the real contract name
+    // (that column further along already uses "Contract" for the
+    // count) -- same real deep-link + "open a positioned window"
+    // convention contractLink() below uses, off the first line's own
+    // already-loaded r.contractUrl rather than a fresh fetch.
+    const contractUrl = lines[0]?.contractUrl;
+    // .chk-tce-contract-link overrides this table's own dashboard-wide
+    // th { text-transform: uppercase } for just this link, by request --
+    // "Contract" stays plain mixed-case rather than reading as "CONTRACT"
+    // like the rest of the header row.
+    const contractHeaderLink = contractUrl
+      ? ` - <a href="${escapeHtml(contractUrl)}" target="_blank" rel="noopener noreferrer" class="chk-tce-contract-link" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">Contract</a>`
+      : '';
     return `
       <table class="chk-tce-lines-table">
-        <thead><tr class="shaded-row"><th>Service Name</th><th>Tag</th><th>TC Calc</th><th>Contract</th><th>Unit Price</th><th>Total</th><th></th></tr></thead>
+        <thead><tr class="shaded-row"><th>Service Name${contractHeaderLink}</th><th>Tag</th><th>TC Calc</th><th>Contract</th><th>Unit Price</th><th>Total</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     `;
@@ -1351,7 +1367,7 @@ export function mount(container) {
         const isBundle = btn.dataset.isBundle === '1';
         const row = techCoverContractLines(prefix).find((r) => String(r.id) === unitId && !!r.isBundle === isBundle);
         if (!row) return;
-        openAdjustUnitsModal(row, { sign: Number(btn.dataset.sign), unitsAmount: Number(btn.dataset.unitsAmount) });
+        openAdjustUnitsModal(row, { sign: Number(btn.dataset.sign), unitsAmount: Number(btn.dataset.unitsAmount) }, btn);
       });
     });
   }
@@ -1450,9 +1466,17 @@ export function mount(container) {
     // refresh updates whichever tier(s) are showing at once. Same spot
     // whether there's a real Tech Cover contract or just the "No Tech
     // Cover Contract" flag -- refreshing is just as useful either way
-    // (e.g. checking whether a contract just got added).
+    // (e.g. checking whether a contract just got added). Inlined onto
+    // the heading's own line (after its text and any "Calculating..."
+    // badge), by request, rather than sat above it on its own line --
+    // `replace` only ever touches the FIRST `</h2>` in the block, which
+    // is always this one shared heading (the first tier's own, or the
+    // "No Tech Cover Contract" fallback -- never a later tier's).
     if (techCoverHtml) {
-      techCoverHtml = `<button type="button" class="button-link button-link--small chk-tce-refresh-btn">&#8635; Refresh</button>${techCoverHtml}`;
+      techCoverHtml = techCoverHtml.replace(
+        '</h2>',
+        ' <button type="button" class="button-link button-link--small chk-tce-refresh-btn">&#8635; Refresh</button></h2>'
+      );
     }
     const otherContractsHtml = otherContractsSectionHtml();
     let tceHtml;
@@ -2851,7 +2875,15 @@ export function mount(container) {
       </div>`;
   }
 
-  function openAdjustUnitsModal(row, prefill) {
+  // `triggerButton` -- the Tech Cover table's own Update pill that opened
+  // this (undefined from the pencil-icon call site, which has no such
+  // button) -- threaded through to openAdjustUnitsConfirmModal() below so
+  // it can be flipped to "Wait" the moment the real write succeeds, by
+  // request: loadServices()'s own re-fetch/re-render afterwards is slow
+  // enough that the stale Update button would otherwise still sit there
+  // clickable for a while, inviting a second, redundant adjustment on the
+  // same line before the first one's even reflected on screen.
+  function openAdjustUnitsModal(row, prefill, triggerButton) {
     const overlay = document.createElement('div');
     overlay.className = 'history-modal-overlay';
     const sign = prefill?.sign ?? 1;
@@ -2928,7 +2960,7 @@ export function mount(container) {
         return;
       }
       close();
-      openAdjustUnitsConfirmModal(row, effectiveDate, currentSign, unitsAmount);
+      openAdjustUnitsConfirmModal(row, effectiveDate, currentSign, unitsAmount, triggerButton);
     });
     unitsInput.focus();
   }
@@ -2943,7 +2975,7 @@ export function mount(container) {
   // prices the real adjustment the same way server-side, since
   // adjustedUnitPrice/adjustedUnitCost are deliberately never sent (see
   // contract-services/server.js's own adjustUnits()).
-  function openAdjustUnitsConfirmModal(row, effectiveDate, sign, unitsAmount) {
+  function openAdjustUnitsConfirmModal(row, effectiveDate, sign, unitsAmount, triggerButton) {
     const unitChange = sign * unitsAmount;
     // By request: when a change is already pending for the next period
     // (row.nextPeriodUnits -- the same value the main table's own "1 (2)"
@@ -3015,7 +3047,7 @@ export function mount(container) {
     });
     overlay.querySelector('.chk-adjust-back-button').addEventListener('click', () => {
       close();
-      openAdjustUnitsModal(row, { effectiveDate, sign, unitsAmount });
+      openAdjustUnitsModal(row, { effectiveDate, sign, unitsAmount }, triggerButton);
     });
 
     const confirmButton = overlay.querySelector('.chk-adjust-confirm-button');
@@ -3035,6 +3067,17 @@ export function mount(container) {
           unitChange,
         });
         close();
+        // Flip the triggering Update pill to a disabled "Wait" (never
+        // re-enabled here -- loadServices()'s own re-render below either
+        // drops it entirely, once the mismatch it was fixing is gone, or
+        // rebuilds a fresh enabled one), by request -- its own real write
+        // just succeeded, but this refresh is slow enough that leaving it
+        // clickable in the meantime invites a second, redundant
+        // adjustment on the same line before the first is even reflected.
+        if (triggerButton) {
+          triggerButton.disabled = true;
+          triggerButton.textContent = 'Wait';
+        }
         await loadServices(autotaskClientInput.value.trim(), exactClientInput.checked, monthInput.value);
       } catch (err) {
         errorEl.hidden = false;

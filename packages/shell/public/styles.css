@@ -1885,6 +1885,13 @@ h1 {
 .chk-tce-lines-table th:nth-child(6) {
   text-align: right;
 }
+/* Overrides this table's own dashboard-wide th { text-transform:
+   uppercase }, by request -- "Contract" (the link to the real Tech
+   Cover contract, in the Service Name header) stays plain mixed-case
+   rather than reading as "CONTRACT" like the rest of the header row. */
+.chk-tce-lines-table .chk-tce-contract-link {
+  text-transform: none;
+}
 /* Green pill, by request ("more visible than a pencil") -- same real
    action as the Contracts section's own pencil-icon adjustment, just
    pre-filled with the fix amount. Same #16a34a used dashboard-wide
