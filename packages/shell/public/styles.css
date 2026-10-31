@@ -8344,7 +8344,16 @@ tr.accrued-time-yellow-row th {
 .cc-subs-expiring-buttons {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.5rem 1rem;
+}
+/* Each button + its own "Recently Terminated/Renewed" link stacked as one
+   column, by request ("directly under the 3 buttons") -- was a separate
+   row below all 3 buttons, not aligned under any one of them. */
+.cc-subs-expiring-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
 }
 /* "(?)" grey state, by request -- shown before the count is actually
    known (the HTML's own initial class/text, still loading) and again if
@@ -8366,6 +8375,22 @@ tr.accrued-time-yellow-row th {
 .cc-subs-expiring-btn.cc-subs-expiring-btn--alert-green {
   background: color-mix(in srgb, #16a34a 15%, transparent);
   color: #16a34a;
+}
+/* "Recently Terminated"/"Recently Renewed" links, by request -- "just
+   those words", small text, no underline, directly under their matching
+   button (see .cc-subs-expiring-group above) -- plain text, not a
+   .button-link. */
+.cc-recently-completed-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+.cc-recently-completed-link:hover {
+  color: var(--accent);
 }
 
 /* Sized for its own Client/Subscription/Status/Auto-Renews/Term/Expires/

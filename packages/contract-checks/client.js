@@ -118,9 +118,18 @@ export function mount(container) {
     <div class="contract-checks-page">
     <header class="page-header">
       <div class="cc-subs-expiring-buttons">
-        <button type="button" class="button-link button-link--small cc-subs-expiring-btn cc-subs-expiring-btn--pending" data-category="terminating-annual">Terminating Annual (?)</button>
-        <button type="button" class="button-link button-link--small cc-subs-expiring-btn cc-subs-expiring-btn--pending" data-category="terminating-monthly">Terminating Monthly (?)</button>
-        <button type="button" class="button-link button-link--small cc-subs-expiring-btn cc-subs-expiring-btn--pending" data-category="renewing-annual">Renewing Annual (?)</button>
+        <div class="cc-subs-expiring-group">
+          <button type="button" class="button-link button-link--small cc-subs-expiring-btn cc-subs-expiring-btn--pending" data-category="terminating-annual">Terminating Annual (?)</button>
+          <button type="button" class="cc-recently-completed-link" data-order-type="termination">Recently Terminated</button>
+        </div>
+        <div class="cc-subs-expiring-group">
+          <button type="button" class="button-link button-link--small cc-subs-expiring-btn cc-subs-expiring-btn--pending" data-category="terminating-monthly">Terminating Monthly (?)</button>
+          <button type="button" class="cc-recently-completed-link" data-order-type="termination">Recently Terminated</button>
+        </div>
+        <div class="cc-subs-expiring-group">
+          <button type="button" class="button-link button-link--small cc-subs-expiring-btn cc-subs-expiring-btn--pending" data-category="renewing-annual">Renewing Annual (?)</button>
+          <button type="button" class="cc-recently-completed-link" data-order-type="renewal">Recently Renewed</button>
+        </div>
       </div>
       <form id="filter-form" class="date-form date-form--stacked">
         <div class="date-form-row">
@@ -297,6 +306,9 @@ export function mount(container) {
   markRenewalsButton.addEventListener('click', () => openMarkRenewalsModal());
   subsExpiringButtonEls.forEach((el, key) => el.addEventListener('click', () => openSubsExpiringModal(key)));
   loadSubsExpiringCounts();
+  container.querySelectorAll('.cc-recently-completed-link').forEach((el) => {
+    el.addEventListener('click', () => openRecentlyCompletedModal(el.dataset.orderType, el.textContent));
+  });
 
   async function load() {
     const allDates = allDatesInput.checked;
@@ -1550,6 +1562,101 @@ export function mount(container) {
               <td class="ticket-number">${formatPeriod(r.term)}</td>
               <td class="ticket-number">${formatDate(r.expirationDate)}</td>
               <td class="ticket-number">${formatDays(r.daysUntilExpiry)}</td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  // "Recently Terminated"/"Recently Renewed" links, by request -- one
+  // plain text link under each of the 3 Subscriptions Expiring buttons
+  // above ("Recently Terminated" appears twice, under both Terminating
+  // Annual and Terminating Monthly, since THIS page's own order data has
+  // no Annual/Monthly split for terminations the way Subscriptions
+  // Expiring's Autotask-sourced data above does -- both trigger the exact
+  // same termination query). Window: items actually marked ALL DONE back
+  // to the 1st of the PREVIOUS month if today (AEST) is the 8th or
+  // earlier, otherwise the 1st of the CURRENT month -- by request. AEST
+  // "today" computed the same way this page's own defaultSinceISO() is,
+  // just with its own 8th-of-month threshold rather than that function's
+  // 7th -- kept as its own function rather than sharing, since the two
+  // thresholds are a deliberate, separate choice, not a shared constant.
+  function recentlyCompletedSinceISO() {
+    const aestNow = new Date(Date.now() + 10 * 60 * 60 * 1000);
+    const year = aestNow.getUTCFullYear();
+    const month = aestNow.getUTCMonth();
+    const day = aestNow.getUTCDate();
+    const targetMonth = day <= 8 ? month - 1 : month;
+    return new Date(Date.UTC(year, targetMonth, 1)).toISOString().slice(0, 10);
+  }
+
+  async function openRecentlyCompletedModal(orderType, label) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel wsp-qa-modal-panel cc-subs-expiring-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>${escapeHtml(label)}</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <p class="status">Loading...</p>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const headerSpanEl = overlay.querySelector('.history-modal-panel-header span');
+    const bodyEl = overlay.querySelector('.history-modal-body');
+    try {
+      const since = recentlyCompletedSinceISO();
+      const params = new URLSearchParams({ orderType, since });
+      const res = await fetch(`/api/contract-checks/recently-completed?${params.toString()}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+      const items = data.items || [];
+      headerSpanEl.textContent = `${label} (${items.length})`;
+      bodyEl.innerHTML =
+        items.length === 0 ? `<p class="status">Nothing completed since ${escapeHtml(formatDate(since))}.</p>` : recentlyCompletedTableHtml(items);
+    } catch (err) {
+      bodyEl.innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  // Sorted server-side (listRecentlyCompleted() in db.js) by effective
+  // date (provisionedCellHtml()'s own date, falling back to when it was
+  // completed) latest first, by request -- not re-sorted here.
+  function recentlyCompletedTableHtml(items) {
+    return `
+      <table class="contract-checks-table">
+        <thead>
+          <tr><th>Client</th><th>Order #</th><th>Product</th><th>Effective Date</th><th>Completed</th><th>By</th></tr>
+        </thead>
+        <tbody>
+          ${items
+            .map(
+              (o) => `
+            <tr>
+              <td>${escapeHtml(o.clientName || '')}</td>
+              <td class="ticket-number">${escapeHtml(o.orderNumber || '')}</td>
+              <td class="cc-product-cell">${escapeHtml((o.products || []).map((p) => p.name).join(', '))}</td>
+              <td class="ticket-number">${provisionedCellHtml(o)}</td>
+              <td class="ticket-number">${formatDateTime(o.allDoneAt)}</td>
+              <td>${escapeHtml(o.allDoneByName || '')}</td>
             </tr>`
             )
             .join('')}

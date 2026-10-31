@@ -995,6 +995,25 @@ function listChangeEventsSince(processType, sinceIso) {
     .all(processType, sinceIso, ...TOGGLE_FIELDS);
 }
 
+// "Recently Terminated"/"Recently Renewed" links (under the Terminating
+// Annual/Terminating Monthly/Renewing Annual buttons), by request -- every
+// item of the given order_type that's actually been marked ALL DONE
+// (completed), windowed by WHEN it was completed (all_done_at), newest
+// effective date (provisioning_date -- what the main table's own
+// "Provisioned" column shows, falling back to all_done_at for the rare row
+// with no provisioning_date set at all) first. Two different dates doing
+// two different jobs, by request: the window scopes by completion date,
+// the ORDER BY is "effective date latest first".
+function listRecentlyCompleted(processType, orderType, sinceIso) {
+  return db
+    .prepare(
+      `SELECT * FROM items
+       WHERE process_type = ? AND order_type = ? AND all_done_at IS NOT NULL AND all_done_at >= ?
+       ORDER BY COALESCE(provisioning_date, all_done_at) DESC`
+    )
+    .all(processType, orderType, sinceIso);
+}
+
 // Every currently-outstanding row for a process type -- used by sync.js's
 // "refresh outstanding" step (see the README's sync design) to re-check
 // status/pending_date on anything not yet resolved, regardless of how old
@@ -1111,6 +1130,7 @@ module.exports = {
   saveSyncState,
   listItemsRaw,
   listChangeEventsSince,
+  listRecentlyCompleted,
   listRenewalsEligibleForBulkDone,
   listOutstandingProcessing,
   listCompletedMissingProvisioningDate,

@@ -8,6 +8,7 @@ const {
   updateItemFields,
   listItemsRaw,
   listChangeEventsSince,
+  listRecentlyCompleted,
   listRenewalsEligibleForBulkDone,
   getItemHistory,
   getToggleHistories,
@@ -800,6 +801,34 @@ router.get('/change-report', async (req, res) => {
       products: JSON.parse(row.products_json || '[]'),
     }));
     res.json({ sinceDate, events });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Recently Terminated"/"Recently Renewed" links under the Terminating
+// Annual/Terminating Monthly/Renewing Annual buttons, by request -- same
+// `since` convention as Change Report above (a plain YYYY-MM-DD date,
+// widened to a real AEST day boundary here via aestDayBoundsIso()), just
+// windowing on when an item of the given order_type was actually marked
+// ALL DONE rather than on audit_log events. orderType is 'termination' for
+// both of the Terminating buttons (this page's own order data has no
+// Annual/Monthly split the way Subscriptions Expiring's Autotask-sourced
+// data above does) or 'renewal' for Renewing Annual.
+router.get('/recently-completed', (req, res) => {
+  const orderType = req.query.orderType;
+  if (!['termination', 'renewal'].includes(orderType)) {
+    return res.status(400).json({ error: 'Query param "orderType" must be "termination" or "renewal".' });
+  }
+  const sinceDate = req.query.since;
+  if (!sinceDate || !/^\d{4}-\d{2}-\d{2}$/.test(sinceDate)) {
+    return res.status(400).json({ error: 'Query param "since" is required in YYYY-MM-DD format.' });
+  }
+  try {
+    const startISO = aestDayBoundsIso(sinceDate).startISO;
+    const items = listRecentlyCompleted(PROCESS_TYPE, orderType, startISO).map(shapeItem);
+    res.json({ sinceDate, orderType, items });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
