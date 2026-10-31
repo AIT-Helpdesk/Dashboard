@@ -1903,6 +1903,15 @@ h1 {
   color: #16a34a;
   font-weight: 600;
 }
+/* "Wait" state, by request -- the same real Update pill, flipped the
+   moment its write succeeds (see openAdjustUnitsConfirmModal() in
+   client.js), swapped to this dashboard's own yellowy-orange #f59e0b
+   (same shade .chk-tce-show-users-btn above already uses) rather than
+   staying green, so it reads as "busy", not "still actionable". */
+.chk-tce-update-btn--wait {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #f59e0b;
+}
 /* "Load User Counts" pill, by request -- this dashboard's own yellowy-
    orange, same #f59e0b used dashboard-wide (.text-highlight-orange,
    .status.loading, etc.), not a new one-off shade. Same color-mix-tint-

@@ -3077,6 +3077,7 @@ export function mount(container) {
         if (triggerButton) {
           triggerButton.disabled = true;
           triggerButton.textContent = 'Wait';
+          triggerButton.classList.add('chk-tce-update-btn--wait');
         }
         await loadServices(autotaskClientInput.value.trim(), exactClientInput.checked, monthInput.value);
       } catch (err) {
