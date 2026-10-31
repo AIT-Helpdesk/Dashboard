@@ -1394,6 +1394,26 @@ export function mount(container) {
     });
   }
 
+  // "Refresh" button, by request -- re-fetches just Services and Datto
+  // RMM (the two live sources Tech Cover's own TC Calc compares against),
+  // not the whole page's worth of searches. Not awaited/no manual button
+  // reset here -- same "fire and forget, each load re-renders the Summary
+  // on its own completion" convention loadOtherContracts() above already
+  // follows; loadServices() already does this itself, and loadDattoRmm()
+  // now does too (see its own comment), so the very next render rebuilds
+  // this button fresh (re-enabled) regardless of which of the two
+  // finishes last.
+  function wireTechCoverRefreshButton(container) {
+    container.querySelectorAll('.chk-tce-refresh-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        btn.disabled = true;
+        btn.textContent = 'Refreshing...';
+        loadServices(autotaskClientInput.value.trim(), exactClientInput.checked, monthInput.value);
+        loadDattoRmm(dattoSiteInput.value.trim(), true);
+      });
+    });
+  }
+
   // Matched against the row's own RENDERED text (every column, tags
   // stripped) rather than re-deriving a separate searchable string from
   // row's raw fields -- guarantees the filter can never drift out of sync
@@ -1417,11 +1437,23 @@ export function mount(container) {
     // just silently absent. Only once Services has actually resolved a
     // company (lastServicesData) -- before that there's nothing to
     // report yet, same gating otherContractsSectionHtml() below uses.
-    const techCoverHtml = techCoverTierHtml.length
+    let techCoverHtml = techCoverTierHtml.length
       ? techCoverTierHtml.join('<hr class="chk-box-divider" />')
       : lastServicesData
         ? '<h2 class="chk-section-heading chk-section-heading--alert">No Tech Cover Contract</h2>'
         : '';
+    // Refresh just THIS section, by request -- re-fetches only Services
+    // (contract lines/Contract column) and Datto RMM (W/S/N/O counts),
+    // the two live sources TC Calc actually compares against, without
+    // re-running Orders/Subscriptions/M365 Tenancy's own full search.
+    // One shared button above both tiers (not one each) since a single
+    // refresh updates whichever tier(s) are showing at once. Same spot
+    // whether there's a real Tech Cover contract or just the "No Tech
+    // Cover Contract" flag -- refreshing is just as useful either way
+    // (e.g. checking whether a contract just got added).
+    if (techCoverHtml) {
+      techCoverHtml = `<button type="button" class="button-link button-link--small chk-tce-refresh-btn">&#8635; Refresh</button>${techCoverHtml}`;
+    }
     const otherContractsHtml = otherContractsSectionHtml();
     let tceHtml;
     if (techCoverHtml && otherContractsHtml) {
@@ -1438,6 +1470,7 @@ export function mount(container) {
       summaryResultsEl.innerHTML = tceHtml;
       wireTechCoverUpdateButtons(summaryResultsEl);
       wireTechCoverShowUsersButtons(summaryResultsEl);
+      wireTechCoverRefreshButton(summaryResultsEl);
       summaryStatusEl.hidden = false;
       summaryStatusEl.className = 'status';
       summaryStatusEl.textContent =
@@ -1461,6 +1494,7 @@ export function mount(container) {
     `;
     wireTechCoverUpdateButtons(summaryResultsEl);
     wireTechCoverShowUsersButtons(summaryResultsEl);
+    wireTechCoverRefreshButton(summaryResultsEl);
   }
 
   // ---------------------------------------------------------------------
@@ -3015,6 +3049,16 @@ export function mount(container) {
   // Section 5 -- Datto RMM (devices & open alerts), read-only
   // ---------------------------------------------------------------------
 
+  // Real gap, confirmed (same kind of bug loadServices()'s own comment
+  // already documents): this was the one section whose own load() never
+  // re-rendered the Client Check Summary at all, even though Tech Cover's
+  // own TC Calc reads lastDattoData for its W/S/N/O counts. Harmless
+  // before Tech Cover existed (nothing else depended on this), but once
+  // it did, a Datto refresh (including the new "Refresh" button on the
+  // Tech Cover section itself) could finish and silently leave the
+  // Summary showing stale counts. Now calls it on every path, same
+  // "whichever load finishes LAST leaves the freshest view" convention
+  // every other section here already follows.
   async function loadDattoRmm(site, force) {
     dattoStatusEl.hidden = false;
     dattoStatusEl.className = 'status';
@@ -3023,6 +3067,7 @@ export function mount(container) {
     dattoResultsEl.innerHTML = '';
     if (!site) {
       dattoStatusEl.textContent = 'Type a Datto Site above (defaults to Autotask Client) to look up devices.';
+      activeRenderers.renderClientCheckSummary();
       return;
     }
     dattoStatusEl.className = 'status loading';
@@ -3033,9 +3078,11 @@ export function mount(container) {
       const data = await fetchJson(`/api/check-client/datto-rmm?${params.toString()}`, 'GET');
       lastDattoData = data;
       activeRenderers.renderDattoRmm(data);
+      activeRenderers.renderClientCheckSummary();
     } catch (err) {
       dattoStatusEl.className = 'status error';
       dattoStatusEl.textContent = `Error: ${err.message}`;
+      activeRenderers.renderClientCheckSummary();
     }
   }
 
