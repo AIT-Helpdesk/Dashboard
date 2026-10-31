@@ -1644,7 +1644,7 @@ export function mount(container) {
     return `
       <table class="contract-checks-table">
         <thead>
-          <tr><th>Client</th><th>Order #</th><th>Product</th><th>Effective Date</th><th>Completed</th><th>By</th></tr>
+          <tr><th>Client</th><th>Product</th><th>Effective Date</th></tr>
         </thead>
         <tbody>
           ${items
@@ -1652,11 +1652,8 @@ export function mount(container) {
               (o) => `
             <tr>
               <td>${escapeHtml(o.clientName || '')}</td>
-              <td class="ticket-number">${escapeHtml(o.orderNumber || '')}</td>
               <td class="cc-product-cell">${escapeHtml((o.products || []).map((p) => p.name).join(', '))}</td>
               <td class="ticket-number">${provisionedCellHtml(o)}</td>
-              <td class="ticket-number">${formatDateTime(o.allDoneAt)}</td>
-              <td>${escapeHtml(o.allDoneByName || '')}</td>
             </tr>`
             )
             .join('')}
