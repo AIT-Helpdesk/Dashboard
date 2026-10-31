@@ -1274,6 +1274,18 @@ export function mount(container) {
     return endedWithinLast13Months(c.endDate);
   }
 
+  // Contract Name links straight to the real Autotask contract, by
+  // request -- same deep-link URL (contract-services/server.js's own
+  // buildOtherContracts(), via getContractUrl()) and same "open a real
+  // separate positioned window, not just a new tab" convention this
+  // page's own Contracts table already uses (contractLink() below) --
+  // plain text if, for whatever reason, no URL came back.
+  function otherContractNameHtml(c) {
+    const label = escapeHtml(c.contractName);
+    if (!c.contractUrl) return label;
+    return `<a href="${escapeHtml(c.contractUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+  }
+
   // "Other Contracts" box, by request -- sits next to the Tech Cover
   // Check Summary section(s) above, listing every OTHER real contract on
   // this client (contract-services/server.js's own buildOtherContracts()
@@ -1292,7 +1304,16 @@ export function mount(container) {
     }
     const visible = lastOtherContractsData.contracts.filter(isVisibleOtherContract);
     const rows = visible.length
-      ? visible.map((c) => `<tr><td>${escapeHtml(c.contractName)}</td><td>${escapeHtml(c.status)}</td><td>${formatServiceDate(c.endDate)}</td></tr>`).join('')
+      ? visible
+          .map(
+            (c) => `
+      <tr>
+        <td>${otherContractNameHtml(c)}</td>
+        <td${c.statusCode !== 1 ? ' class="cell-flag-red"' : ''}>${escapeHtml(c.status)}</td>
+        <td>${formatServiceDate(c.endDate)}</td>
+      </tr>`
+          )
+          .join('')
       : '<tr><td colspan="3">No other contracts found.</td></tr>';
     return `
       <h2 class="chk-section-heading">Other Contracts</h2>

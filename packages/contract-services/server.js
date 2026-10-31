@@ -465,15 +465,21 @@ async function buildOtherContracts(companyIds, excludePrefixes = []) {
   const client = await getClient();
   const [contracts, statusLabels] = await Promise.all([fetchByFieldIn(client.contracts, 'companyID', companyIds), getPicklistLabels(client.contracts, 'status')]);
   const excluded = excludePrefixes.map((p) => p.trim().toLowerCase());
-  return contracts
-    .filter((c) => !excluded.some((p) => (c.contractName || '').trim().toLowerCase().startsWith(p)))
-    .map((c) => ({
+  const filtered = contracts.filter((c) => !excluded.some((p) => (c.contractName || '').trim().toLowerCase().startsWith(p)));
+  // getContractUrl() is async (same deep-link helper the Contracts table
+  // above already uses, via contractLink() in check-client/client.js), by
+  // request -- the Contract Name itself links straight to the real
+  // Autotask contract, not just plain text.
+  const shaped = await Promise.all(
+    filtered.map(async (c) => ({
       contractName: c.contractName,
+      contractUrl: await getContractUrl(c.id),
       status: statusLabels.get(c.status) || `#${c.status}`,
       statusCode: c.status,
       endDate: c.endDate,
     }))
-    .sort((a, b) => a.contractName.localeCompare(b.contractName));
+  );
+  return shaped.sort((a, b) => a.contractName.localeCompare(b.contractName));
 }
 
 // Attached to the router (a function, so it can carry extra named
