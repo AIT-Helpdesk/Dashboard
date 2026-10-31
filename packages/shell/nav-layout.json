@@ -126,11 +126,11 @@
     "children": [
       {
         "type": "page",
-        "id": "client-activity"
+        "id": "client-summary"
       },
       {
         "type": "page",
-        "id": "client-summary"
+        "id": "client-activity"
       },
       {
         "type": "page",
@@ -139,6 +139,10 @@
       {
         "type": "page",
         "id": "contract-services"
+      },
+      {
+        "type": "page",
+        "id": "m365-environment"
       },
       {
         "type": "page",
@@ -155,10 +159,6 @@
       {
         "type": "page",
         "id": "find-passwords"
-      },
-      {
-        "type": "page",
-        "id": "m365-environment"
       }
     ],
     "hidden": true
@@ -323,6 +323,10 @@
       {
         "type": "page",
         "id": "update-break-glass-accounts-mfa-tracker"
+      },
+      {
+        "type": "page",
+        "id": "training-test-tracker-tracker"
       }
     ]
   },
@@ -382,6 +386,11 @@
     "type": "category",
     "id": "missing-pages",
     "label": "Missing Pages",
-    "children": []
+    "children": [
+      {
+        "type": "page",
+        "id": "invoice-intake"
+      }
+    ]
   }
 ]
