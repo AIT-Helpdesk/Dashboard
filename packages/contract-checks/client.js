@@ -596,30 +596,59 @@ export function mount(container) {
     // ignores `color`, unlike a currentColor SVG). Styled in styles.css.
     const editIcon = `<button type="button" class="wsp-icon-btn cc-po-edit-btn" data-id="${o.id}" title="Edit ticket number"><svg class="cc-po-edit-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>`;
     if (!o.poNumber) return editIcon;
-    // target="_blank" stays as a real fallback (middle-click/ctrl-click/
-    // "open in new tab" all still work normally) -- the plain-click case is
-    // intercepted in wireRowActions() below to open a real separate WINDOW
-    // instead of a tab, positioned on the same monitor as this one, by
-    // request. rel="noopener" either way -- the opened ticket page never
-    // gets a handle back to this one.
-    //
-    // Hover tooltip, by request -- client/status/title straight from the
-    // real Autotask ticket (server.js's attachTicketDetails(), not this
-    // order's own Ingram-sourced clientName, which can legitimately name a
-    // different client than the ticket's own company). Ticket # and status
-    // share one line, by request; client and title each get their own.
-    // Any piece that failed to fetch (or the ticket has none, e.g. no
-    // title) is just left out of its line rather than showing "undefined".
-    const tooltipLines = [];
-    if (o.ticketClientName) tooltipLines.push(`Client: ${o.ticketClientName}`);
-    tooltipLines.push(`Ticket #${o.poNumber}${o.ticketStatus ? ` -- ${o.ticketStatus}` : ''}`);
-    if (o.ticketTitle) tooltipLines.push(`Title: ${o.ticketTitle}`);
-    const tooltip = tooltipLines.join('\n');
+    // PO # can now hold more than one ticket number, by request --
+    // separated by any mix of "&"/"-"/whitespace, same split sync.js's
+    // own parsePoTicketNumbers() uses server-side. A CAPTURING split (not
+    // a plain one) keeps the separator runs themselves in the output, so
+    // the text still reads exactly as typed; only the real ticket-number
+    // pieces (anything that ISN'T entirely "&"/"-"/whitespace/empty --
+    // real bug, confirmed: "&".trim() is still the truthy string "&",
+    // .trim() only strips whitespace, so a plain truthiness check here
+    // wrongly treated the separator itself as a piece, consuming a slot
+    // meant for the NEXT real ticket number and shifting every link after
+    // it one position out of alignment, exactly why a second ticket number
+    // always showed "not found" regardless of whether it actually
+    // resolved) line up by position with o.ticketLinks (one entry per
+    // typed number, in that same order, carrying its own resolved
+    // url/status/title/clientName -- null/missing for one that didn't
+    // resolve).
+    const parts = o.poNumber.split(/([&\-\s]+)/);
+    const links = o.ticketLinks || [];
+    let linkIndex = 0;
+    const piecesHtml = parts.map((part) => (/^[&\-\s]*$/.test(part) ? escapeHtml(part) : ticketPieceHtml(part, links[linkIndex++]))).join('');
+    return `${piecesHtml}${poFlagIconHtml(o)} ${editIcon}${rewstIconHtml(o)}`;
+  }
 
-    const linkOrText = o.ticketUrl
-      ? `<a href="${escapeHtml(o.ticketUrl)}" target="_blank" rel="noopener" class="cc-ticket-link" title="${escapeHtml(tooltip)}">${escapeHtml(o.poNumber)}</a>`
-      : `<span class="cc-po-not-found" title="Ticket not found in Autotask">${escapeHtml(o.poNumber)}</span>`;
-    return `${linkOrText}${poFlagIconHtml(o)} ${editIcon}${rewstIconHtml(o)}`;
+  // One typed ticket-number piece's own link (or not-found span), by
+  // request -- blue link + its own hover tooltip for a resolved one,
+  // yellowy-orange "not found" text for one that isn't, each independent
+  // of the others in the same PO # field. `link` is this piece's own
+  // entry in o.ticketLinks (undefined if there's ever a count mismatch --
+  // treated the same as "not found" rather than throwing). target="_blank"
+  // stays as a real fallback (middle-click/ctrl-click/"open in new tab"
+  // all still work normally) -- the plain-click case is intercepted in
+  // wireRowActions() below to open a real separate WINDOW instead of a
+  // tab, positioned on the same monitor as this one, by request.
+  // rel="noopener" either way -- the opened ticket page never gets a
+  // handle back to this one.
+  //
+  // Hover tooltip, by request -- client/status/title straight from the
+  // real Autotask ticket (server.js's attachTicketDetails(), not this
+  // order's own Ingram-sourced clientName, which can legitimately name a
+  // different client than the ticket's own company). Ticket # and status
+  // share one line, by request; client and title each get their own. Any
+  // piece that failed to fetch (or the ticket has none, e.g. no title) is
+  // just left out of its line rather than showing "undefined".
+  function ticketPieceHtml(text, link) {
+    if (!link || !link.url) {
+      return `<span class="cc-po-not-found" title="Ticket not found in Autotask">${escapeHtml(text)}</span>`;
+    }
+    const tooltipLines = [];
+    if (link.clientName) tooltipLines.push(`Client: ${link.clientName}`);
+    tooltipLines.push(`Ticket #${text}${link.status ? ` -- ${link.status}` : ''}`);
+    if (link.title) tooltipLines.push(`Title: ${link.title}`);
+    const tooltip = tooltipLines.join('\n');
+    return `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener" class="cc-ticket-link" title="${escapeHtml(tooltip)}">${escapeHtml(text)}</a>`;
   }
 
   // After the PO #, before the edit pencil, by request -- two mutually
@@ -1423,11 +1452,25 @@ export function mount(container) {
   // Renewals as Done) above 0 -- by request, the same "nothing to act on"
   // vs. "something needs attention" distinction .cc-mark-renewals-btn's
   // own red already carries on this page.
+  // "Client (#)" per distinct client in `rows`, one per line (a <title>
+  // tooltip renders \n as a real line break), sorted alphabetically -- by
+  // request, a quick hover preview of who's in a category without
+  // actually opening its modal.
+  function clientBreakdownTooltip(rows) {
+    const counts = new Map();
+    for (const r of rows) counts.set(r.clientName, (counts.get(r.clientName) || 0) + 1);
+    return [...counts.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, count]) => `${name} (${count})`)
+      .join('\n');
+  }
+
   function renderSubsExpiringButtons() {
     for (const cat of SUBS_EXPIRING_CATEGORIES) {
       const btn = subsExpiringButtonEls.get(cat.key);
       if (!btn) continue;
-      const count = subsExpiringRows.filter(cat.match).length;
+      const matchedRows = subsExpiringRows.filter(cat.match);
+      const count = matchedRows.length;
       btn.textContent = subsExpiringLoadError ? `${cat.label} (?)` : `${cat.label} (${count})`;
       // Grey "(?)" (same look as the initial pre-load state, by request)
       // while unknown -- a failed fetch, same as not having loaded yet --
@@ -1437,7 +1480,11 @@ export function mount(container) {
       btn.classList.toggle('cc-subs-expiring-btn--pending', !!subsExpiringLoadError);
       btn.classList.toggle('cc-subs-expiring-btn--alert', isAlert && !cat.alertGreen);
       btn.classList.toggle('cc-subs-expiring-btn--alert-green', isAlert && !!cat.alertGreen);
-      btn.title = subsExpiringLoadError ? `Couldn't load Subscriptions Expiring data: ${subsExpiringLoadError}` : '';
+      btn.title = subsExpiringLoadError
+        ? `Couldn't load Subscriptions Expiring data: ${subsExpiringLoadError}`
+        : count > 0
+          ? clientBreakdownTooltip(matchedRows)
+          : '';
     }
   }
 
@@ -1914,7 +1961,7 @@ export function mount(container) {
         </div>
         <div class="history-modal-body">
           <label class="wsp-qa-modal-label">
-            <input type="text" class="wsp-field cc-po-input" value="${escapeHtml((item && item.poNumber) || '')}" placeholder="e.g. T20260828.0017" maxlength="50" />
+            <input type="text" class="wsp-field cc-po-input" value="${escapeHtml((item && item.poNumber) || '')}" placeholder="e.g. T20260828.0017 (or several, separated by & / - / space)" maxlength="150" />
           </label>
           <p class="status error cc-po-modal-error" hidden></p>
           <div class="wsp-form-actions">

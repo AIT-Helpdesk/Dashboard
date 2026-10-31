@@ -224,6 +224,34 @@ async function resolveTicketAutotaskId(poNumber) {
   }
 }
 
+// PO # can now hold more than one ticket number, by request -- separated
+// by any mix of "&", "-", or whitespace (a real ticket number is a
+// letter + 8 digits + "." + 4 digits, so none of those three characters
+// ever appear inside one -- splitting on a run of them is unambiguous).
+// Blank/whitespace-only input returns an empty array, same as a single
+// blank PO # always has.
+function parsePoTicketNumbers(poNumber) {
+  return (poNumber || '')
+    .split(/[&\-\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// The plural mirror of resolveTicketAutotaskId() above -- resolves EVERY
+// ticket number parsed out of one PO # field, in parallel (each lookup
+// already has its own network-blip-safe try/catch via the singular
+// function above). Returns [{ ticketNumber, autotaskId }] in the same
+// order they were typed, autotaskId null for one that didn't resolve --
+// callers that just want the real linked ids filter those out
+// themselves, callers that need to flag a not-found one (client.js's own
+// PO # cell) keep the full list.
+async function resolveTicketAutotaskIds(poNumber) {
+  const ticketNumbers = parsePoTicketNumbers(poNumber);
+  return Promise.all(
+    ticketNumbers.map(async (ticketNumber) => ({ ticketNumber, autotaskId: await resolveTicketAutotaskId(ticketNumber) }))
+  );
+}
+
 // RN Renewal orders' PO # is never meaningful, by request -- Ingram auto-
 // renewals carry over the PO from the original order they're renewing,
 // which then wrongly links the renewal to that OLD ticket. Cleared here at
@@ -251,8 +279,14 @@ async function syncOneOrder(orderStub, token, customerNameById) {
   const poNumber = clearPo ? null : detail.poNumber;
   // No PO means nothing to resolve a ticket link from either -- skip the
   // lookup entirely rather than resolving against the (now-discarded) real
-  // PO just to throw the result away.
-  const ticketAutotaskId = clearPo ? null : await resolveTicketAutotaskId(detail.poNumber);
+  // PO just to throw the result away. May be several, by request --
+  // resolveTicketAutotaskIds() parses every ticket number out of the PO #
+  // field (any mix of "&"/"-"/whitespace) and resolves each independently.
+  // The FULL [{ticketNumber, autotaskId}] list is kept (autotaskId null
+  // entries included, not filtered out) -- db.js stores the whole thing,
+  // so client.js can still flag exactly WHICH typed piece didn't resolve,
+  // not just whether the order has at least one real link.
+  const ticketLinks = clearPo ? [] : await resolveTicketAutotaskIds(detail.poNumber);
 
   upsertOrder({
     processType: PROCESS_TYPE,
@@ -272,7 +306,7 @@ async function syncOneOrder(orderStub, token, customerNameById) {
     provisioningDate: detail.provisioningDate || orderStub.provisioningDate || null,
     pendingDate: detail.pendingDate,
     poNumber,
-    ticketAutotaskId,
+    ticketLinks,
     products: detail.products,
     currentTotal: detail.currentTotal,
   });
@@ -390,7 +424,7 @@ async function syncTerminations(token, customerNameById) {
       provisioningDate: sub.expirationDate || null,
       pendingDate: null,
       poNumber: null,
-      ticketAutotaskId: null,
+      ticketLinks: [],
       products,
       currentTotal: null,
     });
@@ -502,7 +536,7 @@ async function runSync() {
 // /items/:id when a user manually edits a row's PO # (Ticket #), by
 // request, so the linked Autotask ticket gets re-resolved the same way a
 // sync run would resolve it, not a separate copy of this lookup.
-module.exports = { runSync, PROCESS_TYPE, resolveTicketAutotaskId };
+module.exports = { runSync, PROCESS_TYPE, resolveTicketAutotaskId, resolveTicketAutotaskIds };
 
 if (require.main === module) {
   runSync()

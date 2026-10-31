@@ -289,6 +289,34 @@ function migrateAddPoNumberManual() {
 }
 migrateAddPoNumberManual();
 
+// Adds ticket_autotask_ids_json to items, by request ("more than one
+// ticket associated with an order" -- PO # can now hold several ticket
+// numbers, see sync.js's own resolveTicketAutotaskIds()). Plain nullable
+// ADD COLUMN, no CHECK constraint, same shape as migrateAddPoNumberManual()
+// above. Must run before migrateBlankAutoTerminationPoNumbers() below,
+// which references this column. Stores a JSON array of
+// { ticketNumber, autotaskId } -- one entry per ticket number typed into
+// PO #, autotaskId null for one that didn't resolve (see
+// resolveTicketAutotaskIds() in sync.js) -- so every row, old or new, has
+// a real array from day one, never NULL. Backfilled from the old single
+// ticket_autotask_id column (which stays in place -- SQLite here can't
+// cheaply drop it, and nothing needs the space back -- it just stops
+// being read by new code): a row that already had a resolved ticket gets
+// one entry (ticketNumber taken straight from its own po_number, since
+// that WAS the single ticket number typed at the time), a row with none
+// gets an empty array.
+function migrateAddTicketAutotaskIdsJson() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('items')`).all();
+  if (columns.some((c) => c.name === 'ticket_autotask_ids_json')) return;
+  db.exec(`ALTER TABLE items ADD COLUMN ticket_autotask_ids_json TEXT`);
+  const rows = db.prepare(`SELECT id, po_number, ticket_autotask_id FROM items`).all();
+  for (const row of rows) {
+    const links = row.ticket_autotask_id == null ? [] : [{ ticketNumber: row.po_number || null, autotaskId: row.ticket_autotask_id }];
+    db.prepare(`UPDATE items SET ticket_autotask_ids_json = $json WHERE id = $id`).run({ $json: JSON.stringify(links), $id: row.id });
+  }
+}
+migrateAddTicketAutotaskIdsJson();
+
 // One-time correction: terminations first synced into their own
 // 'ingram_termination' process_type, before being merged into the main
 // 'ingram_subscription' list by request, so they show up alongside
@@ -324,7 +352,9 @@ migrateMergeTerminationsIntoSubscriptionType();
 // itself always respects -- never clears a PO # a human has actually typed
 // in via the edit pencil.
 function migrateBlankAutoTerminationPoNumbers() {
-  db.prepare(`UPDATE items SET po_number = NULL, ticket_autotask_id = NULL WHERE order_type = 'termination' AND po_number_manual = 0 AND (po_number IS NOT NULL OR ticket_autotask_id IS NOT NULL)`).run();
+  db.prepare(
+    `UPDATE items SET po_number = NULL, ticket_autotask_id = NULL, ticket_autotask_ids_json = NULL WHERE order_type = 'termination' AND po_number_manual = 0 AND (po_number IS NOT NULL OR ticket_autotask_id IS NOT NULL OR ticket_autotask_ids_json IS NOT NULL)`
+  ).run();
 }
 migrateBlankAutoTerminationPoNumbers();
 
@@ -764,8 +794,17 @@ function updateItemFields(itemId, fields, actor) {
   // above) -- opening the editor and hitting Save is itself a real
   // confirmation.
   if ('poNumber' in fields) {
+    // fields.ticketLinks is the FULL [{ticketNumber, autotaskId}] list
+    // server.js's PATCH /items/:id route now resolves via
+    // resolveTicketAutotaskIds() -- same shape/reasoning as upsertOrder()'s
+    // own comment above. ticket_autotask_id (singular) stays set to just
+    // the first resolved id (or null).
+    const ticketLinks = Array.isArray(fields.ticketLinks) ? fields.ticketLinks : [];
+    const firstResolvedTicketId = ticketLinks.find((t) => t.autotaskId != null)?.autotaskId ?? null;
     sets.push('ticket_autotask_id = $ticketAutotaskId');
-    params.$ticketAutotaskId = fields.ticketAutotaskId ?? null;
+    params.$ticketAutotaskId = firstResolvedTicketId;
+    sets.push('ticket_autotask_ids_json = $ticketAutotaskIdsJson');
+    params.$ticketAutotaskIdsJson = JSON.stringify(ticketLinks);
     sets.push('po_number_manual = $poNumberManual');
     params.$poNumberManual = fields.poNumber ? 1 : 0;
   }
@@ -810,6 +849,21 @@ function upsertOrder(order) {
   // already have been manually protected).
   const preserveManualPo = !!(existing && existing.po_number_manual);
 
+  // order.ticketLinks is the FULL [{ticketNumber, autotaskId}] list
+  // sync.js's own resolveTicketAutotaskIds() now produces -- one entry
+  // per ticket number typed into PO #, autotaskId null for one that
+  // didn't resolve (kept, not filtered out, so client.js can still flag
+  // exactly which typed piece failed). ticket_autotask_id (singular)
+  // stays written too, as just the FIRST resolved id (or null), purely
+  // so a direct look at the row still shows something sane; nothing
+  // reads that column anymore (see migrateAddTicketAutotaskIdsJson()'s
+  // own comment above).
+  const ticketLinks = preserveManualPo
+    ? JSON.parse(existing.ticket_autotask_ids_json || '[]')
+    : Array.isArray(order.ticketLinks)
+      ? order.ticketLinks
+      : [];
+  const firstResolvedTicketId = ticketLinks.find((t) => t.autotaskId != null)?.autotaskId ?? null;
   const shared = {
     $orderNumber: order.orderNumber || null,
     $orderType: order.orderType || null,
@@ -820,7 +874,8 @@ function upsertOrder(order) {
     $provisioningDate: order.provisioningDate || null,
     $pendingDate: order.pendingDate || null,
     $poNumber: preserveManualPo ? existing.po_number : order.poNumber || null,
-    $ticketAutotaskId: preserveManualPo ? existing.ticket_autotask_id : order.ticketAutotaskId ?? null,
+    $ticketAutotaskId: firstResolvedTicketId,
+    $ticketAutotaskIdsJson: JSON.stringify(ticketLinks),
     $productsJson: JSON.stringify(order.products || []),
     $currentTotal: order.currentTotal ?? null,
   };
@@ -831,7 +886,8 @@ function upsertOrder(order) {
          order_number = $orderNumber, order_type = $orderType, customer_id = $customerId,
          client_name = $clientName, status = $status, creation_date = $creationDate,
          provisioning_date = $provisioningDate, pending_date = $pendingDate, po_number = $poNumber,
-         ticket_autotask_id = $ticketAutotaskId, products_json = $productsJson, current_total = $currentTotal,
+         ticket_autotask_id = $ticketAutotaskId, ticket_autotask_ids_json = $ticketAutotaskIdsJson,
+         products_json = $productsJson, current_total = $currentTotal,
          updated_at = $updatedAt
        WHERE id = $id`
     ).run({ ...shared, $updatedAt: now, $id: existing.id });
@@ -842,12 +898,12 @@ function upsertOrder(order) {
     .prepare(
       `INSERT INTO items (
          process_type, source_order_id, order_number, order_type, customer_id, client_name, status,
-         creation_date, provisioning_date, pending_date, po_number, ticket_autotask_id, products_json, current_total,
-         created_at, updated_at
+         creation_date, provisioning_date, pending_date, po_number, ticket_autotask_id, ticket_autotask_ids_json,
+         products_json, current_total, created_at, updated_at
        ) VALUES (
          $processType, $sourceOrderId, $orderNumber, $orderType, $customerId, $clientName, $status,
-         $creationDate, $provisioningDate, $pendingDate, $poNumber, $ticketAutotaskId, $productsJson, $currentTotal,
-         $createdAt, $updatedAt
+         $creationDate, $provisioningDate, $pendingDate, $poNumber, $ticketAutotaskId, $ticketAutotaskIdsJson,
+         $productsJson, $currentTotal, $createdAt, $updatedAt
        )`
     )
     .run({ ...shared, $processType: order.processType, $sourceOrderId: order.sourceOrderId, $createdAt: now, $updatedAt: now });

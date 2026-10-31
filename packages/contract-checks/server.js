@@ -19,7 +19,7 @@ const {
   listProductMappings,
   getSyncState,
 } = require('./db.js');
-const { runSync, PROCESS_TYPE, resolveTicketAutotaskId } = require('./sync.js');
+const { runSync, PROCESS_TYPE, resolveTicketAutotaskIds } = require('./sync.js');
 
 // Edit Template (below) is restricted to ADMIN_FULL_ACCESS (.env,
 // packages/shell/registry.js), by request. Checked here again, not just
@@ -292,6 +292,29 @@ async function postTicketNoteAndClose(ticketAutotaskId, noteText, actor, bulkWit
   return { ok: true, ...result };
 }
 
+// The plural mirror of calling postTicketNoteAndClose()/
+// reopenTicketWithNote() once -- by request, an order's PO # can now
+// link several tickets, and ALL DONE/reopen needs to act on every one of
+// them, not just the first. `fn` is one of those two functions, already
+// bound to everything except the ticket id (a plain arrow wrapping the
+// call); every id gets its own independent attempt, in parallel. `ok`
+// stays true only if EVERY ticket succeeded; on any failure, `error`
+// names which ticket(s) failed and why, joined into one string -- the
+// audit_log schema still has just one ticket_action_error column per
+// toggle, so a partial failure needs to read as one specific message,
+// not a generic "something failed".
+async function applyToAllTickets(ticketIds, fn) {
+  const results = await Promise.all(ticketIds.map((id) => fn(id)));
+  const ok = results.every((r) => r.ok);
+  const error = ok
+    ? null
+    : ticketIds
+        .map((id, i) => (results[i].ok ? null : `Ticket ${id}: ${results[i].error}`))
+        .filter(Boolean)
+        .join('; ');
+  return { ok, localDevSkipped: results.every((r) => r.localDevSkipped), error };
+}
+
 // snake_case DB row -> camelCase API shape. products_json is parsed back
 // into the same {name, quantity} array shape Ingram Orders already uses on
 // the wire, so the client's licensesCellHtml()-style rendering can be
@@ -317,6 +340,15 @@ function shapeItem(row) {
     poNumber: row.po_number,
     poNumberManual: !!row.po_number_manual,
     ticketAutotaskId: row.ticket_autotask_id,
+    // One entry per ticket number typed into PO # (any mix of
+    // "&"/"-"/whitespace, see sync.js's own resolveTicketAutotaskIds()),
+    // by request ("more than one ticket associated with an order") --
+    // { ticketNumber, autotaskId }, autotaskId null for one that didn't
+    // resolve. attachTicketDetails()/below mutates each entry in place
+    // with its own status/title/clientName/url once fetched.
+    // ticketAutotaskId above stays too, just as "the first resolved one",
+    // for anything that hasn't been updated to this plural shape.
+    ticketLinks: JSON.parse(row.ticket_autotask_ids_json || '[]'),
     products: JSON.parse(row.products_json || '[]'),
     currentTotal: row.current_total,
     checkedContractAt: row.checked_contract_at,
@@ -434,8 +466,15 @@ function buildResponse(items, { filterTerm, statusTerm, productTerm, includeRene
 const TICKET_DETAILS_CACHE_TTL_MS = 5 * 60 * 1000;
 const ticketDetailsCache = new Map(); // ticketAutotaskId -> { data, expiresAt }
 
+// o.ticketLinks can now hold several entries, by request -- this fetches
+// details for EVERY resolved one across every order (one batched query,
+// same as before, just over the flattened/deduped id set), mutating each
+// link object IN PLACE with its own status/title/clientName/url, rather
+// than one scalar per order. o.ticketDateMismatch stays a single flag per
+// order, by request ("the ? can appear just once") -- true if ANY of this
+// order's linked tickets mismatches.
 async function attachTicketDetails(orders) {
-  const neededIds = [...new Set(orders.filter((o) => o.ticketAutotaskId).map((o) => o.ticketAutotaskId))];
+  const neededIds = [...new Set(orders.flatMap((o) => (o.ticketLinks || []).map((l) => l.autotaskId).filter((id) => id != null)))];
   if (neededIds.length === 0) return;
 
   const now = Date.now();
@@ -478,22 +517,39 @@ async function attachTicketDetails(orders) {
   }
 
   for (const o of orders) {
-    if (!o.ticketAutotaskId) continue;
-    const cached = ticketDetailsCache.get(o.ticketAutotaskId);
-    if (!cached) continue;
-    o.ticketStatus = cached.data.status;
-    o.ticketTitle = cached.data.title;
-    o.ticketClientName = cached.data.clientName;
-    // The "?" icon (client.js) -- flags when the ticket's own creation
-    // date is more than a day away from the ORDER's creation date, a real
-    // sign this order's PO # might have resolved to the wrong ticket
-    // (exactly the stale-subscription-PONumber issue confirmed live this
-    // session). Deliberately skipped -- not just hidden, not computed at
-    // all -- when poNumberManual is set: a human already looked at this
-    // one and confirmed/corrected it, so there's nothing left to flag.
-    if (!o.poNumberManual && cached.data.createDate && o.creationDate) {
-      const diffMs = Math.abs(new Date(cached.data.createDate).getTime() - new Date(o.creationDate).getTime());
-      o.ticketDateMismatch = diffMs > 24 * 60 * 60 * 1000;
+    if (!o.ticketLinks || o.ticketLinks.length === 0) continue;
+    let anyMismatch = false;
+    for (const link of o.ticketLinks) {
+      if (link.autotaskId == null) continue;
+      const cached = ticketDetailsCache.get(link.autotaskId);
+      if (!cached) continue;
+      link.status = cached.data.status;
+      link.title = cached.data.title;
+      link.clientName = cached.data.clientName;
+      // The "?" icon (client.js) -- flags when a linked ticket's own
+      // creation date is more than a day away from the ORDER's creation
+      // date, a real sign this order's PO # might have resolved to the
+      // wrong ticket (exactly the stale-subscription-PONumber issue
+      // confirmed live this session). Deliberately skipped -- not just
+      // hidden, not computed at all -- when poNumberManual is set: a
+      // human already looked at this one and confirmed/corrected it, so
+      // there's nothing left to flag.
+      if (!o.poNumberManual && cached.data.createDate && o.creationDate) {
+        const diffMs = Math.abs(new Date(cached.data.createDate).getTime() - new Date(o.creationDate).getTime());
+        if (diffMs > 24 * 60 * 60 * 1000) anyMismatch = true;
+      }
+    }
+    if (anyMismatch) o.ticketDateMismatch = true;
+    // Singular fields kept too, from the FIRST linked ticket -- several
+    // older features (the ticket-status warning banners in client.js,
+    // Check Client's own read-only mirror) still read these scalars and
+    // are out of scope for this change; they just see "the first ticket"
+    // now instead of "the only ticket".
+    const first = o.ticketLinks.find((l) => l.autotaskId != null);
+    if (first) {
+      o.ticketStatus = first.status;
+      o.ticketTitle = first.title;
+      o.ticketClientName = first.clientName;
     }
   }
 }
@@ -519,7 +575,7 @@ const REWST_FLAG_FALSE_CACHE_TTL_MS = 20 * 60 * 1000;
 const rewstFlagCache = new Map(); // ticketAutotaskId -> { value: boolean, expiresAt }
 
 async function attachRewstStageDoneFlags(orders) {
-  const neededIds = [...new Set(orders.filter((o) => o.ticketAutotaskId).map((o) => o.ticketAutotaskId))];
+  const neededIds = [...new Set(orders.flatMap((o) => (o.ticketLinks || []).map((l) => l.autotaskId).filter((id) => id != null)))];
   if (neededIds.length === 0) return;
 
   const now = Date.now();
@@ -546,10 +602,24 @@ async function attachRewstStageDoneFlags(orders) {
     });
   }
 
+  // True if ANY linked ticket has passed through this status, by request
+  // -- closing/working several tickets on one order is conceptually one
+  // combined job, so one icon covers all of them rather than one per
+  // ticket.
   for (const o of orders) {
-    if (!o.ticketAutotaskId) continue;
-    const cached = rewstFlagCache.get(o.ticketAutotaskId);
-    if (cached) o.hasRewstStageDone = cached.value;
+    if (!o.ticketLinks || o.ticketLinks.length === 0) continue;
+    if (o.ticketLinks.some((l) => l.autotaskId != null && rewstFlagCache.get(l.autotaskId)?.value)) o.hasRewstStageDone = true;
+  }
+}
+
+// Mutates every one of shaped.ticketLinks with its own `url`, by request
+// ("more than one ticket associated with an order") -- so client.js's PO #
+// cell can link each resolved ticket number independently, not just the
+// first. getTicketUrl() caches per id, so this only costs a real request
+// the first time any given id is looked up.
+async function attachTicketUrls(shaped) {
+  for (const link of shaped.ticketLinks) {
+    if (link.autotaskId != null) link.url = await getTicketUrl(link.autotaskId);
   }
 }
 
@@ -570,6 +640,7 @@ async function loadEnrichedItems(processType, sinceIso) {
     rawRows.map(async (row) => {
       const shaped = shapeItem(row);
       shaped.ticketUrl = row.ticket_autotask_id ? await getTicketUrl(row.ticket_autotask_id) : null;
+      await attachTicketUrls(shaped);
       shaped.toggleHistory = toggleHistories[row.id] || {};
       shaped.historyCount = historyCounts[row.id] || 0;
       return shaped;
@@ -658,6 +729,7 @@ router.get('/renewals-eligible', async (req, res) => {
       rows.map(async (row) => {
         const shaped = shapeItem(row);
         shaped.ticketUrl = row.ticket_autotask_id ? await getTicketUrl(row.ticket_autotask_id) : null;
+        await attachTicketUrls(shaped);
         return shaped;
       })
     );
@@ -789,8 +861,15 @@ router.patch('/items/:id/toggle', async (req, res) => {
   // with no note at all. "Leave as COMPLETE" skips both the note and the
   // status change entirely -- a deliberate no-op, not a failure, so ok
   // stays true. Same skip-if-no-linked-ticket rule as the ticking-ON case.
+  // updated.ticket_autotask_ids_json: PO # can now link several tickets,
+  // by request -- every RESOLVED one of them (a not-found piece has no
+  // autotaskId to act on) gets the note/close or reopen below, via
+  // applyToAllTickets() above.
+  const updatedTicketIds = JSON.parse(updated.ticket_autotask_ids_json || '[]')
+    .map((l) => l.autotaskId)
+    .filter((id) => id != null);
   let ticketAction = null;
-  if (field === 'all_done' && updated.ticket_autotask_id) {
+  if (field === 'all_done' && updatedTicketIds.length > 0) {
     // Real incident, confirmed (by request -- Atho Group's Order
     // SO001384 / Ticket T20261012.0020: ALL DONE ticked locally, but the
     // real Autotask ticket never got the note/status change, with ZERO
@@ -809,21 +888,16 @@ router.patch('/items/:id/toggle', async (req, res) => {
     // see the `if (ticketAction)` block below.
     try {
       if (value) {
-        ticketAction = await postTicketNoteAndClose(
-          updated.ticket_autotask_id,
-          orderNoteBody(updated, { includeHeader: false }),
-          actor,
-          null,
-          closeTicket !== false,
-          req
+        ticketAction = await applyToAllTickets(updatedTicketIds, (ticketId) =>
+          postTicketNoteAndClose(ticketId, orderNoteBody(updated, { includeHeader: false }), actor, null, closeTicket !== false, req)
         );
       } else if (reopenStatus === 'leave') {
         ticketAction = { ok: true, statusReverted: false, statusLeftAsComplete: true };
       } else {
-        ticketAction = await reopenTicketWithNote(updated.ticket_autotask_id, Number(reopenStatus), actor, req);
+        ticketAction = await applyToAllTickets(updatedTicketIds, (ticketId) => reopenTicketWithNote(ticketId, Number(reopenStatus), actor, req));
       }
     } catch (err) {
-      console.error(`Contract Checks: unexpected error during ticket action for item ${updated.id} (ticket ${updated.ticket_autotask_id}):`, err.message);
+      console.error(`Contract Checks: unexpected error during ticket action for item ${updated.id} (tickets ${updatedTicketIds.join(', ')}):`, err.message);
       ticketAction = { ok: false, error: err.message };
     }
   }
@@ -899,17 +973,30 @@ router.post('/items/bulk-close', async (req, res) => {
   // Group by the REAL ticket, by request -- "sometimes the same ticket
   // number will be on several rows... merge the notes all into one note...
   // you only need to close each ticket once as well." One
-  // postTicketNoteAndClose() call per DISTINCT ticket_autotask_id, not one
-  // per item, so a ticket shared by N orders gets exactly one merged note
-  // and one status change, never N of each.
-  const groupsByTicket = new Map(); // ticketAutotaskId -> items[]
+  // postTicketNoteAndClose() call per DISTINCT ticket id, not one per
+  // item, so a ticket shared by N orders gets exactly one merged note and
+  // one status change, never N of each. An item linked to SEVERAL tickets
+  // (by request, "more than one ticket associated with an order") lands
+  // in every one of its own tickets' groups -- its own outcome is rolled
+  // up across all of them afterward, not recorded once per group (see the
+  // results loop below).
+  const itemTicketIds = new Map(); // itemId -> ticket id[]
+  const groupsByTicket = new Map(); // ticketId -> items[]
   const itemsWithoutTicket = [];
   for (const item of items) {
-    if (item.ticket_autotask_id) {
-      if (!groupsByTicket.has(item.ticket_autotask_id)) groupsByTicket.set(item.ticket_autotask_id, []);
-      groupsByTicket.get(item.ticket_autotask_id).push(item);
-    } else {
+    // Only the RESOLVED ones -- a not-found piece has no autotaskId to
+    // group/act on.
+    const ticketIds = JSON.parse(item.ticket_autotask_ids_json || '[]')
+      .map((l) => l.autotaskId)
+      .filter((id) => id != null);
+    itemTicketIds.set(item.id, ticketIds);
+    if (ticketIds.length === 0) {
       itemsWithoutTicket.push(item);
+      continue;
+    }
+    for (const ticketId of ticketIds) {
+      if (!groupsByTicket.has(ticketId)) groupsByTicket.set(ticketId, []);
+      groupsByTicket.get(ticketId).push(item);
     }
   }
 
@@ -924,7 +1011,7 @@ router.post('/items/bulk-close', async (req, res) => {
   }));
 
   console.log(`Contract Checks: bulk-close starting for ${items.length} item(s) across ${groupsByTicket.size} ticket(s): ${items.map((i) => i.order_number).join(', ')}`);
-  const results = [];
+  const ticketActionByTicketId = new Map();
   for (const [ticketId, groupItems] of groupsByTicket) {
     console.log(`Contract Checks: bulk-close processing ticket ${ticketId} (orders: ${groupItems.map((i) => i.order_number).join(', ')})...`);
     // Each order's own note content, prefixed with its own order number, by
@@ -951,20 +1038,30 @@ router.post('/items/bulk-close', async (req, res) => {
       ticketAction = { ok: false, error: err.message };
     }
     console.log(`Contract Checks: bulk-close result for ticket ${ticketId}:`, JSON.stringify(ticketAction));
-    // Same outcome stamp as the single-item toggle route -- every item in
-    // this ticket group shares the one merged note/status-change result,
-    // so the same 'sent'/'failed'/'local_dev_skipped' lands on every one
-    // of their own audit_log rows (there's no per-item "skipped" case
-    // here -- bulk close has no "Leave as COMPLETE" option, unlike a
-    // single untick).
-    const result = ticketAction.localDevSkipped ? 'local_dev_skipped' : ticketAction.ok ? 'sent' : 'failed';
-    for (const item of groupItems) {
-      recordTicketActionOutcome(auditLogIdByItemId.get(item.id), result, ticketAction.ok ? null : ticketAction.error);
-      results.push({ itemId: item.id, orderNumber: item.order_number, ticketAction });
-    }
+    ticketActionByTicketId.set(ticketId, ticketAction);
   }
-  for (const item of itemsWithoutTicket) {
-    results.push({ itemId: item.id, orderNumber: item.order_number, ticketAction: null });
+
+  // Rolls each item's own outcome up across EVERY one of its own tickets
+  // (just one, for the common single-ticket case) -- ok only if all of
+  // them succeeded; on any failure, error names which ticket(s) failed
+  // and why, same aggregation shape as applyToAllTickets() above (the
+  // single-toggle route's own equivalent), since the audit_log schema
+  // still has just one ticket_action_error column per toggle.
+  const results = [];
+  for (const item of items) {
+    const ticketIds = itemTicketIds.get(item.id);
+    if (ticketIds.length === 0) {
+      results.push({ itemId: item.id, orderNumber: item.order_number, ticketAction: null });
+      continue;
+    }
+    const actions = ticketIds.map((id) => ticketActionByTicketId.get(id));
+    const ok = actions.every((a) => a.ok);
+    const localDevSkipped = actions.every((a) => a.localDevSkipped);
+    const error = ok ? null : ticketIds.map((id, i) => (actions[i].ok ? null : `Ticket ${id}: ${actions[i].error}`)).filter(Boolean).join('; ');
+    const ticketAction = { ok, localDevSkipped, error };
+    const result = localDevSkipped ? 'local_dev_skipped' : ok ? 'sent' : 'failed';
+    recordTicketActionOutcome(auditLogIdByItemId.get(item.id), result, ok ? null : error);
+    results.push({ itemId: item.id, orderNumber: item.order_number, ticketAction });
   }
   console.log(`Contract Checks: bulk-close finished for ${items.length} item(s).`);
 
@@ -998,7 +1095,14 @@ router.patch('/items/:id', async (req, res) => {
   // text. async route -- this is a real Autotask lookup, not a DB read.
   if ('poNumber' in body) {
     fields.poNumber = body.poNumber ? String(body.poNumber).trim() : null;
-    fields.ticketAutotaskId = await resolveTicketAutotaskId(fields.poNumber);
+    // Plural, by request ("more than one ticket associated with an
+    // order") -- resolveTicketAutotaskIds() parses every ticket number
+    // out of the field (any mix of "&"/"-"/whitespace) and resolves each
+    // independently, same as sync.js's own syncOneOrder() now does. The
+    // FULL list is kept (autotaskId null entries included) -- db.js
+    // stores the whole thing, so client.js can still flag exactly WHICH
+    // typed piece didn't resolve.
+    fields.ticketLinks = await resolveTicketAutotaskIds(fields.poNumber);
   }
 
   const actor = { email: req.session.user.email, name: req.session.user.name };

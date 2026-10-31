@@ -1651,11 +1651,34 @@ export function mount(container) {
     }
   }
 
+  // PO # can now hold more than one ticket number, by request -- same
+  // split (any mix of "&"/"-"/whitespace, separators kept so the text
+  // still reads exactly as typed) and same per-piece o.ticketLinks
+  // line-up Contract Checks' own poNumberCellHtml() uses; see that page's
+  // own comment for the full reasoning. This page's own version stays
+  // read-only (no edit pencil, no per-ticket hover tooltip -- just the
+  // link vs. not-found-orange split), matching how this copy already
+  // differed from Contract Checks' own before this change.
   function poNumberCellHtml(o) {
     if (!o.poNumber) return '';
-    const linkOrText = o.ticketUrl
-      ? `<a href="${escapeHtml(o.ticketUrl)}" target="_blank" rel="noopener" class="cc-ticket-link">${escapeHtml(o.poNumber)}</a>`
-      : `<span title="Ticket not found in Autotask">${escapeHtml(o.poNumber)}</span>`;
+    // Real bug, confirmed (same fix as Contract Checks' own
+    // poNumberCellHtml()): "&".trim() is still the truthy string "&", so
+    // a plain truthiness check here wrongly treated the separator itself
+    // as a ticket piece, consuming a links[] slot meant for the NEXT real
+    // ticket number and shifting everything after it out of alignment --
+    // checking "is this part ENTIRELY separator characters" instead.
+    const parts = o.poNumber.split(/([&\-\s]+)/);
+    const links = o.ticketLinks || [];
+    let linkIndex = 0;
+    const linkOrText = parts
+      .map((part) => {
+        if (/^[&\-\s]*$/.test(part)) return escapeHtml(part);
+        const link = links[linkIndex++];
+        return link && link.url
+          ? `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener" class="cc-ticket-link">${escapeHtml(part)}</a>`
+          : `<span class="cc-po-not-found" title="Ticket not found in Autotask">${escapeHtml(part)}</span>`;
+      })
+      .join('');
     // Small icon after the link, by request, when this ticket's status
     // history ever passed through "Rewst - Stage Done" -- same
     // attachRewstStageDoneFlags() flag Contract Checks' own page shows
