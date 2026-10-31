@@ -116,6 +116,10 @@
     "label": "Client Info"
   },
   {
+    "type": "page",
+    "id": "client-search-tabs"
+  },
+  {
     "type": "category",
     "id": "client-pages",
     "label": "Client Pages",

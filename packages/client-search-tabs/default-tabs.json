@@ -1,0 +1,14 @@
+[
+  {
+    "id": "client-contacts",
+    "label": "Client Contacts"
+  },
+  {
+    "id": "classification-summary",
+    "label": "Clients by Classification"
+  },
+  {
+    "id": "find-passwords",
+    "label": "Find Passwords"
+  }
+]
