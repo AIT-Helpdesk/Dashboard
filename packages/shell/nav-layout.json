@@ -323,10 +323,6 @@
       {
         "type": "page",
         "id": "update-break-glass-accounts-mfa-tracker"
-      },
-      {
-        "type": "page",
-        "id": "training-test-tracker-tracker"
       }
     ]
   },
