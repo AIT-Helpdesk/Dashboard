@@ -2147,6 +2147,18 @@ h1 {
   color: #d97706;
   font-weight: 700;
   margin-left: 0.3rem;
+  /* A bit bigger, by request -- more obvious than the plain text size
+     around it. */
+  font-size: 1.15em;
+}
+/* PO # text when its ticket number wasn't found in Autotask at all
+   (poNumberCellHtml() in client.js) -- same yellowy-orange used
+   dashboard-wide (.text-highlight-orange, .status.loading), by request,
+   not a new one-off shade. Color only, deliberately not bold like
+   .text-highlight-orange itself -- just flagging the text, not shouting
+   it. */
+.cc-po-not-found {
+  color: #f59e0b;
 }
 /* Client Financials' unpaid-invoice warning (client.js's unpaidIconHtml())
    -- real red, unlike the amber "worth checking" convention just above:

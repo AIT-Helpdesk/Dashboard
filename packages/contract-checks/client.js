@@ -618,7 +618,7 @@ export function mount(container) {
 
     const linkOrText = o.ticketUrl
       ? `<a href="${escapeHtml(o.ticketUrl)}" target="_blank" rel="noopener" class="cc-ticket-link" title="${escapeHtml(tooltip)}">${escapeHtml(o.poNumber)}</a>`
-      : `<span title="Ticket not found in Autotask">${escapeHtml(o.poNumber)}</span>`;
+      : `<span class="cc-po-not-found" title="Ticket not found in Autotask">${escapeHtml(o.poNumber)}</span>`;
     return `${linkOrText}${poFlagIconHtml(o)} ${editIcon}${rewstIconHtml(o)}`;
   }
 
