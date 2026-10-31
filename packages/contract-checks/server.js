@@ -791,19 +791,40 @@ router.patch('/items/:id/toggle', async (req, res) => {
   // stays true. Same skip-if-no-linked-ticket rule as the ticking-ON case.
   let ticketAction = null;
   if (field === 'all_done' && updated.ticket_autotask_id) {
-    if (value) {
-      ticketAction = await postTicketNoteAndClose(
-        updated.ticket_autotask_id,
-        orderNoteBody(updated, { includeHeader: false }),
-        actor,
-        null,
-        closeTicket !== false,
-        req
-      );
-    } else if (reopenStatus === 'leave') {
-      ticketAction = { ok: true, statusReverted: false, statusLeftAsComplete: true };
-    } else {
-      ticketAction = await reopenTicketWithNote(updated.ticket_autotask_id, Number(reopenStatus), actor, req);
+    // Real incident, confirmed (by request -- Atho Group's Order
+    // SO001384 / Ticket T20261012.0020: ALL DONE ticked locally, but the
+    // real Autotask ticket never got the note/status change, with ZERO
+    // trace anywhere). postTicketNoteAndClose()/reopenTicketWithNote()
+    // only catch an Autotask HTTP failure (a clean rejection from the
+    // note/status call itself) -- an unexpected throw anywhere else in
+    // that path (getClient() itself failing, a transient network/auth
+    // blip, ...) used to propagate straight out of this whole route
+    // uncaught, past setToggle() above, which had ALREADY committed the
+    // local checkbox a moment earlier. That left no audit trail at all
+    // (ticket_action_result stays NULL -- indistinguishable from "no
+    // linked ticket, nothing to send") and no clean response for the
+    // client's own alert() to ever fire on. Caught here now so ANY
+    // failure, not just an Autotask-side rejection, always ends up
+    // recorded as a real 'failed' outcome with a real error message --
+    // see the `if (ticketAction)` block below.
+    try {
+      if (value) {
+        ticketAction = await postTicketNoteAndClose(
+          updated.ticket_autotask_id,
+          orderNoteBody(updated, { includeHeader: false }),
+          actor,
+          null,
+          closeTicket !== false,
+          req
+        );
+      } else if (reopenStatus === 'leave') {
+        ticketAction = { ok: true, statusReverted: false, statusLeftAsComplete: true };
+      } else {
+        ticketAction = await reopenTicketWithNote(updated.ticket_autotask_id, Number(reopenStatus), actor, req);
+      }
+    } catch (err) {
+      console.error(`Contract Checks: unexpected error during ticket action for item ${updated.id} (ticket ${updated.ticket_autotask_id}):`, err.message);
+      ticketAction = { ok: false, error: err.message };
     }
   }
 
@@ -915,7 +936,20 @@ router.post('/items/bulk-close', async (req, res) => {
     // ticked.
     const mergedNoteText = groupItems.map((i) => orderNoteBody(i, { includeHeader: true })).join('\n\n-------------------------\n\n');
     const bulkWithList = ticketLabels.filter((t) => t.ticketId !== ticketId).map((t) => t.label);
-    const ticketAction = await postTicketNoteAndClose(ticketId, mergedNoteText, actor, bulkWithList, closeTicket, req);
+    // Same fix, same real incident, as the single-item toggle route's own
+    // try/catch above -- an unexpected throw here used to abort this
+    // WHOLE loop, leaving this ticket group AND every remaining one with
+    // no audit_log outcome recorded at all, even though every item's ALL
+    // DONE was already ticked locally up front (the setToggle() loop
+    // above). Caught per-ticket-group now so one failure doesn't take
+    // the rest of the batch down with it, and always ends up recorded.
+    let ticketAction;
+    try {
+      ticketAction = await postTicketNoteAndClose(ticketId, mergedNoteText, actor, bulkWithList, closeTicket, req);
+    } catch (err) {
+      console.error(`Contract Checks: unexpected error during bulk-close ticket action for ticket ${ticketId}:`, err.message);
+      ticketAction = { ok: false, error: err.message };
+    }
     console.log(`Contract Checks: bulk-close result for ticket ${ticketId}:`, JSON.stringify(ticketAction));
     // Same outcome stamp as the single-item toggle route -- every item in
     // this ticket group shares the one merged note/status-change result,

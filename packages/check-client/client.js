@@ -1364,9 +1364,19 @@ export function mount(container) {
     // Tech Cover block (one flex row) rather than stacked under it --
     // but only when there's actually a Tech Cover block to sit beside;
     // with none, it just renders full-width on its own, same as before.
-    const techCoverHtml = TECH_COVER_TIERS.map((t) => techCoverSectionHtml(t.label, t.prefix))
-      .filter(Boolean)
-      .join('<hr class="chk-box-divider" />');
+    const techCoverTierHtml = TECH_COVER_TIERS.map((t) => techCoverSectionHtml(t.label, t.prefix)).filter(Boolean);
+    // Neither tier matched -- by request, a heading-only red flag ("No
+    // Tech Cover Contract", .chk-section-heading--alert) rather than no
+    // Tech Cover block at all, so Other Contracts still has something to
+    // sit beside and this client's own lack of cover is visible, not
+    // just silently absent. Only once Services has actually resolved a
+    // company (lastServicesData) -- before that there's nothing to
+    // report yet, same gating otherContractsSectionHtml() below uses.
+    const techCoverHtml = techCoverTierHtml.length
+      ? techCoverTierHtml.join('<hr class="chk-box-divider" />')
+      : lastServicesData
+        ? '<h2 class="chk-section-heading chk-section-heading--alert">No Tech Cover Contract</h2>'
+        : '';
     const otherContractsHtml = otherContractsSectionHtml();
     let tceHtml;
     if (techCoverHtml && otherContractsHtml) {

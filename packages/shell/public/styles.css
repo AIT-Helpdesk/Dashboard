@@ -2277,6 +2277,12 @@ h1 {
 .check-client-page .chk-section-heading:first-of-type {
   margin-top: 1rem;
 }
+/* "No Tech Cover Contract", by request -- red (.cell-flag-red's own
+   #dc2626, same red used dashboard-wide) instead of the usual green,
+   flagging a real gap rather than a normal section heading. */
+.check-client-page .chk-section-heading--alert {
+  color: #dc2626;
+}
 /* Contract Services' own "adjust units" popups (openAdjustUnitsModal()/
    openAdjustUnitsConfirmModal() in check-client/client.js) -- narrower than
    the base .history-modal-panel's own 30rem, same idea as .wsp-qa-modal-panel's
