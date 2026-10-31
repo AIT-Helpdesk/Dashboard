@@ -2428,6 +2428,23 @@ h1 {
   font-size: 0.9rem;
   color: var(--muted);
 }
+/* "Multiple Matches", by request -- red/bold, boxed the same way a tab
+   page's own active-tab pill is (.tab-button.active's own border +
+   color-mix background-tint + border-radius recipe), just red (#dc2626)
+   instead of blue (var(--accent)) -- a wide wildcard matching several
+   real clients deserves more than the plain muted label text this is
+   normally shown in. inline-block so the box hugs the text, same as a
+   tab button does, rather than stretching full width as a <p> otherwise
+   would. */
+.check-client-page .chk-client-label--multiple-matches {
+  display: inline-block;
+  color: #dc2626;
+  font-weight: 700;
+  border: 1px solid #dc2626;
+  border-radius: 6px;
+  background: color-mix(in srgb, #dc2626 14%, var(--card));
+  padding: 0.2rem 0.6rem;
+}
 
 /* Contract Checks' own table -- a DIFFERENT class from .ingram-orders-table
    above (even though the two pages share the same first several columns)
@@ -8292,6 +8309,13 @@ tr.accrued-time-yellow-row th {
 .cc-subs-expiring-btn.cc-subs-expiring-btn--alert {
   background: color-mix(in srgb, #dc2626 15%, transparent);
   color: #dc2626;
+}
+/* Renewing Annual's own above-0 state, by request -- green instead of
+   red (a renewal is good news, not bad), same #16a34a/color-mix-tint
+   convention as the red variant above, not a new one-off shade. */
+.cc-subs-expiring-btn.cc-subs-expiring-btn--alert-green {
+  background: color-mix(in srgb, #16a34a 15%, transparent);
+  color: #16a34a;
 }
 
 /* Sized for its own Client/Subscription/Status/Auto-Renews/Term/Expires/

@@ -118,9 +118,9 @@ export function mount(container) {
     <div class="contract-checks-page">
     <header class="page-header">
       <div class="cc-subs-expiring-buttons">
-        <button type="button" class="button-link button-link--small cc-subs-expiring-btn" data-category="terminating-annual">Terminating Annual (0)</button>
-        <button type="button" class="button-link button-link--small cc-subs-expiring-btn" data-category="terminating-monthly">Terminating Monthly (0)</button>
-        <button type="button" class="button-link button-link--small cc-subs-expiring-btn" data-category="renewing-annual">Renewing Annual (0)</button>
+        <button type="button" class="button-link button-link--small cc-subs-expiring-btn cc-subs-expiring-btn--pending" data-category="terminating-annual">Terminating Annual (?)</button>
+        <button type="button" class="button-link button-link--small cc-subs-expiring-btn cc-subs-expiring-btn--pending" data-category="terminating-monthly">Terminating Monthly (?)</button>
+        <button type="button" class="button-link button-link--small cc-subs-expiring-btn cc-subs-expiring-btn--pending" data-category="renewing-annual">Renewing Annual (?)</button>
       </div>
       <form id="filter-form" class="date-form date-form--stacked">
         <div class="date-form-row">
@@ -213,7 +213,9 @@ export function mount(container) {
   const SUBS_EXPIRING_CATEGORIES = [
     { key: 'terminating-annual', label: 'Terminating Annual', match: (r) => !r.autoRenews && termType(r.term) === 'Annual' },
     { key: 'terminating-monthly', label: 'Terminating Monthly', match: (r) => !r.autoRenews && termType(r.term) === 'Monthly' },
-    { key: 'renewing-annual', label: 'Renewing Annual', match: (r) => r.autoRenews && termType(r.term) === 'Annual' },
+    // Green above 0, by request -- unlike the two Terminating categories
+    // above (red, bad news), a renewal is good news.
+    { key: 'renewing-annual', label: 'Renewing Annual', match: (r) => r.autoRenews && termType(r.term) === 'Annual', alertGreen: true },
   ];
   let subsExpiringRows = [];
   let subsExpiringLoadError = null;
@@ -1427,7 +1429,14 @@ export function mount(container) {
       if (!btn) continue;
       const count = subsExpiringRows.filter(cat.match).length;
       btn.textContent = subsExpiringLoadError ? `${cat.label} (?)` : `${cat.label} (${count})`;
-      btn.classList.toggle('cc-subs-expiring-btn--alert', !subsExpiringLoadError && count > 0);
+      // Grey "(?)" (same look as the initial pre-load state, by request)
+      // while unknown -- a failed fetch, same as not having loaded yet --
+      // otherwise blue at 0, red above 0 (green instead for Renewing
+      // Annual, cat.alertGreen -- see SUBS_EXPIRING_CATEGORIES above).
+      const isAlert = !subsExpiringLoadError && count > 0;
+      btn.classList.toggle('cc-subs-expiring-btn--pending', !!subsExpiringLoadError);
+      btn.classList.toggle('cc-subs-expiring-btn--alert', isAlert && !cat.alertGreen);
+      btn.classList.toggle('cc-subs-expiring-btn--alert-green', isAlert && !!cat.alertGreen);
       btn.title = subsExpiringLoadError ? `Couldn't load Subscriptions Expiring data: ${subsExpiringLoadError}` : '';
     }
   }

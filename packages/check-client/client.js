@@ -296,6 +296,12 @@ export function mount(container) {
     const sameSet = autotaskNames.length === ingramNames.length && autotaskNames.every((n) => ingramNames.includes(n));
     clientLabelEl.hidden = false;
     clientLabelEl.textContent = sameSet ? `Client: ${autotaskText}` : `Client: ${autotaskText} / ${ingramText}`;
+    // Red/bold "tab" box, by request -- same shape as a tab page's own
+    // active-tab pill (.tab-button.active's border/background-tint/
+    // border-radius recipe), just red instead of blue -- a wide wildcard
+    // matching several real clients is worth flagging more loudly than
+    // the plain muted-text label this normally is.
+    clientLabelEl.classList.toggle('chk-client-label--multiple-matches', autotaskNames.length > 1 || ingramNames.length > 1);
   }
 
   // Ingram Client mirrors Autotask Client live as it's typed, UNTIL Ingram
