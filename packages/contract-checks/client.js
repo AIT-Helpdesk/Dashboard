@@ -1863,11 +1863,17 @@ export function mount(container) {
   }
 
   // "Sent to Autotask" / "Failed: <error>" / "Not sent (left as Complete)"
-  // / blank -- ticketActionResult is only ever set on an all_done event
-  // that actually had something to send (see recordTicketActionOutcome()'s
-  // own comment in db.js) -- blank covers both "not an all_done event" and
-  // "all_done, but no linked ticket to send anything to" alike, since
-  // neither is a real outcome worth a line of its own.
+  // / "No linked ticket" / blank -- ticketActionResult is only ever set on
+  // an all_done event that actually had something to send (see
+  // recordTicketActionOutcome()'s own comment in db.js); a blank
+  // ticketActionResult on an all_done event (ON or OFF) means there was no
+  // linked ticket to act on at all -- these rows were already included in
+  // this report (confirmed against real data), just indistinguishable at
+  // a glance from a non-all_done checkbox toggle (checked_contract/
+  // m365_ok/...), which also always leaves this column blank since it has
+  // no ticket-action concept at all. Calling it out explicitly here, by
+  // request, so a done-with-no-ticket order reads as "included, nothing
+  // to send" rather than looking skipped/missing.
   function ticketActionText(e) {
     if (e.ticketActionResult === 'sent') return 'Sent to Autotask';
     if (e.ticketActionResult === 'skipped') return 'Not sent (left as Complete)';
@@ -1877,6 +1883,7 @@ export function mount(container) {
     // this was a dev session".
     if (e.ticketActionResult === 'local_dev_skipped') return 'Not sent (localhost dev session)';
     if (e.ticketActionResult === 'failed') return `Failed: ${e.ticketActionError || 'unknown error'}`;
+    if (e.field === 'all_done') return 'No linked ticket';
     return '';
   }
 
