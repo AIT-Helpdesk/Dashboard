@@ -4,6 +4,22 @@ node_modules/
 logs/
 server.pid
 
+# Shared sidebar layout -- runtime-configured state (who put what page
+# where), not source. Previously checked in "by request" so a fresh
+# server didn't start with an empty sidebar (see README.md's old
+# "Deploying the sidebar layout" section), but that meant every deploy
+# silently overwrote whatever's live on production with whatever's
+# committed -- confirmed the hard way (2026-11-01) this kept wiping out
+# real admin reordering, including a page (training-tracker-tracker)
+# that was NEVER actually committed in the first place, so a plain
+# `git checkout -- packages/shell/nav-layout.json` in the deploy script
+# made it vanish outright rather than just reset its position. Untracked
+# now so production's own layout is the permanent source of truth and
+# survives every future deploy; a brand-new server just starts with an
+# empty/default sidebar, rebuilt by hand once -- the one-time cost this
+# was originally checked in to avoid.
+packages/shell/nav-layout.json
+
 # Strety OAuth tokens -- real bearer credentials for whichever Strety
 # account connected, persisted to disk so the connection survives a
 # restart (see packages/strety-client/index.js). Never committed.
