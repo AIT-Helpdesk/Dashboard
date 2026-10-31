@@ -42,6 +42,13 @@ let lastDattoData = null;
 // Elite section's own licensed-users count does NOT trigger that fetch on
 // its own, it just reads whatever's already there (or isn't).
 let lastM365UsersData = null;
+// Fired automatically once Services loads (loadOtherContracts() below,
+// called from loadServices()) -- unlike lastM365UsersData above, this
+// one isn't gated behind a click, by request; it's meant to just sit
+// next to the Tech Cover Check Summary section(s) once a search
+// resolves. { contracts: [...] } once loaded, or null before that/on a
+// fresh search.
+let lastOtherContractsData = null;
 
 // Whichever mount() is CURRENTLY on screen registers its own section
 // render functions here, overwriting whatever the previous mount left
@@ -340,6 +347,7 @@ export function mount(container) {
     lastSubscriptionsData = null;
     lastM365Data = null;
     lastM365UsersData = null;
+    lastOtherContractsData = null;
     activeRenderers.renderClientCheckSummary();
     try {
       // Datto RMM has no dependency on the other sections' own results
@@ -1223,6 +1231,74 @@ export function mount(container) {
     `;
   }
 
+  // True only for an end date that has ALREADY PASSED, within the last 13
+  // calendar months -- both bounds matter: confirmed against real data
+  // (A Brave Life Ltd's own "Annual Antivirus" contract) that an Inactive
+  // contract's endDate can sit years in the FUTURE (Autotask leaves the
+  // originally-scheduled end date in place for an early-terminated
+  // contract, rather than rewriting it to the real termination date), so
+  // a one-sided "not too long ago" check alone would wrongly show a
+  // contract that hasn't even ended yet. An Active one is never checked
+  // against this at all (see otherContractsSectionHtml() below).
+  function endedWithinLast13Months(endDate) {
+    if (!endDate) return false;
+    const end = new Date(endDate);
+    const now = new Date();
+    const cutoff = new Date();
+    cutoff.setUTCMonth(cutoff.getUTCMonth() - 13);
+    return end >= cutoff && end <= now;
+  }
+
+  // "T&M *" contracts, by request -- never shown Inactive at all, even
+  // one that ended recently (unlike every other contract here, see
+  // isVisibleOtherContract() below) -- an Adhoc/Time & Materials
+  // contract that's finished is just done, not something worth a recent-
+  // activity exception for.
+  function isTMContract(contractName) {
+    return (contractName || '').trim().toLowerCase().startsWith('t&m');
+  }
+
+  // Active always shows; an Inactive one shows only if it ended within
+  // the last 13 months (endedWithinLast13Months above) -- EXCEPT a
+  // "T&M *" contract, which only ever shows when Active (isTMContract
+  // above), by request.
+  function isVisibleOtherContract(c) {
+    if (c.statusCode === 1) return true;
+    if (isTMContract(c.contractName)) return false;
+    return endedWithinLast13Months(c.endDate);
+  }
+
+  // "Other Contracts" box, by request -- sits next to the Tech Cover
+  // Check Summary section(s) above, listing every OTHER real contract on
+  // this client (contract-services/server.js's own buildOtherContracts()
+  // has already dropped the Tech Cover ones, loaded via
+  // loadOtherContracts() the moment Services resolves a company). Just
+  // Contract Name and Status, by request -- legend-sized text
+  // (.chk-other-contracts-box), same "supporting context, not the main
+  // table" treatment as the Calculations box.
+  function otherContractsSectionHtml() {
+    if (!lastServicesData) return '';
+    if (!lastOtherContractsData) {
+      return `
+        <h2 class="chk-section-heading">Other Contracts</h2>
+        <div class="chk-other-contracts-box"><p class="status">Loading...</p></div>
+      `;
+    }
+    const visible = lastOtherContractsData.contracts.filter(isVisibleOtherContract);
+    const rows = visible.length
+      ? visible.map((c) => `<tr><td>${escapeHtml(c.contractName)}</td><td>${escapeHtml(c.status)}</td><td>${formatServiceDate(c.endDate)}</td></tr>`).join('')
+      : '<tr><td colspan="3">No other contracts found.</td></tr>';
+    return `
+      <h2 class="chk-section-heading">Other Contracts</h2>
+      <div class="chk-other-contracts-box">
+        <table class="chk-other-contracts-table">
+          <thead><tr class="shaded-row"><th>Contract Name</th><th>Status</th><th>End Date</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
   // Every Tech Cover tier this section covers, in display order -- add a
   // new tier here (label + its contract-name prefix, already lower-cased)
   // and both Check Summary sections and the formula/Users-RMM machinery
@@ -1276,12 +1352,27 @@ export function mount(container) {
   function renderClientCheckSummary() {
     const rows = buildClientCheckSummaryRows();
     // One section per tier this client actually has a contract for (most
-    // clients have none or one; nothing stops a client having both) --
-    // joined with the same divider the main table already uses below,
-    // but only BETWEEN sections that are actually present.
-    const tceHtml = TECH_COVER_TIERS.map((t) => techCoverSectionHtml(t.label, t.prefix))
+    // clients have none or one; nothing stops a client having both),
+    // stacked and joined with the same divider the main table already
+    // uses below. Other Contracts, by request, sits BESIDE this whole
+    // Tech Cover block (one flex row) rather than stacked under it --
+    // but only when there's actually a Tech Cover block to sit beside;
+    // with none, it just renders full-width on its own, same as before.
+    const techCoverHtml = TECH_COVER_TIERS.map((t) => techCoverSectionHtml(t.label, t.prefix))
       .filter(Boolean)
       .join('<hr class="chk-box-divider" />');
+    const otherContractsHtml = otherContractsSectionHtml();
+    let tceHtml;
+    if (techCoverHtml && otherContractsHtml) {
+      tceHtml = `
+        <div class="chk-summary-side-by-side">
+          <div class="chk-summary-side-by-side-tc">${techCoverHtml}</div>
+          <div class="chk-summary-side-by-side-other">${otherContractsHtml}</div>
+        </div>
+      `;
+    } else {
+      tceHtml = techCoverHtml || otherContractsHtml;
+    }
     if (rows.length === 0) {
       summaryResultsEl.innerHTML = tceHtml;
       wireTechCoverUpdateButtons(summaryResultsEl);
@@ -1298,7 +1389,7 @@ export function mount(container) {
     summaryResultsEl.innerHTML = `
       <table class="chk-summary-table">
         <thead>
-          <tr>
+          <tr class="shaded-row">
             <th>Subscription</th><th>IM Licenses</th><th>Contract</th><th>M365 Licenses</th><th>Consumed</th><th>Suspended</th>
             <th>Term / Billing Period</th><th>Auto-Renewal</th><th>Renews / Expires</th>
           </tr>
@@ -2375,6 +2466,12 @@ export function mount(container) {
       const data = await fetchJson(`/api/check-client/services?${params.toString()}`, 'GET');
       lastServicesData = data;
       activeRenderers.renderServices(data);
+      // "Other Contracts", by request -- fired automatically the moment
+      // Services resolves a real company, not gated behind a click (see
+      // lastOtherContractsData's own comment). Not awaited -- it has its
+      // own independent loading state and re-renders the Summary on its
+      // own completion, same convention every other section here follows.
+      loadOtherContracts(data.byCompany.map((g) => g.companyId));
       // Real bug, confirmed: this was the ONE section whose own load()
       // never re-rendered the Client Check Summary at all. Contract (AT)
       // reads straight off lastServicesData (contractMatchesForSku()),
@@ -2392,6 +2489,24 @@ export function mount(container) {
       servicesStatusEl.className = 'status error';
       servicesStatusEl.textContent = `Error: ${err.message}`;
       activeRenderers.renderClientCheckSummary();
+    }
+  }
+
+  // "Other Contracts" box on Client Check Summary, by request -- every
+  // real contract on the resolved company/companies except Tech Cover
+  // ones (contract-services/server.js's own buildOtherContracts() has
+  // already dropped those). A failed fetch just leaves the box showing
+  // nothing rather than an error -- this is a secondary "also, FYI"
+  // section, not worth a visible error state of its own on this already
+  // busy page.
+  async function loadOtherContracts(companyIds) {
+    if (companyIds.length === 0) return;
+    try {
+      const params = new URLSearchParams({ companyIds: companyIds.join(',') });
+      lastOtherContractsData = await fetchJson(`/api/check-client/other-contracts?${params.toString()}`, 'GET');
+      activeRenderers.renderClientCheckSummary();
+    } catch {
+      // Silent, see comment above.
     }
   }
 

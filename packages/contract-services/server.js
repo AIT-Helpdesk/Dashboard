@@ -1,7 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getContractUrl, parseWildcard, fetchByFieldIn, aestToUtcIso } = require('@dashboard/autotask-client');
+const { getClient, mapWithConcurrency, resolveCompanyName, listAll, getContractUrl, parseWildcard, fetchByFieldIn, aestToUtcIso, getPicklistLabels } = require('@dashboard/autotask-client');
 const { isContractManager } = require('@dashboard/shell/contract-manager-permissions.js');
 
 
@@ -446,14 +446,46 @@ router.post('/adjust-units', async (req, res) => {
   }
 });
 
+// Every one of a set of companies' own real Autotask contracts, unscoped
+// by month (unlike buildReport() above, which only ever sees a contract
+// active in one selected billing month) -- Check Client's own "Other
+// Contracts" box, by request. `excludePrefixes` (lower-cased) drops any
+// contract whose name starts with one of them -- Check Client's Tech
+// Cover sections already cover those separately, so this box is
+// deliberately "everything ELSE". Status is Autotask's own 2-value
+// Contracts.status picklist (1 "In Effect", 3 "Terminated" -- confirmed
+// via field info, same convention client-summary/server.js's own
+// buildActiveContracts() already documents) -- both the resolved label
+// and the raw code are returned, so the caller can apply its own "only
+// show an inactive one if it ended recently" rule without a second
+// lookup. No status filter here at all (unlike buildActiveContracts,
+// which only wants status 1) -- deciding which statuses to actually
+// show is the caller's own display rule, not this function's job.
+async function buildOtherContracts(companyIds, excludePrefixes = []) {
+  const client = await getClient();
+  const [contracts, statusLabels] = await Promise.all([fetchByFieldIn(client.contracts, 'companyID', companyIds), getPicklistLabels(client.contracts, 'status')]);
+  const excluded = excludePrefixes.map((p) => p.trim().toLowerCase());
+  return contracts
+    .filter((c) => !excluded.some((p) => (c.contractName || '').trim().toLowerCase().startsWith(p)))
+    .map((c) => ({
+      contractName: c.contractName,
+      status: statusLabels.get(c.status) || `#${c.status}`,
+      statusCode: c.status,
+      endDate: c.endDate,
+    }))
+    .sort((a, b) => a.contractName.localeCompare(b.contractName));
+}
+
 // Attached to the router (a function, so it can carry extra named
 // properties) rather than changed on module.exports itself -- the shell
 // still needs `require('./server.js')` to BE the router it mounts. Lets the
 // new Check Client page (packages/check-client) call this exact same
 // month-scoped report-building function in-process, instead of duplicating
 // it. adjustUnits is exposed the same way, for that same page's own
-// POST /services/adjust-units to delegate to in-process.
+// POST /services/adjust-units to delegate to in-process. buildOtherContracts
+// is exposed the same way, for that page's own GET /other-contracts.
 router.buildReport = buildReport;
 router.adjustUnits = adjustUnits;
+router.buildOtherContracts = buildOtherContracts;
 
 module.exports = router;

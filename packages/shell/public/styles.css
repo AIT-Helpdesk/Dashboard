@@ -1809,6 +1809,60 @@ h1 {
 .chk-tce-notes p:last-child {
   margin-bottom: 0;
 }
+/* "Other Contracts" box, by request -- same box recipe as .chk-tce-notes
+   above (own class, not a reuse of that one, since this is a genuinely
+   different feature -- a contract list, not a calculations legend), and
+   the same legend-sized text, by request ("use the small print like in
+   the Calculations... section"). font-size set once on the box itself
+   so the table inside inherits it, rather than repeating it per cell. */
+/* Other Contracts sits BESIDE the whole Tech Cover block, by request --
+   one flex row, Tech Cover (which can itself be one or two stacked tier
+   sections) taking the remaining space and Other Contracts keeping its
+   own natural width. Wraps to stacked at phone width, same convention
+   .chk-tce-columns above already uses. */
+.chk-summary-side-by-side {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+.chk-summary-side-by-side-tc {
+  flex: 1 1 24rem;
+  min-width: 0;
+}
+.chk-summary-side-by-side-other {
+  flex: 0 1 auto;
+}
+.chk-other-contracts-box {
+  margin-top: 0.5rem;
+  background: var(--row-alt-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  font-size: 0.62rem;
+  color: var(--muted);
+  max-width: 28rem;
+}
+.chk-other-contracts-table {
+  width: 100%;
+  border-collapse: collapse;
+  /* Explicit, not just inherited from .chk-other-contracts-box above --
+     same exact size as .chk-tce-notes p's own "Contract Counts are for
+     Next Period" line, by request. */
+  font-size: 0.62rem;
+}
+.chk-other-contracts-table th,
+.chk-other-contracts-table td {
+  font-size: 0.62rem;
+}
+.chk-other-contracts-table th {
+  text-align: left;
+  font-weight: 600;
+  padding: 0 0.5rem 0.3rem 0;
+}
+.chk-other-contracts-table td {
+  padding: 0.15rem 0.5rem 0.15rem 0;
+}
 /* The per-contract-line table, by request -- wider than .chk-tce-table
    (now 7 columns including the trailing Update button, a real Service
    Name can run long), sits on its own row above the Users/RMM + notes

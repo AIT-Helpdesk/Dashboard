@@ -494,6 +494,31 @@ router.post('/services/adjust-units', async (req, res) => {
   }
 });
 
+// "Other Contracts" box on the Client Check Summary, by request -- every
+// real contract on the already-resolved company/companies (GET /services'
+// own byCompany[].companyId, one per real Autotask company this search
+// matched) EXCEPT Tech Cover ones, which the Summary's own Tech Cover
+// sections already cover. Same in-process-delegation shape GET /services
+// above already uses -- no new Autotask query logic here, just Contract
+// Services' own buildOtherContracts(). Which statuses to actually show
+// (the "only an Inactive one if it ended recently" rule) is a display
+// decision made client-side, same as every other Tech Cover display rule
+// -- this just returns every non-Tech-Cover contract, unfiltered by status.
+router.get('/other-contracts', async (req, res) => {
+  try {
+    const companyIds = (req.query.companyIds || '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isInteger(n));
+    if (companyIds.length === 0) return res.json({ contracts: [] });
+    const contracts = await contractServices.buildOtherContracts(companyIds, ['tech cover elite', 'tech cover essentials']);
+    res.json({ contracts });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Section 5 -- Datto RMM, via @dashboard/datto-rmm's own lib.js (NOT its
 // server.js -- that package's own router/cache is for its account-wide
 // overview page, a different shape; this calls the underlying client
