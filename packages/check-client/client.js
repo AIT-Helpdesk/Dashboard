@@ -163,7 +163,7 @@ export function mount(container) {
       <div id="subs-results" class="results"></div>
     </div>
 
-    <h2 class="chk-section-heading">Microsoft 365 Tenancy <span class="inline-subtext">(Ingram tenant ID &rarr; Rewst &rarr; M365)</span></h2>
+    <h2 class="chk-section-heading">Microsoft 365 Tenancy <span class="inline-subtext">(Ingram tenant ID &rarr; Rewst &rarr; M365)</span> <button type="button" id="m365-refresh-btn" class="button-link button-link--small">&#8635; Refresh</button></h2>
     <p id="m365-status" class="status" hidden></p>
     <div id="m365-summary" class="summary" hidden></div>
     <p id="m365-current-data-note" class="chk-current-data-note" hidden>Current Data Shown, no historical point in time available.</p>
@@ -224,6 +224,7 @@ export function mount(container) {
   const m365SummaryEl = container.querySelector('#m365-summary');
   const m365CurrentDataNoteEl = container.querySelector('#m365-current-data-note');
   const m365ResultsEl = container.querySelector('#m365-results');
+  const m365RefreshBtn = container.querySelector('#m365-refresh-btn');
   const servicesStatusEl = container.querySelector('#services-status');
   const servicesSummaryEl = container.querySelector('#services-summary');
   const servicesResultsEl = container.querySelector('#services-results');
@@ -920,11 +921,14 @@ export function mount(container) {
     // quoted (Dept:"Service/Generic Accounts") so a real office/
     // department name containing +-*/(), doesn't get mistaken for an
     // operator by the tokenizer below -- strip the quotes here before
-    // comparing. A trailing * (only inside a quoted value -- an
-    // unquoted one can't contain * at all, see the tokenizer's allow-
-    // list) means prefix match, by request: Dept:"Manager*" matches
-    // any department STARTING WITH "Manager" (e.g. "Manager",
-    // "Manager - Melbourne"), not a literal department named "Manager*".
+    // comparing. A * at the start and/or end (only inside a quoted
+    // value -- an unquoted one can't contain * at all, see the
+    // tokenizer's allow-list) wildcards that end, by request, same
+    // dashboard-wide convention as parseWildcard()'s own op/value split
+    // (@dashboard/autotask-client): Dept:"Manager*" = starts with
+    // "Manager" (e.g. "Manager", "Manager - Melbourne"); Dept:"*
+    // Franchise" = ends with " Franchise"; Dept:"*Manager*" = contains
+    // "Manager". No *, as before, means an exact match.
     if (t.startsWith('OFFICE:') || t.startsWith('DEPT:')) {
       if (counts.levelledUsers === null) return null;
       const isOffice = t.startsWith('OFFICE:');
@@ -932,9 +936,16 @@ export function mount(container) {
       if (want.length >= 2 && want.startsWith('"') && want.endsWith('"')) want = want.slice(1, -1).trim();
       want = want.toUpperCase();
       const field = (u) => ((isOffice ? u.office : u.department) || '').trim().toUpperCase();
-      if (want.length > 1 && want.endsWith('*')) {
-        const prefix = want.slice(0, -1);
-        return counts.levelledUsers.filter((u) => field(u).startsWith(prefix)).length;
+      const startsWithStar = want.length > 1 && want.startsWith('*');
+      const endsWithStar = want.length > 1 && want.endsWith('*');
+      if (startsWithStar || endsWithStar) {
+        let needle = want;
+        if (startsWithStar) needle = needle.slice(1);
+        if (endsWithStar) needle = needle.slice(0, -1);
+        needle = needle.trim();
+        if (startsWithStar && endsWithStar) return counts.levelledUsers.filter((u) => field(u).includes(needle)).length;
+        if (endsWithStar) return counts.levelledUsers.filter((u) => field(u).startsWith(needle)).length;
+        return counts.levelledUsers.filter((u) => field(u).endsWith(needle)).length;
       }
       return counts.levelledUsers.filter((u) => field(u) === want).length;
     }
@@ -2162,6 +2173,25 @@ export function mount(container) {
       activeRenderers.renderClientCheckSummary();
     }
   }
+
+  // "Refresh" button, by request -- re-fetches just this section (a live
+  // Rewst/M365 lookup, not cached server-side the way Datto RMM's own
+  // devices/alerts are, so simply calling loadM365Tenancy() again is
+  // already a fresh fetch). Unlike the Tech Cover section's own Refresh
+  // button, this heading is static markup (not rebuilt by any render*()
+  // call), so the button has to reset its own disabled/text state here
+  // once loadM365Tenancy() settles, rather than relying on a re-render to
+  // rebuild it fresh.
+  m365RefreshBtn.addEventListener('click', async () => {
+    m365RefreshBtn.disabled = true;
+    m365RefreshBtn.textContent = 'Refreshing...';
+    try {
+      await loadM365Tenancy();
+    } finally {
+      m365RefreshBtn.disabled = false;
+      m365RefreshBtn.textContent = '↻ Refresh';
+    }
+  });
 
   function renderM365Tenancy(data) {
     if (!data.matched) {
