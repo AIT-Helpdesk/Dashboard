@@ -1341,10 +1341,34 @@ export function mount(container) {
   // rather than cached), reusing its own fetch/toggle logic unchanged. A
   // no-op if that section hasn't rendered at all yet (e.g. no M365 match
   // for this client) -- nothing to click, by design never an error.
+  // By request, this button is only ever about getting the COUNTS loaded
+  // for Tech Cover's own table -- it shouldn't also leave the real user
+  // list sitting open down in Microsoft 365 Tenancy, so once that first
+  // click's own fetch finishes, a second click immediately closes it
+  // again (that toggle's own handler already treats a second click, once
+  // loaded, as "just flip hidden" -- see renderM365Tenancy()). Waits for
+  // the real toggle's own `disabled` flag to clear (set/cleared
+  // synchronously around its fetch) rather than guessing a delay. This
+  // button only ever renders while that data is still unloaded (see
+  // techCoverUsersRmmTableHtml() above), so the first click always hits
+  // that toggle's own "not yet loaded" branch -- never the plain
+  // show/hide one a later click would.
   function wireTechCoverShowUsersButtons(container) {
     container.querySelectorAll('.chk-tce-show-users-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        document.querySelector('.chk-m365-users-toggle')?.click();
+      btn.addEventListener('click', async () => {
+        const usersToggle = document.querySelector('.chk-m365-users-toggle');
+        if (!usersToggle) return;
+        usersToggle.click();
+        while (usersToggle.disabled) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        // Only close it back up if the load actually succeeded (that
+        // toggle's own text flips to "Hide Users (...)" on success) --
+        // on a failed fetch there's nothing loaded to hide, and clicking
+        // again would just retry instead of closing anything.
+        if (usersToggle.textContent.startsWith('Hide')) {
+          usersToggle.click();
+        }
       });
     });
   }
@@ -2559,18 +2583,26 @@ export function mount(container) {
               // (contract-services/server.js's shared buildReport()), so
               // equal names are always contiguous -- same "differs from the
               // row right above it" boundary check Contract Services' own
-              // client.js uses.
-              (r, i) => `
-            <tr${rowClass(r, i > 0 && r.contractName !== group.rows[i - 1].contractName)}>
+              // client.js uses. Contract name/link only shown on the FIRST
+              // row of each contract group (i === 0 counts as one too, by
+              // request -- "easier to read" when a contract has several
+              // service lines, each one no longer repeats the same name/
+              // link down the whole column.
+              (r, i) => {
+                const isContractBoundary = i > 0 && r.contractName !== group.rows[i - 1].contractName;
+                const showContract = i === 0 || isContractBoundary;
+                return `
+            <tr${rowClass(r, isContractBoundary)}>
               <td><div class="col-service" title="${escapeHtml(r.serviceName)}"><span class="col-service-name">${formatServiceName(r.serviceItemName)}</span>${r.internalDescription ? `<span class="cell-subtext">${escapeHtml(r.internalDescription)}</span>` : ''}</div></td>
-              <td class="col-contract">${contractLink(r)}</td>
+              <td class="col-contract">${showContract ? contractLink(r) : ''}</td>
               <td class="ticket-number">${unitsCell(r)}</td>
               <td class="ticket-number">${formatPrice(perItem(r.cost, r.units))}</td>
               <td class="ticket-number">${formatPrice(perItem(r.price, r.units))}</td>
               <td class="ticket-number">${formatPrice(r.price)}</td>
               <td class="ticket-number">${formatServiceDate(r.startDate)} - ${formatServiceDate(r.endDate)}</td>
               <td class="ticket-number${isRecentChange(r.contractLastModified) ? ' cell-flag-red' : ''}" title="Contract's last-modified date -- the service unit itself has no modification timestamp">${formatServiceDate(r.contractLastModified)}</td>
-            </tr>`
+            </tr>`;
+              }
             )
             .join('')}
         </tbody>
