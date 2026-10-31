@@ -1221,19 +1221,6 @@ h1 {
   border-radius: 6px;
 }
 
-/* The "x" on a tab that was dragged in from the sidebar (never on the four
-   built-in report tabs, or Help) -- lets one be removed again as easily as
-   it was added. Sits inside its own tab button; stopPropagation() in
-   client.js keeps clicking it from also selecting/activating that tab. */
-.tab-remove {
-  margin-left: 0.4rem;
-  opacity: 0.6;
-}
-.tab-remove:hover {
-  opacity: 1;
-  color: #dc2626;
-}
-
 /* Every tabbed page's own embedded-page title, made small and pulled
    right up against the tab bar's line above it, by request -- the tab
    itself already says which page this is, so a big page-header title

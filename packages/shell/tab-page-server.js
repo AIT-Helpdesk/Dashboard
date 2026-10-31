@@ -12,10 +12,12 @@ const { isDashboardAdmin, readNavLayout, writeNavLayout, unregisterPage } = requ
 // living alongside it -- same "runtime-configured state" shape as
 // shell/nav-layout.json, read/write via the same plain fs pattern.
 //
-// Covers three admin-editable, genuinely SHARED (every viewer sees the
-// same thing) settings for one tabbed page:
-//   - permanent-tabs.json -- which extra tabs the admin has made
-//     permanent for everyone (see tab-page-client.js's own comment).
+// Covers four admin-editable, genuinely SHARED (every viewer sees the
+// same thing, no per-viewer override of any kind -- by request,
+// 2026-11-01: "only allow admin to make those changes... everyone sees
+// admin's version") settings for one tabbed page:
+//   - permanent-tabs.json -- which extra tabs the admin has added, beyond
+//     the built-in defaults (see tab-page-client.js's own comment).
 //   - removed-default-tabs.json -- which of the page's own ORIGINAL
 //     built-in tabs (defaultTabs, baked in at creation by Tab Page
 //     Builder) the admin has since removed for everyone -- by request
@@ -28,11 +30,16 @@ const { isDashboardAdmin, readNavLayout, writeNavLayout, unregisterPage } = requ
 //   - help-text.json -- free-form custom notes the admin can add to that
 //     page's own Help tab, on top of the always-generated "how this
 //     works" explanation.
+//   - tab-order.json -- the admin's own tab ORDER, by request ("I would
+//     like them to appear like that for everyone... they don't even
+//     retain that new position for me"). Always applied for every
+//     viewer, every load.
 function createTabPageRouter(storageDir) {
   const permanentTabsPath = path.join(storageDir, 'permanent-tabs.json');
   const removedDefaultTabsPath = path.join(storageDir, 'removed-default-tabs.json');
   const helpTextPath = path.join(storageDir, 'help-text.json');
   const defaultTabsPath = path.join(storageDir, 'default-tabs.json');
+  const tabOrderPath = path.join(storageDir, 'tab-order.json');
 
   // The page's own ORIGINAL built-in tabs ({id,label} pairs), written
   // once -- by Tab Page Builder's own POST /publish for anything created
@@ -114,6 +121,19 @@ function createTabPageRouter(storageDir) {
     fs.writeFileSync(helpTextPath, JSON.stringify(text));
   }
 
+  function readTabOrder() {
+    try {
+      const data = JSON.parse(fs.readFileSync(tabOrderPath, 'utf8'));
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return []; // no file yet, or unreadable -- no shared order set yet
+    }
+  }
+
+  function writeTabOrder(ids) {
+    fs.writeFileSync(tabOrderPath, JSON.stringify(ids, null, 2));
+  }
+
   const router = express.Router();
   router.use(express.json());
 
@@ -156,6 +176,24 @@ function createTabPageRouter(storageDir) {
       return res.status(400).json({ error: 'Body must be { tabIds: [...] }.' });
     }
     writeRemovedDefaultTabIds(req.body.tabIds);
+    res.json({ ok: true });
+  });
+
+  router.get('/tab-order', (req, res) => {
+    res.json({ tabIds: readTabOrder(), editable: isDashboardAdmin(req) });
+  });
+
+  router.put('/tab-order', (req, res) => {
+    // Same admin-only enforcement as /permanent-tabs and
+    // /removed-default-tabs above, for the same reason -- this is the
+    // SHARED starting order every viewer sees by default.
+    if (!isDashboardAdmin(req)) {
+      return res.status(403).json({ error: 'Only Amber can set the shared tab order.' });
+    }
+    if (!Array.isArray(req.body?.tabIds)) {
+      return res.status(400).json({ error: 'Body must be { tabIds: [...] }.' });
+    }
+    writeTabOrder(req.body.tabIds);
     res.json({ ok: true });
   });
 
