@@ -805,14 +805,20 @@ export function mount(container) {
       </tr>`;
   }
 
-  // Tech Cover Elite, by request -- a separate section, shown only when
-  // this client actually has a real Autotask contract whose name STARTS
-  // WITH "Tech Cover Elite" (checked against Contract Services' own
-  // already-loaded rows, not re-fetched) -- by request, not an exact
-  // match, so a real variant name (e.g. "Tech Cover Elite Platinum")
-  // still counts.
-  function hasTechCoverEliteContract() {
-    return (lastServicesData?.byCompany || []).some((c) => c.rows.some((r) => (r.contractName || '').trim().toLowerCase().startsWith('tech cover elite')));
+  // Tech Cover (Elite, Essentials, ...), by request -- a separate section
+  // per tier, shown only when this client actually has a real Autotask
+  // contract whose name STARTS WITH that tier's own prefix (checked
+  // against Contract Services' own already-loaded rows, not re-fetched)
+  // -- by request, not an exact match, so a real variant name (e.g. "Tech
+  // Cover Elite Platinum") still counts. One shared parametrized
+  // implementation across tiers -- everything below (the formula
+  // identifiers, the Users/RMM counts) is the same client-wide data
+  // regardless of which tier's contract lines are being compared against
+  // it; Essentials uses the exact same [U*]/[D*]-style tags as Elite,
+  // confirmed against a real contract (A Brave Life Ltd, Oct 2026).
+  // `prefix` is already lower-cased by every call site below.
+  function hasTechCoverContract(prefix) {
+    return (lastServicesData?.byCompany || []).some((c) => c.rows.some((r) => (r.contractName || '').trim().toLowerCase().startsWith(prefix)));
   }
 
   // One row per real contract LINE, by request -- collapses a line that
@@ -821,10 +827,10 @@ export function mount(container) {
   // change shouldn't show as an extra phantom row here either) down to
   // just its own most-recently-started period, keyed on the line's real
   // FK (contractServiceID/contractServiceBundleID) within each contract.
-  function techCoverEliteContractLines() {
+  function techCoverContractLines(prefix) {
     const linesByKey = new Map();
     for (const r of allServiceRows()) {
-      if (!(r.contractName || '').trim().toLowerCase().startsWith('tech cover elite')) continue;
+      if (!(r.contractName || '').trim().toLowerCase().startsWith(prefix)) continue;
       const lineKey = `${r.contractId}:${r.isBundle ? `bundle:${r.contractServiceBundleID}` : `service:${r.contractServiceID}`}`;
       const existing = linesByKey.get(lineKey);
       if (!existing || r.startDate > existing.startDate) linesByKey.set(lineKey, r);
@@ -1010,13 +1016,60 @@ export function mount(container) {
     }
   }
 
-  function techCoverEliteLinesTableHtml() {
-    const lines = techCoverEliteContractLines();
-    if (lines.length === 0) return '<p class="status">No active Tech Cover Elite contract lines found.</p>';
+  // Tech Cover Essentials-only fallback, by request -- these real
+  // Essentials service items are ALWAYS treated as the given tag even
+  // when this particular contract line has no real tag typed into its
+  // own Internal Description yet, unlike Elite (where every line needs
+  // its own real tag, no safe universal default exists there). Exact
+  // match (trimmed/case-insensitive) against the real Autotask catalog
+  // item names, not a prefix/contains match -- deliberately narrow so a
+  // different, unanticipated Essentials line is never silently guessed
+  // at.
+  const ESSENTIALS_DEFAULT_TAGS = {
+    'kaseya 365 endpoint': 'D*',
+    'kaseya 365 user': 'U*',
+    'kaseya 365 user & endpoint bundle': 'U*',
+  };
+  function essentialsDefaultTag(serviceItemName) {
+    return ESSENTIALS_DEFAULT_TAGS[(serviceItemName || '').trim().toLowerCase()] || null;
+  }
+
+  // "... Bundle CREDIT" lines, by request -- always treated as matching
+  // whatever the real "... Bundle" line on the SAME contract currently
+  // shows for Contract (its nextPeriodUnits/units), never computed via a
+  // formula of its own -- a credit line's whole job is to cancel out the
+  // paired bundle line 1:1, so comparing it against anything else would
+  // be comparing it to the wrong thing. Exact names, same reasoning as
+  // ESSENTIALS_DEFAULT_TAGS above.
+  const ESSENTIALS_BUNDLE_NAME = 'kaseya 365 user & endpoint bundle';
+  const ESSENTIALS_BUNDLE_CREDIT_NAME = 'kaseya 365 user & endpoint bundle credit';
+
+  function techCoverLinesTableHtml(prefix, label) {
+    const lines = techCoverContractLines(prefix);
+    if (lines.length === 0) return `<p class="status">No active ${escapeHtml(label)} contract lines found.</p>`;
     const counts = computeTceCounts();
+    // Keyed by contractId, not just "the first bundle line found" -- these
+    // lines can span several real clients/contracts when this table
+    // covers more than one company.
+    const bundleContractCountByContractId = new Map();
+    for (const r of lines) {
+      if ((r.serviceItemName || '').trim().toLowerCase() === ESSENTIALS_BUNDLE_NAME) {
+        bundleContractCountByContractId.set(r.contractId, r.nextPeriodUnits ?? r.units);
+      }
+    }
     const rows = lines
       .map((r) => {
-        const calc = tcCalcForTag(r.internalDescription, counts);
+        const isBundleCredit = prefix === 'tech cover essentials' && (r.serviceItemName || '').trim().toLowerCase() === ESSENTIALS_BUNDLE_CREDIT_NAME;
+        const realTag = bracketPart(r.internalDescription);
+        const defaultTag = !isBundleCredit && prefix === 'tech cover essentials' && !realTag ? essentialsDefaultTag(r.serviceItemName) : null;
+        // No bundle line found on this same contract for a CREDIT line ->
+        // '' (nothing to compare against), same as "no formula at all"
+        // below -- never Not Yet Loaded, this isn't an async-loading gap.
+        const calc = isBundleCredit
+          ? bundleContractCountByContractId.has(r.contractId)
+            ? bundleContractCountByContractId.get(r.contractId)
+            : ''
+          : tcCalcForTag(realTag ? r.internalDescription : defaultTag ? `[${defaultTag}]` : '', counts);
         // Contract shows the NEXT period's count when one's known, by
         // request -- only falling back to the current count when
         // there's no next-period value at all. Unit Price/Total are
@@ -1025,27 +1078,66 @@ export function mount(container) {
         const contractCount = r.nextPeriodUnits ?? r.units;
         // Bold red on BOTH cells when they genuinely disagree, by
         // request -- only when calc resolved to a real number (never
-        // for '' -- no formula to compare -- or null -- not loaded yet,
+        // for '' -- no formula to compare -- or null -- not yet loaded,
         // nothing to compare against either). Compared against the SAME
         // value Contract actually displays, so the highlight always
         // matches what's on screen.
         const mismatch = typeof calc === 'number' && calc !== contractCount;
         const mismatchClass = mismatch ? ' cell-flag-red' : '';
-        const calcCell = calc === null ? '<span class="inline-subtext">Not yet loaded</span>' : calc;
+        // "Update" button, by request -- same real action as the Contracts
+        // section's own pencil-icon adjustment (openAdjustUnitsModal(),
+        // same ContractServiceAdjustment write, same Contract Manager-only
+        // gate), just pre-filled with the sign/amount that would actually
+        // fix this mismatch (never shown when there's nothing to fix, or
+        // for anyone who couldn't use the pencil either). A green pill
+        // (.chk-tce-update-btn below), by request -- "more visible than a
+        // pencil".
+        const updateCell =
+          lastServicesData?.isManager && mismatch
+            ? (() => {
+                const delta = calc - contractCount;
+                const sign = delta > 0 ? 1 : -1;
+                const unitsAmount = Math.abs(delta);
+                return `<button type="button" class="button-link button-link--small chk-tce-update-btn" data-tc-prefix="${escapeHtml(prefix)}" data-unit-id="${escapeHtml(String(r.id))}" data-is-bundle="${r.isBundle ? '1' : '0'}" data-sign="${sign}" data-units-amount="${unitsAmount}" title="${sign === 1 ? 'Add' : 'Remove'} ${unitsAmount} to match TC Calc (${calc})">Update</button>`;
+              })()
+            : '';
+        // Bold red, by request -- same .text-highlight-red class used
+        // dashboard-wide for this exact shade, not a new one-off. Two
+        // distinct blank states: null is "still waiting on Users/Datto to
+        // load" (Not Yet Loaded); '' is "no tag, no default, nothing to
+        // calculate at all" ([No Calc]) -- genuinely different reasons,
+        // so each gets its own message rather than one generic blank.
+        const calcCell =
+          calc === null
+            ? '<span class="text-highlight-red">Not Yet Loaded</span>'
+            : calc === ''
+              ? '<span class="text-highlight-red">[No Calc]</span>'
+              : calc;
+        // A defaulted tag (no real one set on the contract line) shows
+        // italic with a tooltip, so it never reads as if Autotask itself
+        // carries this tag.
+        const tagCell = isBundleCredit
+          ? `<i class="inline-subtext" title="Always matches the paired &quot;Kaseya 365 User &amp; Endpoint Bundle&quot; line on this contract">= Bundle</i>`
+          : realTag
+            ? escapeHtml(realTag)
+            : defaultTag
+              ? `<i class="inline-subtext" title="No tag set on this contract line -- defaulted for this known Tech Cover Essentials service item">${escapeHtml(defaultTag)}</i>`
+              : '';
         return `
       <tr>
         <td>${escapeHtml(r.serviceItemName || '')}</td>
-        <td>${escapeHtml(bracketPart(r.internalDescription))}</td>
+        <td>${tagCell}</td>
         <td class="ticket-number${mismatchClass}">${calcCell}</td>
         <td class="ticket-number${mismatchClass}">${contractCount ?? ''}</td>
         <td class="ticket-number">${formatPrice(perItem(r.price, r.units))}</td>
         <td class="ticket-number">${formatPrice(r.price)}</td>
+        <td>${updateCell}</td>
       </tr>`;
       })
       .join('');
     return `
       <table class="chk-tce-lines-table">
-        <thead><tr class="shaded-row"><th>Service Name</th><th>Tag</th><th>TC Calc</th><th>Contract</th><th>Unit Price</th><th>Total</th></tr></thead>
+        <thead><tr class="shaded-row"><th>Service Name</th><th>Tag</th><th>TC Calc</th><th>Contract</th><th>Unit Price</th><th>Total</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     `;
@@ -1055,20 +1147,36 @@ export function mount(container) {
   // own lazy toggle) has already loaded -- by request, this section
   // never fires that fetch on its own, so it shows a prompt instead of a
   // number until someone's actually clicked that button this search.
-  function techCoverEliteUsersRmmTableHtml() {
+  // Shared across every Tech Cover tier's own section (Elite, Essentials,
+  // ...) -- these are the client's real total Users/RMM counts, not
+  // anything specific to one tier's own contract lines.
+  function techCoverUsersRmmTableHtml() {
     const counts = computeTceCounts();
-    const usersNotLoaded = 'Click &quot;Show Users&quot;';
-    const dattoNotLoaded = 'Not yet loaded';
+    // A real button, by request ("avoid having to scroll down" to the
+    // real Show Users button further down the page in Microsoft 365
+    // Tenancy) -- wired in wireTechCoverShowUsersButtons() below to just
+    // click that SAME real button rather than duplicating its fetch/
+    // toggle logic here. Only shown once that real button actually
+    // exists (Microsoft 365 Tenancy's own search has resolved) -- by
+    // request, before that it's a disabled grey "Wait" instead, since
+    // there's nothing yet for it to click.
+    const usersToggleReady = !!document.querySelector('.chk-m365-users-toggle');
+    const usersNotLoadedHtml = usersToggleReady
+      ? '<button type="button" class="button-link button-link--small chk-tce-show-users-btn">Load User Counts</button>'
+      : '<button type="button" class="button-link button-link--small chk-tce-wait-btn" disabled>Wait</button>';
+    // Bold red, by request -- same .text-highlight-red class/wording as
+    // the TC Calc column's own "Not Yet Loaded" state, not a new one-off.
+    const dattoNotLoadedHtml = '<span class="text-highlight-red">Not Yet Loaded</span>';
     // "N1/N2/N3/N4 = total", by request -- the slash-joined breakdown
     // PLUS the sum of all of them (U* -- "any time you see U*, that's
     // all the U's added together"), one combined row/prompt rather than
     // 4 separate ones.
-    function breakdownCell(values, notLoadedText, notLoadedClass = 'inline-subtext') {
-      if (values.some((v) => v === null)) return `<span class="${notLoadedClass}">${notLoadedText}</span>`;
+    function breakdownCell(values, notLoadedHtml) {
+      if (values.some((v) => v === null)) return notLoadedHtml;
       return `${values.join(' | ')} = ${values.reduce((a, b) => a + b, 0)}`;
     }
-    const licensedUsersCell = breakdownCell([counts.u1, counts.u2, counts.u3, counts.u4], usersNotLoaded, 'text-highlight-orange');
-    const rmmCell = breakdownCell([counts.w, counts.s, counts.n, counts.o], dattoNotLoaded);
+    const licensedUsersCell = breakdownCell([counts.u1, counts.u2, counts.u3, counts.u4], usersNotLoadedHtml);
+    const rmmCell = breakdownCell([counts.w, counts.s, counts.n, counts.o], dattoNotLoadedHtml);
     return `
       <table class="chk-tce-table">
         <thead><tr class="shaded-row"><th>Source</th><th>Metric</th><th>Count</th></tr></thead>
@@ -1080,8 +1188,13 @@ export function mount(container) {
     `;
   }
 
-  function techCoverEliteSectionHtml() {
-    if (!hasTechCoverEliteContract()) return '';
+  // One Tech Cover tier's whole section -- `prefix` is the lower-cased
+  // contract-name prefix to match (hasTechCoverContract/
+  // techCoverContractLines above), `label` is the real display name
+  // ("Tech Cover Elite", "Tech Cover Essentials", ...) used in the
+  // heading and the lines table's own "nothing found" message.
+  function techCoverSectionHtml(label, prefix) {
+    if (!hasTechCoverContract(prefix)) return '';
     // Same heading format as Client Check Summary's own (h2.chk-section-
     // heading, not the smaller section-heading--nav style this used
     // before), by request -- including an inline orange status span the
@@ -1092,13 +1205,13 @@ export function mount(container) {
     const stillCalculating = Object.values(counts).some((v) => v === null);
     const calculatingBadge = stillCalculating ? ' <span class="status loading chk-tce-calculating">Calculating TC Calc values...</span>' : '';
     // Two columns for the Users/RMM table alongside the shaded grey
-    // notes box, same layout as before; the new per-line table sits on
-    // its own row above both, since it can run to several real lines.
+    // notes box, same layout as before; the per-line table sits on its
+    // own row above both, since it can run to several real lines.
     return `
-      <h2 class="chk-section-heading">Tech Cover Elite Check Summary${calculatingBadge}</h2>
-      ${techCoverEliteLinesTableHtml()}
+      <h2 class="chk-section-heading">${escapeHtml(label)} Check Summary${calculatingBadge}</h2>
+      ${techCoverLinesTableHtml(prefix, label)}
       <div class="chk-tce-columns">
-        ${techCoverEliteUsersRmmTableHtml()}
+        ${techCoverUsersRmmTableHtml()}
         <div class="chk-tce-notes">
           <p><u><b>Calculations based on Microsoft allocated licenses and Datto RMM Devices</b></u></p>
           <p>Contract Counts are for Next Period</p>
@@ -1110,6 +1223,50 @@ export function mount(container) {
     `;
   }
 
+  // Every Tech Cover tier this section covers, in display order -- add a
+  // new tier here (label + its contract-name prefix, already lower-cased)
+  // and both Check Summary sections and the formula/Users-RMM machinery
+  // above are reused automatically, no other code needs to change.
+  const TECH_COVER_TIERS = [
+    { label: 'Tech Cover Elite', prefix: 'tech cover elite' },
+    { label: 'Tech Cover Essentials', prefix: 'tech cover essentials' },
+  ];
+
+  // The Tech Cover lines table's own "Update" button -- same real row
+  // lookup shape as wireServiceRowActions() above (id + isBundle, since
+  // `id` alone is shared across two different Autotask entity types), just
+  // re-derived from techCoverContractLines(prefix) rather than a `group`
+  // already in scope, since this button can live in either tier's own
+  // section. Re-running that function here is cheap (same already-loaded
+  // lastServicesData/allServiceRows(), no re-fetch) and keeps this in sync
+  // with whatever's actually on screen without threading the array through.
+  function wireTechCoverUpdateButtons(container) {
+    container.querySelectorAll('.chk-tce-update-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const prefix = btn.dataset.tcPrefix;
+        const unitId = btn.dataset.unitId;
+        const isBundle = btn.dataset.isBundle === '1';
+        const row = techCoverContractLines(prefix).find((r) => String(r.id) === unitId && !!r.isBundle === isBundle);
+        if (!row) return;
+        openAdjustUnitsModal(row, { sign: Number(btn.dataset.sign), unitsAmount: Number(btn.dataset.unitsAmount) });
+      });
+    });
+  }
+
+  // The Licensed Users table's own "Show Users" button -- just clicks the
+  // real .chk-m365-users-toggle button down in Microsoft 365 Tenancy
+  // (rebuilt fresh on every M365 search, so it's looked up live here
+  // rather than cached), reusing its own fetch/toggle logic unchanged. A
+  // no-op if that section hasn't rendered at all yet (e.g. no M365 match
+  // for this client) -- nothing to click, by design never an error.
+  function wireTechCoverShowUsersButtons(container) {
+    container.querySelectorAll('.chk-tce-show-users-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelector('.chk-m365-users-toggle')?.click();
+      });
+    });
+  }
+
   // Matched against the row's own RENDERED text (every column, tags
   // stripped) rather than re-deriving a separate searchable string from
   // row's raw fields -- guarantees the filter can never drift out of sync
@@ -1118,9 +1275,17 @@ export function mount(container) {
   // with no second place to update).
   function renderClientCheckSummary() {
     const rows = buildClientCheckSummaryRows();
-    const tceHtml = techCoverEliteSectionHtml();
+    // One section per tier this client actually has a contract for (most
+    // clients have none or one; nothing stops a client having both) --
+    // joined with the same divider the main table already uses below,
+    // but only BETWEEN sections that are actually present.
+    const tceHtml = TECH_COVER_TIERS.map((t) => techCoverSectionHtml(t.label, t.prefix))
+      .filter(Boolean)
+      .join('<hr class="chk-box-divider" />');
     if (rows.length === 0) {
       summaryResultsEl.innerHTML = tceHtml;
+      wireTechCoverUpdateButtons(summaryResultsEl);
+      wireTechCoverShowUsersButtons(summaryResultsEl);
       summaryStatusEl.hidden = false;
       summaryStatusEl.className = 'status';
       summaryStatusEl.textContent =
@@ -1134,7 +1299,7 @@ export function mount(container) {
       <table class="chk-summary-table">
         <thead>
           <tr>
-            <th>Subscription</th><th>IM Licenses</th><th>Contract (AT)</th><th>M365 Licenses</th><th>Consumed</th><th>Suspended</th>
+            <th>Subscription</th><th>IM Licenses</th><th>Contract</th><th>M365 Licenses</th><th>Consumed</th><th>Suspended</th>
             <th>Term / Billing Period</th><th>Auto-Renewal</th><th>Renews / Expires</th>
           </tr>
         </thead>
@@ -1142,6 +1307,8 @@ export function mount(container) {
       </table>
       ${tceHtml ? `<hr class="chk-box-divider" />${tceHtml}` : ''}
     `;
+    wireTechCoverUpdateButtons(summaryResultsEl);
+    wireTechCoverShowUsersButtons(summaryResultsEl);
   }
 
   // ---------------------------------------------------------------------

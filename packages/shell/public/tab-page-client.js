@@ -124,7 +124,36 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
   // session) -- module scope (of this factory CALL, i.e. per tabbed
   // page), same convention every other page's lastData uses.
   let tabOrder = loadTabOrder(new Set([...DEFAULT_TAB_IDS, ...extraTabIds]));
-  let lastActiveTabId = tabOrder[0];
+
+  // Which tab was active, PERSONAL to this browser (localStorage, same
+  // per-page-id convention as EXTRA_TABS_KEY/TAB_ORDER_KEY/
+  // TAB_BAR_MINIMIZED_KEY above) -- by request, "when refreshing a
+  // tabbed page, go back to the tab you were on before clicking
+  // refresh", applied to every tabbed page at once since they all share
+  // this one factory. Validated against the same known-at-this-point id
+  // set tabOrder's own loadTabOrder() above already uses (plus the Help
+  // tab, a valid selectable tab that isn't in DEFAULT_TAB_IDS/
+  // extraTabIds) -- a stale id (a personal tab removed since, or a
+  // permanent tab not yet known this early) just falls back to the
+  // first tab, same as a brand-new visit, rather than erroring.
+  const LAST_ACTIVE_TAB_KEY = `${id}.lastActiveTab`;
+  function loadLastActiveTabId(knownIds) {
+    let saved;
+    try {
+      saved = localStorage.getItem(LAST_ACTIVE_TAB_KEY);
+    } catch {
+      saved = null;
+    }
+    return saved && knownIds.has(saved) ? saved : tabOrder[0];
+  }
+  function saveLastActiveTabId(tabId) {
+    try {
+      localStorage.setItem(LAST_ACTIVE_TAB_KEY, tabId);
+    } catch {
+      // localStorage unavailable -- a refresh just lands on the first tab again, same as before this existed.
+    }
+  }
+  let lastActiveTabId = loadLastActiveTabId(new Set([...DEFAULT_TAB_IDS, ...extraTabIds, HELP_TAB.id]));
 
   // Minimize the tab strip down to just a toggle button, by request --
   // for small screens, where a whole row of tabs eats a lot of vertical
@@ -634,6 +663,7 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
 
     async function selectTab(tabId) {
       lastActiveTabId = tabId;
+      saveLastActiveTabId(tabId);
       // Dashboard-wide Help button (app.js's openHelpModal()) reads this
       // to know which real page's README to show for a "-tabs" wrapper
       // page -- the active TAB's own underlying page id, not this

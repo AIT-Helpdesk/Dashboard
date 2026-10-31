@@ -1745,6 +1745,33 @@ h1 {
   width: 18%;
 }
 
+/* M365 Licenses/Consumed/Suspended -- a subtle box border showing they're
+   associated (all three come from the same Microsoft 365 license data),
+   by request. var(--border), same token used dashboard-wide for a plain
+   cell border (e.g. .tcr-table). The left/right rules below apply to
+   every row (header included) since table-wide th/td selectors, giving
+   the box's two vertical sides automatically; only the top (header) and
+   bottom (last body row) edges need adding explicitly to close it into a
+   full rectangle. */
+.chk-summary-table th:nth-child(4),
+.chk-summary-table td:nth-child(4) {
+  border-left: 1px solid var(--border);
+}
+.chk-summary-table th:nth-child(6),
+.chk-summary-table td:nth-child(6) {
+  border-right: 1px solid var(--border);
+}
+.chk-summary-table thead th:nth-child(4),
+.chk-summary-table thead th:nth-child(5),
+.chk-summary-table thead th:nth-child(6) {
+  border-top: 1px solid var(--border);
+}
+.chk-summary-table tbody tr:last-child td:nth-child(4),
+.chk-summary-table tbody tr:last-child td:nth-child(5),
+.chk-summary-table tbody tr:last-child td:nth-child(6) {
+  border-bottom: 1px solid var(--border);
+}
+
 /* Tech Cover Elite's own small Metric/Count table, by request -- deliberately
    NOT .chk-summary-table (that class's own nth-child width rules above are
    tuned for its 9-column layout, which would badly squeeze this table's
@@ -1773,7 +1800,9 @@ h1 {
 }
 .chk-tce-notes p {
   margin: 0 0 0.4rem;
-  font-size: 0.85rem;
+  /* Legend-sized, by request -- smaller than the table text it annotates,
+     not matching it. */
+  font-size: 0.62rem;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -1781,13 +1810,13 @@ h1 {
   margin-bottom: 0;
 }
 /* The per-contract-line table, by request -- wider than .chk-tce-table
-   (5 columns, a real Service Name can run long), sits on its own row
-   above the Users/RMM + notes columns rather than squeezed into either
-   one of them. */
+   (now 7 columns including the trailing Update button, a real Service
+   Name can run long), sits on its own row above the Users/RMM + notes
+   columns rather than squeezed into either one of them. */
 .chk-tce-lines-table {
   margin: 0.5rem 0 1rem;
   width: 100%;
-  max-width: 48rem;
+  max-width: 52rem;
 }
 .chk-tce-lines-table th,
 .chk-tce-lines-table td {
@@ -1801,6 +1830,44 @@ h1 {
 .chk-tce-lines-table th:nth-child(5),
 .chk-tce-lines-table th:nth-child(6) {
   text-align: right;
+}
+/* Green pill, by request ("more visible than a pencil") -- same real
+   action as the Contracts section's own pencil-icon adjustment, just
+   pre-filled with the fix amount. Same #16a34a used dashboard-wide
+   (.cell-flag-green, .chk-section-heading, etc.) and the same
+   color-mix-tint-pill convention Contract Checks' own alert-style pills
+   already use (e.g. .cc-mark-renewals-btn), not a new one-off shade. */
+.chk-tce-update-btn {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: #16a34a;
+  font-weight: 600;
+}
+/* "Load User Counts" pill, by request -- this dashboard's own yellowy-
+   orange, same #f59e0b used dashboard-wide (.text-highlight-orange,
+   .status.loading, etc.), not a new one-off shade. Same color-mix-tint-
+   pill convention .chk-tce-update-btn above already uses. */
+.chk-tce-show-users-btn {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #f59e0b;
+  font-weight: 600;
+  /* Narrower (shorter) than the usual .button-link--small pill, by
+     request -- to read closer to Contract Checks' own small pill buttons
+     when sitting inside this table's own taller cell padding. */
+  padding: 0.1rem 0.5rem;
+  line-height: 1.2;
+}
+/* "Wait" placeholder, by request -- shown instead of the real Show Users
+   trigger until that button actually exists below. Grey (var(--muted)),
+   same color-mix-tint-pill shape as .chk-tce-show-users-btn above, and
+   genuinely inert (disabled, not just styled to look that way) since it
+   has nothing to click yet. */
+.chk-tce-wait-btn {
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  line-height: 1.2;
+  cursor: default;
 }
 .chk-tce-table {
   margin-top: 0.5rem;
@@ -8157,6 +8224,16 @@ tr.accrued-time-yellow-row th {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+/* "(?)" grey state, by request -- shown before the count is actually
+   known (the HTML's own initial class/text, still loading) and again if
+   the load ever fails, rather than either case reading as a real "(0)"
+   in the normal blue. --pending always wins visually over --alert when
+   both happen to be set (client.js only applies --alert once a real
+   count is known, so this is belt-and-braces, not load-bearing). */
+.cc-subs-expiring-btn.cc-subs-expiring-btn--pending {
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
 }
 .cc-subs-expiring-btn.cc-subs-expiring-btn--alert {
   background: color-mix(in srgb, #dc2626 15%, transparent);
