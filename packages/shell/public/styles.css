@@ -2499,6 +2499,21 @@ h1 {
 .contract-checks-table td.cc-product-cell {
   white-space: nowrap;
 }
+/* Horizontal scroll, by request -- an unusually long Product name (the
+   nowrap above, combined with table-layout: auto, is exactly what can
+   push this table wider than its own card) was running the tick-box
+   columns at the end of the row off the edge of the page with no way to
+   reach them. Overrides .resource-group's own overflow: hidden (clips
+   rather than scrolls) for just this page's table, same scoped-override
+   pattern as .wo-scorecards-section .resource-group elsewhere in this
+   file. The Change Report popup's own table (same .contract-checks-table
+   markup, changeReportHtml() in client.js) renders into its own overlay
+   OUTSIDE .contract-checks-page, so it needs its own selector here too,
+   not just a child of the first one. */
+.contract-checks-page .resource-group,
+.cc-change-report-results .resource-group {
+  overflow-x: auto;
+}
 
 .ticket-times-table {
   table-layout: fixed;
