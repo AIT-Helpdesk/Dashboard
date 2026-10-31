@@ -30,6 +30,7 @@ let lastIngramClientManuallyEdited = false;
 // the rest of the search.
 let lastDattoSite = '';
 let lastDattoSiteManuallyEdited = false;
+let lastExactDattoSite = false; // off by default -- the normal wildcard/contains search
 let lastSince = null;
 let lastMonth = null;
 let lastOrdersData = null;
@@ -135,6 +136,9 @@ export function mount(container) {
         <div class="date-form-row">
           <label for="datto-site-input">Datto Site</label>
           <input type="text" id="datto-site-input" name="dattoSite" placeholder="e.g. Acme* (wildcards with *, optional)" />
+          <label class="inline-checkbox-label chk-exact-client-label" title="Force an exact match on the Datto Site name (instead of the usual wildcard/contains search)">
+            <input type="checkbox" id="exact-datto-site-input" />
+          </label>
         </div>
       </form>
     </header>
@@ -184,6 +188,7 @@ export function mount(container) {
   const exactClientInput = container.querySelector('#exact-client-input');
   const ingramClientInput = container.querySelector('#ingram-client-input');
   const dattoSiteInput = container.querySelector('#datto-site-input');
+  const exactDattoSiteInput = container.querySelector('#exact-datto-site-input');
   const sinceInput = container.querySelector('#since-input');
   const monthInput = container.querySelector('#month-input');
   const searchButton = container.querySelector('#search-button');
@@ -250,6 +255,7 @@ export function mount(container) {
   exactClientInput.checked = lastExactClient;
   ingramClientInput.value = lastIngramClient;
   dattoSiteInput.value = lastDattoSite;
+  exactDattoSiteInput.checked = lastExactDattoSite;
   sinceInput.value = lastSince || defaultSinceISO();
   monthInput.value = lastMonth || currentMonthISO();
 
@@ -340,6 +346,7 @@ export function mount(container) {
     const exactClient = exactClientInput.checked;
     const ingramClient = ingramClientInput.value.trim();
     const dattoSite = dattoSiteInput.value.trim();
+    const exactDattoSite = exactDattoSiteInput.checked;
     const since = sinceInput.value;
     const month = monthInput.value;
     searchButton.disabled = true;
@@ -363,7 +370,7 @@ export function mount(container) {
         loadOrders(ingramClient, since),
         loadSubscriptions(ingramClient),
         loadServices(autotaskClient, exactClient, month),
-        loadDattoRmm(dattoSite),
+        loadDattoRmm(dattoSite, false, exactDattoSite),
       ]);
       // Runs only after all three above have settled -- Microsoft 365
       // Tenancy's own fallback path (see loadM365Tenancy()'s comment) wants
@@ -377,6 +384,7 @@ export function mount(container) {
       lastIngramClientManuallyEdited = ingramClientManuallyEdited;
       lastDattoSite = dattoSite;
       lastDattoSiteManuallyEdited = dattoSiteManuallyEdited;
+      lastExactDattoSite = exactDattoSite;
       lastSince = since;
       lastMonth = month;
       searchButton.disabled = false;
@@ -908,12 +916,27 @@ export function mount(container) {
     const t = tok.toUpperCase();
     // Office:Home / Dept:Finance -- a count of the levelled users whose
     // M365 office/department matches the value after the colon (case-
-    // insensitive, spaces inside the value allowed).
+    // insensitive, spaces inside the value allowed). The value may be
+    // quoted (Dept:"Service/Generic Accounts") so a real office/
+    // department name containing +-*/(), doesn't get mistaken for an
+    // operator by the tokenizer below -- strip the quotes here before
+    // comparing. A trailing * (only inside a quoted value -- an
+    // unquoted one can't contain * at all, see the tokenizer's allow-
+    // list) means prefix match, by request: Dept:"Manager*" matches
+    // any department STARTING WITH "Manager" (e.g. "Manager",
+    // "Manager - Melbourne"), not a literal department named "Manager*".
     if (t.startsWith('OFFICE:') || t.startsWith('DEPT:')) {
       if (counts.levelledUsers === null) return null;
       const isOffice = t.startsWith('OFFICE:');
-      const want = tok.slice(isOffice ? 7 : 5).trim().toUpperCase();
-      return counts.levelledUsers.filter((u) => ((isOffice ? u.office : u.department) || '').trim().toUpperCase() === want).length;
+      let want = tok.slice(isOffice ? 7 : 5).trim();
+      if (want.length >= 2 && want.startsWith('"') && want.endsWith('"')) want = want.slice(1, -1).trim();
+      want = want.toUpperCase();
+      const field = (u) => ((isOffice ? u.office : u.department) || '').trim().toUpperCase();
+      if (want.length > 1 && want.endsWith('*')) {
+        const prefix = want.slice(0, -1);
+        return counts.levelledUsers.filter((u) => field(u).startsWith(prefix)).length;
+      }
+      return counts.levelledUsers.filter((u) => field(u) === want).length;
     }
     if (t === 'D*') return [counts.w, counts.s, counts.n, counts.o].some((x) => x === null) ? null : counts.w + counts.s + counts.n + counts.o;
     if (t === 'U*') return [counts.u1, counts.u2, counts.u3, counts.u4].some((x) => x === null) ? null : counts.u1 + counts.u2 + counts.u3 + counts.u4;
@@ -936,9 +959,14 @@ export function mount(container) {
     const s = text.trim();
     if (!s) return [];
     // Office:/Dept: values run up to the next operator, paren or comma,
-    // so they can contain spaces ("Office:Head Office"). Everything else
-    // is still an explicit allow-list token.
-    const re = /\s*(OFFICE:[^+\-*/(),]+|DEPT:[^+\-*/(),]+|DW|DS|DN|DO|D\*|U1|U2|U3|U4|U\*|MAX|MIN|\d+(?:\.\d+)?|[()+\-*/,])\s*/gi;
+    // so they can contain spaces ("Office:Head Office"). A quoted value
+    // (Office:"Service/Generic Accounts", by request) instead runs to
+    // the closing quote, so a real office/department name that itself
+    // contains +-*/(), (e.g. a "-" or "/" in the name) isn't mistaken
+    // for an operator -- the quoted alternative is tried first so it
+    // wins over the unquoted one. Everything else is still an explicit
+    // allow-list token.
+    const re = /\s*(OFFICE:"[^"]*"|DEPT:"[^"]*"|OFFICE:[^+\-*/(),]+|DEPT:[^+\-*/(),]+|DW|DS|DN|DO|D\*|U1|U2|U3|U4|U\*|MAX|MIN|\d+(?:\.\d+)?|[()+\-*/,])\s*/gi;
     const tokens = [];
     let pos = 0;
     while (pos < s.length) {
@@ -1247,7 +1275,7 @@ export function mount(container) {
           <p>Contract Counts are for Next Period</p>
           <p><strong>USERS:</strong> <span class="text-highlight-orange">U1:</span>Premium,Standard,Office E3 | <span class="text-highlight-orange">U2:</span>Basic | <span class="text-highlight-orange">U3:</span>Exch Online | <span class="text-highlight-orange">U4:</span>F3 = <span class="text-highlight-orange">U*:</span>All</p>
           <p><strong>DRMM:</strong> <span class="text-highlight-orange">DW:</span>Workstation | <span class="text-highlight-orange">DS:</span>Server | <span class="text-highlight-orange">DN:</span>Network | <span class="text-highlight-orange">DO:</span>Other = <span class="text-highlight-orange">D*:</span>All</p>
-          <p><strong>OTHER:</strong> <span class="text-highlight-orange">Dept</span> | <span class="text-highlight-orange">Office</span> = Free text fields</p>
+          <p><strong>OTHER:</strong> <span class="text-highlight-orange">Dept:*</span> | <span class="text-highlight-orange">Office:*</span> = Free text fields</p>
         </div>
       </div>
     `;
@@ -1425,7 +1453,7 @@ export function mount(container) {
         btn.disabled = true;
         btn.textContent = 'Refreshing...';
         loadServices(autotaskClientInput.value.trim(), exactClientInput.checked, monthInput.value);
-        loadDattoRmm(dattoSiteInput.value.trim(), true);
+        loadDattoRmm(dattoSiteInput.value.trim(), true, exactDattoSiteInput.checked);
       });
     });
   }
@@ -3103,7 +3131,7 @@ export function mount(container) {
   // Summary showing stale counts. Now calls it on every path, same
   // "whichever load finishes LAST leaves the freshest view" convention
   // every other section here already follows.
-  async function loadDattoRmm(site, force) {
+  async function loadDattoRmm(site, force, exactSite) {
     dattoStatusEl.hidden = false;
     dattoStatusEl.className = 'status';
     dattoSummaryEl.hidden = true;
@@ -3119,6 +3147,7 @@ export function mount(container) {
     try {
       const params = new URLSearchParams({ site });
       if (force) params.set('force', 'true');
+      if (exactSite) params.set('exactSite', 'true');
       const data = await fetchJson(`/api/check-client/datto-rmm?${params.toString()}`, 'GET');
       lastDattoData = data;
       activeRenderers.renderDattoRmm(data);

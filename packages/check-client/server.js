@@ -583,12 +583,22 @@ router.get('/datto-rmm', async (req, res) => {
   if (!dattoRmm.hasDattoCredentials()) return res.json({ connected: false });
   const siteTerm = (req.query.site || '').trim();
   if (!siteTerm) return res.status(400).json({ error: 'Query param "site" is required.' });
+  // exactSite, by request -- same "force exact match" convention as
+  // exactClient on the Autotask Client search above, since Datto's own
+  // site names are a third naming system (see this route's own comment
+  // above) that can collide on a plain contains/wildcard search (e.g. one
+  // client's site name being a substring of an unrelated client's).
+  // matchesWildcard() itself has no exact-match op, so this is a plain
+  // case-insensitive equality check done here instead, bypassing it
+  // entirely when exactSite is set.
+  const exactSite = req.query.exactSite === 'true';
+  const matchesSite = (value) => (exactSite ? (value || '').trim().toLowerCase() === siteTerm.toLowerCase() : matchesWildcard(value, siteTerm));
   try {
     const force = req.query.force === 'true';
     const [allDevices, alertsResult] = await Promise.all([getCachedDattoDevices(force), getCachedDattoAlerts(force)]);
 
-    const devices = allDevices.filter((d) => matchesWildcard(d.site, siteTerm));
-    const alerts = alertsResult.alerts.filter((a) => matchesWildcard(a.siteName, siteTerm));
+    const devices = allDevices.filter((d) => matchesSite(d.site));
+    const alerts = alertsResult.alerts.filter((a) => matchesSite(a.siteName));
 
     const bySite = new Map();
     for (const d of devices) {
