@@ -99,7 +99,7 @@ async function fetchSubscriptions(token, allStatuses) {
   return [...activeSubs, ...pendingSubs];
 }
 
-async function buildReport(filterTerm, subscriptionTerm, allStatuses) {
+async function buildReport(filterTerm, subscriptionTerm, subscriptionIdTerm, accountIdTerm, allStatuses) {
   const token = await getToken();
 
   const [subscriptions, customers] = await Promise.all([
@@ -119,6 +119,13 @@ async function buildReport(filterTerm, subscriptionTerm, allStatuses) {
     // excluded one doesn't show up as an empty group, and totals stay honest.
     if (EXCLUDED_NAME_PATTERNS.some((pattern) => matchesWildcard(s.name, pattern))) continue;
     if (subscriptionTerm && !matchesWildcard(s.name, subscriptionTerm)) continue;
+    // Subscription/Account ID, by request -- same wildcard convention as
+    // every other search box on this page, just matched against the id's
+    // string form rather than a name (Ingram ids are numeric, but a plain,
+    // no-wildcard search still works correctly as a "contains" match on
+    // that string -- see matchesWildcard()'s own default op).
+    if (subscriptionIdTerm && !matchesWildcard(String(s.id), subscriptionIdTerm)) continue;
+    if (accountIdTerm && !matchesWildcard(String(s.customerId), accountIdTerm)) continue;
     const clientName = customerNameById.get(s.customerId) || `Customer #${s.customerId}`;
     if (filterTerm && !matchesWildcard(clientName, filterTerm)) continue;
     if (!byClientMap.has(s.customerId)) {
@@ -175,6 +182,8 @@ async function buildReport(filterTerm, subscriptionTerm, allStatuses) {
     asOf: new Date().toISOString(),
     filterTerm: filterTerm || null,
     subscriptionTerm: subscriptionTerm || null,
+    subscriptionIdTerm: subscriptionIdTerm || null,
+    accountIdTerm: accountIdTerm || null,
     allStatuses: !!allStatuses,
     totalCount: matched.length,
     statusCounts,
@@ -214,16 +223,16 @@ const reportCacheByKey = new Map(); // key -> { data, expiresAt }
 // each kicking off their own fetch against Ingram.
 const inFlightByKey = new Map(); // key -> Promise
 
-function cacheKeyFor(filterTerm, subscriptionTerm, allStatuses) {
-  return `${(filterTerm || '').trim().toLowerCase()}|${(subscriptionTerm || '').trim().toLowerCase()}|${allStatuses ? 'all' : 'default'}`;
+function cacheKeyFor(filterTerm, subscriptionTerm, subscriptionIdTerm, accountIdTerm, allStatuses) {
+  return `${(filterTerm || '').trim().toLowerCase()}|${(subscriptionTerm || '').trim().toLowerCase()}|${(subscriptionIdTerm || '').trim().toLowerCase()}|${(accountIdTerm || '').trim().toLowerCase()}|${allStatuses ? 'all' : 'default'}`;
 }
 
-async function getReport(filterTerm, subscriptionTerm, allStatuses, force) {
-  const key = cacheKeyFor(filterTerm, subscriptionTerm, allStatuses);
+async function getReport(filterTerm, subscriptionTerm, subscriptionIdTerm, accountIdTerm, allStatuses, force) {
+  const key = cacheKeyFor(filterTerm, subscriptionTerm, subscriptionIdTerm, accountIdTerm, allStatuses);
   const cached = reportCacheByKey.get(key);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
   if (!inFlightByKey.has(key)) {
-    const build = buildReport(filterTerm, subscriptionTerm, allStatuses)
+    const build = buildReport(filterTerm, subscriptionTerm, subscriptionIdTerm, accountIdTerm, allStatuses)
       .then((data) => {
         reportCacheByKey.set(key, { data, expiresAt: Date.now() + REPORT_CACHE_TTL_MS });
         return data;
@@ -240,7 +249,14 @@ const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
-    const data = await getReport(req.query.client, req.query.subscription, req.query.allStatuses === 'true', req.query.force === 'true');
+    const data = await getReport(
+      req.query.client,
+      req.query.subscription,
+      req.query.subscriptionId,
+      req.query.accountId,
+      req.query.allStatuses === 'true',
+      req.query.force === 'true'
+    );
     res.json(data);
   } catch (err) {
     console.error(err);

@@ -97,7 +97,7 @@ router.get('/orders', async (req, res) => {
 router.get('/subscriptions', async (req, res) => {
   try {
     const filterTerm = (req.query.client || '').trim();
-    const data = await ingramSubscriptions.getReport(filterTerm, '', false, false);
+    const data = await ingramSubscriptions.getReport(filterTerm, '', '', '', false, false);
     res.json(data);
   } catch (err) {
     console.error(err);

@@ -9,6 +9,8 @@ export const label = "Ingram Subscriptions";
 let lastData = null;
 let lastFilter = '';
 let lastSubscriptionFilter = '';
+let lastSubscriptionIdFilter = '';
+let lastAccountIdFilter = '';
 let lastAllStatuses = false; // default: active & pending only, by request
 
 // Whichever mount() is CURRENTLY on screen registers its own render()
@@ -38,6 +40,10 @@ export function mount(container) {
         <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
         <label for="subscription-input">Subscription Name</label>
         <input type="text" id="subscription-input" name="subscription" placeholder="optional, e.g. *Business Basic* (wildcards with *)" />
+        <label for="subscription-id-input">Subscription ID</label>
+        <input type="text" id="subscription-id-input" name="subscriptionId" placeholder="optional (wildcards with *)" />
+        <label for="account-id-input">Account ID</label>
+        <input type="text" id="account-id-input" name="accountId" placeholder="optional (wildcards with *)" />
         <label for="all-statuses-input" class="inline-checkbox-label">
           <input type="checkbox" id="all-statuses-input" /> All Statuses
         </label>
@@ -52,6 +58,8 @@ export function mount(container) {
   const form = container.querySelector('#filter-form');
   const clientInput = container.querySelector('#client-input');
   const subscriptionInput = container.querySelector('#subscription-input');
+  const subscriptionIdInput = container.querySelector('#subscription-id-input');
+  const accountIdInput = container.querySelector('#account-id-input');
   const allStatusesInput = container.querySelector('#all-statuses-input');
   const refreshButton = container.querySelector('#refresh-button');
   const statusEl = container.querySelector('#status');
@@ -60,6 +68,8 @@ export function mount(container) {
 
   clientInput.value = lastFilter;
   subscriptionInput.value = lastSubscriptionFilter;
+  subscriptionIdInput.value = lastSubscriptionIdFilter;
+  accountIdInput.value = lastAccountIdFilter;
   allStatusesInput.checked = lastAllStatuses;
 
   // This mount is now the active one -- see activeRender's own comment
@@ -68,7 +78,7 @@ export function mount(container) {
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(clientInput.value, subscriptionInput.value, allStatusesInput.checked);
+    load(clientInput.value, subscriptionInput.value, subscriptionIdInput.value, accountIdInput.value, allStatusesInput.checked);
   });
 
   // The server caches each search (keyed by the filter term AND the
@@ -79,7 +89,7 @@ export function mount(container) {
   // below). Refresh always sends `force=true`, which bypasses that cache for
   // the current search and rebuilds -- a button literally labeled "Refresh"
   // should always get current data, not a cached one.
-  async function load(clientFilter, subscriptionFilter, allStatuses) {
+  async function load(clientFilter, subscriptionFilter, subscriptionIdFilter, accountIdFilter, allStatuses) {
     refreshButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
@@ -91,6 +101,8 @@ export function mount(container) {
       const params = new URLSearchParams({ force: 'true' });
       if (clientFilter) params.set('client', clientFilter);
       if (subscriptionFilter) params.set('subscription', subscriptionFilter);
+      if (subscriptionIdFilter) params.set('subscriptionId', subscriptionIdFilter);
+      if (accountIdFilter) params.set('accountId', accountIdFilter);
       if (allStatuses) params.set('allStatuses', 'true');
       const res = await fetch(`/api/ingram-subscriptions?${params.toString()}`);
       const data = await res.json();
@@ -98,6 +110,8 @@ export function mount(container) {
       lastData = data;
       lastFilter = clientFilter;
       lastSubscriptionFilter = subscriptionFilter;
+      lastSubscriptionIdFilter = subscriptionIdFilter;
+      lastAccountIdFilter = accountIdFilter;
       lastAllStatuses = allStatuses;
       activeRender(data);
     } catch (err) {
@@ -114,6 +128,8 @@ export function mount(container) {
     const filterClauses = [];
     if (data.filterTerm) filterClauses.push(`client "${escapeHtml(data.filterTerm)}"`);
     if (data.subscriptionTerm) filterClauses.push(`subscription "${escapeHtml(data.subscriptionTerm)}"`);
+    if (data.subscriptionIdTerm) filterClauses.push(`subscription ID "${escapeHtml(data.subscriptionIdTerm)}"`);
+    if (data.accountIdTerm) filterClauses.push(`account ID "${escapeHtml(data.accountIdTerm)}"`);
     const filterSuffix = filterClauses.length ? ` matching ${filterClauses.join(' and ')}` : '';
     const statusBreakdown = STATUS_ORDER.filter((s) => data.statusCounts[s] > 0)
       .map((s) => `${data.statusCounts[s]} ${STATUS_LABELS[s]}`)
