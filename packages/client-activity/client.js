@@ -127,8 +127,23 @@ export function mount(container) {
     const incompleteTickets = data.recentTickets.filter((t) => !t.done);
     const completedTickets = data.recentTickets.filter((t) => t.done);
 
-    resultsEl.appendChild(sectionHeading(`Recent Tickets -- Incomplete (${incompleteTickets.length})`));
-    resultsEl.appendChild(recentTicketsTable(incompleteTickets));
+    const billingContractTickets = data.billingContractTickets || [];
+
+    const incompleteBox = document.createElement('div');
+    incompleteBox.appendChild(sectionHeading(`Recent Tickets -- Incomplete (${incompleteTickets.length})`));
+    incompleteBox.appendChild(recentTicketsTable(incompleteTickets));
+
+    const billingContractBox = document.createElement('div');
+    billingContractBox.appendChild(sectionHeading(`Billing - Contract (${billingContractTickets.length})`));
+    billingContractBox.appendChild(billingContractTicketsTable(billingContractTickets));
+
+    const incompleteRow = document.createElement('div');
+    incompleteRow.style.display = 'grid';
+    incompleteRow.style.gridTemplateColumns = 'repeat(auto-fit, minmax(320px, 1fr))';
+    incompleteRow.style.gap = '0.75rem';
+    incompleteRow.appendChild(incompleteBox);
+    incompleteRow.appendChild(billingContractBox);
+    resultsEl.appendChild(incompleteRow);
 
     resultsEl.appendChild(sectionHeading(`Recent Tickets -- Completed (${completedTickets.length})`));
     resultsEl.appendChild(recentTicketsTable(completedTickets));
@@ -214,6 +229,7 @@ export function mount(container) {
   function recentTicketsTable(tickets) {
     const wrap = document.createElement('div');
     wrap.className = 'resource-group';
+    wrap.style.overflowX = 'auto';
     if (tickets.length === 0) {
       wrap.innerHTML = '<p class="status" style="padding: 0.75rem 1rem;">None.</p>';
       return wrap;
@@ -234,6 +250,40 @@ export function mount(container) {
               <td>${escapeHtml(priorityShort(t.priority))}</td>
               <td class="ticket-number">${escapeHtml(timeToClose(t))}</td>
               <td class="ticket-number">${formatDate(t.createDate)}</td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    `;
+    return wrap;
+  }
+
+  // Same shape as recentTicketsTable() but just Ticket # / Title / Due Date
+  // -- by request, Status/Priority/Time to Close/Created left out since
+  // every row here is already known to be "Billing - Contract", and due
+  // date is the one thing that actually matters for this list.
+  function billingContractTicketsTable(tickets) {
+    const wrap = document.createElement('div');
+    wrap.className = 'resource-group';
+    wrap.style.overflowX = 'auto';
+    if (tickets.length === 0) {
+      wrap.innerHTML = '<p class="status" style="padding: 0.75rem 1rem;">None.</p>';
+      return wrap;
+    }
+    wrap.innerHTML = `
+      <table>
+        <thead>
+          <tr><th>Ticket #</th><th>Title</th><th>Due Date</th></tr>
+        </thead>
+        <tbody>
+          ${tickets
+            .map(
+              (t) => `
+            <tr>
+              <td class="ticket-number">${ticketLink(t)}</td>
+              <td>${escapeHtml(t.title)}</td>
+              <td class="ticket-number">${formatDate(t.dueDateTime)}</td>
             </tr>`
             )
             .join('')}

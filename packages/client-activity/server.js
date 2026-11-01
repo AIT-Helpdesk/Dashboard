@@ -140,6 +140,28 @@ router.get('/', async (req, res) => {
     const openByStatus = countBy(openTickets, statusLabels, 'status', groupToDoStatuses);
     const openByPriority = countBy(openTickets, priorityLabels, 'priority');
 
+    // Tickets currently sitting at status "Billing - Contract". Pulled from
+    // allTickets, not openTickets -- this status already matches
+    // DONE_STATUS_PATTERNS' 'billing - *' wildcard above, so it's excluded
+    // from openTickets entirely; this box needs it regardless of that
+    // done/open classification. Not scoped to the 12-month recentTickets
+    // window either, since a ticket can sit in this status for a long time
+    // regardless of when it was created.
+    const billingContractStatusIds = computeStatusIdsMatching(statusLabels, ['billing - contract']);
+    const billingContractTickets = [];
+    for (const t of allTickets) {
+      if (!billingContractStatusIds.has(t.status)) continue;
+      billingContractTickets.push({
+        id: t.id,
+        ticketNumber: t.ticketNumber,
+        ticketUrl: await getTicketUrl(t.id),
+        title: t.title,
+        createDate: t.createDate,
+        dueDateTime: t.dueDateTime || null,
+      });
+    }
+    billingContractTickets.sort((a, b) => new Date(b.createDate) - new Date(a.createDate));
+
     // Recent tickets: created within the window, newest first.
     const recentTickets = [];
     for (const t of allTickets) {
@@ -203,6 +225,7 @@ router.get('/', async (req, res) => {
       openByPriority,
       openTotal: openTickets.length,
       recentTickets,
+      billingContractTickets,
     });
   } catch (err) {
     console.error(err);

@@ -48,6 +48,7 @@
 import { widgetsHtmlForComponent, fullTableHtmlForComponent, detailsBlock, wireDeviceFilters, formatDateTime, escapeHtml } from '/meeting-prep-report-render.js';
 import { computeFindings } from '/meeting-prep-recommendations.js';
 import { loadSelection, onSelectionChange } from '/meeting-prep-selection.js';
+import { getDraft, saveDraft, anyDrafted } from '/meeting-prep-ai-drafts.js';
 
 // Client-facing labels only, by request ("Remove the mentions of Datto on
 // headings and links eg. RMM Report and RMM Live", then "leave the word
@@ -78,6 +79,31 @@ function reportHeading(c) {
 
 export const id = 'report';
 export const label = 'Make Report';
+
+// Which report kinds get a "Draft Commentary" button at all -- the server
+// (packages/report/ai-payload-config.js) is the one source of truth for
+// this, by request ("design the payload-assembly step generically...
+// adding a new report type should mean adding a new config/mapping entry,
+// not modifying the core drafting pipeline"); this page just asks it once
+// per mount and caches the answer at module scope, same "fetch once,
+// reuse across remounts" convention Check Up's own lastHandlerOptions
+// uses. `null` means "not loaded yet" (AI buttons simply don't show on the
+// very first render until this resolves, then a re-render picks them up) --
+// kept distinct from an empty Set (a real, loaded "nothing configured").
+let aiSupportedKinds = null;
+let aiKindsPromise = null;
+
+function ensureAiKindsLoaded(onLoaded) {
+  if (!aiKindsPromise) {
+    aiKindsPromise = fetch('/api/report/ai-kinds')
+      .then((res) => res.json())
+      .then((data) => {
+        aiSupportedKinds = new Set(data.kinds || []);
+      })
+      .catch((err) => console.error('Report: failed to load AI-commentary kinds:', err));
+  }
+  aiKindsPromise.then(onLoaded);
+}
 
 export function mount(container) {
   // The Ambient IT letterhead banner that used to sit here (first shown
@@ -123,6 +149,104 @@ export function mount(container) {
   // existing scroll box, styles.css, untouched here). Only at print time
   // does it disappear from the section (replaced by the same Appendix
   // link every other kind gets) and reappear as its own Appendix instead.
+  // AI-drafted commentary for this section -- by request ("AI-Assisted
+  // Reporting Brief", Oct 2026). Returns '' for a kind the server has no
+  // ai-payload-config.js entry for (aiSupportedKinds not yet loaded, or
+  // loaded and this kind isn't in it) -- same "quietly not there" shape
+  // widgetsHtmlForComponent() itself already uses for an unrecognised kind.
+  // Sits directly under the widgets, by request ("editable text directly
+  // under the widget it describes... so the TAM reviews the number and the
+  // AI's sentence about it side by side"), ABOVE the table block.
+  //
+  // Screen shows an editable <textarea> (plus the Draft/Regenerate button
+  // and the AI-drafted tag, both .no-print -- TAM-only review chrome, never
+  // meant for the client's own copy of the report); print shows a plain
+  // <p> instead, kept in sync on every keystroke (wireAiCommentary()'s own
+  // textarea 'input' handler) -- same "editable widget on screen, plain
+  // static copy for print" duality this page's table/appendix link
+  // (tableBlock above) already uses, since a <textarea>'s own overflow
+  // doesn't print the way a plain paragraph's text wrapping does.
+  function aiCommentaryHtml(c) {
+    if (!aiSupportedKinds || !aiSupportedKinds.has(c.kind)) return '';
+    const draft = getDraft(c);
+    const text = draft?.text || '';
+    const tagLabel = draft ? (draft.edited ? 'AI-drafted · edited' : 'AI-drafted') : '';
+    return `
+      <div class="mtg-ai-block" data-ai-id="${escapeHtml(c.id)}">
+        <div class="no-print mtg-ai-controls">
+          <button type="button" class="button-link button-link--small mtg-ai-draft-btn">${draft ? 'Regenerate' : 'Draft Commentary'}</button>
+          <span class="mtg-ai-tag"${draft ? '' : ' hidden'}>${tagLabel}</span>
+        </div>
+        <textarea class="no-print mtg-ai-textarea" placeholder="Click &quot;Draft Commentary&quot; to generate AI commentary for this section."${draft ? '' : ' hidden'}>${escapeHtml(text)}</textarea>
+        <p class="mtg-ai-commentary-print"${draft ? '' : ' hidden'}>${escapeHtml(text)}</p>
+      </div>`;
+  }
+
+  // Wires every drafted/draftable section's own button + textarea, by
+  // request ("regenerate button... editable text"). Looked up by
+  // data-ai-id (CSS.escape()'d -- component.id can contain slashes etc.,
+  // see this page's own sectionAnchorId() comment on why IDs aren't used
+  // bare as HTML/CSS identifiers elsewhere on this page either) rather than
+  // walking sections by index, so this stays correct regardless of section
+  // order.
+  function wireAiCommentary(selected) {
+    if (!aiSupportedKinds) return;
+    for (const c of selected) {
+      if (!aiSupportedKinds.has(c.kind)) continue;
+      const block = contentEl.querySelector(`.mtg-ai-block[data-ai-id="${CSS.escape(c.id)}"]`);
+      if (!block) continue;
+      const btn = block.querySelector('.mtg-ai-draft-btn');
+      const tag = block.querySelector('.mtg-ai-tag');
+      const textarea = block.querySelector('.mtg-ai-textarea');
+      const printEl = block.querySelector('.mtg-ai-commentary-print');
+
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        const prevLabel = btn.textContent;
+        btn.textContent = 'Drafting...';
+        try {
+          const res = await fetch('/api/report/draft-commentary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ component: c }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+          const entry = { text: data.text, edited: false, generatedAt: new Date().toISOString() };
+          saveDraft(c, entry);
+          textarea.value = entry.text;
+          textarea.hidden = false;
+          printEl.textContent = entry.text;
+          printEl.hidden = false;
+          tag.textContent = 'AI-drafted';
+          tag.hidden = false;
+          btn.textContent = 'Regenerate';
+        } catch (err) {
+          alert(`AI drafting failed: ${err.message}`);
+          btn.textContent = prevLabel;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+      // Any hand-edit immediately re-tags "AI-drafted · edited" -- by
+      // request ("mark AI-drafted sections visually... so it's clear at a
+      // glance which content is generated versus pulled raw"), extended
+      // here to also distinguish "generated, as-is" from "generated, then
+      // hand-edited" rather than just "AI vs. not". No debounce on the
+      // localStorage write -- cheap, and this is a single-admin-at-a-time
+      // internal page, not a high-frequency save path.
+      textarea.addEventListener('input', () => {
+        printEl.textContent = textarea.value;
+        printEl.hidden = false;
+        const existing = getDraft(c) || { generatedAt: new Date().toISOString() };
+        saveDraft(c, { ...existing, text: textarea.value, edited: true });
+        tag.textContent = 'AI-drafted · edited';
+        tag.hidden = false;
+      });
+    }
+  }
+
   function reportSectionHtml(c, i, appendixNumberById) {
     const widgets = widgetsHtmlForComponent(c);
     const table = fullTableHtmlForComponent(c);
@@ -163,6 +287,7 @@ export function mount(container) {
       <div id="${sectionAnchorId(i)}" class="mtg-report-section${compact ? ' mtg-report-section--compact' : ''}" data-section-index="${i}">
         <h3>${heading}</h3>
         ${widgets}
+        ${aiCommentaryHtml(c)}
         ${tableBlock}
         ${!table ? originalFileLink : ''}
       </div>`;
@@ -319,6 +444,10 @@ export function mount(container) {
           <p class="mtg-report-asof">As of ${escapeHtml(formatDateTime(selection.asOf))}</p>
         </div>
       </div>
+      <div id="report-ai-review-banner" class="no-print mtg-ai-review-banner" hidden>
+        <p>AI-drafted content is present in this report -- please review before exporting.</p>
+        <button type="button" id="report-ai-review-proceed" class="button-link button-link--small">Proceed to Export</button>
+      </div>
       ${reportNotes}
       <div class="mtg-report-tabs no-print" id="report-tabs"></div>
       <hr class="mtg-report-page-divider no-print" id="report-page-divider" />
@@ -326,12 +455,34 @@ export function mount(container) {
       ${appendices}
     `;
     wireDeviceFilters(contentEl);
+    wireAiCommentary(selected);
     // Native print dialog -- "Save as PDF" is a destination choice inside
     // it on every real OS/browser, not a separate code path this page has
     // to implement itself. styles.css's own @media print rules (the
     // .no-print button included) handle what the resulting document looks
     // like.
-    contentEl.querySelector('#report-print-button').addEventListener('click', () => window.print());
+    //
+    // Human-review gate, by request ("AI drafts, never auto-sends... before
+    // the Export to PDF button fires, add a deliberate pause... doesn't
+    // need to hard-block, just prevent exporting on autopilot"): the FIRST
+    // click, while any ticked section still has AI-drafted content, reveals
+    // the review banner above instead of printing immediately; a second
+    // click on this same button (banner now visible, so the condition below
+    // no longer holds) or the banner's own "Proceed to Export" button both
+    // fall through to the real window.print(). Re-ticking a different
+    // selection rebuilds this whole block fresh, so the banner's
+    // acknowledged state never carries over to a report it wasn't shown for.
+    const reviewBanner = contentEl.querySelector('#report-ai-review-banner');
+    const printButton = contentEl.querySelector('#report-print-button');
+    printButton.addEventListener('click', () => {
+      if (reviewBanner.hidden && anyDrafted(selected)) {
+        reviewBanner.hidden = false;
+        reviewBanner.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      window.print();
+    });
+    contentEl.querySelector('#report-ai-review-proceed').addEventListener('click', () => window.print());
     contentEl.querySelector('#report-mode-toggle').addEventListener('click', () => {
       reportMode = reportMode === 'tabs' ? 'page' : 'tabs';
       applyMode();
@@ -341,6 +492,13 @@ export function mount(container) {
   }
 
   render(loadSelection());
+  // AI-commentary buttons simply don't render until this resolves (see
+  // aiSupportedKinds' own comment) -- re-render once to pick them up,
+  // same "fetch once, re-render on arrival" shape as any other page here
+  // that caches a rarely-changing option list at module scope.
+  ensureAiKindsLoaded(() => {
+    if (container.isConnected) render(loadSelection());
+  });
 
   // Live-updates while this page sits open in one tab and Meeting Prep is
   // being ticked in another (the main real-world shape: presenting on a
