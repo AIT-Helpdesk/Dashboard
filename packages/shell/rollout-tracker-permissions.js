@@ -35,4 +35,26 @@ function isTrackerManager(req) {
   return trackerManagerNames().includes(name.trim().toLowerCase());
 }
 
-module.exports = { isTrackerManager };
+// Delete Row / Delete Column -- a SEPARATE permission list from
+// TRACKER_MANAGER, by request: deleting a row or column outright is a more
+// destructive action than the structural changes Tracker Manager already
+// covers (add column, add stage, reorder, mark complete), so it gets its
+// own narrower .env list rather than riding along on TRACKER_MANAGER.
+// Configured via .env's TRACKER_DELETE_ROW_COLUMN -- same comma-separated
+// exact Entra ID display names convention as TRACKER_MANAGER above (see
+// its own comment for the case-insensitive/trimmed matching and the
+// "check the exact Entra spelling" troubleshooting note).
+function trackerDeleteNames() {
+  return (process.env.TRACKER_DELETE_ROW_COLUMN || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isTrackerDeleteAllowed(req) {
+  const name = req.session.user?.name;
+  if (!name) return false;
+  return trackerDeleteNames().includes(name.trim().toLowerCase());
+}
+
+module.exports = { isTrackerManager, isTrackerDeleteAllowed };

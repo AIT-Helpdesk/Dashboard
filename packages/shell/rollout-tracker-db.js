@@ -1132,6 +1132,35 @@ function createRolloutTrackerDb(dbPath) {
     }
   }
 
+  // The column-level mirror of deleteRow() above -- by request ("Delete
+  // Column" capability, gated separately via TRACKER_DELETE_ROW_COLUMN,
+  // see rollout-tracker-permissions.js). Purges every stage of this
+  // column (for a compound column) + their own stage_status + audit
+  // entries first (same orphan reasoning deleteRow applies to sub_rows,
+  // one level down), then this column's own cell_status/audit entries,
+  // then the column itself. Audit rows for a stage can carry only
+  // stage_id with no column_id (see seedOneStageStatus's own recordAudit
+  // call) -- deleted via the stage_id loop below, not caught by the
+  // `WHERE column_id = ?` delete that follows.
+  function deleteColumn(columnId) {
+    db.exec('BEGIN');
+    try {
+      const stageIds = db.prepare('SELECT id FROM stages WHERE column_id = ?').all(columnId).map((s) => s.id);
+      for (const stageId of stageIds) {
+        db.prepare('DELETE FROM audit_log WHERE stage_id = ?').run(stageId);
+        db.prepare('DELETE FROM stage_status WHERE stage_id = ?').run(stageId);
+      }
+      db.prepare('DELETE FROM stages WHERE column_id = ?').run(columnId);
+      db.prepare('DELETE FROM audit_log WHERE column_id = ?').run(columnId);
+      db.prepare('DELETE FROM cell_status WHERE column_id = ?').run(columnId);
+      db.prepare('DELETE FROM columns WHERE id = ?').run(columnId);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // The master grid -- every row x every column's current status, shaped
   // the same way tc-elite-rollout/server.js's own GET / already shapes
   // its response (columns[] carrying `kind`/`cellType`, rows[] now also
@@ -1285,6 +1314,7 @@ function createRolloutTrackerDb(dbPath) {
     renameRow,
     renameColumn,
     deleteRow,
+    deleteColumn,
     getGrid,
     getColumnDetail,
     getRowDetail,

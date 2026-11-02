@@ -11,7 +11,7 @@ const {
   movePageToCategory,
   removePageNode,
 } = require('./rollout-tracker-nav.js');
-const { isTrackerManager } = require('./rollout-tracker-permissions.js');
+const { isTrackerManager, isTrackerDeleteAllowed } = require('./rollout-tracker-permissions.js');
 
 // Compound columns and their own detail-sheet "stages" -- ported from
 // tc-elite-rollout/server.js (by request, Oct 2026), so every tracker
@@ -240,6 +240,7 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     renameRow,
     renameColumn,
     deleteRow,
+    deleteColumn,
     getGrid,
     getColumnDetail,
     getRowDetail,
@@ -286,7 +287,17 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       // isManager rides along on every grid load -- rollout-tracker-
       // client.js uses it to show/hide Add Column and Tracking Complete/
       // Un-Complete This, rather than a separate /api/me round trip.
-      res.json({ columns: shaped.columns, rows: shaped.rows, totalRows, rowNoun, isManager: isTrackerManager(req) });
+      // canDeleteRowColumn is the same "server decides, client just
+      // reflects it" convention, for Delete Row/Delete Column -- its own
+      // separate TRACKER_DELETE_ROW_COLUMN list, not TRACKER_MANAGER.
+      res.json({
+        columns: shaped.columns,
+        rows: shaped.rows,
+        totalRows,
+        rowNoun,
+        isManager: isTrackerManager(req),
+        canDeleteRowColumn: isTrackerDeleteAllowed(req),
+      });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
@@ -363,12 +374,40 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     }
   });
 
+  // Hard-deletes one row -- gated to TRACKER_DELETE_ROW_COLUMN (.env, see
+  // rollout-tracker-permissions.js), a SEPARATE, narrower list from
+  // TRACKER_MANAGER -- by request. Checked server-side, not just
+  // hidden/disabled client-side, same "never trust the client alone"
+  // rule every other gated action on this dashboard follows.
   router.delete('/rows/:rowId', (req, res) => {
     try {
+      if (!isTrackerDeleteAllowed(req)) {
+        return res.status(403).json({ error: `Only an authorised user can delete a ${rowNoun.toLowerCase()}.` });
+      }
       const rowId = Number(req.params.rowId);
       const row = db.prepare('SELECT id FROM rows WHERE id = ?').get(rowId);
       if (!row) return res.status(404).json({ error: `No such ${rowNoun.toLowerCase()}.` });
       deleteRow(rowId);
+      res.status(204).end();
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The column-level mirror of DELETE /rows/:rowId above -- same
+  // TRACKER_DELETE_ROW_COLUMN gate. Works for either a simple or a
+  // compound column (deleteColumn() in rollout-tracker-db.js purges its
+  // stages/stage_status too).
+  router.delete('/columns/:columnId', (req, res) => {
+    try {
+      if (!isTrackerDeleteAllowed(req)) {
+        return res.status(403).json({ error: 'Only an authorised user can delete a column.' });
+      }
+      const columnId = Number(req.params.columnId);
+      const column = db.prepare('SELECT id FROM columns WHERE id = ?').get(columnId);
+      if (!column) return res.status(404).json({ error: 'Column not found.' });
+      deleteColumn(columnId);
       res.status(204).end();
     } catch (err) {
       console.error(err);

@@ -21,6 +21,8 @@ const STATUSES_REQUIRING_COMMENT = ['note'];
 
 const RENAME_ICON_SVG =
   '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
+const DELETE_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M6 7h12l-1 13.5a1 1 0 0 1-1 .9H8a1 1 0 0 1-1-.9L6 7zm3-3h6l1 2H8l1-2zM4 7h16" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>';
 
 export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item' }) {
   let showAll = false;
@@ -84,6 +86,14 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
   // non-manager, same "server decides, client just reflects it" gate the
   // header's own Add Column button already uses (addColumnButton.hidden).
   let isManager = false;
+  // Set from loadGrid()'s own GET /'s `canDeleteRowColumn` field, same
+  // "server decides, client just reflects it" convention as isManager
+  // above -- but its OWN permission list (TRACKER_DELETE_ROW_COLUMN in
+  // .env, see rollout-tracker-permissions.js), not TRACKER_MANAGER. Gates
+  // the Delete Row/Delete Column buttons below, independently of
+  // isManager -- someone can be a Tracker Manager without being allowed
+  // to delete a row/column, and vice versa.
+  let canDelete = false;
 
   return function mount(container) {
     container.innerHTML = `
@@ -621,8 +631,14 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         const res = await fetch(`${apiBase}/${showAll ? '?all=true' : ''}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-        renderGrid(data);
+        // Set BEFORE renderGrid(data) -- it calls renderTbodyRows()
+        // internally, which reads the `canDelete` closure variable (not
+        // `data` directly, unlike the header template's own `data.isManager`/
+        // `data.canDeleteRowColumn` checks) to decide whether to show each
+        // row's Delete button.
         isManager = !!data.isManager;
+        canDelete = !!data.canDeleteRowColumn;
+        renderGrid(data);
         renderDetailButtons(data.columns, data.rows);
         addColumnButton.hidden = !isManager;
         if (openDetailColumnId && !data.columns.some((c) => c.id === openDetailColumnId)) {
@@ -686,7 +702,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             ${columns
               .map(
                 (col) =>
-                  `<th class="rt-col-header" draggable="${data.isManager ? 'true' : 'false'}" data-column-id="${col.id}">${col.kind === 'simple' ? `<button type="button" class="rt-bulk-col-btn" data-column-id="${col.id}" data-cell-type="${col.cellType}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ` : ''}${escapeHtml(col.label)}${data.isManager ? ` <button type="button" class="rt-rename-btn rt-rename-col-btn" data-column-id="${col.id}" data-column-label="${escapeHtml(col.label)}" title="Rename column">${RENAME_ICON_SVG}</button>` : ''}</th>`
+                  `<th class="rt-col-header" draggable="${data.isManager ? 'true' : 'false'}" data-column-id="${col.id}">${col.kind === 'simple' ? `<button type="button" class="rt-bulk-col-btn" data-column-id="${col.id}" data-cell-type="${col.cellType}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ` : ''}${escapeHtml(col.label)}${data.isManager ? ` <button type="button" class="rt-rename-btn rt-rename-col-btn" data-column-id="${col.id}" data-column-label="${escapeHtml(col.label)}" title="Rename column">${RENAME_ICON_SVG}</button>` : ''}${data.canDeleteRowColumn ? ` <button type="button" class="rt-rename-btn rt-delete-col-btn" data-column-id="${col.id}" data-column-label="${escapeHtml(col.label)}" title="Delete column">${DELETE_ICON_SVG}</button>` : ''}</th>`
               )
               .join('')}
           </tr>
@@ -727,6 +743,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       wireCellInteractions(table);
       wireBulkColumnButtons(table, 'master');
       wireRenameColumnButtons(table);
+      wireDeleteColumnButtons(table);
       renderTbodyRows(columns, rows);
       wireRowNameFilterInput(table, columns, rows);
       wireColumnTextFilterInputs(table, columns, rows);
@@ -799,6 +816,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             <tr>
               <td>
                 <button type="button" class="rt-rename-btn" data-row-id="${row.id}" data-row-name="${escapeHtml(row.name)}" title="Rename">${RENAME_ICON_SVG}</button>
+                ${canDelete ? `<button type="button" class="rt-rename-btn rt-delete-row-btn" data-row-id="${row.id}" data-row-name="${escapeHtml(row.name)}" title="Delete ${escapeHtml(rowNoun)}">${DELETE_ICON_SVG}</button>` : ''}
                 ${escapeHtml(row.name)}
                 ${row.kind === 'simple' ? ` <button type="button" class="rt-bulk-row-btn" data-row-id="${row.id}" title="Set every column in this row to the same value">⚙</button>` : ''}
               </td>
@@ -813,6 +831,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       // wireBulkColumnButtons are wired exactly once, there, instead.
       wireBulkRowButtons(table, 'master');
       wireRenameButtons(table);
+      wireDeleteRowButtons(table);
     }
 
     function wireRowNameFilterInput(table, columns, rows) {
@@ -2220,6 +2239,63 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             if (e.key === 'Enter') save();
             if (e.key === 'Escape') editor.remove();
           });
+        });
+      });
+    }
+
+    // Delete Row -- gated to TRACKER_DELETE_ROW_COLUMN (.env, see
+    // rollout-tracker-permissions.js), a SEPARATE, narrower permission
+    // from Tracker Manager -- by request. The button itself is only ever
+    // rendered when `canDelete` is true (same "server decides, client
+    // just reflects it" gate every other restricted action here uses),
+    // and the server re-checks it independently on DELETE /rows/:rowId --
+    // this is just the UI affordance. Scoped to tbody, same reasoning
+    // wireRenameButtons' own comment gives (its buttons share the
+    // .rt-rename-btn class for styling, which wireDeleteColumnButtons'
+    // buttons below also reuse). A hard delete, irreversible -- one
+    // explicit confirm naming the row, same pattern Delete Tracker uses.
+    function wireDeleteRowButtons(table) {
+      table.querySelector('tbody').querySelectorAll('.rt-delete-row-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const rowId = btn.dataset.rowId;
+          const rowName = btn.dataset.rowName || `this ${rowNoun.toLowerCase()}`;
+          if (!confirm(`Permanently delete "${rowName}"? This deletes every one of its column statuses and its audit history -- it cannot be undone.`)) return;
+          try {
+            const res = await fetch(`${apiBase}/rows/${rowId}`, { method: 'DELETE' });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.error || `Request failed (${res.status})`);
+            }
+            await loadGrid();
+          } catch (err) {
+            alert(`Error: ${err.message}`);
+          }
+        });
+      });
+    }
+
+    // The column-level mirror of wireDeleteRowButtons above, for the
+    // master grid's own column headers -- same TRACKER_DELETE_ROW_COLUMN
+    // gate, same irreversible-hard-delete confirm. Wired once, in
+    // renderGrid() -- this button lives in <thead>, same reasoning
+    // wireRenameColumnButtons is wired there instead of inside
+    // renderTbodyRows().
+    function wireDeleteColumnButtons(table) {
+      table.querySelectorAll('.rt-delete-col-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const columnId = btn.dataset.columnId;
+          const columnLabel = btn.dataset.columnLabel || 'this column';
+          if (!confirm(`Permanently delete the "${columnLabel}" column? This deletes every ${rowNoun.toLowerCase()}'s status in it (and its stages, if compound) and its audit history -- it cannot be undone.`)) return;
+          try {
+            const res = await fetch(`${apiBase}/columns/${columnId}`, { method: 'DELETE' });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.error || `Request failed (${res.status})`);
+            }
+            await loadGrid();
+          } catch (err) {
+            alert(`Error: ${err.message}`);
+          }
         });
       });
     }

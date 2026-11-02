@@ -3568,6 +3568,49 @@ td.ticket-number {
   font-weight: normal;
 }
 
+/* Cost of Azure's own toolbar -- allow its several controls (filter group,
+   select all/none, zero-out, refresh) to wrap onto a second line rather
+   than overflow .page-header, since .date-form itself has no flex-wrap. */
+.coa-toolbar {
+  flex-wrap: wrap;
+}
+
+/* All/$0 only/>$0 only filter group -- same light-pill-default,
+   solid-accent-when-active look as .tm-quick-date-group's own buttons
+   elsewhere on this dashboard, just under this page's own class so it
+   doesn't imply a time-management-specific meaning. */
+.coa-filter-group {
+  display: flex;
+  gap: 0.25rem;
+}
+.coa-filter-group button.coa-filter-btn {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  border: none;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  cursor: pointer;
+}
+.coa-filter-group button.coa-filter-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Cost of Azure's own results table -- by request, smaller text than the
+   dashboard default so a long Invoice Description doesn't dominate the
+   row. */
+.coa-items-table table {
+  font-size: 0.8rem;
+}
+/* Flags a Billable Amount that's been manually edited away from the
+   contract's own standard rate, by request. */
+.coa-edited-tag {
+  color: var(--accent);
+  font-size: 0.75em;
+  font-weight: 600;
+}
+
 /* Datto RMM's card grid -- donut-ring cards (ported look from
    C:\Code\Improved-Dashboards' own React donut widgets, drawn as plain SVG
    here since this dashboard has no component layer). */
@@ -5431,6 +5474,14 @@ tr.row-text-highlight-blue td {
 }
 .rt-rename-btn:hover {
   color: var(--accent);
+}
+/* Delete Row/Delete Column -- reuse .rt-rename-btn's sizing (same tiny
+   icon button), but hover red, not the accent colour -- a destructive
+   action, same red Delete Tracker already uses (see
+   .date-form button.button-link--small.rt-delete-button above). */
+.rt-delete-row-btn:hover,
+.rt-delete-col-btn:hover {
+  color: #dc2626;
 }
 .rt-table th:has(.rt-bulk-row-editor) {
   max-width: none;
