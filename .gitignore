@@ -20,6 +20,21 @@ server.pid
 # was originally checked in to avoid.
 packages/shell/nav-layout.json
 
+# Same reasoning as nav-layout.json above, one level down -- each tabbed
+# "-tabs" page's own runtime tab state (which tabs are currently shown/
+# hidden/reordered, see tab-page-server.js's tab-order.json/permanent-
+# tabs.json/removed-default-tabs.json). Confirmed the hard way (2026-11-02):
+# pushing committed copies of these broke a plain `git pull` outright on
+# production -- "untracked working tree files would be overwritten by
+# merge" -- since production's own live files at the same paths were never
+# gitignored until now. Untracked (git rm --cached, content on disk
+# untouched) and gitignored dashboard-wide, same permanent-source-of-truth
+# reasoning as nav-layout.json; a brand-new "-tabs" page just starts from
+# its own defaults, rebuilt by hand once if needed.
+packages/*-tabs/tab-order.json
+packages/*-tabs/permanent-tabs.json
+packages/*-tabs/removed-default-tabs.json
+
 # Strety OAuth tokens -- real bearer credentials for whichever Strety
 # account connected, persisted to disk so the connection survives a
 # restart (see packages/strety-client/index.js). Never committed.
