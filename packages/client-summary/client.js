@@ -111,8 +111,9 @@ export function mount(container) {
     resultsEl.innerHTML = '';
 
     resultsEl.appendChild(renderHeader(data));
-    resultsEl.appendChild(renderFinancialSnapshot(data.financialSnapshot));
+    resultsEl.appendChild(renderInstalledServiceBadges(data.installedServices));
     resultsEl.appendChild(renderActiveContracts(data.activeContracts));
+    resultsEl.appendChild(renderFinancialSnapshot(data.financialSnapshot));
     resultsEl.appendChild(renderRecentTickets(data.recentTickets));
     resultsEl.appendChild(renderSecurityAlerts(data.securityAlerts));
   }
@@ -126,8 +127,8 @@ export function mount(container) {
     const addressHtml = addressParts.length ? escapeHtml(addressParts.join(', ')) : '<span class="muted">--</span>';
 
     const activeBadge = data.isActive
-      ? '<span class="cell-flag-green">Active</span>'
-      : '<span class="cell-flag-red">Inactive</span>';
+      ? '<span class="client-summary-service-badge client-summary-service-badge--yes">Active</span>'
+      : '<span class="client-summary-service-badge client-summary-service-badge--no">Inactive</span>';
 
     const udfRows = data.contactUdfs
       .map((u) => `<div><span class="muted">${escapeHtml(u.name)}:</span> ${u.value ? escapeHtml(u.value) : '<span class="muted">--</span>'}</div>`)
@@ -135,7 +136,7 @@ export function mount(container) {
 
     wrap.innerHTML = `
       <div class="resource-group-header">
-        <span><strong>${companyLink(data)}</strong> ${activeBadge}${data.classification ? ` -- ${escapeHtml(data.classification)}` : ''}</span>
+        <span><strong>${companyLink(data)}</strong> ${activeBadge}${classificationHtml(data.classification)}</span>
       </div>
       <div class="client-summary-header-grid">
         <div>
@@ -152,6 +153,18 @@ export function mount(container) {
       </div>
     `;
     return wrap;
+  }
+
+  // Tech Cover Elite / Tech Cover Essentials get their own colour, by
+  // request -- same purple TC Elite Rollout's own "Issue" status already
+  // uses dashboard-wide (.cell-flag-purple), not a new one-off shade.
+  // Every other classification stays plain text, same as before this
+  // change.
+  function classificationHtml(classification) {
+    if (!classification) return '';
+    const cls = classification === 'Tech Cover Elite' ? 'cell-flag-green' : classification === 'Tech Cover Essentials' ? 'cell-flag-purple' : null;
+    const label = escapeHtml(classification);
+    return ` -- ${cls ? `<span class="${cls}">${label}</span>` : label}`;
   }
 
   function contactHtml(contact) {
@@ -211,9 +224,21 @@ export function mount(container) {
   }
 
   // --- Active contracts ------------------------------------------------
-  function renderActiveContracts(contracts) {
+  function renderActiveContracts(activeContracts) {
+    const { rows: contracts, warnings } = activeContracts;
     const section = document.createElement('div');
     section.innerHTML = `<h2 class="client-summary-section-heading">Active Contracts <span class="inline-subtext">(${contracts.length})</span></h2>`;
+
+    // Orange "worth a look, nothing's actually broken" warnings, by
+    // request -- missing T&M default contract (every client), plus a
+    // missing matching Tech Cover Elite/Essentials contract when the
+    // client's own classification says it should have one. Same
+    // .status.warn amber this dashboard already uses for this exact
+    // "needs a look" meaning elsewhere (Meeting Prep's own
+    // needsAttention banner), not a new one-off color.
+    for (const warning of warnings) {
+      section.insertAdjacentHTML('beforeend', `<p class="status warn">⚠ ${escapeHtml(warning)}</p>`);
+    }
 
     if (contracts.length === 0) {
       section.insertAdjacentHTML('beforeend', '<p class="status">No active contracts.</p>');
@@ -224,7 +249,7 @@ export function mount(container) {
     wrap.className = 'resource-group';
     wrap.innerHTML = `
       <table>
-        <thead><tr><th>Contract</th><th>Type</th><th>Start</th><th>End</th></tr></thead>
+        <thead><tr class="shaded-row"><th>Contract</th><th>Type</th><th>Start</th><th>End</th><th>Next Billing</th></tr></thead>
         <tbody>
           ${contracts
             .map(
@@ -233,7 +258,8 @@ export function mount(container) {
               <td>${contractLink(c)}</td>
               <td>${escapeHtml(c.contractType)}</td>
               <td class="ticket-number">${formatDate(c.startDate)}</td>
-              <td class="ticket-number">${formatDate(c.endDate)}</td>
+              <td class="ticket-number">${isPastDate(c.endDate) ? `<span class="cell-flag-red">${formatDate(c.endDate)}</span>` : formatDate(c.endDate)}</td>
+              <td class="ticket-number">${c.nextBillingDate ? formatDate(c.nextBillingDate) : '<span class="muted">--</span>'}</td>
             </tr>`
             )
             .join('')}
@@ -242,6 +268,69 @@ export function mount(container) {
     `;
     section.appendChild(wrap);
     return section;
+  }
+
+  // --- Installed Services -- a row of green/red pill badges, by request,
+  // placed right under the company header rather than as its own table
+  // section further down. Detail (seats/agents/locations) is a native
+  // title= tooltip on hover -- plenty for a one-line fact, no reason for a
+  // custom hover widget. "installed" null (Datto EDR's/AutoElevate's/
+  // Huntress's own "not-configured" status) is its own grey/muted third
+  // state, same reasoning as the earlier table version had: SaaS
+  // Protection's/Datto EDR's/AutoElevate's/Huntress's own "installed: false"
+  // doesn't distinguish "genuinely not a client" from "name didn't match
+  // confidently" either (see server.js's own comments on each findX()) --
+  // shown as a plain red "not installed" either way, same as every other
+  // not-installed badge, since this page has no way to tell those two
+  // apart.
+  function renderInstalledServiceBadges(services) {
+    const items = [
+      { label: 'SaaS Alerts', installed: services.saasAlerts.installed },
+      {
+        label: 'SaaS Backups',
+        installed: services.saasProtection.installed,
+        detail: services.saasProtection.installed
+          ? [
+              services.saasProtection.billableSeatCount != null ? `${services.saasProtection.billableSeatCount} billable seats` : null,
+              services.saasProtection.backupPercentage != null ? `${services.saasProtection.backupPercentage}% backed up` : null,
+            ]
+              .filter(Boolean)
+              .join(', ')
+          : null,
+      },
+      services.dattoEdr.status === 'not-configured'
+        ? { label: 'Datto EDR', installed: null }
+        : {
+            label: 'Datto EDR',
+            installed: services.dattoEdr.installed,
+            detail: services.dattoEdr.installed ? `${services.dattoEdr.locationCount} location${services.dattoEdr.locationCount === 1 ? '' : 's'}` : null,
+          },
+      services.autoElevate.status === 'not-configured' ? { label: 'AutoElevate', installed: null } : { label: 'AutoElevate', installed: services.autoElevate.installed },
+      services.huntress.status === 'not-configured'
+        ? { label: 'Huntress', installed: null }
+        : {
+            label: 'Huntress',
+            installed: services.huntress.installed,
+            detail: services.huntress.agentsCount != null ? `${services.huntress.agentsCount} agent${services.huntress.agentsCount === 1 ? '' : 's'}` : null,
+          },
+      // Detail is just the matched Rewst customer's own name, not a real
+      // connected-integrations list -- that data isn't available from the
+      // one Rewst workflow this reuses (see server.js's own comment).
+      services.rewst.status === 'not-configured'
+        ? { label: 'Rewst', installed: null }
+        : { label: 'Rewst', installed: services.rewst.installed, detail: services.rewst.rewstCompanyName ? `Rewst: ${services.rewst.rewstCompanyName}` : null },
+    ];
+
+    const wrap = document.createElement('div');
+    wrap.className = 'client-summary-service-badges';
+    wrap.innerHTML = items
+      .map((i) => {
+        const cls = i.installed === null ? 'client-summary-service-badge--unknown' : i.installed ? 'client-summary-service-badge--yes' : 'client-summary-service-badge--no';
+        const title = i.installed === null ? 'Not yet connected' : i.detail ? i.detail : i.installed ? 'Installed' : 'Not installed';
+        return `<span class="client-summary-service-badge ${cls}" title="${escapeHtml(title)}">${escapeHtml(i.label)}</span>`;
+      })
+      .join('');
+    return wrap;
   }
 
   // --- Recent ticket activity ------------------------------------------
@@ -320,7 +409,7 @@ export function mount(container) {
   function companyLink(data) {
     const label = escapeHtml(data.companyName);
     if (!data.companyUrl) return label;
-    return `<a href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+    return `<a class="client-summary-name-link" href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
   }
 
   function contractLink(c) {
@@ -350,6 +439,15 @@ export function mount(container) {
   function formatDate(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleDateString();
+  }
+
+  // Active Contracts' own End date, by request -- red when it's already
+  // passed, flags a contract still showing "In Effect" (status 1) in
+  // Autotask despite its own end date already lapsing. No end date at all
+  // (open-ended contract) is never flagged -- nothing to compare.
+  function isPastDate(iso) {
+    if (!iso) return false;
+    return new Date(iso).getTime() < Date.now();
   }
 
   function formatDateTime(iso) {

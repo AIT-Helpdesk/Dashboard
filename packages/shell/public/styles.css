@@ -4283,6 +4283,51 @@ td.ticket-number {
   margin: 1.5rem 0 0.75rem;
 }
 
+/* Client Summary's own header name link -- no underline, by request (the
+   popup-window onclick behaviour already signals it's clickable, same as
+   every other link on this page, so the underline was just visual noise
+   on the one link styled as a heading). */
+.client-summary-name-link {
+  text-decoration: none;
+}
+
+/* Installed Services -- green/red "button-like" pills across the top of
+   Client Summary, right under the company header, by request (replacing
+   an earlier table layout). Same pill shape (border-radius: 999px) the
+   dashboard's other floating pill buttons already use (.focus-exit-btn,
+   the Help button), filled solid rather than outlined so installed/
+   not-installed reads at a glance without needing to read label text
+   color. Grey (--muted) is its own third state for "unknown" (a missing
+   credential, or a name that didn't match confidently) -- never collapsed
+   into red, same "don't show a false No" reasoning server.js documents
+   for each source. Detail (seats/agents/locations/the matched vendor
+   name) is a native title= tooltip -- plenty for a one-line fact, no
+   custom hover widget needed. */
+.client-summary-service-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.client-summary-service-badge {
+  display: inline-block;
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: white;
+  cursor: default;
+}
+.client-summary-service-badge--yes {
+  background: #16a34a;
+}
+.client-summary-service-badge--no {
+  background: #dc2626;
+}
+.client-summary-service-badge--unknown {
+  background: var(--muted);
+}
+
 /* Unallocated Service Calls' month calendar. */
 .calendar-nav {
   gap: 0.75rem;
@@ -4765,6 +4810,16 @@ td.ticket-number a:hover {
    Protection's Backup % column (>90% but <100%), by request. */
 .cell-flag-orange {
   color: #f59e0b !important;
+  font-weight: 600;
+}
+
+/* Client Summary's own Classification colouring (Tech Cover Elite /
+   Essentials), by request -- same purple TC Elite Rollout's "Issue"
+   status/Workshop's "Next Up" already use dashboard-wide (#8b5cf6), not a
+   new one-off shade. First cell-flag-* use of it as plain text rather
+   than a filled pill. */
+.cell-flag-purple {
+  color: #8b5cf6 !important;
   font-weight: 600;
 }
 

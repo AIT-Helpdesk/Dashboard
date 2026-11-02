@@ -229,6 +229,14 @@ async function fetchSeats(customerId) {
     seatType: s.seatType,
     seatState: s.seatState,
     dateAdded: s.dateAdded || null,
+    // Confirmed live (real Kraftur data): Datto's own per-seat `billable`
+    // field is the string "1" on a billed seat, "" otherwise -- not a real
+    // boolean. Normalized here. Confirmed live this is what actually
+    // distinguishes a real licensed mailbox from the SharePoint/Teams/
+    // shared-mailbox rows /domains' own `seatsUsed` lumps in with it (same
+    // real account: 173 total seat rows, only 52 billable) -- added for
+    // Client Summary's own "billable seats" detail, by request.
+    billable: s.billable === '1' || s.billable === true,
   }));
 }
 
@@ -259,6 +267,15 @@ async function getApplicationsHistory(customerId, force) {
   const data = await fetchApplications(customerId, HISTORY_DAYS);
   applicationsHistoryCache.set(customerId, { data, expiresAt: Date.now() + DETAIL_CACHE_TTL_MS });
   return data;
+}
+
+// Client Summary's own "billable seats" detail, by request -- its own
+// small lookup rather than making the caller fetch every seat row itself.
+// Reuses getSeats()'s own cache (20-min TTL), so a client already clicked
+// on SaaS Protection's own page this session costs nothing extra here.
+async function getBillableSeatCount(customerId, force) {
+  const seats = await getSeats(customerId, force);
+  return seats.filter((s) => s.billable).length;
 }
 
 async function getSeats(customerId, force) {
@@ -479,6 +496,53 @@ function warmServiceAggregateCache() {
 warmServiceAggregateCache();
 setInterval(warmServiceAggregateCache, SERVICE_AGGREGATE_WARM_INTERVAL_MS).unref();
 
+// Same &/and normalization Meeting Prep's own siteMatches()/
+// siteInClassification() use for exactly this reason (its own comment:
+// "deliberately scoped to Meeting Prep's own site matching... rather than
+// changing [matchesWildcard] for every consumer") -- kept as an independent
+// copy here rather than imported, same reasoning; this call site has the
+// same cross-vendor naming problem.
+function normalizeAmpersand(s) {
+  return (s || '')
+    .replace(/\s*&\s*/g, ' and ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// Looks up this ONE Autotask company among every SaaS Protection domain row,
+// for Client Summary's own "Installed Services" section -- by request. No
+// PSA mapping field exists on a domain row (unlike SaaS Alerts' own
+// `mappedToPSA`), so this matches by NAME, allowing for the exact same
+// "legal suffix dropped" mismatch Meeting Prep's data/README.md already
+// documents for Dark Web ID vs Datto RMM (confirmed live here too: Autotask
+// has "Kraftur Pty Ltd", SaaS Protection's own saasCustomerName is just
+// "Kraftur") -- equal OR either name containing the other, after &/and
+// normalization, same bidirectional check siteInClassification() above
+// uses. More than one match either way returns null rather than guessing
+// which one is really this client, same "don't guess" reasoning
+// resolveSingleCompany() uses elsewhere on this dashboard, just without a
+// surfaced "ambiguous" state (the caller only needs a yes/no + detail, not a
+// picker). Uses the already-cached getDomains() -- no extra Datto call.
+async function findDomainMatch(companyName) {
+  const domains = await getDomains(false);
+  const normCompany = normalizeAmpersand(companyName);
+  const pool = domains.filter((d) => {
+    const normCustomer = normalizeAmpersand(d.saasCustomerName);
+    if (!normCustomer) return false;
+    return normCustomer === normCompany || normCustomer.includes(normCompany) || normCompany.includes(normCustomer);
+  });
+  if (pool.length !== 1) return null;
+  const d = pool[0];
+  return {
+    customerId: d.saasCustomerId,
+    clientName: d.saasCustomerName,
+    domain: d.domain,
+    seatsUsed: d.seatsUsed ?? null,
+    backupPercentage: d.backupStats?.backupPercentage ?? null,
+  };
+}
+
 const router = express.Router();
 // Only POST /accept-failure sends a body -- Express only parses one when a
 // request actually has one, so this is a no-op for every GET route here,
@@ -612,5 +676,7 @@ router.get('/accepted-failures', (req, res) => {
 router.getWidgetBucket = getWidgetBucket;
 router.getServiceAggregate = getServiceAggregate;
 router.getApplicationsHistory = getApplicationsHistory;
+router.findDomainMatch = findDomainMatch;
+router.getBillableSeatCount = getBillableSeatCount;
 
 module.exports = router;

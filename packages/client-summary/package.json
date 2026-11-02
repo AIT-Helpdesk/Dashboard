@@ -12,6 +12,8 @@
   "dependencies": {
     "@dashboard/autotask-client": "*",
     "@dashboard/saasalerts-client": "*",
+    "@dashboard/saas-protection": "*",
+    "axios": "^1.7.2",
     "express": "^4.19.2"
   }
 }
