@@ -24,14 +24,14 @@ const autoElevate = require('@dashboard/client-summary/autoelevate.js');
 const huntress = require('@dashboard/client-summary/huntress.js');
 // Branded PDF export, by request ("add a button to create a pdf in
 // Ambient iT colours and logo with all the info we have... add some AI
-// recommendations and commentary") -- see pdf-template.js's own header
-// for the full reasoning (reuses the exact gauge/donut/KPI widgets and
-// real styles.css this page already renders with, via Puppeteer driving
-// a local Chrome/Edge install rather than this dashboard's only existing
-// PDF library, pdfkit, which is too low-level to reasonably match a
-// polished multi-section report like the one this was modeled on).
-const { buildReportHtml } = require('./pdf-template.js');
-const { hasPdfBrowser, renderPdf } = require('./pdf-render.js');
+// recommendations and commentary") -- drawn directly with pdfkit (see
+// pdf-template.js's own header), NOT a Puppeteer/Chrome HTML-to-PDF
+// render as this first shipped -- confirmed live on production that
+// launching a real browser from the AmbientDashboard Windows SERVICE
+// (Local System, Session 0) fails every time, a well-documented and
+// largely unfixable-from-code limitation of that execution context.
+// pdfkit draws the PDF in-process, no second process launched at all.
+const { buildReportPdf } = require('./pdf-template.js');
 const { hasAnthropicCredentials, buildCommentary } = require('./ai-commentary.js');
 
 // Live Reports -- "Present to Client" -- by request: a live-pulled
@@ -548,7 +548,6 @@ router.use(express.json({ limit: '5mb' }));
 router.post('/pdf', async (req, res) => {
   const { report, vendors } = req.body || {};
   if (!report || !vendors) return res.status(400).json({ error: 'Both "report" and "vendors" are required in the request body.' });
-  if (!hasPdfBrowser()) return res.status(500).json({ error: 'No Chrome/Edge install found on this server to render the PDF.' });
   try {
     // AI commentary is optional -- a missing ANTHROPIC_API_KEY or a
     // failed Claude call both just mean the PDF ships without the
@@ -564,9 +563,7 @@ router.post('/pdf', async (req, res) => {
         console.error('live-reports: AI commentary call failed, shipping the PDF without it:', err.message);
       }
     }
-    const html = await buildReportHtml({ report, vendors, commentary });
-    const footerText = `Ambient iT | Managed Services Report | ${report.siteName}`;
-    const pdf = await renderPdf(html, { footerText });
+    const pdf = await buildReportPdf({ report, vendors, commentary });
     // Windows-illegal filename characters stripped, same reasoning every
     // other generated-filename helper on this dashboard already follows.
     const filename = `${report.siteName} - Managed Services Report - ${new Date().toISOString().slice(0, 10)}.pdf`.replace(/[\\/:*?"<>|]/g, '');

@@ -171,9 +171,3 @@ packages/invoice-intake/invoice-intake-state.json
 packages/invoice-intake/data.db
 packages/invoice-intake/data.db-shm
 packages/invoice-intake/data.db-wal
-
-# Live Reports' own PDF export -- a throwaway Chrome/Edge profile
-# directory (pdf-render.js's own USER_DATA_DIR), created on disk the
-# first time the "Create PDF" button is used. Runtime browser-profile
-# data, not source -- never committed.
-packages/live-reports/.pdf-profile/
