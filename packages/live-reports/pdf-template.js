@@ -68,6 +68,125 @@ function ensureSpace(doc, y, needed) {
   return y;
 }
 
+// Real semi-circle gauge -- same shape/bands/needle as the on-screen
+// page's own gaugeSvg() (meeting-prep-report-render.js), redrawn with
+// pdfkit's own SVG-arc path support (`doc.path('M.. A r r 0 0 1 ..')`,
+// confirmed this session to exist -- pdfkit implements the full SVG path
+// mini-language, arcs included, not just M/L/C) rather than the flat
+// tile+pill this file used at first: that first cut was a deliberate
+// "skip the arc math" simplification, but it's what the user is pointing
+// at by "no gauges, completely different" -- this is the fix, not a new
+// design. `x`,`y` is the box's top-left, `w` the box width the gauge
+// should fill edge-to-edge; height follows the original 180x105 aspect
+// ratio automatically. Returns the height actually drawn so the caller
+// can place the label/pill below it without guessing.
+function drawGauge(doc, x, y, w, score) {
+  const scale = w / 180;
+  const cx = x + w / 2;
+  const cy = y + 90 * scale;
+  const r = 75 * scale;
+  const lw = 16 * scale;
+  const stops = [0, 25, 50, 75, 100];
+  const colors = ['#dc2626', '#f59e0b', '#86c95e', '#16a34a'];
+  const point = (s) => {
+    const a = ((180 - (s / 100) * 180) * Math.PI) / 180;
+    return [cx + r * Math.cos(a), cy - r * Math.sin(a)];
+  };
+
+  doc.lineCap('round');
+  stops.slice(0, -1).forEach((s0, i) => {
+    const [x0, y0] = point(s0);
+    const [x1, y1] = point(stops[i + 1]);
+    const d = `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+    doc.path(d).lineWidth(lw).strokeColor(colors[i]).stroke();
+  });
+
+  const clamped = Math.max(0, Math.min(100, score ?? 0));
+  const [nx, ny] = point(clamped);
+  doc.lineWidth(Math.max(2, 3 * scale)).strokeColor(INK);
+  doc.moveTo(cx, cy).lineTo(nx, ny).stroke();
+  doc.lineCap('butt');
+  doc.circle(cx, cy, Math.max(3, 5 * scale)).fillColor(INK).fill();
+
+  const status = statusForScore(score);
+  const label = score === null || score === undefined ? '?' : `${score}%`;
+  const fontSize = Math.max(12, 15 * scale);
+  doc.fillColor(status.color).font('Helvetica-Bold').fontSize(fontSize);
+  doc.text(label, x, cy - 12 * scale - fontSize / 2, { width: w, align: 'center' });
+  doc.fillColor(INK);
+
+  return 105 * scale;
+}
+
+// Real ring donut -- same shape as the on-screen page's own donutSvg()
+// (meeting-prep-report-render.js), replacing the stacked-bar
+// approximation this file started with for the same "no gauges,
+// completely different" reason the gauge above was redrawn: a stacked bar
+// reads proportions fine but doesn't look like the rest of the dashboard.
+// Draws each non-zero segment as its own stroked arc starting at 12
+// o'clock and sweeping clockwise -- the same angle convention
+// donutSvg's stroke-dasharray trick produces, just drawn as real arcs
+// since pdfkit has no dasharray-on-a-circle primitive. Legend lists every
+// segment (zero-value included), matching donutWidget's own legend.
+function drawDonutArcSegment(doc, cx, cy, r, startFrac, endFrac, lw, color) {
+  const angleDeg = (frac) => -90 + frac * 360;
+  const toPoint = (deg) => {
+    const rad = (deg * Math.PI) / 180;
+    return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+  };
+  const sweepDeg = (endFrac - startFrac) * 360;
+  doc.lineWidth(lw).strokeColor(color);
+  if (sweepDeg >= 359.9) {
+    doc.circle(cx, cy, r).stroke();
+    return;
+  }
+  const [x0, y0] = toPoint(angleDeg(startFrac));
+  const [x1, y1] = toPoint(angleDeg(endFrac));
+  const largeArc = sweepDeg > 180 ? 1 : 0;
+  const d = `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 ${largeArc} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+  doc.path(d).stroke();
+}
+
+function drawDonut(doc, x, y, w, title, legend, colors) {
+  doc.font('Helvetica-Bold').fontSize(9.5).fillColor(BRAND_PURPLE).text(title, x, y, { width: w });
+  y += 16;
+
+  const entries = Object.entries(legend);
+  const total = entries.reduce((sum, [, v]) => sum + v, 0);
+  const diameter = 64;
+  const strokeW = 13;
+  const cx = x + diameter / 2;
+  const cy = y + diameter / 2;
+  const r = diameter / 2 - strokeW / 2;
+
+  doc.lineWidth(strokeW).strokeColor(BORDER);
+  doc.circle(cx, cy, r).stroke();
+
+  let cum = 0;
+  entries.forEach(([label, val]) => {
+    if (val <= 0 || total <= 0) return;
+    const startFrac = cum / total;
+    cum += val;
+    const endFrac = cum / total;
+    drawDonutArcSegment(doc, cx, cy, r, startFrac, endFrac, strokeW, colors[label] || '#9aa3af');
+  });
+
+  doc.fillColor(INK).font('Helvetica-Bold').fontSize(11).text(String(total), x, cy - 5, { width: diameter, align: 'center' });
+
+  const legendX = x + diameter + 14;
+  const legendW = Math.max(60, w - diameter - 14);
+  let ly = y;
+  doc.font('Helvetica').fontSize(8);
+  entries.forEach(([label, val]) => {
+    doc.circle(legendX + 3, ly + 5, 3).fillColor(colors[label] || '#9aa3af').fill();
+    doc.fillColor(INK).text(`${label}: ${val}`, legendX + 11, ly, { width: legendW - 11 });
+    ly = doc.y + 3;
+  });
+
+  doc.fillColor(INK);
+  return Math.max(y + diameter, ly) + 6;
+}
+
 function drawPill(doc, x, y, label, color) {
   doc.font('Helvetica-Bold').fontSize(8);
   const w = doc.widthOfString(label) + 16;
@@ -128,14 +247,14 @@ function drawSectionHeading(doc, y, text) {
 function drawAtAGlance(doc, y, report) {
   y = drawSectionHeading(doc, y, 'At a Glance');
   const w = contentWidth(doc);
-  const tileH = 78; // tall enough that each of the 4 packed sub-tiles below (h ~= 35) has real room for a value + label without colliding
+  const tileH = 112; // tall enough for the real gauge (scoreW-16 wide, so ~67 tall) + label + pill stacked below it, and for the 4 packed sub-tiles (h ~= 52) to have room for a value + label without colliding
   const scoreW = 130;
   const gap = 8;
 
   const status = statusForScore(report.overallScore);
   doc.roundedRect(MARGIN, y, scoreW, tileH, 6).fillAndStroke(CARD_BG, BORDER);
-  doc.fillColor(status.color).font('Helvetica-Bold').fontSize(26).text(`${report.overallScore ?? '--'}%`, MARGIN, y + 12, { width: scoreW, align: 'center' });
-  doc.fillColor(MUTED).font('Helvetica').fontSize(7.5).text('Overall Health Score', MARGIN, y + 46, { width: scoreW, align: 'center' });
+  const gaugeH = drawGauge(doc, MARGIN + 8, y + 6, scoreW - 16, report.overallScore);
+  doc.fillColor(MUTED).font('Helvetica').fontSize(7.5).text('Overall Health Score', MARGIN, y + 6 + gaugeH - 8, { width: scoreW, align: 'center' });
   drawPill(doc, MARGIN + scoreW / 2 - 28, y + tileH - 20, status.label, status.color);
 
   const restX = MARGIN + scoreW + gap;
@@ -306,13 +425,13 @@ function drawDeviceHealth(doc, y, report) {
   const colW = (w - 16) / 2;
 
   if (report.workstation) {
-    const afterLeft = drawBreakdown(doc, MARGIN, y, colW, `Workstations -- Patch Management (${report.workstation.patch.score}%)`, report.workstation.patch.legend, PATCH_COLORS);
-    const afterRight = drawBreakdown(doc, MARGIN + colW + 16, y, colW, `Workstations -- Software (${report.workstation.software.score}%)`, report.workstation.software.legend, SOFTWARE_COLORS);
+    const afterLeft = drawDonut(doc, MARGIN, y, colW, `Workstations -- Patch Management (${report.workstation.patch.score}%)`, report.workstation.patch.legend, PATCH_COLORS);
+    const afterRight = drawDonut(doc, MARGIN + colW + 16, y, colW, `Workstations -- Software (${report.workstation.software.score}%)`, report.workstation.software.legend, SOFTWARE_COLORS);
     y = Math.max(afterLeft, afterRight) + 6;
   }
   if (report.workstation || report.server) {
-    const leftY = report.workstation ? drawBreakdown(doc, MARGIN, y, colW, `Workstations -- Antivirus (${report.workstation.antivirus.score}%)`, report.workstation.antivirus.legend, ANTIVIRUS_COLORS) : y;
-    const rightY = report.server ? drawBreakdown(doc, MARGIN + colW + 16, y, colW, `Servers -- Antivirus (${report.server.antivirus.score}%)`, report.server.antivirus.legend, ANTIVIRUS_COLORS) : y;
+    const leftY = report.workstation ? drawDonut(doc, MARGIN, y, colW, `Workstations -- Antivirus (${report.workstation.antivirus.score}%)`, report.workstation.antivirus.legend, ANTIVIRUS_COLORS) : y;
+    const rightY = report.server ? drawDonut(doc, MARGIN + colW + 16, y, colW, `Servers -- Antivirus (${report.server.antivirus.score}%)`, report.server.antivirus.legend, ANTIVIRUS_COLORS) : y;
     y = Math.max(leftY, rightY) + 6;
   }
   if (report.server) {
