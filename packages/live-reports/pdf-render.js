@@ -1,6 +1,5 @@
 const puppeteer = require('puppeteer-core');
 const path = require('path');
-const os = require('os');
 
 // Renders a self-contained HTML string to a PDF buffer via puppeteer-core
 // driving an EXISTING Chrome/Edge install, rather than the plain
@@ -33,15 +32,21 @@ function hasPdfBrowser() {
 // substitutes, not something this file's own CSS has to define.
 // A dedicated, explicitly-writable profile directory, NOT Edge/Chrome's
 // own default one -- "Failed to launch the browser process!" with no
-// further detail is the classic symptom of a headless browser launched
-// under a Windows SERVICE account (this dashboard runs as the
-// AmbientDashboard service on production, not an interactive user):
-// service accounts often have no real user profile at all, so the
-// browser's own default --user-data-dir resolution (normally somewhere
-// under that user's AppData) fails before the browser can even start.
-// os.tmpdir() resolves to a real, writable path for any account,
-// interactive or service, sidestepping that entirely.
-const USER_DATA_DIR = path.join(os.tmpdir(), 'live-reports-pdf-profile');
+// further detail (confirmed live on production, even with dumpio below)
+// is the classic symptom of a headless browser launched under a Windows
+// SERVICE account (this dashboard runs as the AmbientDashboard service
+// on production, not an interactive user): service accounts often have
+// no real user profile at all, so the browser's own default
+// --user-data-dir resolution (normally somewhere under that user's own
+// AppData) fails before the browser can even start. os.tmpdir() was
+// tried first and did NOT fix this -- a service account's resolved temp
+// directory isn't guaranteed to be writable by that account either.
+// Used instead: a folder inside this package's OWN directory, the same
+// place every other page's own SQLite data.db/-wal files (see root
+// .gitignore) and this dashboard's own log redirects already prove the
+// service account can write to, confirmed live every time the app runs
+// at all.
+const USER_DATA_DIR = path.join(__dirname, '.pdf-profile');
 
 async function renderPdf(html, { footerText }) {
   const executablePath = findBrowserExecutable();
@@ -60,14 +65,17 @@ async function renderPdf(html, { footerText }) {
       // no-desktop-session service account needs that an interactive
       // user session usually doesn't.
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+      // Pipes the BROWSER's own stdout/stderr into this Node process's
+      // own stdout/stderr (which production's own Pull-DashBoard setup
+      // already redirects to its log files) -- confirmed live this
+      // session that Puppeteer's own thrown error carries no further
+      // detail on its own ("Failed to launch the browser process!" and
+      // nothing else), so this is the only way left to see the real OS-
+      // level reason (permissions, a missing DLL, AV interference, etc.)
+      // if this still fails after the profile-directory change above.
+      dumpio: true,
     });
   } catch (err) {
-    // Puppeteer's own "Failed to launch the browser process!" error is
-    // famously unhelpful on its own -- the real reason is usually in the
-    // browser's own stderr, which Puppeteer already appends to err.message
-    // when it can capture it. Logged in full server-side (not sent to the
-    // client as-is) so a future failure here is diagnosable from the
-    // server's own log without having to reproduce it by hand again.
     console.error('live-reports: Puppeteer failed to launch the browser:', err.message);
     throw new Error(`Could not launch Chrome/Edge to render the PDF: ${err.message}`);
   }
