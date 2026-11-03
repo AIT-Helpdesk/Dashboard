@@ -348,22 +348,25 @@ function mapDeviceSummary(device) {
     lastSeen: device.lastSeen ?? device.lastSeenDate ?? null,
     agentVersion: device.aor ?? device.agentVersion ?? null,
     rebootRequired: Boolean(device.rebootRequired),
-    // UNCONFIRMED against this account's real live payload -- unlike every
-    // other field in this mapping (each checked against a real raw device
-    // dump, per this file's own header comment), this one hasn't been.
-    // Datto RMM's v2 API is documented (publicly, not confirmed live here)
-    // as returning a nested `deviceType: { category, type }` object, with
-    // `category` being the coarse bucket a "devices by type" breakdown
-    // would want (e.g. "Laptop", "Desktop", "Server", "Printer", "Mobile",
-    // "ESXi Host", "Network Device"). Added for Meeting Prep's own live
+    // CONFIRMED live against this account's real payload (1,589 devices,
+    // this session): real category values are 'Desktop', 'Laptop',
+    // 'Server', 'Printer', 'Datto Continuity', and several 'Network
+    // Device (...)' variants -- the nested `deviceType: { category, type }`
+    // object this reads from is real, not the originally-unconfirmed
+    // shape this comment used to flag. Added for Meeting Prep's own live
     // "Core Resources" widgets (by request), same purely-additive
     // reasoning getAllDevices() itself was added under -- every existing
-    // export/behavior in this file is unchanged. Falls back to 'Unknown'
-    // rather than breaking anything if the real shape turns out to differ.
-    // Confirm against a real device payload from this account (e.g. log one
-    // raw `device` object here) before relying on the category labels for
-    // anything beyond a rough breakdown.
+    // export/behavior in this file is unchanged.
     deviceType: pick(device.deviceType?.category, device.deviceType?.type) ?? 'Unknown',
+    // Three more CONFIRMED-live fields (same session), added for Live
+    // Reports' own per-client Patch Management/Software Management/
+    // Antivirus breakdown (by request) -- raw Datto enum values, not
+    // display labels (that mapping is the caller's job, same as every
+    // other display-formatting decision on this dashboard). Purely
+    // additive, same reasoning as deviceType/extIpAddress above.
+    patchStatusRaw: device.patchManagement?.patchStatus ?? null,
+    antivirusStatus: device.antivirus?.antivirusStatus ?? null,
+    softwareStatus: device.softwareStatus ?? null,
   };
 }
 

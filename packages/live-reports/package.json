@@ -1,0 +1,18 @@
+{
+  "name": "@dashboard/live-reports",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "live-reports",
+    "label": "Live Reports",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/datto-rmm": "*",
+    "@dashboard/meeting-prep": "*",
+    "express": "^4.19.2"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@dashboard/live-health-scores",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "live-health-scores",
+    "label": "Live Health Scores",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/datto-rmm": "*",
+    "@dashboard/live-reports": "*",
+    "@dashboard/tc-elite-services": "*",
+    "express": "^4.19.2"
+  }
+}

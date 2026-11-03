@@ -3388,6 +3388,29 @@ th {
   font-weight: 700;
 }
 
+/* Live Health Scores' own sortable column headers -- same pattern as
+   SaaS Alerts Customers' .sac-sort-btn above, scoped under its own class
+   since that page's own comment already says its naming isn't meant as
+   a dashboard-wide th convention. */
+.lhs-sort-btn {
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.lhs-sort-btn:hover {
+  color: var(--accent);
+}
+.lhs-sort-btn--active {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 td.ticket-number {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -9784,6 +9807,68 @@ tr.accrued-time-yellow-row th {
 .mtg-kpi-tile--bad .mtg-kpi-value,
 .mtg-kpi-tile--bad .mtg-kpi-sub {
   color: #dc2626;
+}
+
+/* Live Reports' own gauge card + 2x2 device-count tile block, sat side by
+   side, by request ("box sizes... need to be consistent and fit nicely
+   against the size of the health gauge") -- both fixed to the SAME width
+   (240px) rather than each sizing to its own content (.mtg-widget's usual
+   flex: 0 1 auto, which let the gauge card balloon to fit its caption's
+   unwrapped width, and let kpiTileRow's own flex-wrap tiles land at
+   whatever width happened to fit). .mtg-widget-grid's own align-items:
+   stretch (default) already matches both items to the row's tallest
+   height; live-reports-kpi-grid fills that full stretched height with its
+   2x2 block (not centered within it, by request -- "top and bottom line
+   up with the count boxes"), so the block's own top/bottom edges land
+   exactly on the gauge card's top/bottom edges instead of floating in the
+   middle with dead space above and below. */
+.live-reports-gauge {
+  width: 240px;
+}
+.live-reports-kpi-grid {
+  width: 240px;
+  display: flex;
+}
+.live-reports-kpi-grid .mtg-kpi-row {
+  /* Overrides kpiTileRow's own flex-wrap row with a real 2x2 grid --
+     exactly 2 equal-width columns regardless of each tile's own text
+     length, and grid's default align-items: stretch keeps all 4 tiles
+     the same height within their row, matching each other even when one
+     tile's number has more digits than another's. grid-template-rows:
+     1fr 1fr + width/height 100% (filling the stretched flex parent) is
+     what actually produces the top/bottom alignment -- without it the
+     grid's rows size to their own content and the whole block sits
+     shorter than the gauge card, flush to the top (flex's default
+     align-items: stretch on .live-reports-kpi-grid only stretches this
+     row itself, not its own internal row tracks). */
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 0.6rem;
+  width: 100%;
+  height: 100%;
+  /* .mtg-kpi-row's own base rule (its usual in-page-flow spacing below a
+     section heading) sets margin-top: 0.75rem -- left in place here it
+     pushed this whole 100%-height grid down BELOW the stretched
+     container's own top, so the block no longer actually filled it top-
+     to-bottom (same gap reappearing at the bottom too) -- exactly the
+     "top/bottom doesn't line up" mess. Reset to 0 since this grid sits
+     inside its own dedicated wrapper, not after a heading. */
+  margin-top: 0;
+}
+.live-reports-kpi-grid .mtg-kpi-tile {
+  flex: initial; /* kpiTileRow's own flex: 1 1 130px no longer applies under a grid parent -- reset so nothing clashes */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* Grid's default align-items: stretch only matches heights WITHIN a row
+     -- row 1 (Total Devices/Seen <7 Days) and row 2 (Seen 7-30 Days/Not
+     Seen 30+ Days) can still differ from EACH OTHER whenever one row's
+     label wraps to two lines and the other's doesn't ("Not Seen 30+ Days"
+     vs "Total Devices"). A fixed min-height (sized for the longest label
+     wrapped to 2 lines) makes all 4 boxes the same size always, by
+     request, instead of only matching pairwise within each row. */
+  min-height: 90px;
 }
 
 .mtg-segbar-track {

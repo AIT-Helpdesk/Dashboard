@@ -55,17 +55,30 @@ async function buildContractPills(client, companyIds) {
 // fetched.
 const FAN_OUT_CONCURRENCY = 5;
 
-async function buildTcEliteServices() {
-  const client = await getClient();
+// Just the classification lookup + company list -- split out from
+// buildTcEliteServices() below so Live Health Scores can reuse the exact
+// same "who counts as a TC Elite client" membership test (same "reuse the
+// sibling's own function, don't duplicate it" convention Check Client/
+// Meeting Prep/Live Reports already established) without also paying for
+// the per-company 6-vendor Installed Services fan-out, which it has no
+// use for.
+async function resolveTcEliteCompanies(client) {
   const classificationLabels = await getPicklistLabels(client.companies, 'classification');
   const tcEliteCode = [...classificationLabels.entries()].find(([, label]) => label === CLASSIFICATION_LABEL)?.[0] ?? null;
-  if (tcEliteCode === null) return { asOf: new Date().toISOString(), rows: [] };
+  if (tcEliteCode === null) return [];
 
   const companies = await listAll(client.companies, [
     { op: 'eq', field: 'classification', value: tcEliteCode },
     { op: 'eq', field: 'isActive', value: true },
   ]);
   companies.sort((a, b) => a.companyName.localeCompare(b.companyName));
+  return companies;
+}
+
+async function buildTcEliteServices() {
+  const client = await getClient();
+  const companies = await resolveTcEliteCompanies(client);
+  if (companies.length === 0) return { asOf: new Date().toISOString(), rows: [] };
 
   const companyIds = companies.map((c) => c.id);
   // Parent company name, by request ("put the clients with a parent in a
@@ -142,5 +155,9 @@ router.get('/', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Reused by Live Health Scores, by request -- see resolveTcEliteCompanies()'s
+// own header comment.
+router.resolveTcEliteCompanies = resolveTcEliteCompanies;
 
 module.exports = router;

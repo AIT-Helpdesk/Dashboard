@@ -981,4 +981,12 @@ router.post('/ingest', async (req, res) => {
   }
 });
 
+// Reused by Live Reports' own Datto RMM (Live) section, by request --
+// same "reuse the sibling's own function, don't duplicate it" convention
+// Check Client already established with Contract Checks/Ingram
+// Subscriptions/Contract Services. Self-contained (classifyFreshness/
+// siteMatches/normalizeAmpersand/slugify are all reached via closure, not
+// separate exports), so attaching just this one function is enough.
+router.buildDattoLiveDevicesComponent = buildDattoLiveDevicesComponent;
+
 module.exports = router;
