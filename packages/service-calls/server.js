@@ -40,17 +40,27 @@ const {
 // by default ("Show Completed", off by default) without a refetch.
 async function buildReport(monthKey, currentUserEmail) {
   const client = await getClient();
-  const [y, m] = monthKey.split('-').map(Number);
-  const monthStartISO = aestToUtcIso(y, m, 1);
-  const monthEndISO = aestToUtcIso(y, m + 1, 1);
-
-  const serviceCalls = await listAll(client.serviceCalls, [
-    { op: 'gte', field: 'startDateTime', value: monthStartISO },
-    { op: 'lt', field: 'startDateTime', value: monthEndISO },
-  ]);
-
   const todayKey = todayAestKey();
   const gridDates = buildMonthGrid(monthKey);
+
+  // Query the FULL displayed grid range, not just the calendar month --
+  // by request ("fill the data in the days at the beginning and end of
+  // the calendar page which are from the previous and next month rather
+  // than leaving them blank"). gridDates[0]/[-1] are the grid's own
+  // first/last real calendar dates (always complete Monday..Sunday
+  // weeks, see buildMonthGrid() below), so a leading/trailing day
+  // belonging to the previous/next month now gets its own real service
+  // calls too, instead of an empty cell just because it falls outside
+  // the selected month.
+  const [gy, gm, gd] = gridDates[0].split('-').map(Number);
+  const [gy2, gm2, gd2] = gridDates[gridDates.length - 1].split('-').map(Number);
+  const gridStartISO = aestToUtcIso(gy, gm, gd);
+  const gridEndISO = aestToUtcIso(gy2, gm2, gd2 + 1); // exclusive, the instant right after the grid's last day
+
+  const serviceCalls = await listAll(client.serviceCalls, [
+    { op: 'gte', field: 'startDateTime', value: gridStartISO },
+    { op: 'lt', field: 'startDateTime', value: gridEndISO },
+  ]);
 
   if (serviceCalls.length === 0) {
     return { month: monthKey, todayKey, gridDates, totalCount: 0, unallocatedCount: 0, byDay: {} };
@@ -111,7 +121,6 @@ async function buildReport(monthKey, currentUserEmail) {
   ]);
 
   const rows = [];
-  let unallocatedCount = 0;
   for (const sc of serviceCalls) {
     const ticketIds = ticketIdsByServiceCallId.get(sc.id) || [];
     const relatedTickets = [];
@@ -130,7 +139,6 @@ async function buildReport(monthKey, currentUserEmail) {
     const resourceNames = [];
     for (const rid of resourceIds) resourceNames.push(await resolveResourceName(client, rid));
     resourceNames.sort((a, b) => a.localeCompare(b));
-    if (resourceNames.length === 0) unallocatedCount++;
 
     rows.push({
       id: sc.id,
@@ -169,7 +177,20 @@ async function buildReport(monthKey, currentUserEmail) {
     byDay[r.dayKey].push(r);
   }
 
-  return { month: monthKey, todayKey, gridDates, totalCount: rows.length, unallocatedCount, byDay };
+  // totalCount/unallocatedCount stay scoped to the real calendar MONTH
+  // (the client's own summary line literally says "in <Month Year>") --
+  // byDay above still carries every row across the full grid (including
+  // the leading/trailing days from the previous/next month), but those
+  // extra days' calls shouldn't inflate a stat that names one specific
+  // month.
+  const [my, mm] = monthKey.split('-').map(Number);
+  const inMonthRows = rows.filter((r) => {
+    const [ry, rm] = r.dayKey.split('-').map(Number);
+    return ry === my && rm === mm;
+  });
+  const unallocatedCount = inMonthRows.filter((r) => !r.allocated).length;
+
+  return { month: monthKey, todayKey, gridDates, totalCount: inMonthRows.length, unallocatedCount, byDay };
 }
 
 // Full Monday-start weeks covering every day of the given month -- e.g.

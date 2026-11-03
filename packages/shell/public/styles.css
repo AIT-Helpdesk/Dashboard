@@ -4293,16 +4293,19 @@ td.ticket-number {
 
 /* Installed Services -- green/red "button-like" pills across the top of
    Client Summary, right under the company header, by request (replacing
-   an earlier table layout). Same pill shape (border-radius: 999px) the
+   an earlier table layout). Same pill SHAPE (border-radius: 999px) the
    dashboard's other floating pill buttons already use (.focus-exit-btn,
-   the Help button), filled solid rather than outlined so installed/
-   not-installed reads at a glance without needing to read label text
-   color. Grey (--muted) is its own third state for "unknown" (a missing
-   credential, or a name that didn't match confidently) -- never collapsed
-   into red, same "don't show a false No" reasoning server.js documents
-   for each source. Detail (seats/agents/locations/the matched vendor
-   name) is a native title= tooltip -- plenty for a one-line fact, no
-   custom hover widget needed. */
+   the Help button). Lightened, by request ("lighten the colour of all
+   pills... shaped like the buttons on Contract Checks") -- a light
+   color-mix() tint background + the matched colour as the TEXT, same
+   convention Contract Checks' own small pill buttons use dashboard-wide
+   (.cc-mark-renewals-btn, .button-link--small, .mid-badge--exact/etc),
+   not the earlier flat solid-fill-plus-white-text look. Grey (--muted) is
+   its own third state for "unknown" (a missing credential, or a name that
+   didn't match confidently) -- never collapsed into red, same "don't show
+   a false No" reasoning server.js documents for each source. Detail
+   (seats/agents/locations/the matched vendor name) is a native title=
+   tooltip -- plenty for a one-line fact, no custom hover widget needed. */
 .client-summary-service-badges {
   display: flex;
   flex-wrap: wrap;
@@ -4311,21 +4314,41 @@ td.ticket-number {
 }
 .client-summary-service-badge {
   display: inline-block;
-  padding: 0.35rem 0.9rem;
+  padding: 0.25rem 0.6rem;
   border-radius: 999px;
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  color: white;
   cursor: default;
 }
+/* The 2 contract pills render as a real <a> (pillHtml() in client.js)
+   when they have a matched contract to click through to, by request --
+   override the browser's own default underline/cursor for that case,
+   same "no underline" convention .client-summary-name-link already uses
+   for this page's own company-name link. */
+a.client-summary-service-badge {
+  text-decoration: none;
+  cursor: pointer;
+}
 .client-summary-service-badge--yes {
-  background: #16a34a;
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: #16a34a;
 }
 .client-summary-service-badge--no {
-  background: #dc2626;
+  background: color-mix(in srgb, #dc2626 18%, transparent);
+  color: #dc2626;
 }
 .client-summary-service-badge--unknown {
-  background: var(--muted);
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
+}
+/* The 2 "contract pill" badges (Default Contract / "Tech Cover Elite"
+   contract), by request -- always blue (var(--accent), same blue
+   .cell-flag-blue already uses dashboard-wide), purely informational
+   rather than a pass/fail like the --yes/--no/--unknown trio above. Used
+   here and on TC Elite Services' own per-row pills. */
+.client-summary-service-badge--info {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
 }
 
 /* Unallocated Service Calls' month calendar. */

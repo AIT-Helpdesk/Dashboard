@@ -177,34 +177,55 @@ function buildMonthGrid(monthKey) {
 }
 
 async function buildMonthReport(teamId, monthKey) {
-  const [y, m] = monthKey.split('-').map(Number);
-  const monthStartKey = `${monthKey}-01`;
-  const nextMonthStart = new Date(Date.UTC(y, m, 1)); // m is already 1-based monthKey's month, so Date.UTC(y, m, 1) is the 1st of the FOLLOWING month
-  const monthEndKeyExclusive = nextMonthStart.toISOString().slice(0, 10);
-
   const todayKey = todayAestKey();
   const gridDates = buildMonthGrid(monthKey);
+
+  // Query the FULL displayed grid range, not just the calendar month --
+  // by request ("fill the data in the days at the beginning and end of
+  // the calendar page which are from the previous and next month rather
+  // than leaving them blank"). gridDates[0]/[-1] are the grid's own
+  // first/last real calendar dates (always complete Monday..Sunday
+  // weeks, see buildMonthGrid() below), so a leading/trailing day
+  // belonging to the previous/next month now gets its own real shifts/
+  // leave/public holidays too, instead of an empty cell just because it
+  // falls outside the selected month.
+  const gridStartKey = gridDates[0];
+  const [gy2, gm2, gd2] = gridDates[gridDates.length - 1].split('-').map(Number);
+  const gridEndKeyExclusive = new Date(Date.UTC(gy2, gm2 - 1, gd2 + 1)).toISOString().slice(0, 10);
+
   // Bare dateWorked-shaped ISO strings, NOT aestToUtcIso() -- TimeEntries.
   // dateWorked is a date-only field that needs no real AEST offset
   // conversion, same established convention @dashboard/times' own Leave
   // query already follows.
-  const [{ byDay, totalCount }, leaveEntries, publicHolidayEntries] = await Promise.all([
-    getShiftsByDay(teamId, monthStartKey, monthEndKeyExclusive),
-    getClient().then((client) => fetchLeaveEntries(client, `${monthStartKey}T00:00:00.000Z`, `${monthEndKeyExclusive}T00:00:00.000Z`)),
-    getClient().then((client) => fetchPublicHolidayEntries(client, `${monthStartKey}T00:00:00.000Z`, `${monthEndKeyExclusive}T00:00:00.000Z`)),
+  const [{ byDay }, leaveEntries, publicHolidayEntries] = await Promise.all([
+    getShiftsByDay(teamId, gridStartKey, gridEndKeyExclusive),
+    getClient().then((client) => fetchLeaveEntries(client, `${gridStartKey}T00:00:00.000Z`, `${gridEndKeyExclusive}T00:00:00.000Z`)),
+    getClient().then((client) => fetchPublicHolidayEntries(client, `${gridStartKey}T00:00:00.000Z`, `${gridEndKeyExclusive}T00:00:00.000Z`)),
   ]);
 
-  let extraCount = 0;
   for (const row of [...leaveEntries, ...publicHolidayEntries]) {
     if (!byDay[row.dayKey]) byDay[row.dayKey] = [];
     byDay[row.dayKey].push(row);
-    extraCount++;
   }
   for (const day of Object.values(byDay)) {
     day.sort((a, b) => (a.startDateTime || '').localeCompare(b.startDateTime || ''));
   }
 
-  return { month: monthKey, todayKey, gridDates, totalCount: totalCount + extraCount, byDay };
+  // totalCount stays scoped to the real calendar MONTH (the client's own
+  // summary line literally says "in <Month Year>") -- byDay above still
+  // carries every entry across the full grid (including the leading/
+  // trailing days from the previous/next month), but those extra days'
+  // shifts/leave/holidays shouldn't inflate a stat that names one
+  // specific month. Recomputed from the now-fully-merged byDay rather
+  // than carrying the earlier grid-wide totalCount/extraCount forward.
+  const [my, mm] = monthKey.split('-').map(Number);
+  let inMonthCount = 0;
+  for (const [dayKey, entries] of Object.entries(byDay)) {
+    const [dy, dm] = dayKey.split('-').map(Number);
+    if (dy === my && dm === mm) inMonthCount += entries.length;
+  }
+
+  return { month: monthKey, todayKey, gridDates, totalCount: inMonthCount, byDay };
 }
 
 const REPORT_CACHE_TTL_MS = 10 * 60 * 1000; // same as service-calls -- a roster fix should show up within the hour, not stay stale for the CSP-Customers-style 20 min

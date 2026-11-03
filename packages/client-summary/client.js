@@ -111,7 +111,7 @@ export function mount(container) {
     resultsEl.innerHTML = '';
 
     resultsEl.appendChild(renderHeader(data));
-    resultsEl.appendChild(renderInstalledServiceBadges(data.installedServices));
+    resultsEl.appendChild(renderInstalledServiceBadges(data.installedServices, data.activeContracts));
     resultsEl.appendChild(renderActiveContracts(data.activeContracts));
     resultsEl.appendChild(renderFinancialSnapshot(data.financialSnapshot));
     resultsEl.appendChild(renderRecentTickets(data.recentTickets));
@@ -283,7 +283,35 @@ export function mount(container) {
   // shown as a plain red "not installed" either way, same as every other
   // not-installed badge, since this page has no way to tell those two
   // apart.
-  function renderInstalledServiceBadges(services) {
+  function renderInstalledServiceBadges(services, activeContracts) {
+    // 2 "contract pills", by request -- which active contract (if any)
+    // is this client's billing default, and which (if any) is its "Tech
+    // Cover Elite*" contract (same wildcard-prefix match Active
+    // Contracts' own orange warning below already uses). Default's own
+    // pill shows just the matched contract's own NAME as its label (no
+    // "Default: " caption, by request) and stays blue either way -- the
+    // Tech Cover Elite pill instead keeps a fixed, short label ("Tech
+    // Cover Elite") when a match IS found (full contract name moved to
+    // the hover tooltip only, since real names here -- "Tech Cover Elite
+    // - Managed Support Plan" -- are long enough to otherwise widen the
+    // pill row a lot), but turns RED with the label "No Tech Cover
+    // Contract" when no active contract starts with "Tech Cover Elite",
+    // by request -- same red .client-summary-service-badge--no every
+    // other "not installed" pill on this page already uses. Same 2 pills
+    // TC Elite Services shows for every TC Elite client at once, by
+    // request.
+    const defaultContractTitle = activeContracts.defaultContractName ? `Default: ${activeContracts.defaultContractName}` : 'Default: None';
+    const defaultContractPill = pillHtml('client-summary-service-badge--info', activeContracts.defaultContractName || 'None', defaultContractTitle, activeContracts.defaultContractUrl);
+
+    const eliteContractCls = activeContracts.eliteContractName ? 'client-summary-service-badge--info' : 'client-summary-service-badge--no';
+    const eliteContractText = activeContracts.eliteContractName ? 'Tech Cover Elite' : 'No Tech Cover Contract';
+    const eliteContractTitle = activeContracts.eliteContractName
+      ? `Tech Cover Elite: ${activeContracts.eliteContractName}`
+      : 'No active contract starting with "Tech Cover Elite" was found.';
+    const eliteContractPill = pillHtml(eliteContractCls, eliteContractText, eliteContractTitle, activeContracts.eliteContractUrl);
+
+    const contractPillsHtml = defaultContractPill + eliteContractPill;
+
     const items = [
       { label: 'SaaS Alerts', installed: services.saasAlerts.installed },
       {
@@ -323,13 +351,15 @@ export function mount(container) {
 
     const wrap = document.createElement('div');
     wrap.className = 'client-summary-service-badges';
-    wrap.innerHTML = items
-      .map((i) => {
-        const cls = i.installed === null ? 'client-summary-service-badge--unknown' : i.installed ? 'client-summary-service-badge--yes' : 'client-summary-service-badge--no';
-        const title = i.installed === null ? 'Not yet connected' : i.detail ? i.detail : i.installed ? 'Installed' : 'Not installed';
-        return `<span class="client-summary-service-badge ${cls}" title="${escapeHtml(title)}">${escapeHtml(i.label)}</span>`;
-      })
-      .join('');
+    wrap.innerHTML =
+      contractPillsHtml +
+      items
+        .map((i) => {
+          const cls = i.installed === null ? 'client-summary-service-badge--unknown' : i.installed ? 'client-summary-service-badge--yes' : 'client-summary-service-badge--no';
+          const title = i.installed === null ? 'Not yet connected' : i.detail ? i.detail : i.installed ? 'Installed' : 'Not installed';
+          return `<span class="client-summary-service-badge ${cls}" title="${escapeHtml(title)}">${escapeHtml(i.label)}</span>`;
+        })
+        .join('');
     return wrap;
   }
 
@@ -416,6 +446,18 @@ export function mount(container) {
     const label = escapeHtml(c.contractName);
     if (!c.contractUrl) return label;
     return `<a href="${escapeHtml(c.contractUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+  }
+
+  // The 2 contract pills click through to their own matched contract in
+  // Autotask, by request -- same real popup-window convention
+  // contractLink() above already uses. Renders as a plain <span> (not
+  // clickable) when there's no contract to link to -- the "None"/"No
+  // Tech Cover Contract" case.
+  function pillHtml(cls, text, title, url) {
+    const safeText = escapeHtml(text);
+    const safeTitle = escapeHtml(title);
+    if (!url) return `<span class="client-summary-service-badge ${cls}" title="${safeTitle}">${safeText}</span>`;
+    return `<a class="client-summary-service-badge ${cls}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${safeTitle}" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${safeText}</a>`;
   }
 
   function invoiceLink(inv) {

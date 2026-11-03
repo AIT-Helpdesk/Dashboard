@@ -3,6 +3,12 @@ node_modules/
 *.log
 logs/
 server.pid
+dev-server.pid
+
+# Real client PDFs/reports generated while testing Datto report fetching
+# and other ad-hoc scripts -- client data, not source, never committed.
+Claude outputs/
+datto_reports_test/
 
 # Shared sidebar layout -- runtime-configured state (who put what page
 # where), not source. Previously checked in "by request" so a fresh

@@ -20,11 +20,7 @@ const {
   excludeMonitoringAlerts,
 } = require('@dashboard/autotask-client');
 const { get: saasAlertsGet } = require('@dashboard/saasalerts-client');
-const saasProtectionRouter = require('@dashboard/saas-protection/server.js');
-const { hasDattoEdrCredentials, findLocationMatches } = require('./datto-edr.js');
-const { hasAutoElevateCredentials, findCompanyMatch: findAutoElevateMatch } = require('./autoelevate.js');
-const { hasHuntressCredentials, findOrganizationMatch: findHuntressMatch } = require('./huntress.js');
-const { hasRewstCredentials, findCustomerMatch: findRewstMatch } = require('./rewst.js');
+const { findSaasAlertsCustomerId, buildInstalledServices } = require('./installed-services.js');
 
 // Company-level UDFs to surface next to Primary/Billing Contact, by request.
 // Confirmed against real data (Companies/178): these live on
@@ -241,81 +237,35 @@ async function buildActiveContracts(client, company, classification) {
     warnings.push('No active "Tech Cover Essentials" contract was found.');
   }
 
-  return { rows, warnings };
+  // 2 blue "contract pills", by request -- which active contract (if any)
+  // is this client's billing default, and which (if any) is its "Tech
+  // Cover Elite*" contract (the SAME wildcard-prefix match the warning
+  // above already uses). Shown here and on TC Elite Services (every TC
+  // Elite client at once) -- TC Elite Services builds the identical pair
+  // itself from its own batched contract fetch, not via this function
+  // (that page never resolves one company's Active Contracts section at
+  // all), but the two are deliberately the exact same rule.
+  const defaultContract = contracts.find((c) => c.isDefaultContract) || null;
+  const eliteContract = contracts.find((c) => normalizeContractName(c.contractName).startsWith('TECH COVER ELITE')) || null;
+
+  return {
+    rows,
+    warnings,
+    defaultContractName: defaultContract ? defaultContract.contractName : null,
+    // Both pills click through to the matched contract in Autotask, by
+    // request -- same getContractUrl()/popup-window convention every
+    // other contract link on this page already uses.
+    defaultContractUrl: defaultContract ? await getContractUrl(defaultContract.id) : null,
+    eliteContractName: eliteContract ? eliteContract.contractName : null,
+    eliteContractUrl: eliteContract ? await getContractUrl(eliteContract.id) : null,
+  };
 }
 
 // --- Installed Services --------------------------------------------------
-// "Do we have X installed for this client" across a handful of other
-// systems, by request -- shown right after Active Contracts. Two sources
-// today:
-//   - SaaS Alerts: reuses the exact same company-id-to-customer mapping
-//     (findSaasAlertsCustomerId(), defined below in the Security Alerts
-//     section this page already had) -- an EXACT id match via SaaS Alerts'
-//     own mappedToPSA entry, not a name guess.
-//   - Datto SaaS Protection: @dashboard/saas-protection's own
-//     findDomainMatch(), a NAME match (no PSA-style id mapping exists on
-//     that side) -- "installed: false" below can mean either genuinely not
-//     a SaaS Protection client, or a name that didn't line up well enough to
-//     match confidently; this page can't currently tell those two apart.
-// Dark Web ID and INKY (Email Security) are left out for now -- by
-// request -- neither has a live subscription API, only sparse manually-
-// parsed report files for a handful of clients (see @dashboard/meeting-prep),
-// which isn't a reliable "installed or not" signal for the whole client base.
-//   - Datto EDR: ./datto-edr.js's own findLocationMatches() -- a NAME match
-//     against Datto EDR's own Locations (its per-site/branch unit, synced
-//     from Datto RMM), same reasoning as SaaS Protection's match. Shows
-//     "not-configured" (not a false "No") until DATTO_EDR_API_KEY/
-//     DATTO_EDR_URL are both set, same "quietly not there" convention
-//     hasDattoCredentials() already uses for live Datto RMM elsewhere.
-// AutoElevate / Huntress: ./autoelevate.js's own findCompanyMatch() and
-// ./huntress.js's own findOrganizationMatch() -- real live APIs (CyberFOX's
-// Partner API and Huntress's own REST API, both confirmed live against the
-// real account), NOT sourced from @dashboard/tc-elite-rollout's own
-// staff-maintained rollout data (that tracker is itself what's being
-// verified against a real source, by explicit request -- reusing it here
-// would be circular).
-async function buildInstalledServices(company) {
-  const [saasAlertsCustomerId, saasProtectionMatch, dattoEdrMatches, autoElevateMatch, huntressMatch, rewstMatch] = await Promise.all([
-    findSaasAlertsCustomerId(company.id),
-    saasProtectionRouter.findDomainMatch(company.companyName),
-    hasDattoEdrCredentials() ? findLocationMatches(company.companyName) : Promise.resolve(null),
-    hasAutoElevateCredentials() ? findAutoElevateMatch(company.companyName) : Promise.resolve(undefined),
-    hasHuntressCredentials() ? findHuntressMatch(company.companyName) : Promise.resolve(undefined),
-    hasRewstCredentials() ? findRewstMatch(company.companyName) : Promise.resolve(undefined),
-  ]);
-  // SaaS Protection's own billable-seat count needs a SECOND live call
-  // (per-customer /seats, not the bulk /domains list findDomainMatch()
-  // already used) -- only made when there's actually a match, by request
-  // ("show the user count or billable seats rather than total seats" --
-  // /domains' own seatsUsed lumps in SharePoint sites/Teams/shared
-  // mailboxes alongside real licensed users; confirmed live on a real
-  // account, 173 total seat rows there, only 52 actually billable).
-  const billableSeatCount = saasProtectionMatch ? await saasProtectionRouter.getBillableSeatCount(saasProtectionMatch.customerId) : null;
-  return {
-    saasAlerts: { installed: saasAlertsCustomerId !== null },
-    saasProtection: saasProtectionMatch
-      ? { installed: true, billableSeatCount, backupPercentage: saasProtectionMatch.backupPercentage }
-      : { installed: false },
-    dattoEdr:
-      dattoEdrMatches === null
-        ? { status: 'not-configured' }
-        : { status: 'ok', installed: dattoEdrMatches.length > 0, locationCount: dattoEdrMatches.length },
-    autoElevate: autoElevateMatch === undefined ? { status: 'not-configured' } : { status: 'ok', installed: autoElevateMatch !== null },
-    huntress:
-      huntressMatch === undefined
-        ? { status: 'not-configured' }
-        : { status: 'ok', installed: huntressMatch !== null, agentsCount: huntressMatch ? huntressMatch.agents_count : null },
-    // "installed" here only means "has a matching Rewst CSP customer
-    // record" -- there's no per-organization connected-integrations list
-    // available from the one Rewst workflow this reuses, see
-    // ./rewst.js's own comment for why. rewstCompanyName (the matched
-    // record's own company_name) is the best available detail for now.
-    rewst:
-      rewstMatch === undefined
-        ? { status: 'not-configured' }
-        : { status: 'ok', installed: rewstMatch !== null, rewstCompanyName: rewstMatch ? rewstMatch.company_name : null },
-  };
-}
+// buildInstalledServices() itself now lives in ./installed-services.js --
+// shared with TC Elite Services, which needs the exact same per-company
+// check across every TC Elite client at once, by request. See that file's
+// own comment for the full methodology.
 
 // --- Recent ticket activity ------------------------------------------
 // "Open" here is the same definition Completed Tickets uses for "done" --
@@ -370,11 +320,9 @@ async function buildRecentTickets(client, company) {
 const SEVERITIES = ['critical', 'medium'];
 const SIZE_CAP = 10000; // see Security Alerts' server.js for the undocumented ceiling this guards against
 
-async function findSaasAlertsCustomerId(companyId) {
-  const customers = await saasAlertsGet('/reports/customers');
-  const match = customers.find((c) => (c.mappedToPSA || []).some((m) => m.product === 'autotaskpsa' && m.mappedTo === String(companyId)));
-  return match ? match.id : null;
-}
+// findSaasAlertsCustomerId() itself now lives in ./installed-services.js,
+// shared with Installed Services (and now TC Elite Services) -- same
+// mappedToPSA id match as before, just no longer duplicated here.
 
 function oneMonthAgoDateKey(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
