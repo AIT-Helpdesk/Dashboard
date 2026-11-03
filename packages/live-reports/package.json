@@ -10,9 +10,14 @@
     "server": "server.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.0",
     "@dashboard/autotask-client": "*",
+    "@dashboard/client-summary": "*",
     "@dashboard/datto-rmm": "*",
     "@dashboard/meeting-prep": "*",
-    "express": "^4.19.2"
+    "@dashboard/saas-protection": "*",
+    "@dashboard/saasalerts-client": "*",
+    "express": "^4.19.2",
+    "puppeteer-core": "^23.11.1"
   }
 }

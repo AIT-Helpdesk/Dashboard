@@ -122,4 +122,10 @@ async function buildInstalledServices(company) {
   };
 }
 
-module.exports = { findSaasAlertsCustomerId, buildInstalledServices };
+// getSaasAlertsCustomers() is also exported (not just the two functions
+// above) -- Live Reports reuses it directly for a NAME match against this
+// same 5-min-cached list (it has no Autotask company/id to resolve from,
+// only a Datto RMM site name -- see live-reports/server.js's own
+// buildSaasAlertsSummary() comment), rather than re-fetching the same
+// whole-account customer list a third way.
+module.exports = { findSaasAlertsCustomerId, buildInstalledServices, getSaasAlertsCustomers };

@@ -4364,6 +4364,39 @@ a.client-summary-service-badge {
   background: color-mix(in srgb, var(--muted) 15%, transparent);
   color: var(--muted);
 }
+/* TC Elite Services' own pill overrides, by request -- scoped to just
+   this page via its own .tc-elite-services-page wrapper (client.js), not
+   a change to the base .client-summary-service-badge--* classes
+   themselves -- Client Summary/Live Reports/TC Elite Services' own
+   contract pills (where unaffected below) keep the regular tinted look.
+   "Yes" pills: outlined (var(--bg), white in light mode) with a green
+   border, text green again (by request, after a brief black-text
+   detour) but a darker shade (#166534, Tailwind's green-800) than the
+   border's own #16a34a -- more legible on the white pill at text size
+   than the original bright green. "No"/"info" pills keep their existing
+   tinted background/text, just gaining a matching-color border on top. */
+.tc-elite-services-page .client-summary-service-badge--yes {
+  background: var(--bg);
+  border: 1px solid #16a34a;
+  color: #166534;
+}
+.tc-elite-services-page .client-summary-service-badge--no {
+  border: 1px solid #dc2626;
+}
+.tc-elite-services-page .client-summary-service-badge--info {
+  border: 1px solid var(--accent);
+}
+/* The Default Contract pill specifically when its matched contract is a
+   plain "T&M" one, by request -- a T&M default isn't really informative
+   the way a real named contract is, so it's demoted from the blue --info
+   look to a neutral grey, same tinted-background formula --unknown
+   already uses plus a matching grey border (client.js's own isTmContract()
+   decides which class a given Default Contract pill gets). */
+.tc-elite-services-page .client-summary-service-badge--tm {
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  border: 1px solid var(--muted);
+  color: var(--muted);
+}
 /* The 2 "contract pill" badges (Default Contract / "Tech Cover Elite"
    contract), by request -- always blue (var(--accent), same blue
    .cell-flag-blue already uses dashboard-wide), purely informational
@@ -9468,6 +9501,13 @@ tr.accrued-time-yellow-row th {
   font-weight: 700;
   margin: 0 0 0.6rem;
 }
+/* Live Reports' "Other Systems" widgets -- no section heading above them
+   anymore, by request, so each vendor widget's own title (SaaS Alerts/
+   SaaS Protection/...) is sized up to .client-summary-section-heading's
+   own 1.1rem instead, carrying that same visual weight on its own. */
+.live-reports-other-systems .mtg-widget-title {
+  font-size: 1.1rem;
+}
 .mtg-widget--gauge {
   text-align: center;
 }
@@ -9869,6 +9909,40 @@ tr.accrued-time-yellow-row th {
      wrapped to 2 lines) makes all 4 boxes the same size always, by
      request, instead of only matching pairwise within each row. */
   min-height: 90px;
+}
+
+/* Live Reports' own SaaS Alerts widget, by request -- the 3 count tiles
+   small, back in a row across the top (kpiTileRow's usual direction, just
+   smaller than its default size), with Top Events as an actual list
+   underneath rather than a comma-joined sentence. */
+.live-reports-saas-alerts-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+.live-reports-saas-alerts-kpis .mtg-kpi-row {
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  margin-top: 0;
+}
+.live-reports-saas-alerts-kpis .mtg-kpi-tile {
+  flex: 0 1 90px;
+  padding: 0.5rem 0.6rem;
+}
+.live-reports-saas-alerts-kpis .mtg-kpi-value {
+  font-size: 1.15rem;
+}
+.live-reports-saas-alerts-kpis .mtg-kpi-label {
+  font-size: 0.65rem;
+}
+.live-reports-saas-alerts-events {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+.live-reports-saas-alerts-events li {
+  margin-bottom: 0.3rem;
 }
 
 .mtg-segbar-track {

@@ -13,16 +13,23 @@ export const label = "TC Elite Services";
 let lastData = null; // module-scope, survives the shell's teardown/re-mount, same convention every other page here uses
 
 export function mount(container) {
+  // Wrapped in its own .tc-elite-services-page class so styles.css can
+  // scope the green "yes" pill's outlined look to just this page, by
+  // request, without touching the same .client-summary-service-badge--yes
+  // class Client Summary/Live Reports still show with their regular
+  // tinted-background style.
   container.innerHTML = `
-    <header class="page-header">
-      <h1>TC Elite Services</h1>
-      <div class="date-form">
-        <button type="button" id="refresh-button">Refresh</button>
-      </div>
-    </header>
-    <p id="status" class="status">Loading...</p>
-    <div id="summary" class="summary" hidden></div>
-    <div id="results"></div>
+    <div class="tc-elite-services-page">
+      <header class="page-header">
+        <h1>TC Elite Services</h1>
+        <div class="date-form">
+          <button type="button" id="refresh-button">Refresh</button>
+        </div>
+      </header>
+      <p id="status" class="status">Loading...</p>
+      <div id="summary" class="summary" hidden></div>
+      <div id="results"></div>
+    </div>
   `;
 
   const refreshButton = container.querySelector('#refresh-button');
@@ -133,7 +140,14 @@ export function mount(container) {
   // plain, non-clickable span.
   function renderContractPills(r) {
     const defaultTitle = r.defaultContractName ? `Default: ${r.defaultContractName}` : 'Default: None';
-    const defaultPill = pillHtml('client-summary-service-badge--info', r.defaultContractName || 'None', defaultTitle, r.defaultContractUrl);
+    // Grey instead of the usual blue "info" look specifically when the
+    // matched default contract is a plain T&M one, by request -- same
+    // case-insensitive "starts with T&M" prefix check Contract Checks'
+    // own normalizeContractName()/hasTmDefault logic already uses
+    // elsewhere on this dashboard, kept as a small independent copy here
+    // rather than imported (this page has no dependency on that one).
+    const defaultCls = r.defaultContractName && /^T&M/i.test(r.defaultContractName.trim()) ? 'client-summary-service-badge--tm' : 'client-summary-service-badge--info';
+    const defaultPill = pillHtml(defaultCls, r.defaultContractName || 'None', defaultTitle, r.defaultContractUrl);
 
     const eliteCls = r.eliteContractName ? 'client-summary-service-badge--info' : 'client-summary-service-badge--no';
     const eliteText = r.eliteContractName ? 'Tech Cover Elite' : 'No Tech Cover Contract';
