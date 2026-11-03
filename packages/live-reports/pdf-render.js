@@ -1,4 +1,6 @@
 const puppeteer = require('puppeteer-core');
+const path = require('path');
+const os = require('os');
 
 // Renders a self-contained HTML string to a PDF buffer via puppeteer-core
 // driving an EXISTING Chrome/Edge install, rather than the plain
@@ -29,11 +31,46 @@ function hasPdfBrowser() {
 // footer/page-number band a plain HTML page can't do by itself. Classes
 // like `pageNumber`/`totalPages` are literal strings Puppeteer itself
 // substitutes, not something this file's own CSS has to define.
+// A dedicated, explicitly-writable profile directory, NOT Edge/Chrome's
+// own default one -- "Failed to launch the browser process!" with no
+// further detail is the classic symptom of a headless browser launched
+// under a Windows SERVICE account (this dashboard runs as the
+// AmbientDashboard service on production, not an interactive user):
+// service accounts often have no real user profile at all, so the
+// browser's own default --user-data-dir resolution (normally somewhere
+// under that user's AppData) fails before the browser can even start.
+// os.tmpdir() resolves to a real, writable path for any account,
+// interactive or service, sidestepping that entirely.
+const USER_DATA_DIR = path.join(os.tmpdir(), 'live-reports-pdf-profile');
+
 async function renderPdf(html, { footerText }) {
   const executablePath = findBrowserExecutable();
   if (!executablePath) throw new Error('No Chrome/Edge install found to render the PDF (checked the usual Program Files locations).');
 
-  const browser = await puppeteer.launch({ executablePath, headless: 'new', args: ['--no-sandbox'] });
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      executablePath,
+      headless: 'new',
+      userDataDir: USER_DATA_DIR,
+      // --no-sandbox/--disable-setuid-sandbox: same reasoning as before
+      // (a service account is rarely allowed to create the sandboxed
+      // process Chrome wants by default). --disable-gpu/
+      // --disable-dev-shm-usage: common additional flags a constrained,
+      // no-desktop-session service account needs that an interactive
+      // user session usually doesn't.
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+    });
+  } catch (err) {
+    // Puppeteer's own "Failed to launch the browser process!" error is
+    // famously unhelpful on its own -- the real reason is usually in the
+    // browser's own stderr, which Puppeteer already appends to err.message
+    // when it can capture it. Logged in full server-side (not sent to the
+    // client as-is) so a future failure here is diagnosable from the
+    // server's own log without having to reproduce it by hand again.
+    console.error('live-reports: Puppeteer failed to launch the browser:', err.message);
+    throw new Error(`Could not launch Chrome/Edge to render the PDF: ${err.message}`);
+  }
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
