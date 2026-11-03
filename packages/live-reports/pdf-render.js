@@ -52,12 +52,31 @@ async function renderPdf(html, { footerText }) {
   const executablePath = findBrowserExecutable();
   if (!executablePath) throw new Error('No Chrome/Edge install found to render the PDF (checked the usual Program Files locations).');
 
+  // Confirmed live this session: Edge launches fine headless from a plain
+  // interactive PowerShell prompt on production, but still fails silently
+  // (zero stderr, even with dumpio below) from the AmbientDashboard
+  // service itself (Local System, "interact with desktop" enabled --
+  // neither fixed it). The remaining real difference is the PROCESS
+  // ENVIRONMENT: Windows' Service Control Manager frequently starts a
+  // service with no TEMP/TMP variable set at all (an interactive shell
+  // always has one), and Chrome relies on a valid TEMP internally for
+  // several things (its own lock file, crash handling, GPU cache) even
+  // when --user-data-dir is given explicitly -- a well-documented class
+  // of "Puppeteer silently fails under a Windows service" issue. Forced
+  // here regardless of whatever the service's own environment provides,
+  // pointed at the same already-proven-writable package-local directory
+  // as the profile dir above. fs.mkdirSync() up front too, in case
+  // Chrome's own auto-create of that directory is itself part of what's
+  // failing silently under this account.
+  require('fs').mkdirSync(USER_DATA_DIR, { recursive: true });
+
   let browser;
   try {
     browser = await puppeteer.launch({
       executablePath,
       headless: 'new',
       userDataDir: USER_DATA_DIR,
+      env: { ...process.env, TEMP: USER_DATA_DIR, TMP: USER_DATA_DIR },
       // --no-sandbox/--disable-setuid-sandbox: same reasoning as before
       // (a service account is rarely allowed to create the sandboxed
       // process Chrome wants by default). --disable-gpu/
@@ -72,7 +91,7 @@ async function renderPdf(html, { footerText }) {
       // detail on its own ("Failed to launch the browser process!" and
       // nothing else), so this is the only way left to see the real OS-
       // level reason (permissions, a missing DLL, AV interference, etc.)
-      // if this still fails after the profile-directory change above.
+      // if this still fails after the fixes above.
       dumpio: true,
     });
   } catch (err) {
