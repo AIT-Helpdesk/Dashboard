@@ -56,6 +56,8 @@ function buildPrompt(report, vendors) {
   const data = buildPromptData(report, vendors);
   return `You are writing the narrative sections of a monthly Managed Services Report for an MSP called Ambient iT, for their client "${report.siteName}". You are given a JSON snapshot of that client's current live IT health data (device patching/antivirus/software compliance, open alerts, and security tool coverage across several systems). Write in the MSP's own voice, addressing the client directly ("your computers", "your team"), plain English, no jargon, no padding -- specific and concrete, naming exact numbers where relevant, never vague filler.
 
+Never name the specific vendor/product behind a data point (the JSON keys "saasAlerts", "saasProtection", "dattoEdr", "autoElevate", "huntress" and the device-management platform itself are all internal tool names, not something the client needs or cares about) -- describe what each one actually DOES for the client instead, in plain terms: saasAlerts -> "SaaS alerting/threat detection", saasProtection -> "your backups", dattoEdr -> "endpoint detection and response"/"endpoint security", autoElevate -> "privilege management", huntress -> "managed threat detection". The client cares about the coverage and the outcome, not which specific tool provides it.
+
 DATA:
 ${JSON.stringify(data, null, 2)}
 

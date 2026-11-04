@@ -183,8 +183,67 @@ function drawDonut(doc, x, y, w, title, legend, colors) {
     ly = doc.y + 3;
   });
 
-  doc.fillColor(INK);
+  doc.fillColor(INK).lineWidth(1);
   return Math.max(y + diameter, ly) + 6;
+}
+
+// Measures a donut widget's own natural content height (title + donut/
+// legend block) WITHOUT drawing it -- same measure-then-draw split
+// measureCyberCardHeight()/drawCyberCard() already use for the
+// Cybersecurity Layers cards, reused here so Device Health's own donuts
+// can sit in matching bordered cards (by request), each card sized to fit
+// its own (variable -- legend length differs per category) content.
+function measureDonutHeight(doc, w, legend) {
+  const entries = Object.entries(legend);
+  const diameter = 64;
+  const legendW = Math.max(60, w - diameter - 14);
+  doc.font('Helvetica').fontSize(8);
+  let legendH = 0;
+  entries.forEach(([label, val]) => {
+    legendH += doc.heightOfString(`${label}: ${val}`, { width: legendW - 11 }) + 3;
+  });
+  return 16 + Math.max(diameter, legendH);
+}
+
+// A white bordered card (same style as the Cybersecurity Layers cards)
+// wrapped around one drawDonut() call, at a caller-chosen height (so two
+// cards sharing a row can be drawn at the SAME height and line up exactly
+// -- see drawDonutRow() below). lineWidth(1) explicitly set right before
+// the card border -- confirmed necessary: drawDonut()/drawDonutArcSegment()
+// each set a thick 13px lineWidth for the donut ring itself and never
+// reset it, which otherwise silently carries over into THIS rect's own
+// border stroke (every card after the first in a row rendered with a
+// thick grey halo around it, not a thin border).
+function drawDonutCard(doc, x, y, w, h, title, legend, colors) {
+  const pad = 10;
+  doc.lineWidth(1).roundedRect(x, y, w, h, 4).fillAndStroke('#ffffff', BORDER);
+  drawDonut(doc, x + pad, y + pad, w - pad * 2, title, legend, colors);
+}
+
+// Shared by drawDonutRow() (actually drawing) and drawDeviceHealth() (needs
+// the height up front, before anything's drawn, to size the section's own
+// background rect -- see drawDeviceHealth() below) -- kept as ONE
+// calculation so the two can never drift apart.
+function measureDonutRowHeight(doc, w, leftSpec, rightSpec) {
+  const gap = 16;
+  const colW = (w - gap) / 2;
+  const pad = 10;
+  const leftH = leftSpec ? measureDonutHeight(doc, colW - pad * 2, leftSpec.legend) + pad * 2 : 0;
+  const rightH = rightSpec ? measureDonutHeight(doc, colW - pad * 2, rightSpec.legend) + pad * 2 : 0;
+  return Math.max(leftH, rightH);
+}
+
+// One row of up to 2 donut cards (either slot can be null -- e.g. Servers
+// has no Patch/Software row at all), both sized to the TALLER of the two
+// so their borders line up symmetrically rather than each card hugging its
+// own (possibly shorter) content height.
+function drawDonutRow(doc, y, w, leftSpec, rightSpec) {
+  const gap = 16;
+  const colW = (w - gap) / 2;
+  const rowH = measureDonutRowHeight(doc, w, leftSpec, rightSpec);
+  if (leftSpec) drawDonutCard(doc, MARGIN, y, colW, rowH, leftSpec.title, leftSpec.legend, leftSpec.colors);
+  if (rightSpec) drawDonutCard(doc, MARGIN + colW + gap, y, colW, rowH, rightSpec.title, rightSpec.legend, rightSpec.colors);
+  return y + rowH;
 }
 
 function drawPill(doc, x, y, label, color) {
@@ -197,18 +256,26 @@ function drawPill(doc, x, y, label, color) {
 }
 
 // `h` varies a lot by caller (a tall single score tile vs. 4 small tiles
-// packed into the same overall height) -- font sizes and vertical
-// offsets below are chosen from `h` itself rather than one fixed layout,
-// so a short tile's value/label never collide the way a fixed offset
-// tuned for the tall case did (confirmed live this session: literally
-// overlapping text at the short tile height).
+// packed into the same overall height) -- font sizes are chosen from `h`
+// itself rather than one fixed layout, so a short tile's value/label never
+// collide the way a fixed offset tuned for the tall case did (confirmed
+// live this session: literally overlapping text at the short tile height).
+// The value+label PAIR is vertically centred as one block (not value
+// pinned near the top / label pinned near the bottom, by request -- a
+// taller tile just left a big dead gap in the middle with the number
+// stuck up near the top edge, "looks dumb").
 function drawTile(doc, x, y, w, h, label, value, color) {
   doc.roundedRect(x, y, w, h, 6).fillAndStroke(CARD_BG, BORDER);
   const compact = h < 40;
   const valueFontSize = compact ? 13 : 18;
   const labelFontSize = compact ? 6.5 : 7.5;
-  doc.fillColor(color || INK).font('Helvetica-Bold').fontSize(valueFontSize).text(String(value), x + 4, y + 5, { width: w - 8, align: 'center' });
-  doc.fillColor(MUTED).font('Helvetica').fontSize(labelFontSize).text(label, x + 4, y + h - (compact ? 11 : 18), { width: w - 8, align: 'center' });
+  const valueLineH = valueFontSize * 1.2;
+  const labelLineH = labelFontSize * 1.2;
+  const lineGap = 3;
+  const blockH = valueLineH + lineGap + labelLineH;
+  const blockY = y + Math.max(4, (h - blockH) / 2);
+  doc.fillColor(color || INK).font('Helvetica-Bold').fontSize(valueFontSize).text(String(value), x + 4, blockY, { width: w - 8, align: 'center' });
+  doc.fillColor(MUTED).font('Helvetica').fontSize(labelFontSize).text(label, x + 4, blockY + valueLineH + lineGap, { width: w - 8, align: 'center' });
 }
 
 // Cover header -- page 1 only, full-bleed navy band regardless of the
@@ -225,7 +292,11 @@ function drawTile(doc, x, y, w, h, label, value, color) {
 function drawCoverHeader(doc, report) {
   const pageWidth = doc.page.width;
   const boxX = MARGIN;
-  const boxY = MARGIN;
+  // doc.page.margins.top, not the raw MARGIN constant -- so the reduced
+  // top margin (see buildReportPdf()'s own PDFDocument options) actually
+  // gains page 1 some room too, not just every later page's own `y =
+  // doc.page.margins.top` reset.
+  const boxY = doc.page.margins.top;
   const boxW = pageWidth - MARGIN * 2;
   const pad = 16;
   const rightColW = 150;
@@ -237,7 +308,7 @@ function drawCoverHeader(doc, report) {
   const rightContentH = 26 + 8 + 12; // logo height + gap + date line
   const boxH = Math.max(leftContentH, rightContentH, 70) + pad * 2;
 
-  doc.roundedRect(boxX, boxY, boxW, boxH, 6).lineWidth(1.5).fillAndStroke('#ffffff', BRAND_GREEN);
+  doc.roundedRect(boxX, boxY, boxW, boxH, 6).lineWidth(3).fillAndStroke('#ffffff', BRAND_GREEN);
 
   const rightX = boxX + boxW - pad - rightColW;
   try {
@@ -247,8 +318,11 @@ function drawCoverHeader(doc, report) {
   }
   doc.fillColor(MUTED).font('Helvetica-Bold').fontSize(9.5).text(formatDate(report.asOf), rightX, boxY + pad + 26 + 8, { width: rightColW, align: 'right' });
 
-  doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(20).text(report.siteName, boxX + pad, boxY + pad, { width: leftColW });
-  doc.fillColor(MUTED).font('Helvetica').fontSize(12).text('Managed Services Report', boxX + pad, boxY + pad + titleH + 6, { width: leftColW });
+  // Bottom-left, not top-left, by request -- the logo/date stay top-right
+  // where they were; only the client name + subtitle move.
+  const leftStartY = boxY + boxH - pad - leftContentH;
+  doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(20).text(report.siteName, boxX + pad, leftStartY, { width: leftColW });
+  doc.fillColor(MUTED).font('Helvetica').fontSize(12).text('Managed Services Report', boxX + pad, leftStartY + titleH + 6, { width: leftColW });
 
   doc.fillColor(INK);
   return boxY + boxH + 20;
@@ -263,18 +337,31 @@ function drawSectionHeading(doc, y, text) {
 }
 
 function drawAtAGlance(doc, y, report) {
-  y = drawSectionHeading(doc, y, 'At a Glance');
+  y = drawSectionHeading(doc, y, 'Overall Health View');
   const w = contentWidth(doc);
-  const tileH = 112; // tall enough for the real gauge (scoreW-16 wide, so ~67 tall) + label + pill stacked below it, and for the 4 packed sub-tiles (h ~= 52) to have room for a value + label without colliding
-  const scoreW = 130;
   const gap = 8;
+  // Box is 1/2 the content width now, by request -- but tileH is back to
+  // its ORIGINAL fixed 112 (by request, "set the height to what it was
+  // before the last change") so the Scorecard below it doesn't get pushed
+  // into overrunning the page. A semicircle gauge's own height scales with
+  // whatever width it's drawn at, so stretching it to fill a half-width
+  // box would need far more height than 112 has room for -- instead the
+  // gauge/label/pill group keeps the SAME size it always had (gaugeDrawW
+  // below, the original box's own 130-16 padding) and is centred in the
+  // new wider box, rather than stretched.
+  const scoreW = w / 2 - gap / 2;
+  const tileH = 112;
+  const gaugeDrawW = 114;
+  const gaugeX = MARGIN + (scoreW - gaugeDrawW) / 2;
 
   const status = statusForScore(report.overallScore);
   doc.roundedRect(MARGIN, y, scoreW, tileH, 6).fillAndStroke(CARD_BG, BORDER);
-  const gaugeH = drawGauge(doc, MARGIN + 8, y + 6, scoreW - 16, report.overallScore);
+  const gaugeH = drawGauge(doc, gaugeX, y + 6, gaugeDrawW, report.overallScore);
   doc.fillColor(MUTED).font('Helvetica').fontSize(7.5).text('Overall Health Score', MARGIN, y + 6 + gaugeH - 8, { width: scoreW, align: 'center' });
   drawPill(doc, MARGIN + scoreW / 2 - 28, y + tileH - 20, status.label, status.color);
 
+  // Same 2x2 layout as before, by request -- restW (and so tileW) shrank
+  // to fit, now that scoreW takes half the row instead of a third.
   const restX = MARGIN + scoreW + gap;
   const restW = w - scoreW - gap;
   const tileW = (restW - gap) / 2;
@@ -518,26 +605,65 @@ function drawMonitoringTable(doc, y, detail) {
 function drawDeviceHealth(doc, y, report) {
   y = drawAssetManagementTable(doc, y, report.assetManagementDetail);
   y = drawMonitoringTable(doc, y, report.monitoringDetail);
+  // Extra breathing room before Device Health, by request -- the Monitoring
+  // table's own trailing gap (14px, drawMonitoringTable above) read as too
+  // tight, same "bigger gap for visibility" fix as the Understanding Your
+  // Scores -> Our Recommendations gap elsewhere in this file.
+  y += 16;
   y = drawSectionHeading(doc, y, 'Device Health');
+  // A bit more room under the heading too, by request ("a little more
+  // spacing... top and bottom").
+  y += 10;
   const w = contentWidth(doc);
-  const colW = (w - 16) / 2;
+  // Rows of bordered cards now (drawDonutRow()/drawDonutCard() above), not
+  // bare donuts floating on the page, by request ("put nice boxes around
+  // the Device Health widgets... line them up symmetrically") -- each row's
+  // 2 cards share one height (the taller of the two) so their borders
+  // align, same card look the Cybersecurity Systems section already uses.
+  const rowGap = 14; // was 6 -- more breathing room between rows, by request
+  const bgPad = 10;
 
-  if (report.workstation) {
-    const afterLeft = drawDonut(doc, MARGIN, y, colW, `Workstations -- Patch Management (${report.workstation.patch.score}%)`, report.workstation.patch.legend, PATCH_COLORS);
-    const afterRight = drawDonut(doc, MARGIN + colW + 16, y, colW, `Workstations -- Software (${report.workstation.software.score}%)`, report.workstation.software.legend, SOFTWARE_COLORS);
-    y = Math.max(afterLeft, afterRight) + 6;
+  const row1 = report.workstation
+    ? [
+        { title: `Workstations -- Patch Management (${report.workstation.patch.score}%)`, legend: report.workstation.patch.legend, colors: PATCH_COLORS },
+        { title: `Workstations -- Software (${report.workstation.software.score}%)`, legend: report.workstation.software.legend, colors: SOFTWARE_COLORS },
+      ]
+    : null;
+  const row2 =
+    report.workstation || report.server
+      ? [
+          report.workstation ? { title: `Workstations -- Antivirus (${report.workstation.antivirus.score}%)`, legend: report.workstation.antivirus.legend, colors: ANTIVIRUS_COLORS } : null,
+          report.server ? { title: `Servers -- Antivirus (${report.server.antivirus.score}%)`, legend: report.server.antivirus.legend, colors: ANTIVIRUS_COLORS } : null,
+        ]
+      : null;
+
+  if (row1 || row2) {
+    // Same solid background treatment as Cybersecurity Systems
+    // (drawCybersecurityLayers()), by request -- measured up front (pure
+    // arithmetic, the same measureDonutRowHeight() drawDonutRow() itself
+    // uses, so the two can never drift apart) so it can be drawn FIRST,
+    // with the white cards on top of it after.
+    const row1H = row1 ? measureDonutRowHeight(doc, w, row1[0], row1[1]) : 0;
+    const row2H = row2 ? measureDonutRowHeight(doc, w, row2[0], row2[1]) : 0;
+    const totalH = row1H + (row1 && row2 ? rowGap : 0) + row2H;
+    doc.roundedRect(MARGIN - bgPad, y - bgPad, w + bgPad * 2, totalH + bgPad * 2, 6).fill(BRAND_PURPLE);
+
+    if (row1) {
+      y = drawDonutRow(doc, y, w, row1[0], row1[1]);
+      y += rowGap;
+    }
+    if (row2) {
+      y = drawDonutRow(doc, y, w, row2[0], row2[1]);
+      y += rowGap;
+    }
   }
-  if (report.workstation || report.server) {
-    const leftY = report.workstation ? drawDonut(doc, MARGIN, y, colW, `Workstations -- Antivirus (${report.workstation.antivirus.score}%)`, report.workstation.antivirus.legend, ANTIVIRUS_COLORS) : y;
-    const rightY = report.server ? drawDonut(doc, MARGIN + colW + 16, y, colW, `Servers -- Antivirus (${report.server.antivirus.score}%)`, report.server.antivirus.legend, ANTIVIRUS_COLORS) : y;
-    y = Math.max(leftY, rightY) + 6;
-  }
+
   if (report.server) {
     doc.font('Helvetica-Oblique').fontSize(7.5).fillColor(MUTED).text('Patch Management and Software Management are not handled through this platform for servers.', MARGIN, y, { width: w });
     y += 16;
   }
 
-  return y + 10;
+  return y + 14;
 }
 
 // The full device-by-device table -- its own section now, placed right
@@ -749,31 +875,62 @@ function drawCyberCard(doc, x, y, w, spec) {
 }
 
 function drawCybersecurityLayers(doc, y, vendors) {
-  // No longer guaranteed to start at the top of a fresh page (the forced
-  // addPage() before this call was removed, by request -- this section
-  // now continues straight on from Device Health's own donuts) -- guards
-  // against an orphaned heading alone at the very bottom of a page with
-  // every real card pushed onto the next one.
-  y = ensureSpace(doc, y, 150);
-  y = drawSectionHeading(doc, y, 'Cybersecurity Layers');
+  // Always its own fresh page now, by request -- the earlier "continues
+  // straight on from Device Health when it fits" behaviour is gone.
+  doc.addPage();
+  const pageTop = doc.page.margins.top;
+  const pageBottom = doc.page.height - doc.page.margins.bottom;
+  y = pageTop;
+  y = drawSectionHeading(doc, y, 'Cybersecurity Systems');
   const w = contentWidth(doc);
   const gap = 10;
   const colW = (w - gap) / 2;
   const specs = vendorCardSpecs(vendors);
 
+  // Layout simulated first (pure arithmetic, nothing drawn yet) -- same
+  // shortest-column-first packing as before (fixes a real bug confirmed on
+  // a real PDF: strict i%2 alternation left one tall card, e.g. SaaS Alerts
+  // with several Top Events lines, stranding the next card assigned to
+  // that column far down the page) -- so the solid background behind the
+  // whole grid (by request, "around them and between", like the table
+  // header purple -- not inside each card) can be drawn FIRST, sized to
+  // exactly what each page's own cards need, with the white cards drawn on
+  // top of it after. Grouped into `pages` in case the grid itself ever
+  // needs to spill onto more than one (unusual, but the same per-page
+  // background treatment still applies if it does).
   const colX = [MARGIN, MARGIN + colW + gap];
-  const colY = [y, y];
-  specs.forEach((spec, i) => {
-    const col = i % 2;
-    const x = colX[col];
-    let cy = colY[col];
+  let colY = [y, y];
+  const pages = [[]];
+  specs.forEach((spec) => {
     const h = measureCyberCardHeight(doc, colW, spec);
-    cy = ensureSpace(doc, cy, h);
-    drawCyberCard(doc, x, cy, colW, spec);
+    const col = colY[0] <= colY[1] ? 0 : 1;
+    let cy = colY[col];
+    if (cy + h > pageBottom) {
+      cy = pageTop;
+      colY = [cy, cy];
+      pages.push([]);
+    }
+    pages[pages.length - 1].push({ spec, x: colX[col], y: cy, h });
     colY[col] = cy + h + gap;
   });
 
-  return Math.max(colY[0], colY[1]) + 10;
+  const bgPad = 10;
+  pages.forEach((items, pageIndex) => {
+    if (pageIndex > 0) doc.addPage();
+    if (items.length === 0) return;
+    const top = pageIndex === 0 ? y : pageTop;
+    const bottom = Math.max(...items.map((it) => it.y + it.h));
+    // Top padding now matches the bottom (bgPad both sides), by request --
+    // the cards' own y positions (computed above, starting at `top`) don't
+    // move, only the purple rect's own top edge extends upward by bgPad to
+    // sit evenly above them, same amount of purple as below.
+    doc.roundedRect(MARGIN - bgPad, top - bgPad, w + bgPad * 2, bottom - top + bgPad * 2, 6).fill(BRAND_PURPLE);
+    items.forEach((it) => drawCyberCard(doc, it.x, it.y, colW, it.spec));
+  });
+
+  const lastPageItems = pages[pages.length - 1];
+  const finalY = lastPageItems.length > 0 ? Math.max(...lastPageItems.map((it) => it.y + it.h)) : y;
+  return finalY + bgPad + 10;
 }
 
 // Score-methodology glossary, by request -- fixed reference copy (not
@@ -934,7 +1091,13 @@ function addFootersAndPageNumbers(doc, footerText) {
 
 function buildReportPdf({ report, vendors, commentary }) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: MARGIN, bufferPages: true });
+    // Top margin slightly reduced from the other 3 sides, by request ("a
+    // little bit more room on the page if needed") -- left/right/bottom
+    // stay at MARGIN (everything else on the page is still positioned off
+    // that same constant), only the top -- where every new page's content
+    // actually starts (`y = doc.page.margins.top`, used throughout) -- is
+    // smaller.
+    const doc = new PDFDocument({ size: 'A4', margins: { top: MARGIN - 12, bottom: MARGIN, left: MARGIN, right: MARGIN }, bufferPages: true });
     const chunks = [];
     doc.on('data', (c) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -950,11 +1113,9 @@ function buildReportPdf({ report, vendors, commentary }) {
       y = doc.page.margins.top;
       y = drawDeviceHealth(doc, y, report);
 
-      // No forced page break here, by request -- Cybersecurity Layers
-      // continues straight on from Device Health's own donuts, same page
-      // when it fits (ensureSpace()'s normal per-card page-break logic,
-      // inside drawCybersecurityLayers() itself, still applies if it
-      // doesn't).
+      // Cybersecurity Layers now always starts on its own fresh page, by
+      // request -- drawCybersecurityLayers() calls doc.addPage() itself,
+      // so `y` going in here doesn't matter.
       y = drawCybersecurityLayers(doc, y, vendors);
 
       // Device list and the score-explanations glossary both sit right

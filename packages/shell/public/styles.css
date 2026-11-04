@@ -10074,6 +10074,13 @@ tr.accrued-time-yellow-row th {
   column-gap: 1rem;
   row-gap: 0.75rem;
   align-items: start;
+  /* This grid replaced what used to be a second .mtg-widget-grid row
+     (Devices by Type/Check-in Freshness) -- that class's own margin-top
+     (0.75rem) doesn't apply here any more since this is a different class,
+     which silently dropped the gap between it and the gauge/KPI/Open
+     Alerts row above (confirmed on a real screenshot: the two rows were
+     touching directly). Restated here, same value. */
+  margin-top: 0.75rem;
 }
 .live-reports-overview-grid .live-reports-scorecard-span {
   grid-column: 1 / -1;
@@ -10105,9 +10112,25 @@ tr.accrued-time-yellow-row th {
    text size (not the smaller 0.76rem .live-reports-app-breakdown uses --
    that one's tuned to sit compactly beside a KPI tile, this is its own
    full-width section at the bottom of the page). */
+/* Every section heading on this page (Scorecard, Asset Management,
+   Monitoring, Workstations, Servers, Cybersecurity Systems, Proactive
+   Maintenance -- all share .client-summary-section-heading, a class this
+   page reuses from Client Summary) coloured purple, by request (changed
+   from an earlier green) -- scoped to #results (Live Reports' own results
+   container) so Client Summary's own headings elsewhere on the dashboard
+   are untouched. Same purple as the PDF export's own section headings
+   (pdf-template.js's BRAND_PURPLE, #2E2A7C) -- not a new one-off shade. */
+#results .client-summary-section-heading {
+  color: #2e2a7c;
+}
+
 .live-reports-proactive-maintenance {
   margin: 0.5rem 0;
   padding-left: 1.3rem;
+  /* Smaller text, by request -- same secondary-text size .inline-subtext
+     uses elsewhere on this page (these are standard/unscored activities,
+     not something that needs to read at full body-text weight). */
+  font-size: 0.85em;
   /* 2 columns, by request -- CSS multi-column balances items across both
      automatically (first half left, second half right), same even split
      the PDF's own drawProactiveMaintenanceNote() does by hand. */

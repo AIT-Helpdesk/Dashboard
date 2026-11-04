@@ -323,12 +323,12 @@ function vendorWidgetsHtml(vendors) {
 
 function vendorSummariesHtml(vendors) {
   if (!vendors) return '';
-  // No "Other Systems" section heading anymore, by request -- each
-  // vendor widget's own title (SaaS Alerts/SaaS Protection/...) is sized
-  // up to that heading's own size instead (.live-reports-other-systems
-  // scope in styles.css), carrying the same visual weight a section
-  // heading would have without an extra label line above them.
-  return `<div class="mtg-widget-grid live-reports-other-systems">${vendorWidgetsHtml(vendors)}</div>`;
+  // "Cybersecurity Systems" heading restored, by request (removed earlier
+  // this session, now wanted back) -- same name as the PDF's own section
+  // (pdf-template.js's drawCybersecurityLayers(), renamed from
+  // "Cybersecurity Layers" at the same time) so the two surfaces read as
+  // the same section.
+  return `<h2 class="client-summary-section-heading">Cybersecurity Systems</h2><div class="mtg-widget-grid live-reports-other-systems">${vendorWidgetsHtml(vendors)}</div>`;
 }
 
 export function mount(container) {
