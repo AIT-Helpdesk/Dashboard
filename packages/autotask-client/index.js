@@ -167,6 +167,21 @@ function getClient() {
       // from the default axios export, so this needs its own explicit
       // patch call.
       installErrorSanitizer(client.axios);
+      // autotask-node ties RESPONSE decompression to the same enableCompression
+      // flag we set to false above (it passes `decompress: enableCompression`
+      // to axios.create()) -- so disabling REQUEST gzip (the actual fix needed,
+      // per the comment above) silently also disabled decompressing gzip
+      // RESPONSE bodies. That was invisible for a long time because Autotask
+      // wasn't gzip-compressing responses -- until 2026-11-04/05, when it
+      // started doing so (apparently a new CDN/edge layer in front of their
+      // API, visible in response headers), and every query-based page on this
+      // dashboard (Companies, Service Calls, Resources, everything through
+      // listAll()) started silently getting back 0 rows: axios handed back the
+      // raw, still-gzipped bytes as `response.data`, which don't have an
+      // `.items` property. Confirmed live -- manually gunzipping a real
+      // /Companies/query response body once produced valid JSON. Turned back
+      // on here, independently of the request-side fix above.
+      client.axios.defaults.decompress = true;
       return client;
     });
   }
