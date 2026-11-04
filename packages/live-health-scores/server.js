@@ -5,10 +5,11 @@ const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 // membership test (Companies.classification = "Tech Cover Elite")
 // tc-elite-services/server.js already resolves for its own page.
 const tcEliteServices = require('@dashboard/tc-elite-services/server.js');
-// Reused rather than re-derived -- the exact same Workstation/Server
-// Patch*0.40+Antivirus*0.40+Software*0.20 (Antivirus-only for Servers)
-// Overall Health Score formula Live Reports computes for one client at a
-// time, run here for every TC Elite client at once.
+// Reused rather than re-derived -- the exact same Device Health 60% /
+// Asset Management 20% / Monitoring 20% Overall Health Score formula Live
+// Reports computes for one client at a time, run here for every TC Elite
+// client at once (by request, so this page matches Live Reports exactly
+// instead of its own older devices-only approximation).
 const liveReports = require('@dashboard/live-reports/server.js');
 
 // Live Health Scores -- by request: every current TC Elite client, each
@@ -136,7 +137,12 @@ async function buildRows(force) {
 
     const matchedSiteSet = new Set(matchedSites);
     const devices = allDevices.filter((d) => matchedSiteSet.has(d.site));
-    const { workstation, server, overallScore } = liveReports.computeOverallHealth(devices);
+    // Asset Management/Monitoring resolved first (their own live Datto
+    // calls -- device audits + site alert breakdown, same as Live Reports'
+    // own route), then blended into Overall Health Score exactly the way
+    // Live Reports does for one client, by request.
+    const { assetManagement, monitoring } = await liveReports.computeAssetManagementAndMonitoringScores(devices, force);
+    const { workstation, server, overallScore } = liveReports.computeOverallHealth(devices, { assetManagement, monitoring });
 
     rows.push({
       companyId: company.id,

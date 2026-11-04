@@ -1284,6 +1284,12 @@ function buildReportPdf({ report, vendors, commentary }) {
       // so `y` going in here doesn't matter.
       y = drawCybersecurityLayers(doc, y, vendors);
 
+      // A bit more breathing room than the standard inter-section gap, by
+      // request -- Cybersecurity Systems' own purple background card ends
+      // right at its return value, so the plain gap read as tight next to
+      // Microsoft License Counts' heading immediately below it.
+      y += 14;
+
       // Microsoft License Counts, between Cybersecurity Systems and All
       // Devices now, by request (was after All Devices) --
       // drawM365LicensesTable() already starts its own fresh page when it

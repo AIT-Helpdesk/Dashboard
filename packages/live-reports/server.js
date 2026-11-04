@@ -1115,4 +1115,28 @@ router.post('/pdf', async (req, res) => {
 // Scores fetches and caches getAllDevices() itself.
 router.computeOverallHealth = computeOverallHealth;
 
+// Also reused by Live Health Scores, by request ("change the live health
+// scores page calculations to match the overall health scores
+// calculations of the Live Reports page") -- this is the async half of
+// what this page's own route above does (device audits + site alert
+// breakdown -> Asset Management/Monitoring scores) before it's safe to
+// call the synchronous computeOverallHealth() above with real
+// assetManagement/monitoring values instead of its old devices-only call.
+// Shares this page's own getCachedDeviceAudit()/getCachedSiteAlertsBreakdown()
+// caches (6h/20min TTLs, see their own comments above) rather than each
+// page keeping a separate copy -- the same underlying Datto data either
+// page would otherwise fetch and cache independently.
+async function computeAssetManagementAndMonitoringScores(devices, force) {
+  if (devices.length === 0) return { assetManagement: null, monitoring: null };
+  const siteUid = devices[0].siteUid;
+  const [audits, siteAlertsBreakdown] = await Promise.all([
+    mapWithConcurrency(devices, 5, (d) => getCachedDeviceAudit(d.id, force)),
+    siteUid ? getCachedSiteAlertsBreakdown(siteUid, force) : Promise.resolve(null),
+  ]);
+  const assetManagementDetail = computeAssetManagementDetail(devices, audits);
+  const monitoringDetail = computeMonitoringDetail(siteAlertsBreakdown);
+  return { assetManagement: assetManagementDetail?.score ?? null, monitoring: monitoringDetail?.score ?? null };
+}
+router.computeAssetManagementAndMonitoringScores = computeAssetManagementAndMonitoringScores;
+
 module.exports = router;
