@@ -171,6 +171,52 @@ function proactiveMaintenanceHtml(items) {
     <p class="inline-subtext">Standard activities performed across all managed devices -- not scored.</p>`;
 }
 
+// Microsoft License Counts, by request ("add a set of Microsoft license
+// counts... Use the Product counts from the M365 Contract in Autotask") --
+// the only section on this page backed by a real Autotask Company/Contract
+// lookup rather than a Datto-site-name cross-reference (see server.js's own
+// getM365LicenseCounts() comment for exactly how "current" counts are
+// derived from Autotask's real ContractServiceUnits data, and why an
+// ambiguous/missing company match is surfaced honestly rather than guessed
+// past). Reuses .live-reports-scorecard-table's own look (grey header,
+// centred last column) rather than a new table style.
+function m365LicensesHtml(m365) {
+  if (!m365) return '';
+  const plainHeading = '<h2 class="client-summary-section-heading">Microsoft License Counts</h2>';
+  if (m365.status === 'ambiguous') {
+    return `${plainHeading}<p class="inline-subtext">Multiple Autotask companies match this client's name -- can't show license counts without risking the wrong one. Matches: ${m365.matches.map((m) => escapeHtml(m.companyName)).join(', ')}</p>`;
+  }
+  if (m365.status === 'not-found') {
+    return `${plainHeading}<p class="inline-subtext">No matching Autotask company found for this client.</p>`;
+  }
+  if (m365.status === 'no-contract') {
+    return `${plainHeading}<p class="inline-subtext">No active M365 contract found in Autotask for ${escapeHtml(m365.companyName)}.</p>`;
+  }
+  if (m365.status !== 'ok') {
+    return `${plainHeading}<p class="inline-subtext">Could not load Microsoft license counts.</p>`;
+  }
+  // Literal "(from contract)" now, by request -- not the real contract
+  // name (which could be more than one contract anyway now that several
+  // active M365*-named contracts are combined -- see server.js's own
+  // getM365LicenseCounts()).
+  const heading = '<h2 class="client-summary-section-heading">Microsoft License Counts <span class="inline-subtext">(from contract)</span></h2>';
+  if (!m365.items || m365.items.length === 0) {
+    return `${heading}<p class="inline-subtext">No current license counts found.</p>`;
+  }
+  // No header row, by request ("Product / Count... seems kind of
+  // obvious") -- same showHeader: false the Scorecard table already uses
+  // for the same reason, on the PDF side (drawM365LicensesTable()). Term
+  // (Monthly/Annual) is its own column now, by request -- "--" when
+  // Autotask's own invoiceDescription doesn't name one (a real case, see
+  // parseM365Product()'s own comment).
+  const rows = m365.items.map((item) => `<tr><td>${escapeHtml(item.product)}</td><td>${escapeHtml(item.term || '--')}</td><td>${item.count}</td></tr>`).join('');
+  return `
+    ${heading}
+    <table class="live-reports-scorecard-table">
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 // "Other Systems" section, by request -- one small widget card per vendor
 // that actually has live data worth showing on-screen during a client
 // meeting (no quick-glance badge row above them anymore, by request -- a
@@ -444,7 +490,13 @@ export function mount(container) {
       const params = new URLSearchParams({ site });
       if (exactInput.checked) params.set('exactSite', 'true');
       if (force) params.set('force', 'true');
-      const res = await fetch(`/api/live-reports?${params.toString()}`);
+      // cache: 'no-store' -- defensive, by request (ruling out a stale
+      // browser-cached response as a possible cause of "the page doesn't
+      // reflect what the server now returns" reports). This route's
+      // response changes between calls (force, live data), so it should
+      // never be served from the browser's own HTTP cache regardless of
+      // whatever headers the response happens to carry.
+      const res = await fetch(`/api/live-reports?${params.toString()}`, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       render(data, force);
@@ -465,18 +517,42 @@ export function mount(container) {
   // this placeholder is no longer on the page, so there's nothing to fill in.
   async function loadVendorSummaries(siteName, force) {
     const vendorEl = resultsEl.querySelector('#vendor-summaries');
+    const m365El = resultsEl.querySelector('#m365-licenses');
     if (!vendorEl) return;
     try {
       const params = new URLSearchParams({ siteName });
       if (force) params.set('force', 'true');
-      const res = await fetch(`/api/live-reports/vendors?${params.toString()}`);
+      const res = await fetch(`/api/live-reports/vendors?${params.toString()}`, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       if (!vendorEl.isConnected) return;
-      vendorEl.outerHTML = vendorSummariesHtml(data.vendors);
       currentVendorsData = data.vendors;
+      // "Other Systems" and "Microsoft License Counts" are now rendered in
+      // their OWN try/catch each, by request -- confirmed this session
+      // that a bug in ONE of them (either a thrown exception, or one
+      // vendor's own transient failure) could silently prevent the OTHER
+      // from ever updating, since they used to share one try block and
+      // vendorSummariesHtml() ran first. Each failure is also logged to
+      // the browser console now, so a real bug shows up there instead of
+      // just reading as "nothing happened".
+      try {
+        vendorEl.outerHTML = vendorSummariesHtml(data.vendors);
+      } catch (err) {
+        console.error('Live Reports: failed to render Other Systems:', err);
+        if (vendorEl.isConnected) vendorEl.innerHTML = `<p class="inline-subtext">Could not render Other Systems: ${escapeHtml(err.message)}</p>`;
+      }
+      if (m365El && m365El.isConnected) {
+        try {
+          m365El.innerHTML = m365LicensesHtml(data.vendors.m365Licenses);
+        } catch (err) {
+          console.error('Live Reports: failed to render Microsoft License Counts:', err, data.vendors.m365Licenses);
+          m365El.innerHTML = `<h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext">Could not render license counts: ${escapeHtml(err.message)}</p>`;
+        }
+      }
     } catch (err) {
+      console.error('Live Reports: /vendors request failed:', err);
       if (vendorEl.isConnected) vendorEl.innerHTML = `<p class="inline-subtext">Could not load Other Systems: ${escapeHtml(err.message)}</p>`;
+      if (m365El && m365El.isConnected) m365El.innerHTML = m365LicensesHtml({ status: 'error' });
       // Create PDF still works even when "Other Systems" itself failed to
       // load -- a safe "nothing available" shape for every vendor rather
       // than blocking the whole PDF over one section's own transient
@@ -491,6 +567,7 @@ export function mount(container) {
         dattoEdr: { status: 'not-configured' },
         autoElevate: { status: 'not-configured' },
         huntress: { status: 'not-configured' },
+        m365Licenses: { status: 'error' },
       };
     }
     // Scorecard re-rendered with vendors now available, adding the 2
@@ -616,6 +693,7 @@ export function mount(container) {
       <div id="vendor-summaries"><p class="inline-subtext">Loading Other Systems...</p></div>
       <div class="live-reports-device-list">${deviceList}</div>
       ${data.alertsTruncated ? '<p class="inline-subtext">Note: the account-wide open-alerts list hit its safety cap -- this client\'s alert count may be incomplete.</p>' : ''}
+      <div id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext">Loading...</p></div>
       ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
     `;
     wireDeviceFilters(resultsEl);

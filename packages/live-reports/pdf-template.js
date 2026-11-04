@@ -374,49 +374,99 @@ function drawAtAGlance(doc, y, report) {
   return y + tileH + 18;
 }
 
-function drawCommentaryCards(doc, y, commentary) {
+function measureStatusCardBodyHeight(doc, w, items) {
+  doc.font('Helvetica').fontSize(8);
+  return items && items.length > 0 ? items.reduce((sum, item) => sum + doc.heightOfString(`• ${item}`, { width: w - 16 }) + 3, 6) : 16;
+}
+
+function drawStatusCard(doc, x, y, w, h, title, color, items) {
+  doc.roundedRect(x, y, w, h, 4).fillAndStroke(CARD_BG, BORDER);
+  doc.rect(x, y, w, 20).fill(color);
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9).text(title, x + 8, y + 5);
+  let iy = y + 28;
+  if (items && items.length > 0) {
+    doc.font('Helvetica').fontSize(8).fillColor(INK);
+    items.forEach((item) => {
+      doc.text(`• ${item}`, x + 8, iy, { width: w - 16 });
+      iy = doc.y + 3;
+    });
+  } else {
+    doc.font('Helvetica-Oblique').fontSize(8).fillColor(MUTED).text('Nothing to report', x + 8, iy);
+  }
+}
+
+// Split into separate pieces (Executive Summary / On Track+Action Needed
+// row / Watch), by request -- buildReportPdf() below needs to measure and
+// conditionally reorder the Watch card on its own (moved to the top of the
+// Device Health page when the full page 1 content doesn't fit), which a
+// single monolithic draw-everything function couldn't support.
+function drawExecutiveSummary(doc, y, commentary) {
   const w = contentWidth(doc);
-  doc.roundedRect(MARGIN, y, w, 0, 0); // no-op, keeps style consistent with callout below
-  // Executive Summary callout
   doc.font('Helvetica').fontSize(9);
   const summaryHeight = doc.heightOfString(commentary.executiveSummary, { width: w - 24 }) + 34;
   y = ensureSpace(doc, y, summaryHeight);
   doc.roundedRect(MARGIN, y, w, summaryHeight, 4).fill('#f3f1fb');
   doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(10).text('Executive Summary', MARGIN + 12, y + 10);
   doc.fillColor(INK).font('Helvetica').fontSize(9).text(commentary.executiveSummary, MARGIN + 12, y + 24, { width: w - 24 });
-  y += summaryHeight + 14;
+  return y + summaryHeight + 14;
+}
 
-  const colGap = 10;
-  const colW = (w - colGap * 2) / 3;
-  const cols = [
-    { title: 'On Track', color: BRAND_GREEN, items: commentary.onTrack },
-    { title: 'Watch', color: AMBER, items: commentary.watch },
-    { title: 'Action Needed', color: RED, items: commentary.actionNeeded },
-  ];
+// On Track + Action Needed share a row, by request -- replaces the old
+// 3-equal-column layout, which forced these two up to whatever Watch's own
+// height happened to be (usually the longest list), wasting space in the
+// shorter two. Watch itself is now a separate full-width card (see
+// measureWatchHeight()/drawWatchCard() below) drawn either right after this
+// row (when everything fits on page 1) or at the top of the Device Health
+// page (when it doesn't) -- buildReportPdf() below decides which.
+function measureTopRowHeight(doc, commentary) {
+  const w = contentWidth(doc);
+  const rowGap = 10;
+  const topColW = (w - rowGap) / 2;
+  const onTrackH = measureStatusCardBodyHeight(doc, topColW, commentary.onTrack);
+  const actionH = measureStatusCardBodyHeight(doc, topColW, commentary.actionNeeded);
+  return Math.max(onTrackH, actionH) + 26;
+}
+function drawTopRow(doc, y, commentary) {
+  const w = contentWidth(doc);
+  const rowGap = 10;
+  const topColW = (w - rowGap) / 2;
+  const topRowH = measureTopRowHeight(doc, commentary);
+  y = ensureSpace(doc, y, topRowH);
+  drawStatusCard(doc, MARGIN, y, topColW, topRowH, 'On Track', BRAND_GREEN, commentary.onTrack);
+  drawStatusCard(doc, MARGIN + topColW + rowGap, y, topColW, topRowH, 'Action Needed', RED, commentary.actionNeeded);
+  return y + topRowH;
+}
 
-  doc.font('Helvetica').fontSize(8);
-  const bodyHeights = cols.map((c) => (c.items && c.items.length > 0 ? c.items.reduce((sum, item) => sum + doc.heightOfString(`• ${item}`, { width: colW - 16 }) + 3, 6) : 16));
-  const cardHeight = Math.max(...bodyHeights) + 26;
-  y = ensureSpace(doc, y, cardHeight);
+function measureWatchHeight(doc, commentary) {
+  const w = contentWidth(doc);
+  return measureStatusCardBodyHeight(doc, w, commentary.watch) + 26;
+}
+function drawWatchCard(doc, y, commentary) {
+  const w = contentWidth(doc);
+  const watchH = measureWatchHeight(doc, commentary);
+  y = ensureSpace(doc, y, watchH);
+  drawStatusCard(doc, MARGIN, y, w, watchH, 'Watch', AMBER, commentary.watch);
+  return y + watchH;
+}
 
-  cols.forEach((col, i) => {
-    const x = MARGIN + i * (colW + colGap);
-    doc.roundedRect(x, y, colW, cardHeight, 4).fillAndStroke(CARD_BG, BORDER);
-    doc.rect(x, y, colW, 20).fill(col.color);
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9).text(col.title, x + 8, y + 5);
-    let iy = y + 28;
-    if (col.items && col.items.length > 0) {
-      doc.font('Helvetica').fontSize(8).fillColor(INK);
-      col.items.forEach((item) => {
-        doc.text(`• ${item}`, x + 8, iy, { width: colW - 16 });
-        iy = doc.y + 3;
-      });
-    } else {
-      doc.font('Helvetica-Oblique').fontSize(8).fillColor(MUTED).text('Nothing to report', x + 8, iy);
-    }
-  });
-
-  return y + cardHeight + 18;
+// Scorecard's own row count, without drawing it -- same filter logic
+// drawScorecard() itself uses (kept in sync manually; both are short and
+// read side by side), needed here only to ESTIMATE its height for the
+// page-1-overrun check below. Scorecard's own cell text (area names/%
+// results) is always short, fixed-shape strings that never wrap in
+// practice, so rowHeight*count is a safe estimate, not just a guess.
+function countScorecardRows(report, vendors) {
+  return [
+    report.assetManagement != null,
+    report.monitoring != null,
+    Boolean(report.workstation),
+    Boolean(report.workstation),
+    Boolean(report.workstation),
+    Boolean(report.server),
+    true, // Open Alerts, always shown
+    vendors.saasAlerts.status === 'ok' && vendors.saasAlerts.monitored,
+    vendors.saasProtection.status === 'ok' && vendors.saasProtection.installed,
+  ].filter(Boolean).length;
 }
 
 function drawTable(doc, startY, columns, rows, { rowHeight = 20, headerHeight = 20, showHeader = true } = {}) {
@@ -529,7 +579,11 @@ function drawScorecard(doc, y, report, vendors) {
 
   // No header row, by request -- dropping AREA/RESULT/STATUS is what makes
   // the whole table fit on one page instead of spilling onto a second.
-  return drawTable(doc, y, columns, rows, { rowHeight: 22, headerHeight: 20, showHeader: false }) + 18;
+  // rowHeight trimmed slightly (22 -> 19), by request, to help page 1 fit
+  // without overrunning -- drawTable()'s own per-row height still grows
+  // past this for any row whose real content needs more, so nothing here
+  // risks clipping, just a smaller minimum.
+  return drawTable(doc, y, columns, rows, { rowHeight: 19, headerHeight: 20, showHeader: false }) + 18;
 }
 
 // Bar breakdown replaces the on-screen donut -- a true circular donut is
@@ -666,6 +720,53 @@ function drawDeviceHealth(doc, y, report) {
   return y + 14;
 }
 
+// Microsoft License Counts, by request ("add a set of Microsoft license
+// counts... Use the Product counts from the M365 Contract in Autotask") --
+// right after All Devices. Same status-handling/messaging as the on-screen
+// page's own m365LicensesHtml() (client.js) -- see server.js's own
+// getM365LicenseCounts() for exactly how these counts are derived and why
+// an ambiguous/missing Autotask company match is surfaced honestly rather
+// than guessed past.
+function drawM365LicensesTable(doc, y, m365) {
+  if (!m365) return y;
+  const w = contentWidth(doc);
+  if (m365.status !== 'ok') {
+    const message =
+      m365.status === 'ambiguous'
+        ? "Multiple Autotask companies match this client's name -- can't show license counts without risking the wrong one."
+        : m365.status === 'not-found'
+          ? 'No matching Autotask company found for this client.'
+          : m365.status === 'no-contract'
+            ? `No active M365 contract found in Autotask for ${m365.companyName}.`
+            : 'Could not load Microsoft license counts.';
+    y = ensureSpace(doc, y, 50);
+    y = drawSectionHeading(doc, y, 'Microsoft License Counts');
+    doc.font('Helvetica-Oblique').fontSize(8.5).fillColor(MUTED).text(message, MARGIN, y, { width: w });
+    return y + 20;
+  }
+  if (!m365.items || m365.items.length === 0) return y;
+
+  // Literal "(from contract)" now, by request -- not the real contract
+  // name (which could be more than one contract anyway now that several
+  // active M365*-named contracts are combined -- see server.js's own
+  // getM365LicenseCounts()).
+  y = ensureSpace(doc, y, 60);
+  y = drawSectionHeading(doc, y, 'Microsoft License Counts (from contract)');
+
+  // No header row, by request ("Product / Count... seems kind of
+  // obvious") -- same showHeader: false the Scorecard table already uses
+  // for the same reason. Term (Monthly/Annual) is its own column now, by
+  // request -- "--" when Autotask's own invoiceDescription doesn't name
+  // one (a real case, see parseM365Product()'s own comment, server.js).
+  const columns = [
+    { key: 'product', label: 'PRODUCT', width: w * 0.55 },
+    { key: 'term', label: 'TERM', width: w * 0.25 },
+    { key: 'count', label: 'COUNT', width: w * 0.2 },
+  ];
+  const rows = m365.items.map((item) => ({ product: item.product, term: item.term || '--', count: String(item.count) }));
+  return drawTable(doc, y, columns, rows, { rowHeight: 18, headerHeight: 18, showHeader: false }) + 18;
+}
+
 // The full device-by-device table -- its own section now, placed right
 // before Recommendations (by request), not folded into Device Health
 // above anymore.
@@ -687,11 +788,36 @@ function drawDeviceList(doc, y, report) {
   doc.font('Helvetica-Oblique').fontSize(7.5).fillColor(MUTED).text('Oldest check-in first.', MARGIN, y);
   y += 14;
 
+  // Disk Used % replaces Online, by request (matching Datto's own Storage
+  // Report's own coloured-bar-+-%-used column) -- Device shrunk from 0.28
+  // to 0.22 to make room. Same 15%-free / 85%-used threshold Asset
+  // Management's own disk check already uses (DISK_FREE_PERCENT_THRESHOLD)
+  // for the red cutoff, so a red bar here lines up with what actually
+  // fails that scorecard check; amber is an earlier "getting tight"
+  // warning, not itself a failure.
   const columns = [
-    { key: 'hostname', label: 'DEVICE', width: w * 0.28 },
+    { key: 'hostname', label: 'DEVICE NAME', width: w * 0.22 },
     { key: 'type', label: 'TYPE', width: w * 0.16 },
     { key: 'freshness', label: 'LAST SEEN', width: w * 0.22, render: (doc, x, y, width, row) => doc.fillColor(INK).font('Helvetica').fontSize(8).text(freshnessLabel[row.freshness] || row.freshness, x, y, { width, ellipsis: true }) },
-    { key: 'online', label: 'ONLINE', width: w * 0.1, render: (doc, x, y, width, row) => doc.fillColor(INK).font('Helvetica').fontSize(8).text(row.online ? 'Yes' : 'No', x, y, { width }) },
+    {
+      key: 'diskUsedPercent',
+      label: 'DISK USED',
+      width: w * 0.16,
+      render: (doc, x, y, width, row) => {
+        if (row.diskUsedPercent == null) {
+          doc.fillColor(MUTED).font('Helvetica-Oblique').fontSize(7.5).text('No data', x, y, { width });
+          return;
+        }
+        const pct = row.diskUsedPercent;
+        const color = pct >= 85 ? RED : pct >= 70 ? AMBER : BRAND_GREEN;
+        const barW = Math.min(60, width * 0.5);
+        const barH = 7;
+        const barY = y + 1;
+        doc.rect(x, barY, barW, barH).fill(BORDER);
+        doc.rect(x, barY, Math.max(2, (barW * Math.min(100, pct)) / 100), barH).fill(color);
+        doc.fillColor(INK).font('Helvetica').fontSize(7.5).text(`${pct.toFixed(1)}%`, x + barW + 6, y, { width: width - barW - 6 });
+      },
+    },
     { key: 'lastUser', label: 'LAST USER', width: w * 0.24 },
   ];
   y = drawTable(doc, y, columns, sorted, { rowHeight: 16, headerHeight: 18 });
@@ -1106,11 +1232,46 @@ function buildReportPdf({ report, vendors, commentary }) {
     try {
       let y = drawCoverHeader(doc, report);
       y = drawAtAGlance(doc, y, report);
-      if (commentary) y = drawCommentaryCards(doc, y, commentary);
+
+      // Watch moves to the top of the Device Health page, by request --
+      // but ONLY when the full page 1 content (Executive Summary + On
+      // Track/Action Needed + Watch + Scorecard) genuinely wouldn't all
+      // fit on page 1 anyway; On Track/Action Needed always stay put
+      // either way. Decided by measuring everything up front (nothing
+      // drawn yet), not by reacting after the fact, so On Track/Action
+      // Needed's own position never has to move regardless of which way
+      // this goes.
+      let pendingWatchCommentary = null;
+      if (commentary) {
+        y = drawExecutiveSummary(doc, y, commentary);
+        const topRowH = measureTopRowHeight(doc, commentary);
+        const watchH = measureWatchHeight(doc, commentary);
+        const scorecardH = countScorecardRows(report, vendors) * 19 + 28 + 18;
+        const pageBottom = doc.page.height - doc.page.margins.bottom;
+        const allFitsOnPage1 = y + topRowH + 10 + watchH + 10 + scorecardH <= pageBottom;
+
+        y = drawTopRow(doc, y, commentary);
+        y += 10;
+
+        if (allFitsOnPage1) {
+          y = drawWatchCard(doc, y, commentary);
+          y += 18;
+        } else {
+          pendingWatchCommentary = commentary;
+        }
+      }
       y = drawScorecard(doc, y, report, vendors);
 
       doc.addPage();
       y = doc.page.margins.top;
+      // Watch, if it didn't fit on page 1, leads the Device Health page --
+      // immediately followed by Asset Management (drawDeviceHealth() below
+      // starts with it), not a further page break, by request ("follow it
+      // by the Asset Management section without pushing that to page 3").
+      if (pendingWatchCommentary) {
+        y = drawWatchCard(doc, y, pendingWatchCommentary);
+        y += 18;
+      }
       y = drawDeviceHealth(doc, y, report);
 
       // Cybersecurity Layers now always starts on its own fresh page, by
@@ -1133,6 +1294,11 @@ function buildReportPdf({ report, vendors, commentary }) {
         y += 10;
         y = drawDeviceList(doc, y, report);
       }
+      // Microsoft License Counts, right after All Devices, by request --
+      // drawM365LicensesTable()'s own ensureSpace() handles a page break
+      // naturally if the device list ran to the bottom of its own page,
+      // same as every other section here.
+      y = drawM365LicensesTable(doc, y, vendors.m365Licenses);
 
       doc.addPage();
       y = doc.page.margins.top;

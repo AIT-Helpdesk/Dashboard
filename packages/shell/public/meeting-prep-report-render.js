@@ -683,6 +683,19 @@ export function checkinFreshnessWidget(summary) {
 // copy), with a text filter matching against hostname OR last user, same
 // "Filter by hostname or user" behaviour as the reference screenshot.
 // Wired up by wireDeviceFilters() after this HTML lands in the DOM.
+// Disk Used % column, by request (matching the PDF export's own
+// drawDeviceList() -- same bar + % treatment, same 70/85 thresholds tied to
+// Asset Management's own 15%-free disk check). `d.diskUsedPercent` is only
+// ever populated by Live Reports' own server.js (merged on from the
+// per-device audit data it already fetches for Asset Management scoring) --
+// every other caller of this shared component (Meeting Prep) has no such
+// field, so this reads as "No data" there rather than breaking anything.
+function diskUsedCellHtml(pct) {
+  if (pct == null) return '<span class="muted">No data</span>';
+  const tier = pct >= 85 ? 'bad' : pct >= 70 ? 'warn' : 'good';
+  return `<span class="mtg-disk-used mtg-disk-used--${tier}"><span class="mtg-disk-used-bar"><span class="mtg-disk-used-fill" style="width:${Math.min(100, pct)}%"></span></span><span class="mtg-disk-used-pct">${pct.toFixed(1)}%</span></span>`;
+}
+
 export function deviceListTableHtml(component) {
   if (component.devices.length === 0) {
     return '<p class="mtg-device-table-empty">No devices to list.</p>';
@@ -696,6 +709,7 @@ export function deviceListTableHtml(component) {
       <td>${escapeHtml(d.type)}</td>
       <td>${d.lastSeen ? escapeHtml(formatDateTime(d.lastSeen)) : 'Never reported'}</td>
       <td>${freshnessBadge(d.freshness)}</td>
+      <td>${diskUsedCellHtml(d.diskUsedPercent)}</td>
       <td>${escapeHtml(d.lastUser || 'Unknown')}</td>
     </tr>`
     )
@@ -706,7 +720,7 @@ export function deviceListTableHtml(component) {
     </div>
     <div class="mtg-device-table-wrap">
       <table>
-        <thead><tr><th>Hostname</th><th>Type</th><th>Last Seen</th><th>Status</th><th>Last User</th></tr></thead>
+        <thead><tr><th>Device Name</th><th>Type</th><th>Last Seen</th><th>Status</th><th>Disk Used</th><th>Last User</th></tr></thead>
         <tbody id="${bodyId}">${rows}</tbody>
       </table>
     </div>

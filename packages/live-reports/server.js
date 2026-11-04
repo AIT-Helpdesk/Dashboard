@@ -1,5 +1,5 @@
 const express = require('express');
-const { matchesWildcard, mapWithConcurrency } = require('@dashboard/autotask-client');
+const { matchesWildcard, mapWithConcurrency, getClient, resolveSingleCompany, fetchByFieldIn } = require('@dashboard/autotask-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 // Datto RMM (Live) section, by request -- reuses Meeting Prep's own
 // buildDattoLiveDevicesComponent() in-process (same "reuse the sibling's
@@ -765,15 +765,164 @@ function getProactiveMaintenanceItems() {
   return items.length > 0 ? items : DEFAULT_PROACTIVE_MAINTENANCE_ITEMS;
 }
 
-async function buildVendorSummaries(siteName, force) {
-  const [saasAlerts, saasProtectionSummary, dattoEdrSummary, autoElevateSummary, huntressSummary] = await Promise.all([
-    buildSaasAlertsSummary(siteName, force),
-    buildSaasProtectionSummary(siteName, force),
-    buildDattoEdrSummary(siteName, force),
-    buildAutoElevateSummary(siteName, force),
-    buildHuntressSummary(siteName, force),
+// --- Microsoft License Counts (Autotask M365 contract) -------------------
+// By request ("add a set of Microsoft license counts... Use the Product
+// counts from the M365 Contract in Autotask") -- the ONE place on this page
+// that resolves an actual Autotask Company (everywhere else is purely
+// Datto-site-name-based, by design, see this file's own header). Resolved
+// by NAME only (Live Reports has no stored id mapping) via
+// resolveSingleCompany() -- same "never silently pick a company on an
+// ambiguous/missing match" convention that function's own callers
+// elsewhere on this dashboard already rely on; 'ambiguous'/'not-found' is
+// surfaced honestly, never guessed past.
+//
+// CONFIRMED live this session against a real client's real M365 contract:
+// Autotask has no separate "Product" entity wired into contracts here --
+// the real per-seat counts live on ContractServiceUnits (`units`), one row
+// per billing PERIOD per ContractService, and a client's M365 contract
+// accumulates a NEW ContractService row every time a line's billing
+// changes (a prorate, a plan swap, ...) -- confirmed on one real contract:
+// 182 ContractServices / 565 ContractServiceUnits spanning 3+ years of
+// billing history for what is, product-wise, really only ~8 distinct
+// Microsoft products. So this does NOT read "the contract's product list"
+// directly -- it fetches only the ContractServiceUnits whose own date
+// range covers TODAY (the live/current billing period), groups them by a
+// normalized product name (stripping the "(Monthly)"/"- Prorate from X to
+// Y"/"- Recurring" suffixes Autotask's own invoiceDescription carries),
+// and sums `units` within each group -- that sum IS the client's current
+// seat count for that product, confirmed to match what a human would read
+// off the real contract for "how many of this are we billing right now".
+//
+// A client can have SEVERAL active contracts whose name starts with
+// "M365" at once (by request, "sometimes there's more than one") -- ALL
+// of them are included and their counts combined, not just the first
+// match (a real example: a client could have both "M365" and "M365 -
+// Annual" active simultaneously, each covering a different subset of
+// seats). Inactive contracts are always ignored, by request -- confirmed
+// live against this account's own Contract status picklist: only two
+// values exist here, 0 = Inactive and 1 = Active (no separate
+// "Terminated"/etc. state is actually configured on this account) -- so
+// status === 1 is the complete, correct "active" check, not an
+// approximation. A contract literally named "...(Do Not Use Yet)" is
+// still excluded defensively even though it would also need to be active
+// to reach this filter (confirmed real on one real account, but inactive
+// there -- this is just extra safety against a future active decoy).
+//
+// The billing TERM (Monthly/Annual) is kept as its own column, by
+// request, rather than folded into the product name or merged away --
+// detected from the real invoiceDescription text itself (e.g. "Microsoft
+// 365 Business Standard (Monthly) - Recurring"), null when neither word
+// appears (a real case too -- some lines just say "... - Recurring" with
+// no term at all). A product billed BOTH monthly and annually at once
+// becomes two separate rows (same product, different term), not one
+// merged count, so the breakdown stays honest about what's actually being
+// billed.
+//
+// Backup/storage line items are excluded -- by request this is "Microsoft
+// license counts", and a backup add-on or a per-GB storage line isn't a
+// per-seat license the way the rest of these rows are.
+function parseM365Product(desc) {
+  const raw = desc || '';
+  const term = /\bmonthly\b/i.test(raw) ? 'Monthly' : /\bannual\b/i.test(raw) ? 'Annual' : null;
+  const product = raw
+    .replace(/\s*-\s*Prorate from .+$/i, '')
+    .replace(/\s*-\s*Refund$/i, '')
+    .replace(/\s*-\s*Recurring$/i, '')
+    .replace(/\s*Recurring$/i, '')
+    .replace(/\s*\((Monthly|Annual)\)/gi, '')
+    .replace(/\bMonthly\b|\bAnnual\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return { product, term };
+}
+const M365_EXCLUDE_PATTERN = /backup|storage/i;
+
+async function getM365LicenseCounts(siteName) {
+  const client = await getClient();
+  const companyResult = await resolveSingleCompany(client, siteName);
+  if (companyResult.status !== 'ok') return companyResult; // 'not-found' | 'ambiguous' (+ matches), surfaced as-is
+
+  const contracts = await fetchByFieldIn(client.contracts, 'companyID', [companyResult.company.id]);
+  const matchingContracts = contracts.filter(
+    (c) => c.status === 1 && (c.contractName || '').trim().toLowerCase().startsWith('m365') && !/do not use/i.test(c.contractName || '')
+  );
+  if (matchingContracts.length === 0) return { status: 'no-contract', companyName: companyResult.company.companyName };
+
+  const todayIso = new Date().toISOString();
+  const contractIds = matchingContracts.map((c) => c.id);
+  const [services, currentUnits] = await Promise.all([
+    fetchByFieldIn(client.contractServices, 'contractID', contractIds),
+    fetchByFieldIn(client.contractServiceUnits, 'contractID', contractIds, [
+      { op: 'lte', field: 'startDate', value: todayIso },
+      { op: 'gte', field: 'endDate', value: todayIso },
+    ]),
   ]);
-  return { saasAlerts, saasProtection: saasProtectionSummary, dattoEdr: dattoEdrSummary, autoElevate: autoElevateSummary, huntress: huntressSummary };
+  const serviceById = new Map(services.map((s) => [s.id, s]));
+
+  const counts = new Map(); // "product|term" -> { product, term, count }
+  currentUnits.forEach((u) => {
+    const service = serviceById.get(u.contractServiceID);
+    const rawName = service?.invoiceDescription || service?.name;
+    if (!rawName) return;
+    const { product, term } = parseM365Product(rawName);
+    if (!product || M365_EXCLUDE_PATTERN.test(product)) return;
+    const key = `${product}|${term || ''}`;
+    const existing = counts.get(key) || { product, term, count: 0 };
+    existing.count += u.units || 0;
+    counts.set(key, existing);
+  });
+
+  const items = [...counts.values()]
+    .filter((item) => item.count > 0)
+    .sort((a, b) => b.count - a.count);
+
+  return { status: 'ok', companyName: companyResult.company.companyName, items };
+}
+
+// 20-minute cache, same TTL convention as this file's own Datto/vendor
+// caches -- keyed by siteName since that's the only identifier this page
+// ever has for a client.
+const M365_CACHE_TTL_MS = 20 * 60 * 1000;
+const m365Cache = new Map(); // siteName -> { data, expiresAt }
+async function getCachedM365LicenseCounts(siteName, force) {
+  const cached = m365Cache.get(siteName);
+  if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
+  const data = await getM365LicenseCounts(siteName).catch((err) => {
+    console.error(`Live Reports: M365 license count lookup failed for "${siteName}":`, err.message);
+    return { status: 'error', error: err.message };
+  });
+  m365Cache.set(siteName, { data, expiresAt: Date.now() + M365_CACHE_TTL_MS });
+  return data;
+}
+
+// Each of these 6 calls is caught INDIVIDUALLY, by request (confirmed a
+// real bug this session: a plain Promise.all here meant a single vendor's
+// transient failure -- confirmed live, SaaS Alerts' own external API
+// timing out with a 408 for one real client -- silently took the WHOLE
+// /vendors response down with it, including every OTHER vendor that had
+// nothing wrong with it and the brand new M365 Licenses section, which
+// has nothing to do with SaaS Alerts at all). getCachedM365LicenseCounts()
+// above already catches its OWN errors, but the other 5 buildXSummary()
+// functions don't all guard their own external calls -- caught here
+// instead, once, for all 6, so this page's own "one broken card doesn't
+// take down the page" convention actually holds for this route too.
+function catchVendorError(promise, label) {
+  return promise.catch((err) => {
+    console.error(`Live Reports: ${label} summary failed:`, err.message);
+    return { status: 'error', error: err.message };
+  });
+}
+
+async function buildVendorSummaries(siteName, force) {
+  const [saasAlerts, saasProtectionSummary, dattoEdrSummary, autoElevateSummary, huntressSummary, m365Licenses] = await Promise.all([
+    catchVendorError(buildSaasAlertsSummary(siteName, force), 'SaaS Alerts'),
+    catchVendorError(buildSaasProtectionSummary(siteName, force), 'SaaS Protection'),
+    catchVendorError(buildDattoEdrSummary(siteName, force), 'Datto EDR'),
+    catchVendorError(buildAutoElevateSummary(siteName, force), 'AutoElevate'),
+    catchVendorError(buildHuntressSummary(siteName, force), 'Huntress'),
+    getCachedM365LicenseCounts(siteName, force),
+  ]);
+  return { saasAlerts, saasProtection: saasProtectionSummary, dattoEdr: dattoEdrSummary, autoElevate: autoElevateSummary, huntress: huntressSummary, m365Licenses };
 }
 
 router.get('/', async (req, res) => {
@@ -830,6 +979,23 @@ router.get('/', async (req, res) => {
     // own call site. allowedNames (classification filter) is always null
     // here -- Live Reports has no classification selector of its own.
     const dattoLive = meetingPrep.buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exactSite, null);
+    // Disk Used % merged onto each device row, by request (matching Datto's
+    // own Storage Report, which shows a coloured bar + % used per drive) --
+    // `audits` above is already fetched (one per device, for Asset
+    // Management's own disk-free check), so this is free, no extra API
+    // calls. Matched by device id (buildDattoLiveDevicesComponent()'s own
+    // rows carry the same `id` mapDeviceSummary() set), not assumed
+    // index-aligned with `audits` -- that function does its own internal
+    // site filter/sort, which may not match this route's own `devices`
+    // order.
+    if (dattoLive) {
+      const auditByDeviceId = new Map(devices.map((d, i) => [d.id, audits[i]]));
+      dattoLive.devices = dattoLive.devices.map((row) => {
+        const audit = auditByDeviceId.get(row.id);
+        const diskUsedPercent = audit?.systemDiskFreePercent != null ? 100 - audit.systemDiskFreePercent : null;
+        return { ...row, diskUsedPercent };
+      });
+    }
 
     const siteName = devices[0].site;
 

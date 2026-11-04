@@ -10201,6 +10201,35 @@ tr.accrued-time-yellow-row th {
   color: var(--muted);
   font-size: 0.85rem;
 }
+/* Disk Used % column, by request -- same bar + % treatment and 70/85
+   thresholds as the PDF export's own drawDeviceList() column (see
+   deviceListTableHtml()'s own comment, meeting-prep-report-render.js). */
+.mtg-disk-used {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+.mtg-disk-used-bar {
+  width: 50px;
+  height: 7px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--border);
+}
+.mtg-disk-used-fill {
+  display: block;
+  height: 100%;
+}
+.mtg-disk-used--good .mtg-disk-used-fill {
+  background: #16a34a;
+}
+.mtg-disk-used--warn .mtg-disk-used-fill {
+  background: #d97706;
+}
+.mtg-disk-used--bad .mtg-disk-used-fill {
+  background: #dc2626;
+}
 .mtg-devicetype-caveat {
   margin-top: 0.6rem;
 }
