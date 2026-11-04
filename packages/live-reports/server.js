@@ -1,5 +1,5 @@
 const express = require('express');
-const { matchesWildcard } = require('@dashboard/autotask-client');
+const { matchesWildcard, mapWithConcurrency } = require('@dashboard/autotask-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 // Datto RMM (Live) section, by request -- reuses Meeting Prep's own
 // buildDattoLiveDevicesComponent() in-process (same "reuse the sibling's
@@ -49,17 +49,23 @@ const { hasAnthropicCredentials, buildCommentary } = require('./ai-commentary.js
 // Two figures from the real PDF -- Asset Management % and Monitoring %
 // (the gauge's own top two figures in Datto's canned report) -- are
 // Datto's own composite scores from its canned report engine; no v2 REST
-// endpoint returns them directly (confirmed -- nothing in lib.js's own
-// account/device/filter endpoints carries anything like them), and the
-// device/disk/memory/warranty data Datto's OWN documented Asset Management
-// formula needs isn't available from the bulk device list either (only via
-// an expensive per-device "full audit" call, one per device). By request,
-// APPROXIMATED here instead of left out or sourced from Datto's own
-// already-ingested PDF numbers (the other option discussed, rejected for
-// staying live) -- see assetManagementScore()/monitoringScore() below for
-// what each one actually checks; neither is a re-creation of Datto's real
-// formula, both are live-computed proxies from what the v2 API actually
-// exposes. The gauge/Scorecard's own Overall Health Score blends these two
+// endpoint returns either one directly as a ready-made number. CONFIRMED
+// this session, replacing an earlier narrower approximation: Datto's own
+// real 4-factor Asset Management formula (Warranty Status/Disk Capacity/
+// Memory Capacity/OS Support, straight-averaged -- see Datto's own glossary
+// text in pdf-template.js's SCORE_EXPLANATIONS) CAN be rebuilt live --
+// warrantyDate is a free field already on the bulk device list (no extra
+// call), and disk-free%/memory come from the per-device
+// /v2/audit/device/{deviceUid} endpoint (confirmed no bulk/list variant
+// exists -- one extra API call PER DEVICE, bounded concurrency + a
+// long-lived per-device cache below, so this cost is paid once per device
+// per cache window, not on every page view). Monitoring's real formula is
+// resolution-ratio per alert-priority tier (Score = (Raised-Unresolved)/
+// Raised*100, averaged across Critical/High/Moderate/Low/Information),
+// confirmed live via the site-scoped /v2/site/{siteUid}/alerts/open|
+// resolved endpoints (see datto-rmm/lib.js's own getSiteAlertsBreakdown()).
+// See assetManagementScore()/monitoringScore() below for the exact
+// implementation of each. The gauge/Scorecard's own Overall Health Score blends these two
 // in alongside the existing "Device Health Score Formula" (by request,
 // "use them in the Health calculation... bring it up to what Datto RMM
 // has"): each of Workstations/Servers gets its own Group Health Score
@@ -118,6 +124,48 @@ async function getCachedAlerts(force) {
       });
   }
   return alertsInFlight;
+}
+
+// Per-device audit cache (disk free%/memory for Asset Management), keyed by
+// deviceUid -- deliberately a SEPARATE, much longer-lived cache from
+// devicesCache above: that one call is one full device-list fetch regardless
+// of how many clients get viewed; this one is one API call PER DEVICE (no
+// bulk variant exists -- see getDeviceAudit() in datto-rmm/lib.js), so a
+// client with 60 devices costs 60 real calls on a cold cache. A 6-hour TTL
+// (vs the other caches' 20 minutes) because disk-free%/memory genuinely
+// don't change meaningfully within a day, and because re-warming all of
+// them on every 20-minute window for every client viewed would add up fast.
+// A single device's audit failing is caught and cached as null (one device
+// dropping out of these 2 checks, not the whole report failing) -- same
+// "degrade quietly" convention as this file's other per-item fetches.
+const DEVICE_AUDIT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const deviceAuditCache = new Map(); // deviceUid -> { data, expiresAt }
+async function getCachedDeviceAudit(deviceUid, force) {
+  const cached = deviceAuditCache.get(deviceUid);
+  if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
+  const data = await dattoRmm.getDeviceAudit(deviceUid).catch((err) => {
+    console.error(`Live Reports: device audit failed (${deviceUid}):`, err.message);
+    return null;
+  });
+  deviceAuditCache.set(deviceUid, { data, expiresAt: Date.now() + DEVICE_AUDIT_CACHE_TTL_MS });
+  return data;
+}
+
+// Site-scoped alert Raised/Unresolved-by-priority breakdown (for Monitoring),
+// keyed by siteUid -- its own cache, same 20-minute TTL as devicesCache/
+// alertsCache above (cheap: bounded to one site's own alert volume, not the
+// whole account).
+const SITE_ALERTS_BREAKDOWN_CACHE_TTL_MS = DATTO_CACHE_TTL_MS;
+const siteAlertsBreakdownCache = new Map(); // siteUid -> { data, expiresAt }
+async function getCachedSiteAlertsBreakdown(siteUid, force) {
+  const cached = siteAlertsBreakdownCache.get(siteUid);
+  if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
+  const data = await dattoRmm.getSiteAlertsBreakdown(siteUid).catch((err) => {
+    console.error(`Live Reports: site alerts breakdown failed (${siteUid}):`, err.message);
+    return null;
+  });
+  siteAlertsBreakdownCache.set(siteUid, { data, expiresAt: Date.now() + SITE_ALERTS_BREAKDOWN_CACHE_TTL_MS });
+  return data;
 }
 
 // "Workstation" = Desktop + Laptop, "Server" = Server -- matches the real
@@ -225,20 +273,35 @@ function groupSummary(devices, weights = { patch: 0.4, antivirus: 0.4, software:
   };
 }
 
-// Asset Management proxy, by request ("bring it up to what Datto RMM
-// has... use them in the Health calculation") -- live-computed from raw
-// Datto API data only, NOT a re-creation of Datto's own documented
-// 4-factor formula (Warranty Status/Disk Capacity/Memory Capacity/OS
-// Support -- see the "Understanding Your Scores" glossary text in
-// pdf-template.js). Warranty, disk and memory aren't available from the
-// bulk device list at all -- only via an expensive per-device "full audit"
-// call, one per device, which Datto's own report avoids too (it's
-// computed account-side, not per-request). This checks the one factor
-// that genuinely IS available live: whether each device's own reported OS
-// is still a supported version. Narrower than Datto's real check, by
-// explicit choice (discussed directly) over either reusing Datto's own
-// already-ingested PDF numbers (stale, and not every client has one) or
-// leaving this blank.
+// Asset Management, Datto's own real 4-factor formula, by request ("I
+// found the Asset Management and Monitoring info in Datto's Executive
+// Summary Report... can you see if you can do something getting this info
+// from Datto RMM") -- CONFIRMED live this session, replacing the earlier
+// OS-support-only approximation. Datto's own canned report shows 4
+// equally-weighted Passed/Failed checks, straight-averaged for the section
+// score (confirmed off real screenshots of that report):
+//   1. Device must have at least 15% free space on its System Drive
+//   2. Device must have at least 7.8 GB of memory installed
+//   3. Windows OS must still be supported by Microsoft
+//   4. Device must be within warranty
+// Each check scores independently as (% of devices with data on that check
+// that PASS it) -- a device/client with no data at all for one check (e.g.
+// warrantyDate never populated in Datto RMM for this client) drops that
+// check out of the average entirely rather than counting it as a 0%, same
+// "missing data isn't evidence of failure" reasoning isOsSupported() below
+// already used before this rewrite.
+//
+// Disk-free%/memory need one /v2/audit/device/{deviceUid} call PER DEVICE
+// (confirmed no bulk/list variant exists) -- fetched with bounded
+// concurrency and a long-lived per-device cache (getCachedDeviceAudit()
+// above) so this cost lands once per device per 6-hour window, not on
+// every report view. Warranty uses the free `warrantyDate` field already on
+// the bulk device list (no extra call).
+//
+// Datto's own real "unsupported OS" definition, confirmed off its own
+// canned report: Windows 8.1 and under, or Windows Server 2012/2012 R2 and
+// under -- Windows 10 is explicitly NOT included (unlike this list's own
+// earlier version, which wrongly flagged it as EOL).
 const OS_EOL_PATTERNS = [
   /windows\s*xp/i,
   /windows\s*vista/i,
@@ -246,34 +309,76 @@ const OS_EOL_PATTERNS = [
   /windows\s*8(\.1)?\b/i,
   /windows\s*server\s*2003/i,
   /windows\s*server\s*2008/i,
-  /windows\s*server\s*2012\b/i, // matches both plain 2012 and "2012 R2" -- both EOL Oct 2023
-  /windows\s*10\b/i, // EOL Oct 2025
+  /windows\s*server\s*2012\b/i, // matches both plain 2012 and "2012 R2"
 ];
 function isOsSupported(osString) {
   if (!osString) return true; // no OS data at all is a gap in what we can see, not evidence the device is unsupported -- doesn't penalize the score
   return !OS_EOL_PATTERNS.some((re) => re.test(osString));
 }
-function assetManagementScore(devices) {
-  if (devices.length === 0) return null;
-  const supported = devices.filter((d) => isOsSupported(d.os)).length;
-  return Math.round((supported / devices.length) * 100);
+
+const DISK_FREE_PERCENT_THRESHOLD = 15;
+const MEMORY_GB_THRESHOLD = 7.8;
+
+function passRateOf(items, predicate) {
+  if (items.length === 0) return null; // no data at all for this check -- drop it from the average, don't score it 0%
+  return Math.round((items.filter(predicate).length / items.length) * 100);
 }
 
-// Monitoring proxy, by request -- same "live, not a Datto re-creation"
-// choice as Asset Management above. Datto's own glossary: "influenced by
-// the open monitoring alerts... a higher priority is reflected by an
-// increased weight... a lower score means issues are seen but not yet
-// resolved" -- implemented as a straightforward weighted-penalty model
-// (100 minus a priority-weighted sum of this site's own open alerts,
-// floored at 0), not Datto's real undocumented formula. Needs EVERY
-// priority for this site, not just the Critical/High this page's own
-// alertsByPriority already uses -- see getOpenAlerts()'s `allAlerts`
-// field (added this session specifically for this).
-const ALERT_PRIORITY_WEIGHTS = { Critical: 10, High: 5, Moderate: 2, Low: 0.5, Information: 0.1 };
-function monitoringScore(alertsForSite) {
-  if (alertsForSite.length === 0) return 100;
-  const penalty = alertsForSite.reduce((sum, a) => sum + (ALERT_PRIORITY_WEIGHTS[a.priority] ?? 1), 0);
-  return Math.max(0, Math.round(100 - penalty));
+// Returns the FULL per-check breakdown now, not just the rolled-up number --
+// by request ("I thought you were going to give me some widgets and device
+// info"), same reasoning this page already follows for every other section
+// (the Scorecard shows a rolled-up % too, but Workstations/Servers below it
+// show the real per-category breakdown, not just their own score). `audits`
+// is the already-fetched (and cached) /v2/audit/device/{deviceUid} result
+// per device -- fetched once by the route below (mapWithConcurrency +
+// getCachedDeviceAudit()), passed in here rather than re-fetched, so this
+// function itself is synchronous. Each check that genuinely has no data at
+// all (`total: 0`) still appears in `checks` (so the on-screen/PDF table can
+// show "no data" for it) but its `score` is null and it's excluded from the
+// section average, same "missing data isn't evidence of failure" reasoning
+// as before this rewrite.
+function computeAssetManagementDetail(devices, audits) {
+  if (devices.length === 0) return null;
+
+  const withDisk = audits.filter((a) => a?.systemDiskFreePercent != null);
+  const withMemory = audits.filter((a) => a?.memoryGB != null);
+  const withWarranty = devices.filter((d) => d.warrantyDate);
+
+  const checks = [
+    { key: 'os', label: 'OS still supported by Microsoft', total: devices.length, passed: devices.filter((d) => isOsSupported(d.os)).length },
+    { key: 'disk', label: `At least ${DISK_FREE_PERCENT_THRESHOLD}% free space on System Drive`, total: withDisk.length, passed: withDisk.filter((a) => a.systemDiskFreePercent >= DISK_FREE_PERCENT_THRESHOLD).length },
+    { key: 'memory', label: `At least ${MEMORY_GB_THRESHOLD} GB of memory installed`, total: withMemory.length, passed: withMemory.filter((a) => a.memoryGB >= MEMORY_GB_THRESHOLD).length },
+    { key: 'warranty', label: 'Device is within warranty', total: withWarranty.length, passed: withWarranty.filter((d) => new Date(d.warrantyDate).getTime() > Date.now()).length },
+  ].map((c) => ({ ...c, score: c.total > 0 ? Math.round((c.passed / c.total) * 100) : null }));
+
+  const scored = checks.filter((c) => c.score !== null);
+  const score = scored.length > 0 ? Math.round(scored.reduce((sum, c) => sum + c.score, 0) / scored.length) : null;
+  return { score, checks };
+}
+
+// Monitoring, Datto's own real resolution-ratio-per-priority-tier formula,
+// confirmed off its own canned report's "Total Alerts by Priority" table --
+// replaces the earlier weighted-open-alert-count-penalty approximation.
+// Per tier: Score = (Raised - Unresolved) / Raised * 100 (100% when nothing
+// was ever raised at that tier -- nothing to resolve reads as perfect,
+// matching every real example row on Datto's own report). Section score is
+// the straight average across all 5 tiers, same as Datto's own report.
+// Returns the full per-tier breakdown (Raised/Resolved/Unresolved/Score),
+// same "give the real widget, not just the rolled-up %" reasoning as
+// computeAssetManagementDetail() above. `breakdown` comes from
+// getCachedSiteAlertsBreakdown() -- see datto-rmm/lib.js's own
+// getSiteAlertsBreakdown() for exactly what it fetches.
+const MONITORING_PRIORITIES = ['Critical', 'High', 'Moderate', 'Low', 'Information'];
+function computeMonitoringDetail(breakdown) {
+  if (!breakdown) return null;
+  const byPriority = MONITORING_PRIORITIES.map((priority) => {
+    const { raised = 0, unresolved = 0 } = breakdown[priority] || {};
+    const resolved = raised - unresolved;
+    const score = raised > 0 ? Math.round((resolved / raised) * 100) : 100;
+    return { priority, raised, resolved, unresolved, score };
+  });
+  const score = Math.round(byPriority.reduce((sum, p) => sum + p.score, 0) / byPriority.length);
+  return { score, byPriority };
 }
 
 // Workstation/Server split + Overall Health Score for an already
@@ -282,13 +387,16 @@ function monitoringScore(alertsForSite) {
 // (same "reuse the sibling's own function, don't duplicate it"
 // convention this page itself followed for Meeting Prep's
 // buildDattoLiveDevicesComponent()) instead of re-deriving it a second
-// way. `alertsForSite` is OPTIONAL and OPT-IN, by design -- Live Health
-// Scores' own bulk per-TC-Elite-client pass calls this with just
-// `devices` (unchanged from before this session), so it keeps getting the
-// exact same 2-component formula it always has; only a caller that
-// explicitly passes this site's own full alert list (Live Reports) gets
-// Asset Management/Monitoring blended in too.
-function computeOverallHealth(devices, alertsForSite = null) {
+// way. `assetManagement`/`monitoring` are OPTIONAL and OPT-IN, by design --
+// Live Health Scores' own bulk per-TC-Elite-client pass calls this with
+// just `devices` (unchanged from before this session), so it keeps
+// getting the exact same 2-component formula it always has. Only a caller
+// that's already computed these two live scores itself (Live Reports --
+// both now need real async API calls of their own, see
+// assetManagementScore()/monitoringScore() above, so they're resolved by
+// the caller BEFORE calling this, not inside it) passes them in, and this
+// function stays fully synchronous either way.
+function computeOverallHealth(devices, { assetManagement = null, monitoring = null } = {}) {
   const workstations = devices.filter((d) => WORKSTATION_TYPES.has(d.deviceType));
   const servers = devices.filter((d) => SERVER_TYPES.has(d.deviceType));
   const workstation = groupSummary(workstations);
@@ -298,25 +406,19 @@ function computeOverallHealth(devices, alertsForSite = null) {
   // Antivirus 0.40/Software 0.20 formula unchanged.
   const server = groupSummary(servers, { patch: 0, antivirus: 1, software: 0 });
 
-  let assetManagement = null;
-  let monitoring = null;
-  if (alertsForSite !== null) {
-    assetManagement = assetManagementScore(devices);
-    monitoring = monitoringScore(alertsForSite);
-    // Server Score broadened, by request -- Antivirus alone (the only
-    // thing groupSummary() above could score it on, Patch/Software not
-    // being Datto-managed for servers) was judged too narrow a signal on
-    // its own, so Asset Management/Monitoring are blended in here too,
-    // ALONGSIDE Antivirus (not replacing it) -- same 60/20/20 weighting as
-    // the top-level Overall Health Score below, for the same "keep the
-    // most data-rich real signal dominant" reasoning. `server.healthScore`
-    // going in here is still just the unrounded Antivirus score
-    // (groupSummary's own weights above were {antivirus: 1}, everything
-    // else 0), captured before it's overwritten.
-    if (server) {
-      const antivirusComponent = server.healthScore;
-      server.healthScore = antivirusComponent * 0.6 + assetManagement * 0.2 + monitoring * 0.2;
-    }
+  // Server Score broadened, by request -- Antivirus alone (the only thing
+  // groupSummary() above could score it on, Patch/Software not being
+  // Datto-managed for servers) was judged too narrow a signal on its own,
+  // so Asset Management/Monitoring are blended in here too, ALONGSIDE
+  // Antivirus (not replacing it), each only when actually available (same
+  // re-normalizing weight filter as the top-level blend below, not a
+  // silent 0 for a missing component).
+  if (server) {
+    const serverComponents = [{ score: server.healthScore, weight: 0.6 }];
+    if (assetManagement !== null) serverComponents.push({ score: assetManagement, weight: 0.2 });
+    if (monitoring !== null) serverComponents.push({ score: monitoring, weight: 0.2 });
+    const serverWeight = serverComponents.reduce((sum, c) => sum + c.weight, 0);
+    server.healthScore = serverComponents.reduce((sum, c) => sum + c.score * c.weight, 0) / serverWeight;
   }
 
   // Server weighted 60/Workstation 40 when both exist (servers carry more
@@ -330,19 +432,15 @@ function computeOverallHealth(devices, alertsForSite = null) {
   else if (server) deviceHealthScore = server.healthScore;
   else if (workstation) deviceHealthScore = workstation.healthScore;
 
-  if (alertsForSite === null) {
-    const overallScore = deviceHealthScore !== null ? Math.round(deviceHealthScore) : null;
-    return { workstation, server, overallScore };
-  }
-
   // Device Health 60 / Asset Management 20 / Monitoring 20, by request --
   // the existing patch/antivirus/software blend still carries the most
   // weight (it's the most data-rich of the three), with these two newer,
-  // narrower proxies each contributing a meaningful but smaller share.
+  // live-computed scores each contributing a meaningful but smaller share.
   // Any component with no data (e.g. a client with no devices of EITHER
-  // matched type, so deviceHealthScore is null) drops out of the blend and
-  // the remaining weights re-normalize, rather than silently treating a
-  // missing score as a 0.
+  // matched type, so deviceHealthScore is null, or no assetManagement/
+  // monitoring passed in at all -- the Live Health Scores caller) drops
+  // out of the blend and the remaining weights re-normalize, rather than
+  // silently treating a missing score as a 0.
   const components = [
     { score: deviceHealthScore, weight: 0.6 },
     { score: assetManagement, weight: 0.2 },
@@ -698,12 +796,25 @@ router.get('/', async (req, res) => {
     }
 
     const alerts = alertsResult.alerts.filter((a) => matchesSite(a.siteName));
-    // Every priority, not just the Critical/High `alerts` above -- feeds
-    // the Monitoring score only (see computeOverallHealth()'s own
-    // comment); alertsByPriority/alertsTotalCount below stay Critical/High
-    // only, unchanged.
-    const allAlertsForSite = (alertsResult.allAlerts || []).filter((a) => matchesSite(a.siteName));
-    const { workstation, server, overallScore, assetManagement, monitoring } = computeOverallHealth(devices, allAlertsForSite);
+    // alertsByPriority/alertsTotalCount below stay Critical/High only,
+    // unchanged -- Monitoring's own real per-priority breakdown (ALL 5
+    // tiers, Raised/Unresolved, not just Critical/High open counts) comes
+    // from the site-scoped fetch below instead, keyed by siteUid (every
+    // matched device shares the same one). Device audits (disk/memory, one
+    // call per device) and the site's alert breakdown are fetched here,
+    // once, and handed to both the rolled-up score AND the full breakdown
+    // the on-screen/PDF widgets show -- neither re-fetches what the other
+    // already has.
+    const siteUid = devices[0].siteUid;
+    const [audits, siteAlertsBreakdown] = await Promise.all([
+      mapWithConcurrency(devices, 5, (d) => getCachedDeviceAudit(d.id, force)),
+      siteUid ? getCachedSiteAlertsBreakdown(siteUid, force) : Promise.resolve(null),
+    ]);
+    const assetManagementDetail = computeAssetManagementDetail(devices, audits);
+    const monitoringDetail = computeMonitoringDetail(siteAlertsBreakdown);
+    const assetManagement = assetManagementDetail?.score ?? null;
+    const monitoring = monitoringDetail?.score ?? null;
+    const { workstation, server, overallScore } = computeOverallHealth(devices, { assetManagement, monitoring });
 
     const alertsByPriority = ['Critical', 'High'].map((priority) => ({ priority, count: alerts.filter((a) => a.priority === priority).length }));
 
@@ -737,6 +848,8 @@ router.get('/', async (req, res) => {
       server,
       assetManagement,
       monitoring,
+      assetManagementDetail,
+      monitoringDetail,
       proactiveMaintenance: getProactiveMaintenanceItems(),
       alertsByPriority,
       alertsTotalCount: alerts.length,

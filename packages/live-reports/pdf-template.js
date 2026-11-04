@@ -332,12 +332,19 @@ function drawCommentaryCards(doc, y, commentary) {
   return y + cardHeight + 18;
 }
 
-function drawTable(doc, startY, columns, rows, { rowHeight = 20, headerHeight = 20 } = {}) {
+function drawTable(doc, startY, columns, rows, { rowHeight = 20, headerHeight = 20, showHeader = true } = {}) {
   const x = MARGIN;
   const width = contentWidth(doc);
   let y = startY;
 
+  // showHeader: false, by request, for the Scorecard specifically --
+  // dropping its AREA/RESULT/STATUS header row saves just enough height
+  // for the whole table to fit on one page instead of spilling a row or
+  // two onto a second. A no-op here (not skipped at the call site) so the
+  // page-break continuation below doesn't re-draw a header that was never
+  // shown in the first place.
   const drawHeader = () => {
+    if (!showHeader) return;
     doc.rect(x, y, width, headerHeight).fill(BRAND_PURPLE);
     doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
     let cx = x;
@@ -348,7 +355,7 @@ function drawTable(doc, startY, columns, rows, { rowHeight = 20, headerHeight = 
     y += headerHeight;
   };
 
-  y = ensureSpace(doc, y, headerHeight + rowHeight);
+  y = ensureSpace(doc, y, (showHeader ? headerHeight : 0) + rowHeight);
   drawHeader();
 
   rows.forEach((row, i) => {
@@ -433,7 +440,9 @@ function drawScorecard(doc, y, report, vendors) {
       vendors.saasProtection.installed && { area: 'SaaS Protection (Backup)', result: `${vendors.saasProtection.backupPercentage}%`, status: scorecardStatus(vendors.saasProtection.backupPercentage) },
   ].filter(Boolean);
 
-  return drawTable(doc, y, columns, rows, { rowHeight: 22, headerHeight: 20 }) + 18;
+  // No header row, by request -- dropping AREA/RESULT/STATUS is what makes
+  // the whole table fit on one page instead of spilling onto a second.
+  return drawTable(doc, y, columns, rows, { rowHeight: 22, headerHeight: 20, showHeader: false }) + 18;
 }
 
 // Bar breakdown replaces the on-screen donut -- a true circular donut is
@@ -471,7 +480,44 @@ const SOFTWARE_COLORS = { Compliant: '#16a34a', 'Not Compliant': '#f59e0b', Unma
 // right under these on the same page; moved to its own drawDeviceList()
 // below, now placed right before Recommendations instead (by request),
 // so this function stops reaching into report.dattoLive at all.
+// Asset Management / Monitoring breakdown tables, by request ("I thought
+// you were going to give me some widgets and device info") -- same data as
+// client.js's own assetManagementTableHtml()/monitoringTableHtml(), drawn
+// here with the existing generic drawTable() helper instead of a second
+// table implementation. Placed at the top of the Device Health page (see
+// buildReportPdf() below) -- that page already starts fresh, and these two
+// scores feed directly into the same Overall Health Score the donuts below
+// them are also part of.
+function drawAssetManagementTable(doc, y, detail) {
+  if (!detail || !detail.checks || detail.checks.length === 0) return y;
+  y = drawSectionHeading(doc, y, `Asset Management${detail.score != null ? ` (${detail.score}%)` : ''}`);
+  const w = contentWidth(doc);
+  const columns = [
+    { key: 'label', label: 'CHECK', width: w * 0.55 },
+    { key: 'passedOf', label: 'PASSED', width: w * 0.25 },
+    { key: 'score', label: 'SCORE', width: w * 0.2 },
+  ];
+  const rows = detail.checks.map((c) => ({ label: c.label, passedOf: `${c.passed} / ${c.total}`, score: c.score == null ? 'No data' : `${c.score}%` }));
+  return drawTable(doc, y, columns, rows, { rowHeight: 18, headerHeight: 18 }) + 14;
+}
+function drawMonitoringTable(doc, y, detail) {
+  if (!detail || !detail.byPriority) return y;
+  y = drawSectionHeading(doc, y, `Monitoring (${detail.score}%)`);
+  const w = contentWidth(doc);
+  const columns = [
+    { key: 'priority', label: 'PRIORITY', width: w * 0.3 },
+    { key: 'raised', label: 'RAISED', width: w * 0.175 },
+    { key: 'resolved', label: 'RESOLVED', width: w * 0.175 },
+    { key: 'unresolved', label: 'UNRESOLVED', width: w * 0.175 },
+    { key: 'score', label: 'SCORE', width: w * 0.175 },
+  ];
+  const rows = detail.byPriority.map((p) => ({ priority: p.priority, raised: p.raised, resolved: p.resolved, unresolved: p.unresolved, score: `${p.score}%` }));
+  return drawTable(doc, y, columns, rows, { rowHeight: 16, headerHeight: 18 }) + 14;
+}
+
 function drawDeviceHealth(doc, y, report) {
+  y = drawAssetManagementTable(doc, y, report.assetManagementDetail);
+  y = drawMonitoringTable(doc, y, report.monitoringDetail);
   y = drawSectionHeading(doc, y, 'Device Health');
   const w = contentWidth(doc);
   const colW = (w - 16) / 2;
@@ -781,26 +827,64 @@ function drawScoreExplanations(doc, y) {
 // each other. Moved to the top of the Devices page, by request (used to
 // sit at the bottom of the Cybersecurity Layers page) -- see
 // buildReportPdf() below for where it's actually called now.
+// Boxed, by request ("have the Proactive Maintenance list in a box matching
+// the format of the Executive Summary") -- same soft-purple rounded card
+// drawCommentaryCards() draws for its own Executive Summary callout
+// (roundedRect, #f3f1fb fill, bold purple title at +10, body content
+// starting at +24, 12px side padding), not the plain on-white heading this
+// used before.
 function drawProactiveMaintenanceNote(doc, y, items) {
   if (!items || items.length === 0) return y;
   const w = contentWidth(doc);
-  doc.font('Helvetica').fontSize(8);
-  const itemHeights = items.map((item) => doc.heightOfString(`-  ${item}`, { width: w - 14 }) + 2);
-  const totalHeight = 16 + itemHeights.reduce((sum, h) => sum + h, 0) + 6;
-  y = ensureSpace(doc, y, totalHeight);
+  const pad = 12;
+  // 2 columns, by request -- first half left, second half right (not
+  // interleaved), same even split the on-screen page's own CSS
+  // column-count: 2 produces by default.
+  const gap = 20;
+  const colW = (w - pad * 2 - gap) / 2;
+  const half = Math.ceil(items.length / 2);
+  const leftItems = items.slice(0, half);
+  const rightItems = items.slice(half);
 
-  doc.font('Helvetica-Bold').fontSize(10).fillColor(BRAND_PURPLE).text('Proactive Maintenance', MARGIN, y);
-  y += 16;
+  doc.font('Helvetica').fontSize(8);
+  const measureCol = (colItems) => colItems.reduce((sum, item) => sum + doc.heightOfString(`-  ${item}`, { width: colW - 10 }) + 2, 0);
+  const colHeight = Math.max(measureCol(leftItems), measureCol(rightItems));
+
+  const captionText = 'Standard activities performed across all managed devices -- not scored.';
+  doc.font('Helvetica-Oblique').fontSize(7);
+  const captionHeight = doc.heightOfString(captionText, { width: w - pad * 2 });
+
+  const boxHeight = 24 + colHeight + 6 + captionHeight + 10;
+  y = ensureSpace(doc, y, boxHeight);
+
+  doc.roundedRect(MARGIN, y, w, boxHeight, 4).fill('#f3f1fb');
+  doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(10).text('Proactive Maintenance', MARGIN + pad, y + 10);
+  const colStartY = y + 24;
+
   doc.font('Helvetica').fontSize(8).fillColor(INK);
-  items.forEach((item, i) => {
-    doc.text(`-  ${item}`, MARGIN + 4, y, { width: w - 14 });
-    y += itemHeights[i];
+  let ly = colStartY;
+  leftItems.forEach((item) => {
+    doc.text(`-  ${item}`, MARGIN + pad, ly, { width: colW - 10 });
+    ly = doc.y + 2;
   });
-  doc.font('Helvetica-Oblique').fontSize(7).fillColor(MUTED).text('Standard activities performed across all managed devices -- not scored, and not specific to this client’s own schedule.', MARGIN, y + 2, { width: w });
-  return y + 14;
+  let ry = colStartY;
+  rightItems.forEach((item) => {
+    doc.text(`-  ${item}`, MARGIN + pad + colW + gap, ry, { width: colW - 10 });
+    ry = doc.y + 2;
+  });
+
+  const captionY = colStartY + colHeight + 6;
+  doc.font('Helvetica-Oblique').fontSize(7).fillColor(MUTED).text(captionText, MARGIN + pad, captionY, { width: w - pad * 2 });
+  return y + boxHeight + 14;
 }
 
 function drawRecommendations(doc, y, commentary) {
+  // No longer guaranteed to start at the top of a fresh page (the forced
+  // addPage() before this call was removed, by request -- this section
+  // now continues straight on from Understanding Your Scores) -- guards
+  // against an orphaned heading alone at the very bottom of a page with
+  // the real table pushed onto the next one.
+  y = ensureSpace(doc, y, 80);
   y = drawSectionHeading(doc, y, 'Our Recommendations');
   const w = contentWidth(doc);
   const columns = [
@@ -892,10 +976,16 @@ function buildReportPdf({ report, vendors, commentary }) {
       doc.addPage();
       y = doc.page.margins.top;
       y = drawScoreExplanations(doc, y);
+      // Extra breathing room before Our Recommendations, by request -- the
+      // last explanation item's own trailing gap (10px, drawScoreExplanations
+      // above) read as too tight between the two sections on the same page.
+      y += 16;
 
+      // No forced page break here, by request -- Our Recommendations
+      // continues straight on from Understanding Your Scores, same page
+      // when it fits (ensureSpace()'s normal per-row page-break logic,
+      // inside drawTable() itself, still applies if it doesn't).
       if (commentary && commentary.recommendations && commentary.recommendations.length > 0) {
-        doc.addPage();
-        y = doc.page.margins.top;
         drawRecommendations(doc, y, commentary);
       }
 

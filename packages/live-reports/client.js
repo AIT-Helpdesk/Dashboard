@@ -6,9 +6,11 @@
 // render.js) -- same visual language as that page's own live data, not a
 // second chart implementation. See server.js's own header for what is and
 // isn't reproduced here -- Open Alerts is Critical/High only; Asset
-// Management/Monitoring ARE now shown (Scorecard below), but as
-// live-computed proxies, not Datto's own real composite scores (see
-// server.js's own assetManagementScore()/monitoringScore() comments).
+// Management/Monitoring ARE now shown (Scorecard below, plus their own
+// breakdown tables -- see assetManagementTableHtml()/monitoringTableHtml()
+// below), computed via server.js's own real re-creation of Datto's canned-
+// report formulas (see server.js's own computeAssetManagementDetail()/
+// computeMonitoringDetail() comments).
 import { gaugeSvg, donutWidget, kpiTileRow, deviceTypeBarWidget, checkinFreshnessWidget, deviceListTableHtml, wireDeviceFilters } from '/meeting-prep-report-render.js';
 
 export const id = 'live-reports';
@@ -121,6 +123,41 @@ function scorecardHtml(report, vendors) {
     </div>`;
 }
 
+// Asset Management / Monitoring breakdown tables, by request ("I thought
+// you were going to give me some widgets and device info") -- the Scorecard
+// above already shows each one's rolled-up %, but these are the REAL
+// per-check/per-priority numbers behind it (server.js's own
+// computeAssetManagementDetail()/computeMonitoringDetail()), same structure
+// as Datto's own canned report's own "Asset Management" and "Total Alerts
+// by Priority" tables. Reuses .live-reports-scorecard-table (same look as
+// the Scorecard immediately above -- not a new table style) rather than a
+// donut/KPI-tile treatment, since the real content here IS a small table,
+// same as Datto's own report shows it.
+function assetManagementTableHtml(detail) {
+  if (!detail || !detail.checks || detail.checks.length === 0) return '';
+  const rows = detail.checks
+    .map((c) => `<tr><td>${escapeHtml(c.label)}</td><td>${c.passed} / ${c.total}</td><td><span class="mtg-score-badge mtg-score-badge--${scorecardStatus(c.score).tier}">${c.score == null ? 'No data' : `${c.score}%`}</span></td></tr>`)
+    .join('');
+  return `
+    <h2 class="client-summary-section-heading">Asset Management <span class="inline-subtext">${detail.score != null ? `(${detail.score}%)` : ''}</span></h2>
+    <table class="live-reports-scorecard-table">
+      <thead><tr><th>Check</th><th>Passed</th><th>Score</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+function monitoringTableHtml(detail) {
+  if (!detail || !detail.byPriority) return '';
+  const rows = detail.byPriority
+    .map((p) => `<tr><td>${escapeHtml(p.priority)}</td><td>${p.raised}</td><td>${p.resolved}</td><td>${p.unresolved}</td><td><span class="mtg-score-badge mtg-score-badge--${scorecardStatus(p.score).tier}">${p.score}%</span></td></tr>`)
+    .join('');
+  return `
+    <h2 class="client-summary-section-heading">Monitoring <span class="inline-subtext">(${detail.score}%)</span></h2>
+    <table class="live-reports-scorecard-table">
+      <thead><tr><th>Priority</th><th>Raised</th><th>Resolved</th><th>Unresolved</th><th>Score</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 // Proactive Maintenance, by request -- same list the PDF now shows (top of
 // its own Devices page), server.js's own getProactiveMaintenanceItems()
 // (configurable via PROACTIVE_MAINTENANCE_ITEMS in .env), sourced once on
@@ -131,7 +168,7 @@ function proactiveMaintenanceHtml(items) {
   return `
     <h2 class="client-summary-section-heading">Proactive Maintenance</h2>
     <ul class="live-reports-proactive-maintenance">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
-    <p class="inline-subtext">Standard activities performed across all managed devices -- not scored, and not specific to this client's own schedule.</p>`;
+    <p class="inline-subtext">Standard activities performed across all managed devices -- not scored.</p>`;
 }
 
 // "Other Systems" section, by request -- one small widget card per vendor
@@ -306,9 +343,9 @@ export function mount(container) {
         <label class="inline-checkbox-label" title="Force an exact match on the Datto Site name (instead of the usual wildcard/contains search)">
           <input type="checkbox" id="exact-site-input" /> Exact
         </label>
-        <button type="submit" id="search-button">Search</button>
-        <button type="button" id="refresh-button" title="Re-fetch live Datto RMM data (bypasses the 20-minute cache)">Refresh</button>
-        <button type="button" id="pdf-button" disabled title="Loads with the report above">Create PDF</button>
+        <button type="submit" id="search-button" class="button-link button-link--small refresh-button--emphasis" title="Pull a report for this client (uses the 20-minute cache if still warm)">Search</button>
+        <button type="button" id="refresh-button" class="button-link button-link--small" title="Re-fetch live Datto RMM data (bypasses the 20-minute cache) -- use this when you need the absolute latest, not what was cached up to 20 minutes ago">Refresh</button>
+        <button type="button" id="pdf-button" class="button-link button-link--small" disabled title="Loads with the report above">Create PDF</button>
       </div>
     </form>
     <p id="status" class="status">Type a client's Datto Site name above to pull a live report.</p>
@@ -343,7 +380,13 @@ export function mount(container) {
 
   async function createPdf() {
     if (!currentReportData || !currentVendorsData) return;
+    // Wait here too -- actively generating, same "not available" state as
+    // the report/vendor-data-loading windows above (this one also has its
+    // own pdfStatusEl progress line below, but the button itself should
+    // read the same way every other "disabled because something's in
+    // flight" moment on this page does).
     pdfButton.disabled = true;
+    pdfButton.textContent = 'Wait';
     pdfStatusEl.hidden = false;
     pdfStatusEl.className = 'status';
     pdfStatusEl.textContent = 'Generating PDF... this can take up to a minute.';
@@ -372,6 +415,7 @@ export function mount(container) {
       pdfStatusEl.textContent = `Could not generate PDF: ${err.message}`;
     } finally {
       pdfButton.disabled = false;
+      pdfButton.textContent = 'Create PDF';
     }
   }
 
@@ -388,6 +432,14 @@ export function mount(container) {
     statusEl.className = 'status';
     statusEl.textContent = 'Loading...';
     resultsEl.innerHTML = '';
+    // Disabled + "Wait" from the moment a fetch starts, by request -- not
+    // just once the main report lands (render()'s own `pdfButton.disabled
+    // = true` further down). Without this, a Create PDF click mid-search
+    // (while the OLD client's report is still showing and its own PDF data
+    // is still sitting in currentReportData/currentVendorsData) would
+    // silently generate a PDF for the WRONG client.
+    pdfButton.disabled = true;
+    pdfButton.textContent = 'Wait';
     try {
       const params = new URLSearchParams({ site });
       if (exactInput.checked) params.set('exactSite', 'true');
@@ -450,6 +502,10 @@ export function mount(container) {
       scorecardEl.outerHTML = scorecardHtml(currentReportData, currentVendorsData);
     }
     pdfButton.disabled = !currentReportData || !currentVendorsData;
+    // Still waiting (a newer search landed its report but not its vendor
+    // data yet) vs. genuinely ready -- same Wait/Create PDF distinction as
+    // everywhere else this button's label changes.
+    pdfButton.textContent = pdfButton.disabled ? 'Wait' : 'Create PDF';
     pdfButton.title = pdfButton.disabled ? 'Loads with the report above' : 'Download a branded PDF of this report';
   }
 
@@ -459,7 +515,11 @@ export function mount(container) {
       statusEl.textContent = 'Datto RMM is not connected -- check DATTO_API_KEY in .env.';
       currentReportData = null;
       currentVendorsData = null;
+      // Create PDF, not Wait -- nothing is in flight any more, this is a
+      // dead end until the user fixes the underlying connection, not a
+      // "still loading" state.
       pdfButton.disabled = true;
+      pdfButton.textContent = 'Create PDF';
       return;
     }
     if (!data.found) {
@@ -467,13 +527,20 @@ export function mount(container) {
       statusEl.textContent = `No Datto RMM devices matched "${data.siteTerm}".`;
       currentReportData = null;
       currentVendorsData = null;
+      // Same reasoning as the not-connected branch above -- a dead end
+      // until the user changes the search, not something to wait out.
       pdfButton.disabled = true;
+      pdfButton.textContent = 'Create PDF';
       return;
     }
     statusEl.hidden = true;
     currentReportData = data;
     currentVendorsData = null;
+    // Still Wait here -- the main report landed, but "Other Systems"
+    // (loadVendorSummaries(), called at the end of this function) hasn't
+    // finished yet, and the PDF needs both.
     pdfButton.disabled = true;
+    pdfButton.textContent = 'Wait';
     pdfStatusEl.hidden = true;
 
     // Gauge first, by request -- no section heading (both "Executive
@@ -531,8 +598,15 @@ export function mount(container) {
     resultsEl.innerHTML = `
       <p class="inline-subtext">${escapeHtml(data.siteName)} -- as of ${new Date(data.asOf).toLocaleString()}</p>
       <div class="mtg-widget-grid">${gauge}${kpiGrid}${alertsDonut}</div>
-      <div class="mtg-widget-grid">${typeWidget}${freshnessWidget}</div>
-      ${scorecardHtml(data, null)}
+      <div class="live-reports-overview-grid">
+        ${typeWidget}
+        ${freshnessWidget}
+        <div class="live-reports-scorecard-span">${scorecardHtml(data, null)}</div>
+      </div>
+      <div class="mtg-widget-grid">
+        <div>${assetManagementTableHtml(data.assetManagementDetail)}</div>
+        <div>${monitoringTableHtml(data.monitoringDetail)}</div>
+      </div>
       ${groupWidgets('Workstations', data.workstation)}
       ${groupWidgets(
         'Servers',

@@ -10057,6 +10057,31 @@ tr.accrued-time-yellow-row th {
   text-align: center;
 }
 
+/* Scorecard sized to match the combined width of Devices by Type + Check-in
+   Freshness above it, by request. CSS Grid, not flex -- Devices by
+   Type/Check-in Freshness are row 1 (their own natural max-content column
+   widths), the Scorecard spans both columns as row 2 (grid-column: 1/-1),
+   so its rendered width is bound to those SAME two column tracks rather
+   than a guessed fixed pixel value that would drift the moment either
+   widget's own content changes. .live-reports-scorecard-table's own
+   width:auto (above) is overridden back to 100% here specifically, so the
+   table itself fills the grid item's full stretched width instead of
+   shrink-wrapping to its own (narrower) content the way it does everywhere
+   else on this page. */
+.live-reports-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  column-gap: 1rem;
+  row-gap: 0.75rem;
+  align-items: start;
+}
+.live-reports-overview-grid .live-reports-scorecard-span {
+  grid-column: 1 / -1;
+}
+.live-reports-overview-grid .live-reports-scorecard-table {
+  width: 100%;
+}
+
 /* Datto EDR's own 4 tiles, by request -- a real 2x2 grid (kpiTileRow's own
    plain flex-wrap left 3 tiles on row 1 and stretched the 4th alone across
    the full row 2, confirmed wrong on a real screenshot), same
@@ -10083,9 +10108,15 @@ tr.accrued-time-yellow-row th {
 .live-reports-proactive-maintenance {
   margin: 0.5rem 0;
   padding-left: 1.3rem;
+  /* 2 columns, by request -- CSS multi-column balances items across both
+     automatically (first half left, second half right), same even split
+     the PDF's own drawProactiveMaintenanceNote() does by hand. */
+  column-count: 2;
+  column-gap: 2rem;
 }
 .live-reports-proactive-maintenance li {
   margin-bottom: 0.3rem;
+  break-inside: avoid;
 }
 
 .mtg-segbar-track {

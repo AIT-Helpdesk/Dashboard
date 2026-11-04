@@ -220,15 +220,75 @@ async function getOpenAlerts() {
     alerts,
     totalCount: matched.length,
     truncated: hitSafetyCap || matched.length > alerts.length,
-    // Every priority (Critical/High/Moderate/Low/Information), not just
-    // the High/Critical `alerts` above -- purely additive, every existing
-    // field here is unchanged. `rawAlerts` is already in memory from the
-    // same fetch regardless (no extra API cost), just not previously
-    // returned. Added for Live Reports' own Monitoring score, by request
-    // -- needs the FULL per-site priority breakdown, not the
-    // account-wide-High/Critical-only shape `alerts` already is.
-    allAlerts: rawAlerts.map(mapAlert),
   };
+}
+
+// --- Asset Management / Monitoring live data (Live Reports) --------------
+// Confirmed live this session, replacing two earlier approximations that
+// were built before these were known to exist:
+//   - warrantyDate/siteUid are already free fields on the bulk device list
+//     (see mapDeviceSummary() above) -- no extra call needed for those.
+//   - Disk free space and installed memory are NOT on the bulk list at all;
+//     the only source is this per-device audit endpoint, confirmed with no
+//     bulk/list variant (one call per device -- callers should cache this
+//     aggressively, it's by far the most expensive thing in this file per
+//     device touched).
+//   - Datto's own canned report scores Monitoring from a RESOLVED-RATIO per
+//     alert-priority tier (Score = (Raised-Unresolved)/Raised*100, Raised =
+//     Resolved+still-Unresolved), not a raw open-alert-count penalty -- this
+//     needs full open+resolved history for the SITE, which only exists on
+//     the site-scoped endpoints below (the account-wide
+//     /v2/account/alerts/open used elsewhere in this file has no per-site
+//     resolved-history equivalent). CONFIRMED live this session:
+//   `/v2/site/{siteUid}/alerts/open` and `/v2/site/{siteUid}/alerts/
+//   resolved` both work and are genuinely site-scoped -- `pageDetails.count`
+//   on these is the COUNT ON THIS PAGE, not a real total (confirmed by
+//   varying `max` and watching `count` track it exactly) -- so, same as
+//   every other list endpoint in this file, the real total needs a full
+//   fetchAllPages() walk, not a read of `pageDetails.count`.
+
+// Reuses parseDisksFromAudit() (already defined above for getDeviceDetails())
+// -- same confirmed-real `logicalDisks`/`freespace` shape, no second parsing
+// path needed. System drive is "C:" by convention (every real device this
+// session has only ever shown Windows-style drive letters) -- falls back to
+// the first disk present for a device where "C:" genuinely isn't one.
+async function getDeviceAudit(deviceUid) {
+  const audit = await dattoRequest(`/v2/audit/device/${deviceUid}`);
+  const disks = parseDisksFromAudit(audit);
+  const systemDisk = disks.find((d) => d.drive === 'C:') ?? disks[0] ?? null;
+  const memoryBytes = toNumber(audit?.systemInfo?.totalPhysicalMemory);
+  return {
+    systemDiskFreePercent: systemDisk?.freePercent ?? null,
+    memoryGB: memoryBytes != null ? memoryBytes / 1024 ** 3 : null,
+  };
+}
+
+const MONITORING_PRIORITIES = ['Critical', 'High', 'Moderate', 'Low', 'Information'];
+
+async function fetchAllSiteAlerts(siteUid, status) {
+  // 50 pages * 250/page = 12,500 -- a single site's own alert history,
+  // comfortably above anything realistic (the account-wide equivalent of
+  // this, MAX_ALERT_PAGES above, needed 200 pages for the WHOLE account).
+  return fetchAllPages(`/v2/site/${siteUid}/alerts/${status}`, {}, 'alerts', 50);
+}
+
+// Raised/Unresolved per priority tier for one site, matching exactly what
+// Datto's own canned report's "Total Alerts by Priority" table shows --
+// Raised = every alert this site has ever had at that priority (open +
+// resolved), Unresolved = still open right now. live-reports/server.js's
+// own monitoringScore() turns this into the real resolved-ratio score per
+// tier. A priority with zero alerts either way still gets a {raised: 0,
+// unresolved: 0} entry (not omitted) so the caller's own per-tier scoring
+// doesn't need a presence check.
+async function getSiteAlertsBreakdown(siteUid) {
+  const [openAlerts, resolvedAlerts] = await Promise.all([fetchAllSiteAlerts(siteUid, 'open'), fetchAllSiteAlerts(siteUid, 'resolved')]);
+  const breakdown = {};
+  for (const priority of MONITORING_PRIORITIES) {
+    const unresolved = openAlerts.filter((a) => a.priority === priority).length;
+    const resolved = resolvedAlerts.filter((a) => a.priority === priority).length;
+    breakdown[priority] = { raised: unresolved + resolved, unresolved };
+  }
+  return breakdown;
 }
 
 // Deliberately NOT the original client's own metricStatus() -- confirmed
@@ -338,6 +398,13 @@ function mapDeviceSummary(device) {
     id: device.uid ?? String(device.id),
     hostname: device.hostname ?? 'Unknown',
     site: device.siteName ?? '—',
+    // CONFIRMED live on the raw bulk /v2/account/devices payload (both are
+    // top-level fields, no extra call needed) -- added for Live Reports' own
+    // Asset Management (warrantyDate) and Monitoring (siteUid, needed to call
+    // the site-scoped /v2/site/{siteUid}/alerts/open|resolved endpoints)
+    // scores. Purely additive, same reasoning as every other field here.
+    siteUid: device.siteUid ?? null,
+    warrantyDate: device.warrantyDate ?? null,
     os: device.operatingSystem ?? '—',
     online: Boolean(device.online),
     patchStatus: patchStatus ?? 'Unknown',
@@ -535,4 +602,4 @@ async function getDeviceDetails(deviceUid) {
   };
 }
 
-module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts, getAllDevices };
+module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts, getAllDevices, getDeviceAudit, getSiteAlertsBreakdown };
