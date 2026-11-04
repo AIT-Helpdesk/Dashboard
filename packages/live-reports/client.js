@@ -691,9 +691,9 @@ export function mount(container) {
         'Patch Management and Software Management are not handled through this platform for servers, so they will always show as No Policy / Unmanaged below -- not counted in the Servers Health Score.'
       )}
       <div id="vendor-summaries"><p class="inline-subtext">Loading Other Systems...</p></div>
+      <div id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext">Loading...</p></div>
       <div class="live-reports-device-list">${deviceList}</div>
       ${data.alertsTruncated ? '<p class="inline-subtext">Note: the account-wide open-alerts list hit its safety cap -- this client\'s alert count may be incomplete.</p>' : ''}
-      <div id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext">Loading...</p></div>
       ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
     `;
     wireDeviceFilters(resultsEl);

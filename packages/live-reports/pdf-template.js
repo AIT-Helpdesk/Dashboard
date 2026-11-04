@@ -729,29 +729,34 @@ function drawDeviceHealth(doc, y, report) {
 // than guessed past.
 function drawM365LicensesTable(doc, y, m365) {
   if (!m365) return y;
-  const w = contentWidth(doc);
-  if (m365.status !== 'ok') {
-    const message =
-      m365.status === 'ambiguous'
-        ? "Multiple Autotask companies match this client's name -- can't show license counts without risking the wrong one."
-        : m365.status === 'not-found'
-          ? 'No matching Autotask company found for this client.'
-          : m365.status === 'no-contract'
-            ? `No active M365 contract found in Autotask for ${m365.companyName}.`
-            : 'Could not load Microsoft license counts.';
-    y = ensureSpace(doc, y, 50);
-    y = drawSectionHeading(doc, y, 'Microsoft License Counts');
-    doc.font('Helvetica-Oblique').fontSize(8.5).fillColor(MUTED).text(message, MARGIN, y, { width: w });
-    return y + 20;
-  }
+  // No data found (ambiguous company match / company not found / no
+  // active M365 contract / a load error) -- section is left off the PDF
+  // entirely, by request. On-screen still explains why (client.js's own
+  // m365LicensesHtml()), just not here.
+  if (m365.status !== 'ok') return y;
   if (!m365.items || m365.items.length === 0) return y;
 
-  // Literal "(from contract)" now, by request -- not the real contract
-  // name (which could be more than one contract anyway now that several
-  // active M365*-named contracts are combined -- see server.js's own
-  // getM365LicenseCounts()).
-  y = ensureSpace(doc, y, 60);
-  y = drawSectionHeading(doc, y, 'Microsoft License Counts (from contract)');
+  const w = contentWidth(doc);
+
+  // Whole section forced onto a fresh page if it wouldn't otherwise fit,
+  // by request -- the earlier plain ensureSpace(doc, y, 60) only guarded
+  // the heading itself, not the real table height, which meant the
+  // heading could land alone at the bottom of a page with the entire
+  // table pushed to the next one (confirmed on a real PDF). Estimated
+  // here the same way the Watch-reflow page-1 check elsewhere in this
+  // file does -- rowHeight(18) * row count, product/term text is always
+  // short enough not to wrap in practice, so this is a safe estimate, not
+  // just a guess.
+  const estimatedHeight = 28 + m365.items.length * 18 + 18;
+  const pageBottom = doc.page.height - doc.page.margins.bottom;
+  if (y + estimatedHeight > pageBottom) {
+    doc.addPage();
+    y = doc.page.margins.top;
+  }
+
+  // No "(from contract)" suffix on the PDF, by request -- on-screen still
+  // shows it (client.js's own m365LicensesHtml()), just not here.
+  y = drawSectionHeading(doc, y, 'Microsoft License Counts');
 
   // No header row, by request ("Product / Count... seems kind of
   // obvious") -- same showHeader: false the Scorecard table already uses
@@ -1279,6 +1284,14 @@ function buildReportPdf({ report, vendors, commentary }) {
       // so `y` going in here doesn't matter.
       y = drawCybersecurityLayers(doc, y, vendors);
 
+      // Microsoft License Counts, between Cybersecurity Systems and All
+      // Devices now, by request (was after All Devices) --
+      // drawM365LicensesTable() already starts its own fresh page when it
+      // wouldn't otherwise fit, so this doesn't need a forced addPage()
+      // here, same as every other section that continues straight on from
+      // whatever came before it when there's room.
+      y = drawM365LicensesTable(doc, y, vendors.m365Licenses);
+
       // Device list and the score-explanations glossary both sit right
       // before Recommendations now, by request -- the device-by-device
       // table used to live directly under Device Health's own donuts;
@@ -1294,11 +1307,6 @@ function buildReportPdf({ report, vendors, commentary }) {
         y += 10;
         y = drawDeviceList(doc, y, report);
       }
-      // Microsoft License Counts, right after All Devices, by request --
-      // drawM365LicensesTable()'s own ensureSpace() handles a page break
-      // naturally if the device list ran to the bottom of its own page,
-      // same as every other section here.
-      y = drawM365LicensesTable(doc, y, vendors.m365Licenses);
 
       doc.addPage();
       y = doc.page.margins.top;
