@@ -678,5 +678,6 @@ router.getServiceAggregate = getServiceAggregate;
 router.getApplicationsHistory = getApplicationsHistory;
 router.findDomainMatch = findDomainMatch;
 router.getBillableSeatCount = getBillableSeatCount;
+router.getSeats = getSeats;
 
 module.exports = router;

@@ -220,6 +220,14 @@ async function getOpenAlerts() {
     alerts,
     totalCount: matched.length,
     truncated: hitSafetyCap || matched.length > alerts.length,
+    // Every priority (Critical/High/Moderate/Low/Information), not just
+    // the High/Critical `alerts` above -- purely additive, every existing
+    // field here is unchanged. `rawAlerts` is already in memory from the
+    // same fetch regardless (no extra API cost), just not previously
+    // returned. Added for Live Reports' own Monitoring score, by request
+    // -- needs the FULL per-site priority breakdown, not the
+    // account-wide-High/Critical-only shape `alerts` already is.
+    allAlerts: rawAlerts.map(mapAlert),
   };
 }
 

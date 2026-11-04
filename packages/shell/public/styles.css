@@ -9944,6 +9944,149 @@ tr.accrued-time-yellow-row th {
 .live-reports-saas-alerts-events li {
   margin-bottom: 0.3rem;
 }
+/* Critical-severity Top Events, by request -- coloured red, same red
+   .mtg-kpi-tile--bad already uses, so a critical event reads at the same
+   urgency as a red KPI tile would. */
+.live-reports-event-critical {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+/* SaaS Backups' own 2-row KPI layout, by request -- Backup %/Seats on row
+   1; App Types Healthy alone on row 2 with the per-app seat breakdown
+   sitting beside THAT one tile (not the row above). Every tile here gets
+   the SAME fixed width regardless of label length (plain flex sizing let
+   "App Types Healthy"'s own longer label stretch/wrap that tile taller
+   than "Backup %"/"Seats", confirmed on a real screenshot), so row 2's
+   lone tile lines up visually under row 1's first tile. */
+.live-reports-saas-protection-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.live-reports-saas-protection-row1 {
+  margin-top: 0.75rem;
+}
+.live-reports-saas-protection-row2 {
+  margin-top: 0.6rem;
+  /* flex-start, not the base row's centered alignment -- the dot-point
+     list beside the tile here is usually taller than the tile itself, and
+     should line up with its TOP, not float centered against it.
+     flex-wrap: nowrap (overriding the base row's wrap) is what actually
+     keeps the list beside the tile instead of dropping below it -- a
+     plain min-width on the card (tried first) grew the whole card far
+     wider than it needed to be (confirmed on a real screenshot); nowrap
+     instead lets .mtg-widget's own shrink-to-fit sizing grow the card to
+     EXACTLY what this row needs, no more. */
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+.live-reports-saas-protection-row .mtg-kpi-row {
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  margin-top: 0;
+}
+.live-reports-saas-protection-row .mtg-kpi-tile {
+  flex: 0 0 110px;
+  min-width: 0;
+  padding: 0.6rem 0.5rem;
+  /* Same fixed height across BOTH rows, by request -- "App Types Healthy"
+     wraps to 2 lines at this width (unlike "Backup %"/"Seats"), which made
+     row 2's tile taller than row 1's even though their widths already
+     matched. */
+  min-height: 70px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.live-reports-saas-protection-row .mtg-kpi-label {
+  /* Smaller than the shared 0.75rem default, by request -- gives "App
+     Types Healthy" a better chance of fitting on one line at this tile's
+     fixed 110px width, same as "Backup %"/"Seats" already do. */
+  font-size: 0.68rem;
+}
+/* Back to a real dot-point list, by request -- the inline/chip version
+   (flex-wrap row, no bullets) read wrong; beside the App Types Healthy
+   tile is still where it sits (row 2, see above), just as a vertical list
+   again, same as the very first cut of this breakdown. */
+.live-reports-app-breakdown {
+  /* No grow, auto basis -- hugs its own natural content width (its
+     longest line, e.g. "SharePoint: 10 seats") rather than claiming extra
+     leftover space in the row, which is what was making the whole card
+     wider than it needed to be. */
+  flex: 0 1 auto;
+  margin: 0;
+  padding-left: 1.1rem;
+  /* Smaller than the original 0.85rem, by request, to help it comfortably
+     fit beside the tile instead of needing to wrap. */
+  font-size: 0.76rem;
+}
+.live-reports-app-breakdown li {
+  margin-bottom: 0.2rem;
+}
+
+/* Scorecard, by request -- only 3 narrow columns, no reason to stretch to
+   the full page width the way the global `table { width: 100% }` rule
+   does by default (left it mostly blank space on a real screen). Same
+   "size to its own content, shrink the surrounding box to match" override
+   Check Client's own M365 Tenancy table (.chk-m365-table) already
+   established. */
+.live-reports-scorecard-table {
+  width: auto;
+}
+.live-reports-scorecard-table th,
+.live-reports-scorecard-table td {
+  white-space: nowrap;
+}
+/* Header shading, by request -- every table header on this page, not just
+   the Scorecard's (the first cut only covered the Scorecard). Tried light
+   green first; changed to a darker grey than the row-alternating stripe
+   (--row-alt-bg) instead, by request -- mixed relative to that same
+   variable (not a flat hex) so it stays one step darker than the stripe
+   in BOTH themes, light and dark, rather than needing a separate value
+   for each. */
+.live-reports-scorecard-table th,
+.live-reports-device-list table th {
+  background: color-mix(in srgb, var(--row-alt-bg), black 12%);
+}
+/* STATUS column (always last) centred, by request -- both its header
+   label and the pill in every row. */
+.live-reports-scorecard-table th:last-child,
+.live-reports-scorecard-table td:last-child {
+  text-align: center;
+}
+
+/* Datto EDR's own 4 tiles, by request -- a real 2x2 grid (kpiTileRow's own
+   plain flex-wrap left 3 tiles on row 1 and stretched the 4th alone across
+   the full row 2, confirmed wrong on a real screenshot), same
+   grid-override approach .live-reports-kpi-grid above already established
+   for Meeting Prep's own 4 Datto Live tiles -- simpler here since there's
+   no sibling card height to match, just the tile row itself. */
+.live-reports-dattoedr-kpis .mtg-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.6rem;
+}
+.live-reports-dattoedr-kpis .mtg-kpi-tile {
+  flex: initial;
+}
+.live-reports-app-unhealthy {
+  color: #d97706;
+  font-weight: 600;
+}
+
+/* Proactive Maintenance, by request -- a plain bulleted list, normal body
+   text size (not the smaller 0.76rem .live-reports-app-breakdown uses --
+   that one's tuned to sit compactly beside a KPI tile, this is its own
+   full-width section at the bottom of the page). */
+.live-reports-proactive-maintenance {
+  margin: 0.5rem 0;
+  padding-left: 1.3rem;
+}
+.live-reports-proactive-maintenance li {
+  margin-bottom: 0.3rem;
+}
 
 .mtg-segbar-track {
   display: flex;

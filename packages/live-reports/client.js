@@ -5,8 +5,10 @@
 // already renders (gaugeSvg/donutWidget/kpiTileRow, /meeting-prep-report-
 // render.js) -- same visual language as that page's own live data, not a
 // second chart implementation. See server.js's own header for what is and
-// isn't reproduced here (no Asset Management/Monitoring %, Open Alerts
-// scoped to Critical/High only).
+// isn't reproduced here -- Open Alerts is Critical/High only; Asset
+// Management/Monitoring ARE now shown (Scorecard below), but as
+// live-computed proxies, not Datto's own real composite scores (see
+// server.js's own assetManagementScore()/monitoringScore() comments).
 import { gaugeSvg, donutWidget, kpiTileRow, deviceTypeBarWidget, checkinFreshnessWidget, deviceListTableHtml, wireDeviceFilters } from '/meeting-prep-report-render.js';
 
 export const id = 'live-reports';
@@ -63,6 +65,75 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+// Scorecard, by request ("show the Scorecard on the on screen view before
+// the Workstations") -- same AREA/RESULT/STATUS rows and same 90/70
+// On Track/Watch/In Progress thresholds pdf-template.js's own
+// statusForScore()/scorecardStatus() already use, so the on-screen page
+// and the exported PDF read as the same scorecard, not two different
+// ones. "Action needed" shows as "In Progress" here too, same PDF-only
+// relabel reasoning (a lower score reads as actively being worked
+// through, not a fixed hard failure) -- this IS that same scorecard, on
+// screen now as well as in the PDF.
+function scorecardStatus(score) {
+  if (score === null || score === undefined) return { label: 'Unknown', tier: '' };
+  if (score >= 90) return { label: 'On track', tier: 'good' };
+  if (score >= 70) return { label: 'Watch', tier: 'warn' };
+  return { label: 'In Progress', tier: 'bad' };
+}
+function scorecardRow(area, result, score) {
+  const status = scorecardStatus(score);
+  return `<tr><td>${escapeHtml(area)}</td><td>${escapeHtml(result)}</td><td><span class="mtg-score-badge mtg-score-badge--${status.tier}">${escapeHtml(status.label)}</span></td></tr>`;
+}
+// `vendors` is OPTIONAL -- the Scorecard renders immediately off the main
+// report alone (SaaS Alerts/SaaS Protection rows just don't exist yet),
+// then loadVendorSummaries() below re-renders it with those 2 rows added
+// once vendors has actually loaded, same "fast first paint, fill in
+// vendor data after" split this page's own Other Systems section already
+// uses.
+function scorecardHtml(report, vendors) {
+  const rows = [
+    report.assetManagement != null && scorecardRow('Asset Management', `${report.assetManagement}%`, report.assetManagement),
+    report.monitoring != null && scorecardRow('Monitoring', `${report.monitoring}%`, report.monitoring),
+    report.workstation && scorecardRow('Workstation Patch Management', `${report.workstation.patch.score}%`, report.workstation.patch.score),
+    report.workstation && scorecardRow('Workstation Software Compliance', `${report.workstation.software.score}%`, report.workstation.software.score),
+    report.workstation && scorecardRow('Workstation Antivirus', `${report.workstation.antivirus.score}%`, report.workstation.antivirus.score),
+    report.server && scorecardRow('Server Antivirus', `${report.server.antivirus.score}%`, report.server.antivirus.score),
+    scorecardRow('Open Alerts (Critical/High)', String(report.alertsTotalCount), report.alertsTotalCount > 0 ? 50 : 100),
+    vendors &&
+      vendors.saasAlerts.status === 'ok' &&
+      vendors.saasAlerts.monitored &&
+      scorecardRow(
+        'SaaS Alerts (30 days)',
+        `${vendors.saasAlerts.criticalCount} critical, ${vendors.saasAlerts.mediumCount} medium`,
+        vendors.saasAlerts.criticalCount > 0 ? 40 : vendors.saasAlerts.mediumCount > 0 ? 75 : 100
+      ),
+    vendors && vendors.saasProtection.status === 'ok' && vendors.saasProtection.installed && scorecardRow('SaaS Protection (Backup)', `${vendors.saasProtection.backupPercentage}%`, vendors.saasProtection.backupPercentage),
+  ]
+    .filter(Boolean)
+    .join('');
+  return `
+    <div id="scorecard-table">
+      <h2 class="client-summary-section-heading">Scorecard</h2>
+      <table class="live-reports-scorecard-table">
+        <thead><tr><th>Area</th><th>Result</th><th>Status</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+// Proactive Maintenance, by request -- same list the PDF now shows (top of
+// its own Devices page), server.js's own getProactiveMaintenanceItems()
+// (configurable via PROACTIVE_MAINTENANCE_ITEMS in .env), sourced once on
+// the server rather than duplicated here, so the two surfaces can't drift
+// apart. Placed at the very end of the page, by request.
+function proactiveMaintenanceHtml(items) {
+  if (!items || items.length === 0) return '';
+  return `
+    <h2 class="client-summary-section-heading">Proactive Maintenance</h2>
+    <ul class="live-reports-proactive-maintenance">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+    <p class="inline-subtext">Standard activities performed across all managed devices -- not scored, and not specific to this client's own schedule.</p>`;
+}
+
 // "Other Systems" section, by request -- one small widget card per vendor
 // that actually has live data worth showing on-screen during a client
 // meeting (no quick-glance badge row above them anymore, by request -- a
@@ -78,9 +149,20 @@ function vendorWidgetsHtml(vendors) {
   // an actual list to their right instead of a comma-joined sentence.
   if (vendors.saasAlerts.status === 'ok' && vendors.saasAlerts.monitored) {
     const sa = vendors.saasAlerts;
+    // Critical-severity event names coloured red, by request -- same
+    // "severity carried through, not lost once merged by name" data
+    // server.js's own buildSaasAlertsSummary() now returns.
+    // Counts shown here are each event name's own REAL critical/medium
+    // counts, never merged into one combined number -- confirmed live this
+    // session (Back 2 Basics) that merging them made the red-coloured
+    // numbers add up to MORE than the real Critical tile, a genuine
+    // accuracy bug a client could (and did) catch.
+    const formatEventCounts = (e) => (e.criticalCount > 0 && e.mediumCount > 0 ? `${e.criticalCount} critical, ${e.mediumCount} medium` : String(e.criticalCount || e.mediumCount));
     const eventsListHtml =
       sa.topEvents.length > 0
-        ? `<ul class="live-reports-saas-alerts-events">${sa.topEvents.map((e) => `<li>${escapeHtml(e.name)} <span class="muted">(${e.count})</span></li>`).join('')}</ul>`
+        ? `<ul class="live-reports-saas-alerts-events">${sa.topEvents
+            .map((e) => `<li${e.criticalCount > 0 ? ' class="live-reports-event-critical"' : ''}>${escapeHtml(e.name)} <span class="muted">(${formatEventCounts(e)})</span></li>`)
+            .join('')}</ul>`
         : '<p class="inline-subtext">No alerts in this window.</p>';
     widgets.push(`
       <div class="mtg-widget">
@@ -98,49 +180,81 @@ function vendorWidgetsHtml(vendors) {
       </div>`);
   }
 
-  // SaaS Protection -- backupPercentage/billableSeatCount are the same
-  // figures the badge's own hover detail already shows, repeated here
-  // visibly since this page is meant to be read on-screen, not hovered.
+  // SaaS Backups (renamed from "SaaS Protection (Backup)", by request) --
+  // backupPercentage/billableSeatCount are the same figures the badge's
+  // own hover detail already shows, repeated here visibly since this page
+  // is meant to be read on-screen, not hovered. Layout by request, after
+  // the first cut (3 tiles in one row + a list beside the whole row) read
+  // wrong on a real screenshot -- "App Types Healthy"'s own longer label
+  // wrapped to 2 lines, making that tile visibly taller than the other
+  // two even though their widths matched. Now: Backup %/Seats on their own
+  // row 1, App Types Healthy alone on row 2 with the per-app seat
+  // breakdown sitting beside THAT one tile specifically, not the row
+  // above.
   if (vendors.saasProtection.status === 'ok' && vendors.saasProtection.installed) {
     const sp = vendors.saasProtection;
     const tier = sp.backupPercentage == null ? undefined : sp.backupPercentage >= 95 ? 'good' : sp.backupPercentage >= 70 ? 'warn' : 'bad';
-    const unhealthyHtml =
-      sp.unhealthyAppTypes.length > 0
-        ? `<p class="inline-subtext">Needs attention: ${sp.unhealthyAppTypes.map((a) => `${escapeHtml(a.appType)} (${escapeHtml(a.status)})`).join(', ')}</p>`
+    // Per-app breakdown (Email/OneDrive/SharePoint/Teams), by request --
+    // replaces the old "Needs attention: ..." summary line entirely (this
+    // shows the same unhealthy-app information, just per-app and with a
+    // seat count alongside it, so the summary line would just be
+    // repeating a subset of this).
+    const breakdownHtml =
+      sp.appBreakdown.length > 0
+        ? `<ul class="live-reports-app-breakdown">${sp.appBreakdown
+            .map((a) => {
+              const seatText = a.seatCount != null ? `${a.seatCount} seat${a.seatCount === 1 ? '' : 's'}` : a.status;
+              return `<li${a.healthy ? '' : ' class="live-reports-app-unhealthy"'}>${escapeHtml(a.label)}: ${escapeHtml(seatText)}${a.healthy ? '' : ` <span class="muted">(${escapeHtml(a.status)})</span>`}</li>`;
+            })
+            .join('')}</ul>`
         : '';
     widgets.push(`
       <div class="mtg-widget">
-        <p class="mtg-widget-title">SaaS Protection (Backup)</p>
-        ${kpiTileRow([
-          { label: 'Backup %', value: sp.backupPercentage ?? '--', tier },
-          { label: 'Billable Seats', value: sp.billableSeatCount ?? '--' },
-          { label: 'App Types Healthy', value: `${sp.appTypesHealthy}/${sp.appTypesTotal}` },
-        ])}
-        ${unhealthyHtml}
+        <p class="mtg-widget-title">SaaS Backups</p>
+        <div class="live-reports-saas-protection-row live-reports-saas-protection-row1">
+          ${kpiTileRow([
+            { label: 'Backup %', value: sp.backupPercentage ?? '--', tier },
+            { label: 'Seats', value: sp.billableSeatCount ?? '--' },
+          ])}
+        </div>
+        <div class="live-reports-saas-protection-row live-reports-saas-protection-row2">
+          ${kpiTileRow([{ label: 'App Types Healthy', value: `${sp.appTypesHealthy}/${sp.appTypesTotal}` }])}
+          ${breakdownHtml}
+        </div>
       </div>`);
   }
 
-  // Datto EDR -- agentCount/activeAgentCount/alertCount are summed across
-  // every matched Location (a client can have several, see server.js's
-  // own comment), not just one.
+  // Datto EDR -- agentCount/activeAgentCount/alertCount/alertCount30d are
+  // summed/filtered across every matched Location (a client can have
+  // several, see server.js's own comment), not just one. Locations tile
+  // removed, 30-day alert tile added, by request -- see
+  // buildDattoEdrSummary()'s own comment for how alertCount30d is derived
+  // (the API itself has no working date-range filter). A real 2x2 grid
+  // for these 4 tiles, by request -- kpiTileRow's own plain flex-wrap left
+  // 3 tiles on row 1 and stretched the 4th alone across all of row 2
+  // (confirmed wrong on a real screenshot); .live-reports-dattoedr-kpis
+  // overrides it the same way .live-reports-kpi-grid already does for
+  // Meeting Prep's own 4 Datto Live tiles.
   if (vendors.dattoEdr.status === 'ok' && vendors.dattoEdr.installed) {
     const edr = vendors.dattoEdr;
     widgets.push(`
       <div class="mtg-widget">
         <p class="mtg-widget-title">Datto EDR</p>
-        ${kpiTileRow([
-          { label: 'Locations', value: edr.locationCount },
-          { label: 'Agents', value: edr.agentCount },
-          { label: 'Active Agents', value: edr.activeAgentCount },
-          { label: 'Open Alerts', value: edr.alertCount, tier: edr.alertCount > 0 ? 'bad' : 'good' },
-        ])}
+        <div class="live-reports-dattoedr-kpis">
+          ${kpiTileRow([
+            { label: 'Agents', value: edr.agentCount },
+            { label: 'Active Agents', value: edr.activeAgentCount },
+            { label: 'Open Alerts', value: edr.alertCount, tier: edr.alertCount > 0 ? 'bad' : 'good' },
+            { label: 'Alerts (30 Days)', value: edr.alertCount30d, tier: edr.alertCount30d > 0 ? 'warn' : 'good' },
+          ])}
+        </div>
         ${edr.lastScannedOn ? `<p class="inline-subtext">Last scanned: ${new Date(edr.lastScannedOn).toLocaleString()}</p>` : ''}
       </div>`);
   }
 
   // Huntress -- incidentReportsCount is a LIFETIME total (Huntress's own
-  // /organizations endpoint has no date-range param), explicitly labelled
-  // as such rather than implied to be windowed like SaaS Alerts' figures.
+  // /organizations endpoint has no date-range param); caption shortened to
+  // just that fact, by request.
   if (vendors.huntress.status === 'ok' && vendors.huntress.installed) {
     const h = vendors.huntress;
     const tiles = [
@@ -152,7 +266,7 @@ function vendorWidgetsHtml(vendors) {
       <div class="mtg-widget">
         <p class="mtg-widget-title">Huntress</p>
         ${kpiTileRow(tiles)}
-        <p class="inline-subtext">Incident reports shown is a lifetime total, not limited to the last 30 days.</p>
+        <p class="inline-subtext">Lifetime total incidents.</p>
       </div>`);
   }
 
@@ -315,7 +429,10 @@ export function mount(container) {
       // load -- a safe "nothing available" shape for every vendor rather
       // than blocking the whole PDF over one section's own transient
       // error (same shape pdf-template.js's own vendorMutedCard() already
-      // renders as "Not connected" for any non-'ok' status).
+      // renders as "Not connected" for any non-'ok' status). Scorecard's
+      // own SaaS Alerts/SaaS Protection rows check `status === 'ok'`, so
+      // this safe fallback just means those 2 rows stay omitted below too,
+      // same as if vendors hadn't loaded at all.
       currentVendorsData = {
         saasAlerts: { status: 'not-configured' },
         saasProtection: { status: 'not-configured' },
@@ -323,6 +440,14 @@ export function mount(container) {
         autoElevate: { status: 'not-configured' },
         huntress: { status: 'not-configured' },
       };
+    }
+    // Scorecard re-rendered with vendors now available, adding the 2
+    // vendor-dependent rows it couldn't show on the first (report-only)
+    // render -- guarded the same way the Other Systems replace above is
+    // (a different client's search may have already replaced resultsEl).
+    const scorecardEl = resultsEl.querySelector('#scorecard-table');
+    if (scorecardEl && scorecardEl.isConnected && currentReportData) {
+      scorecardEl.outerHTML = scorecardHtml(currentReportData, currentVendorsData);
     }
     pdfButton.disabled = !currentReportData || !currentVendorsData;
     pdfButton.title = pdfButton.disabled ? 'Loads with the report above' : 'Download a branded PDF of this report';
@@ -407,6 +532,7 @@ export function mount(container) {
       <p class="inline-subtext">${escapeHtml(data.siteName)} -- as of ${new Date(data.asOf).toLocaleString()}</p>
       <div class="mtg-widget-grid">${gauge}${kpiGrid}${alertsDonut}</div>
       <div class="mtg-widget-grid">${typeWidget}${freshnessWidget}</div>
+      ${scorecardHtml(data, null)}
       ${groupWidgets('Workstations', data.workstation)}
       ${groupWidgets(
         'Servers',
@@ -414,8 +540,9 @@ export function mount(container) {
         'Patch Management and Software Management are not handled through this platform for servers, so they will always show as No Policy / Unmanaged below -- not counted in the Servers Health Score.'
       )}
       <div id="vendor-summaries"><p class="inline-subtext">Loading Other Systems...</p></div>
-      ${deviceList}
+      <div class="live-reports-device-list">${deviceList}</div>
       ${data.alertsTruncated ? '<p class="inline-subtext">Note: the account-wide open-alerts list hit its safety cap -- this client\'s alert count may be incomplete.</p>' : ''}
+      ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
     `;
     wireDeviceFilters(resultsEl);
     loadVendorSummaries(data.siteName, force);

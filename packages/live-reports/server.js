@@ -46,17 +46,29 @@ const { hasAnthropicCredentials, buildCommentary } = require('./ai-commentary.js
 // this page as we go if I like what you create") -- Patch Management,
 // Software Management, Antivirus, and Open Alerts only.
 //
-// Two figures from the real PDF are NOT reproduced here -- Asset
-// Management % and Monitoring % (the gauge's own top two figures) are
+// Two figures from the real PDF -- Asset Management % and Monitoring %
+// (the gauge's own top two figures in Datto's canned report) -- are
 // Datto's own composite scores from its canned report engine; no v2 REST
-// endpoint returns them (confirmed -- nothing in lib.js's own account/
-// device/filter endpoints carries anything like them). The gauge here
-// instead uses a defined "Device Health Score Formula" (by request):
-// each of Workstations/Servers gets its own Group Health Score (Patch*0.4
-// + Antivirus*0.4 + Software*0.2, each a weighted-average point value per
-// device status, see PATCH_POINTS/ANTIVIRUS_POINTS/SOFTWARE_POINTS and
-// groupSummary() below), then Overall = Server*0.6 + Workstation*0.4 when
-// both groups have devices (or just whichever one does).
+// endpoint returns them directly (confirmed -- nothing in lib.js's own
+// account/device/filter endpoints carries anything like them), and the
+// device/disk/memory/warranty data Datto's OWN documented Asset Management
+// formula needs isn't available from the bulk device list either (only via
+// an expensive per-device "full audit" call, one per device). By request,
+// APPROXIMATED here instead of left out or sourced from Datto's own
+// already-ingested PDF numbers (the other option discussed, rejected for
+// staying live) -- see assetManagementScore()/monitoringScore() below for
+// what each one actually checks; neither is a re-creation of Datto's real
+// formula, both are live-computed proxies from what the v2 API actually
+// exposes. The gauge/Scorecard's own Overall Health Score blends these two
+// in alongside the existing "Device Health Score Formula" (by request,
+// "use them in the Health calculation... bring it up to what Datto RMM
+// has"): each of Workstations/Servers gets its own Group Health Score
+// (Patch*0.4 + Antivirus*0.4 + Software*0.2, each a weighted-average point
+// value per device status, see PATCH_POINTS/ANTIVIRUS_POINTS/
+// SOFTWARE_POINTS and groupSummary() below), combined Server*0.6 +
+// Workstation*0.4 when both groups have devices (or just whichever one
+// does) into one Device Health component, then Overall = Device Health*0.6
+// + Asset Management*0.2 + Monitoring*0.2 (see computeOverallHealth()).
 //
 // Open Alerts by Priority is Critical/High only, same scope every other
 // Datto RMM page on this dashboard already has (see lib.js's own
@@ -213,14 +225,70 @@ function groupSummary(devices, weights = { patch: 0.4, antivirus: 0.4, software:
   };
 }
 
+// Asset Management proxy, by request ("bring it up to what Datto RMM
+// has... use them in the Health calculation") -- live-computed from raw
+// Datto API data only, NOT a re-creation of Datto's own documented
+// 4-factor formula (Warranty Status/Disk Capacity/Memory Capacity/OS
+// Support -- see the "Understanding Your Scores" glossary text in
+// pdf-template.js). Warranty, disk and memory aren't available from the
+// bulk device list at all -- only via an expensive per-device "full audit"
+// call, one per device, which Datto's own report avoids too (it's
+// computed account-side, not per-request). This checks the one factor
+// that genuinely IS available live: whether each device's own reported OS
+// is still a supported version. Narrower than Datto's real check, by
+// explicit choice (discussed directly) over either reusing Datto's own
+// already-ingested PDF numbers (stale, and not every client has one) or
+// leaving this blank.
+const OS_EOL_PATTERNS = [
+  /windows\s*xp/i,
+  /windows\s*vista/i,
+  /windows\s*7\b/i,
+  /windows\s*8(\.1)?\b/i,
+  /windows\s*server\s*2003/i,
+  /windows\s*server\s*2008/i,
+  /windows\s*server\s*2012\b/i, // matches both plain 2012 and "2012 R2" -- both EOL Oct 2023
+  /windows\s*10\b/i, // EOL Oct 2025
+];
+function isOsSupported(osString) {
+  if (!osString) return true; // no OS data at all is a gap in what we can see, not evidence the device is unsupported -- doesn't penalize the score
+  return !OS_EOL_PATTERNS.some((re) => re.test(osString));
+}
+function assetManagementScore(devices) {
+  if (devices.length === 0) return null;
+  const supported = devices.filter((d) => isOsSupported(d.os)).length;
+  return Math.round((supported / devices.length) * 100);
+}
+
+// Monitoring proxy, by request -- same "live, not a Datto re-creation"
+// choice as Asset Management above. Datto's own glossary: "influenced by
+// the open monitoring alerts... a higher priority is reflected by an
+// increased weight... a lower score means issues are seen but not yet
+// resolved" -- implemented as a straightforward weighted-penalty model
+// (100 minus a priority-weighted sum of this site's own open alerts,
+// floored at 0), not Datto's real undocumented formula. Needs EVERY
+// priority for this site, not just the Critical/High this page's own
+// alertsByPriority already uses -- see getOpenAlerts()'s `allAlerts`
+// field (added this session specifically for this).
+const ALERT_PRIORITY_WEIGHTS = { Critical: 10, High: 5, Moderate: 2, Low: 0.5, Information: 0.1 };
+function monitoringScore(alertsForSite) {
+  if (alertsForSite.length === 0) return 100;
+  const penalty = alertsForSite.reduce((sum, a) => sum + (ALERT_PRIORITY_WEIGHTS[a.priority] ?? 1), 0);
+  return Math.max(0, Math.round(100 - penalty));
+}
+
 // Workstation/Server split + Overall Health Score for an already
 // site-filtered device list -- split out from the route below so Live
 // Health Scores can reuse the exact same formula per TC Elite client
 // (same "reuse the sibling's own function, don't duplicate it"
 // convention this page itself followed for Meeting Prep's
 // buildDattoLiveDevicesComponent()) instead of re-deriving it a second
-// way.
-function computeOverallHealth(devices) {
+// way. `alertsForSite` is OPTIONAL and OPT-IN, by design -- Live Health
+// Scores' own bulk per-TC-Elite-client pass calls this with just
+// `devices` (unchanged from before this session), so it keeps getting the
+// exact same 2-component formula it always has; only a caller that
+// explicitly passes this site's own full alert list (Live Reports) gets
+// Asset Management/Monitoring blended in too.
+function computeOverallHealth(devices, alertsForSite = null) {
   const workstations = devices.filter((d) => WORKSTATION_TYPES.has(d.deviceType));
   const servers = devices.filter((d) => SERVER_TYPES.has(d.deviceType));
   const workstation = groupSummary(workstations);
@@ -230,17 +298,60 @@ function computeOverallHealth(devices) {
   // Antivirus 0.40/Software 0.20 formula unchanged.
   const server = groupSummary(servers, { patch: 0, antivirus: 1, software: 0 });
 
-  // Overall Health Score, by request -- Server weighted 60/Workstation
-  // 40 when both exist (servers carry more business risk per device, so
-  // they're NOT just averaged in equally with however many workstations
-  // a client happens to have); falls back to whichever single group
-  // actually has devices.
-  let overallScore = null;
-  if (server && workstation) overallScore = Math.round(server.healthScore * 0.6 + workstation.healthScore * 0.4);
-  else if (server) overallScore = Math.round(server.healthScore);
-  else if (workstation) overallScore = Math.round(workstation.healthScore);
+  let assetManagement = null;
+  let monitoring = null;
+  if (alertsForSite !== null) {
+    assetManagement = assetManagementScore(devices);
+    monitoring = monitoringScore(alertsForSite);
+    // Server Score broadened, by request -- Antivirus alone (the only
+    // thing groupSummary() above could score it on, Patch/Software not
+    // being Datto-managed for servers) was judged too narrow a signal on
+    // its own, so Asset Management/Monitoring are blended in here too,
+    // ALONGSIDE Antivirus (not replacing it) -- same 60/20/20 weighting as
+    // the top-level Overall Health Score below, for the same "keep the
+    // most data-rich real signal dominant" reasoning. `server.healthScore`
+    // going in here is still just the unrounded Antivirus score
+    // (groupSummary's own weights above were {antivirus: 1}, everything
+    // else 0), captured before it's overwritten.
+    if (server) {
+      const antivirusComponent = server.healthScore;
+      server.healthScore = antivirusComponent * 0.6 + assetManagement * 0.2 + monitoring * 0.2;
+    }
+  }
 
-  return { workstation, server, overallScore };
+  // Server weighted 60/Workstation 40 when both exist (servers carry more
+  // business risk per device, so they're NOT just averaged in equally with
+  // however many workstations a client happens to have); falls back to
+  // whichever single group actually has devices. This blended figure is
+  // itself just ONE component of the Overall Health Score below when
+  // Asset Management/Monitoring are also in play.
+  let deviceHealthScore = null;
+  if (server && workstation) deviceHealthScore = server.healthScore * 0.6 + workstation.healthScore * 0.4;
+  else if (server) deviceHealthScore = server.healthScore;
+  else if (workstation) deviceHealthScore = workstation.healthScore;
+
+  if (alertsForSite === null) {
+    const overallScore = deviceHealthScore !== null ? Math.round(deviceHealthScore) : null;
+    return { workstation, server, overallScore };
+  }
+
+  // Device Health 60 / Asset Management 20 / Monitoring 20, by request --
+  // the existing patch/antivirus/software blend still carries the most
+  // weight (it's the most data-rich of the three), with these two newer,
+  // narrower proxies each contributing a meaningful but smaller share.
+  // Any component with no data (e.g. a client with no devices of EITHER
+  // matched type, so deviceHealthScore is null) drops out of the blend and
+  // the remaining weights re-normalize, rather than silently treating a
+  // missing score as a 0.
+  const components = [
+    { score: deviceHealthScore, weight: 0.6 },
+    { score: assetManagement, weight: 0.2 },
+    { score: monitoring, weight: 0.2 },
+  ].filter((c) => c.score !== null);
+  const totalWeight = components.reduce((sum, c) => sum + c.weight, 0);
+  const overallScore = totalWeight > 0 ? Math.round(components.reduce((sum, c) => sum + c.score * c.weight, 0) / totalWeight) : null;
+
+  return { workstation, server, overallScore, assetManagement, monitoring };
 }
 
 // Same loose normalize-then-either-contains-the-other matching every other
@@ -316,6 +427,11 @@ async function buildSaasAlertsSummary(siteName, force) {
   // genuine alerts worth naming. Each row-fetch below is now scoped to
   // this one customerId too (not account-wide), so it's small regardless
   // of how large that severity's real account-wide total is.
+  // Each row tagged with the severity it was fetched under (`_severity`,
+  // stripped back off below) -- by request, so the Top Events list can
+  // show which of its entries are Critical and colour just those red,
+  // rather than the two severities being indistinguishable once merged
+  // by event name.
   const eventLists = await Promise.all(
     [
       ['critical', criticalCount],
@@ -323,18 +439,35 @@ async function buildSaasAlertsSummary(siteName, force) {
     ].map(async ([alertStatus, total]) => {
       if (total === 0) return [];
       const size = Math.min(total, SAAS_ALERTS_SIZE_CAP);
-      return saasAlertsGet('/reports/events', { start: startISO, end: endISO, alertStatus, customerId, size, timeSort: 'desc' });
+      const rows = await saasAlertsGet('/reports/events', { start: startISO, end: endISO, alertStatus, customerId, size, timeSort: 'desc' });
+      return rows.map((e) => ({ ...e, _severity: alertStatus }));
     })
   );
 
-  const byEventName = new Map();
+  // CONFIRMED live this session (real data, Back 2 Basics): the FIRST cut
+  // of this merged critical+medium occurrences of the same event name into
+  // one combined `count`, coloured red whenever ANY occurrence was
+  // critical -- so a name with 2 critical + 3 medium occurrences showed as
+  // a single red "(5)", even though only 2 of those 5 were actually
+  // critical. Summing every red-coloured number on screen then came out
+  // HIGHER than the real Critical tile (9 vs. the real 6) -- a genuine
+  // client-facing accuracy bug, not just a display quirk, since the
+  // numbers no longer added up to anything real. Fixed by tracking
+  // criticalCount/mediumCount SEPARATELY per name, so the number shown for
+  // each severity is always that severity's own real count -- summing just
+  // the critical figures across every row now always equals the Critical
+  // tile above, by construction.
+  const byEventName = new Map(); // name -> { criticalCount, mediumCount }
   for (const e of eventLists.flat()) {
     const name = e.jointDesc || e.jointType || 'Event';
-    byEventName.set(name, (byEventName.get(name) || 0) + 1);
+    const entry = byEventName.get(name) || { criticalCount: 0, mediumCount: 0 };
+    if (e._severity === 'critical') entry.criticalCount += 1;
+    else entry.mediumCount += 1;
+    byEventName.set(name, entry);
   }
   const topEvents = [...byEventName.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count)
+    .map(([name, v]) => ({ name, criticalCount: v.criticalCount, mediumCount: v.mediumCount }))
+    .sort((a, b) => b.criticalCount + b.mediumCount - (a.criticalCount + a.mediumCount))
     .slice(0, 5);
 
   return { status: 'ok', monitored: true, windowDays: SAAS_ALERTS_WINDOW_DAYS, criticalCount, mediumCount, lowCount, topEvents };
@@ -350,14 +483,58 @@ async function buildSaasAlertsSummary(siteName, force) {
 // Datto's own "Backup Status" chart window -- its own per-app `healthy`
 // flag is what's summarized into counts below, the detail list is just
 // which app types are NOT currently healthy.
+// Per-app-type seat counts, by request ("a seat count or backup count for
+// each of Email, OneDrive, SharePoint & Teams") -- Datto's own /seats rows
+// carry a seatType (SharedMailbox/User/Site/TeamSite/Team, confirmed
+// against real data), not an appType directly, so this maps each seat to
+// the application type it's actually backed up under. Same mapping
+// saas-protection/client.js's own SEAT_TYPE_TO_APP_TYPE already
+// established for its per-client popup, copied here rather than imported
+// (that one's a browser ES module, this is a Node CJS file) -- small
+// literal, same "copy, don't reach into another module's private helper"
+// convention this file already follows elsewhere. OneDrive gets no seat
+// type of its own on the real API (confirmed -- that same comment notes
+// "No OneDrive-typed seat was observed"): a Datto SaaS Protection seat is
+// licensed per M365 USER, and that one licence covers both the user's
+// mailbox (Exchange) AND their OneDrive, so OneDrive's own seat count is
+// the same "User" count as Exchange's, not a separate, smaller number.
+const SEAT_TYPE_TO_APP_TYPES = {
+  SharedMailbox: ['Office365Exchange'],
+  User: ['Office365Exchange', 'Office365OneDrive'],
+  Site: ['Office365SharePoint'],
+  TeamSite: ['Office365SharePoint'],
+  Team: ['Office365Teams'],
+};
+const APP_TYPE_LABELS = {
+  Office365Exchange: 'Email',
+  Office365OneDrive: 'OneDrive',
+  Office365SharePoint: 'SharePoint',
+  Office365Teams: 'Teams',
+};
+const APP_TYPE_ORDER = ['Office365Exchange', 'Office365OneDrive', 'Office365SharePoint', 'Office365Teams'];
+
 async function buildSaasProtectionSummary(siteName, force) {
   const match = await saasProtection.findDomainMatch(siteName);
   if (!match) return { status: 'ok', installed: false };
-  const [billableSeatCount, applications] = await Promise.all([
+  const [billableSeatCount, applications, seats] = await Promise.all([
     saasProtection.getBillableSeatCount(match.customerId, force),
     saasProtection.getApplicationsHistory(match.customerId, force),
+    saasProtection.getSeats(match.customerId, force),
   ]);
   const unhealthy = applications.filter((a) => !a.healthy);
+
+  const seatCountByAppType = {};
+  for (const s of seats) {
+    for (const appType of SEAT_TYPE_TO_APP_TYPES[s.seatType] || []) {
+      seatCountByAppType[appType] = (seatCountByAppType[appType] || 0) + 1;
+    }
+  }
+  const appBreakdown = APP_TYPE_ORDER.map((appType) => {
+    const app = applications.find((a) => a.appType === appType);
+    if (!app) return null; // this app type isn't present for this client at all -- not a real row, not a zero
+    return { appType, label: APP_TYPE_LABELS[appType], healthy: app.healthy, status: app.status, seatCount: seatCountByAppType[appType] ?? null };
+  }).filter(Boolean);
+
   return {
     status: 'ok',
     installed: true,
@@ -366,7 +543,7 @@ async function buildSaasProtectionSummary(siteName, force) {
     billableSeatCount,
     appTypesHealthy: applications.length - unhealthy.length,
     appTypesTotal: applications.length,
-    unhealthyAppTypes: unhealthy.map((a) => ({ appType: a.appType, status: a.status })),
+    appBreakdown,
   };
 }
 
@@ -380,6 +557,23 @@ async function buildSaasProtectionSummary(siteName, force) {
 // buildInstalledServices() (which only read locationCount) -- genuinely new
 // data, not a re-derivation of something already shown elsewhere.
 // alertCount comes back as a STRING on the real API ("0"), not a number.
+// alertCount30d, by request ("a count of total alerts in the last 30
+// days") -- Datto EDR's own /api/Alerts endpoint has NO working server-side
+// filter or pagination (confirmed live this session: every `filter[...]`/
+// `locationId`/`offset`/`page` param tried came back byte-identical,
+// always the same flat batch, hard-capped at exactly 1000 rows regardless
+// of `limit`), so this filters that one fixed batch client-side by each
+// matched Location's own `data.rmmUid` (== an alert's own
+// `hostInfo.rmmSiteId`) and a 30-day cutoff instead of asking the API to
+// scope it. That fixed batch is NOT a true "last 1000 alerts" window in
+// the way it'd need to be for this to under-count silently -- confirmed
+// live the account's own alert volume is low enough that the oldest row
+// already returned (unfiltered) lands right around the 30-day mark on its
+// own, i.e. the 1000-row cap isn't actually binding at this tenant's real
+// volume, so filtering it is a reliable 30-day count in practice, not
+// merely an approximation of one. Cached tenant-wide (getAlerts()'s own
+// 20-min TTL), not re-fetched per client -- same reasoning as every other
+// cached list this page reads from.
 async function buildDattoEdrSummary(siteName, force) {
   if (!dattoEdr.hasDattoEdrCredentials()) return { status: 'not-configured' };
   const matches = await dattoEdr.findLocationMatches(siteName, force);
@@ -388,7 +582,13 @@ async function buildDattoEdrSummary(siteName, force) {
   const activeAgentCount = matches.reduce((sum, l) => sum + (l.activeAgentCount || 0), 0);
   const alertCount = matches.reduce((sum, l) => sum + (Number(l.alertCount) || 0), 0);
   const lastScannedOn = matches.map((l) => l.lastScannedOn).filter(Boolean).sort().pop() || null;
-  return { status: 'ok', installed: true, locationCount: matches.length, agentCount, activeAgentCount, alertCount, lastScannedOn };
+
+  const rmmUids = new Set(matches.map((l) => l.data && l.data.rmmUid).filter(Boolean));
+  const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const alerts = await dattoEdr.getAlerts(force);
+  const alertCount30d = alerts.filter((a) => rmmUids.has(a.hostInfo && a.hostInfo.rmmSiteId) && new Date(a.createdOn).getTime() >= since).length;
+
+  return { status: 'ok', installed: true, agentCount, activeAgentCount, alertCount, alertCount30d, lastScannedOn };
 }
 
 // --- AutoElevate (CyberFOX) ---------------------------------------------
@@ -425,6 +625,48 @@ async function buildHuntressSummary(siteName, force) {
   };
 }
 
+// Proactive Maintenance list, by request -- a standard, account-wide list
+// of regularly scheduled automated activities (NOT pulled live: confirmed
+// against Datto RMM's own real API surface this session -- its only
+// job-related endpoints are GET /v2/job/{uid} and its 3 result
+// sub-routes, plus PUT .../quickjob to CREATE one; there is no list/
+// search endpoint, so a specific client's own scheduled jobs genuinely
+// can't be enumerated via the API at all). Configured via one env var,
+// PROACTIVE_MAINTENANCE_ITEMS, items separated by `|` (a single .env line
+// can't hold real newlines) -- e.g.
+// PROACTIVE_MAINTENANCE_ITEMS=Automated patch deployment|AV engine updates|Scheduled reboots
+// -- falls back to a drafted default list when that's not set, so the
+// report never ships with an empty section. Single source of truth for
+// BOTH surfaces (the on-screen page and the PDF both read this same
+// report.proactiveMaintenance field) -- neither hardcodes its own copy.
+// Pulled from the real "Proactive Maintenance Jobs" table on the Tech
+// Handbook's own "PC Security Settings Applied" SharePoint page (read via
+// the Microsoft 365 connector, by request -- one-time manual transcription
+// for now, not a live sync; direct SharePoint/Graph API access for this
+// server itself is a separate future step). Each line is that row's own
+// bracketed client-facing description, schedule appended -- only rows
+// marked "Y" in that table's own "Show on Client Executive Reports"
+// column belong here (honour that Y/N split on every re-sync; there are
+// no N rows as of this transcription, so all 10 are currently included).
+const DEFAULT_PROACTIVE_MAINTENANCE_ITEMS = [
+  'Backup of drive encryption recovery keys (Weekly)',
+  'Check that threat detection monitoring is active (Daily)',
+  'Check that least-privilege access controls are in place (Daily)',
+  'Verify the dedicated remote support account (Monthly)',
+  'Disable the Windows Fast Startup option (Monthly)',
+  'Run Windows system image scan and repair (Monthly)',
+  'Run a scan and repair of core Windows system files (Monthly)',
+  'Run Disk Cleanup to free up available space (Monthly)',
+  'Check System Restore is enabled (Monthly)',
+  'Verify and enforce endpoint security hardening (Daily)',
+];
+function getProactiveMaintenanceItems() {
+  const raw = (process.env.PROACTIVE_MAINTENANCE_ITEMS || '').trim();
+  if (!raw) return DEFAULT_PROACTIVE_MAINTENANCE_ITEMS;
+  const items = raw.split('|').map((s) => s.trim()).filter(Boolean);
+  return items.length > 0 ? items : DEFAULT_PROACTIVE_MAINTENANCE_ITEMS;
+}
+
 async function buildVendorSummaries(siteName, force) {
   const [saasAlerts, saasProtectionSummary, dattoEdrSummary, autoElevateSummary, huntressSummary] = await Promise.all([
     buildSaasAlertsSummary(siteName, force),
@@ -456,7 +698,12 @@ router.get('/', async (req, res) => {
     }
 
     const alerts = alertsResult.alerts.filter((a) => matchesSite(a.siteName));
-    const { workstation, server, overallScore } = computeOverallHealth(devices);
+    // Every priority, not just the Critical/High `alerts` above -- feeds
+    // the Monitoring score only (see computeOverallHealth()'s own
+    // comment); alertsByPriority/alertsTotalCount below stay Critical/High
+    // only, unchanged.
+    const allAlertsForSite = (alertsResult.allAlerts || []).filter((a) => matchesSite(a.siteName));
+    const { workstation, server, overallScore, assetManagement, monitoring } = computeOverallHealth(devices, allAlertsForSite);
 
     const alertsByPriority = ['Critical', 'High'].map((priority) => ({ priority, count: alerts.filter((a) => a.priority === priority).length }));
 
@@ -488,6 +735,9 @@ router.get('/', async (req, res) => {
       overallScore,
       workstation,
       server,
+      assetManagement,
+      monitoring,
+      proactiveMaintenance: getProactiveMaintenanceItems(),
       alertsByPriority,
       alertsTotalCount: alerts.length,
       // Real total (alertsResult.totalCount, account-wide High/Critical)

@@ -90,4 +90,30 @@ async function findLocationMatches(companyName, force) {
   });
 }
 
-module.exports = { hasDattoEdrCredentials, getLocations, findLocationMatches };
+// Every alert the API will hand back, tenant-wide -- confirmed live this
+// account's own /api/Alerts has NO working filter or pagination param
+// (every `filter[...]`/`locationId`/`offset`/`page` combination tried came
+// back byte-identical), just a flat, hard-capped-at-1000-rows batch. Cached
+// the same way getLocations() above is (20-min TTL) since every caller
+// needs the same unfiltered batch and filters it client-side themselves
+// (see Live Reports' own buildDattoEdrSummary()) rather than this module
+// trying to scope it server-side, which the API doesn't support.
+let alertsCache = null; // { alerts, expiresAt }
+let alertsInFlight = null;
+
+async function getAlerts(force) {
+  if (!force && alertsCache && Date.now() < alertsCache.expiresAt) return alertsCache.alerts;
+  if (!alertsInFlight) {
+    alertsInFlight = edrGet('/api/Alerts')
+      .then((alerts) => {
+        alertsCache = { alerts, expiresAt: Date.now() + CACHE_TTL_MS };
+        return alerts;
+      })
+      .finally(() => {
+        alertsInFlight = null;
+      });
+  }
+  return alertsInFlight;
+}
+
+module.exports = { hasDattoEdrCredentials, getLocations, findLocationMatches, getAlerts };

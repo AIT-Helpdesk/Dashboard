@@ -215,25 +215,43 @@ function drawTile(doc, x, y, w, h, label, value, color) {
 // document's own margins (pdfkit's margin option only affects where
 // flowing text/the page-break boundary sits, not shapes drawn at
 // explicit coordinates).
+// White card with a thin green border, by request -- replaces the earlier
+// full-bleed navy band entirely. Logo + date (no "AS OF" label anymore)
+// stacked top-right; Client Name is now the main title, "Managed Services
+// Report" moved down to the subtitle line (swapped from the original
+// layout, by request). Box height is computed from the actual title
+// height, not a fixed guess -- a long client name wrapping to 2 lines
+// pushes the subtitle down with it instead of overlapping it.
 function drawCoverHeader(doc, report) {
   const pageWidth = doc.page.width;
-  const bandHeight = 112;
-  doc.rect(0, 0, pageWidth, bandHeight).fill(BRAND_PURPLE);
+  const boxX = MARGIN;
+  const boxY = MARGIN;
+  const boxW = pageWidth - MARGIN * 2;
+  const pad = 16;
+  const rightColW = 150;
+  const leftColW = boxW - rightColW - pad * 2;
 
+  doc.font('Helvetica-Bold').fontSize(20);
+  const titleH = doc.heightOfString(report.siteName, { width: leftColW });
+  const leftContentH = titleH + 6 + 14; // title + gap + subtitle line
+  const rightContentH = 26 + 8 + 12; // logo height + gap + date line
+  const boxH = Math.max(leftContentH, rightContentH, 70) + pad * 2;
+
+  doc.roundedRect(boxX, boxY, boxW, boxH, 6).lineWidth(1.5).fillAndStroke('#ffffff', BRAND_GREEN);
+
+  const rightX = boxX + boxW - pad - rightColW;
   try {
-    doc.image(fs.readFileSync(LOGO_PATH), MARGIN, 20, { height: 34 });
+    doc.image(fs.readFileSync(LOGO_PATH), rightX, boxY + pad, { fit: [rightColW, 26], align: 'right' });
   } catch (err) {
     console.error('live-reports: could not embed logo.png in PDF:', err.message);
   }
+  doc.fillColor(MUTED).font('Helvetica-Bold').fontSize(9.5).text(formatDate(report.asOf), rightX, boxY + pad + 26 + 8, { width: rightColW, align: 'right' });
 
-  doc.fillColor('#c9c6ec').font('Helvetica-Bold').fontSize(8).text('AS OF', pageWidth - MARGIN - 220, 24, { width: 220, align: 'right' });
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(11).text(formatDate(report.asOf), pageWidth - MARGIN - 220, 36, { width: 220, align: 'right' });
-
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(24).text('Managed Services Report', MARGIN, 66);
-  doc.fillColor('#d9d7f0').font('Helvetica').fontSize(12).text(`Prepared for ${report.siteName}`, MARGIN, 94);
+  doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(20).text(report.siteName, boxX + pad, boxY + pad, { width: leftColW });
+  doc.fillColor(MUTED).font('Helvetica').fontSize(12).text('Managed Services Report', boxX + pad, boxY + pad + titleH + 6, { width: leftColW });
 
   doc.fillColor(INK);
-  return bandHeight + 20;
+  return boxY + boxH + 20;
 }
 
 function drawSectionHeading(doc, y, text) {
@@ -334,25 +352,49 @@ function drawTable(doc, startY, columns, rows, { rowHeight = 20, headerHeight = 
   drawHeader();
 
   rows.forEach((row, i) => {
-    if (y + rowHeight > doc.page.height - doc.page.margins.bottom) {
+    // Row height grows to fit whatever the tallest PLAIN-TEXT cell actually
+    // needs (a `render` cell -- a pill, say -- is assumed short/fixed and
+    // isn't measured) -- fixes a real clipping bug found this session: the
+    // Recommendations table's "Why It Matters" column can genuinely wrap to
+    // 3 lines of real AI-written text, which the old fixed rowHeight (sized
+    // for 2 lines) silently cut off into the next row's background.
+    doc.font('Helvetica').fontSize(8);
+    let thisRowHeight = rowHeight;
+    columns.forEach((col) => {
+      if (col.render) return;
+      const h = doc.heightOfString(String(row[col.key] ?? ''), { width: col.width - 10 }) + 10;
+      if (h > thisRowHeight) thisRowHeight = h;
+    });
+
+    if (y + thisRowHeight > doc.page.height - doc.page.margins.bottom) {
       doc.addPage();
       y = doc.page.margins.top;
       drawHeader();
     }
-    if (i % 2 === 1) doc.rect(x, y, width, rowHeight).fill('#f9fafb');
+    if (i % 2 === 1) doc.rect(x, y, width, thisRowHeight).fill('#f9fafb');
     let cx = x;
     columns.forEach((col) => {
       if (col.render) {
-        col.render(doc, cx + 6, y + rowHeight / 2 - 5, col.width - 10, row);
+        col.render(doc, cx + 6, y + thisRowHeight / 2 - 5, col.width - 10, row);
       } else {
-        doc.fillColor(INK).font('Helvetica').fontSize(8).text(String(row[col.key] ?? ''), cx + 6, y + rowHeight / 2 - 5, { width: col.width - 10, ellipsis: true });
+        doc.fillColor(INK).font('Helvetica').fontSize(8).text(String(row[col.key] ?? ''), cx + 6, y + 5, { width: col.width - 10 });
       }
       cx += col.width;
     });
-    y += rowHeight;
+    y += thisRowHeight;
   });
 
   return y;
+}
+
+// Scorecard-only status label, by request -- "Action needed" reads as
+// "In Progress" here (a lower score on the Scorecard table reads as
+// actively being worked through, not a fixed hard failure), while every
+// OTHER use of statusForScore() (At a Glance's own gauge status pill) is
+// untouched -- the request was scoped to "on the scorecard" specifically.
+function scorecardStatus(score) {
+  const status = statusForScore(score);
+  return status.label === 'Action needed' ? { label: 'In Progress', color: status.color } : status;
 }
 
 function drawScorecard(doc, y, report, vendors) {
@@ -370,19 +412,25 @@ function drawScorecard(doc, y, report, vendors) {
   ];
 
   const rows = [
-    report.workstation && { area: 'Workstation Patch Management', result: `${report.workstation.patch.score}%`, status: statusForScore(report.workstation.patch.score) },
-    report.workstation && { area: 'Workstation Software Compliance', result: `${report.workstation.software.score}%`, status: statusForScore(report.workstation.software.score) },
-    report.workstation && { area: 'Workstation Antivirus', result: `${report.workstation.antivirus.score}%`, status: statusForScore(report.workstation.antivirus.score) },
-    report.server && { area: 'Server Antivirus', result: `${report.server.antivirus.score}%`, status: statusForScore(report.server.antivirus.score) },
-    { area: 'Open Alerts (Critical/High)', result: String(report.alertsTotalCount), status: statusForScore(report.alertsTotalCount > 0 ? 50 : 100) },
+    // First 2 entries, by request -- live-computed proxies, not Datto's
+    // own real Asset Management/Monitoring figures (see
+    // assetManagementScore()/monitoringScore() in live-reports/server.js
+    // for exactly what each one checks and why).
+    report.assetManagement != null && { area: 'Asset Management', result: `${report.assetManagement}%`, status: scorecardStatus(report.assetManagement) },
+    report.monitoring != null && { area: 'Monitoring', result: `${report.monitoring}%`, status: scorecardStatus(report.monitoring) },
+    report.workstation && { area: 'Workstation Patch Management', result: `${report.workstation.patch.score}%`, status: scorecardStatus(report.workstation.patch.score) },
+    report.workstation && { area: 'Workstation Software Compliance', result: `${report.workstation.software.score}%`, status: scorecardStatus(report.workstation.software.score) },
+    report.workstation && { area: 'Workstation Antivirus', result: `${report.workstation.antivirus.score}%`, status: scorecardStatus(report.workstation.antivirus.score) },
+    report.server && { area: 'Server Antivirus', result: `${report.server.antivirus.score}%`, status: scorecardStatus(report.server.antivirus.score) },
+    { area: 'Open Alerts (Critical/High)', result: String(report.alertsTotalCount), status: scorecardStatus(report.alertsTotalCount > 0 ? 50 : 100) },
     vendors.saasAlerts.status === 'ok' &&
       vendors.saasAlerts.monitored && {
         area: 'SaaS Alerts (30 days)',
         result: `${vendors.saasAlerts.criticalCount} critical, ${vendors.saasAlerts.mediumCount} medium`,
-        status: statusForScore(vendors.saasAlerts.criticalCount > 0 ? 40 : vendors.saasAlerts.mediumCount > 0 ? 75 : 100),
+        status: scorecardStatus(vendors.saasAlerts.criticalCount > 0 ? 40 : vendors.saasAlerts.mediumCount > 0 ? 75 : 100),
       },
     vendors.saasProtection.status === 'ok' &&
-      vendors.saasProtection.installed && { area: 'SaaS Protection (Backup)', result: `${vendors.saasProtection.backupPercentage}%`, status: statusForScore(vendors.saasProtection.backupPercentage) },
+      vendors.saasProtection.installed && { area: 'SaaS Protection (Backup)', result: `${vendors.saasProtection.backupPercentage}%`, status: scorecardStatus(vendors.saasProtection.backupPercentage) },
   ].filter(Boolean);
 
   return drawTable(doc, y, columns, rows, { rowHeight: 22, headerHeight: 20 }) + 18;
@@ -419,6 +467,10 @@ const PATCH_COLORS = { 'Fully Patched': '#16a34a', 'Approved Pending': '#86c95e'
 const ANTIVIRUS_COLORS = { 'Running and Up to Date': '#16a34a', 'Not up to date': '#f59e0b', 'Not Running': '#dc2626', 'Not Detected': '#7f1d1d' };
 const SOFTWARE_COLORS = { Compliant: '#16a34a', 'Not Compliant': '#f59e0b', Unmanaged: '#9aa3af' };
 
+// Donut breakdowns only -- the big device-by-device table used to live
+// right under these on the same page; moved to its own drawDeviceList()
+// below, now placed right before Recommendations instead (by request),
+// so this function stops reaching into report.dattoLive at all.
 function drawDeviceHealth(doc, y, report) {
   y = drawSectionHeading(doc, y, 'Device Health');
   const w = contentWidth(doc);
@@ -439,89 +491,313 @@ function drawDeviceHealth(doc, y, report) {
     y += 16;
   }
 
+  return y + 10;
+}
+
+// The full device-by-device table -- its own section now, placed right
+// before Recommendations (by request), not folded into Device Health
+// above anymore.
+function drawDeviceList(doc, y, report) {
   const devices = report.dattoLive && report.dattoLive.devices;
-  if (devices && devices.length > 0) {
-    const order = { stale: 0, unknown: 1, ageing: 2, recent: 3 };
-    const freshnessLabel = { stale: 'Not seen 30+ days', ageing: 'Seen 7-30 days', recent: 'Seen <7 days', unknown: 'Unknown' };
-    const sorted = [...devices].sort((a, b) => {
-      const f = (order[a.freshness] ?? 9) - (order[b.freshness] ?? 9);
-      if (f !== 0) return f;
-      if (a.online !== b.online) return a.online ? 1 : -1;
-      return (a.hostname || '').localeCompare(b.hostname || '');
-    });
+  if (!devices || devices.length === 0) return y;
+  const w = contentWidth(doc);
 
-    y += 6;
-    doc.font('Helvetica-Bold').fontSize(10).fillColor(BRAND_PURPLE).text(`All Devices (${sorted.length}) -- oldest check-in first`, MARGIN, y);
-    y += 16;
+  const order = { stale: 0, unknown: 1, ageing: 2, recent: 3 };
+  const freshnessLabel = { stale: 'Not seen 30+ days', ageing: 'Seen 7-30 days', recent: 'Seen <7 days', unknown: 'Unknown' };
+  const sorted = [...devices].sort((a, b) => {
+    const f = (order[a.freshness] ?? 9) - (order[b.freshness] ?? 9);
+    if (f !== 0) return f;
+    if (a.online !== b.online) return a.online ? 1 : -1;
+    return (a.hostname || '').localeCompare(b.hostname || '');
+  });
 
-    const columns = [
-      { key: 'hostname', label: 'DEVICE', width: w * 0.28 },
-      { key: 'type', label: 'TYPE', width: w * 0.16 },
-      { key: 'freshness', label: 'LAST SEEN', width: w * 0.22, render: (doc, x, y, width, row) => doc.fillColor(INK).font('Helvetica').fontSize(8).text(freshnessLabel[row.freshness] || row.freshness, x, y, { width, ellipsis: true }) },
-      { key: 'online', label: 'ONLINE', width: w * 0.1, render: (doc, x, y, width, row) => doc.fillColor(INK).font('Helvetica').fontSize(8).text(row.online ? 'Yes' : 'No', x, y, { width }) },
-      { key: 'lastUser', label: 'LAST USER', width: w * 0.24 },
-    ];
-    y = drawTable(doc, y, columns, sorted, { rowHeight: 16, headerHeight: 18 });
-  }
+  y = drawSectionHeading(doc, y, `All Devices (${sorted.length})`);
+  doc.font('Helvetica-Oblique').fontSize(7.5).fillColor(MUTED).text('Oldest check-in first.', MARGIN, y);
+  y += 14;
+
+  const columns = [
+    { key: 'hostname', label: 'DEVICE', width: w * 0.28 },
+    { key: 'type', label: 'TYPE', width: w * 0.16 },
+    { key: 'freshness', label: 'LAST SEEN', width: w * 0.22, render: (doc, x, y, width, row) => doc.fillColor(INK).font('Helvetica').fontSize(8).text(freshnessLabel[row.freshness] || row.freshness, x, y, { width, ellipsis: true }) },
+    { key: 'online', label: 'ONLINE', width: w * 0.1, render: (doc, x, y, width, row) => doc.fillColor(INK).font('Helvetica').fontSize(8).text(row.online ? 'Yes' : 'No', x, y, { width }) },
+    { key: 'lastUser', label: 'LAST USER', width: w * 0.24 },
+  ];
+  y = drawTable(doc, y, columns, sorted, { rowHeight: 16, headerHeight: 18 });
 
   return y + 18;
 }
 
-function vendorCardRows(vendors) {
-  const row = (label, status, lines) => ({ label, status, lines });
-  return [
-    row('SaaS Alerts', vendors.saasAlerts.status, vendors.saasAlerts.status === 'ok' && vendors.saasAlerts.monitored ? [`Critical: ${vendors.saasAlerts.criticalCount}`, `Medium: ${vendors.saasAlerts.mediumCount}`, `Low: ${vendors.saasAlerts.lowCount}`] : null),
-    row(
-      'SaaS Protection (Backup)',
-      vendors.saasProtection.status,
-      vendors.saasProtection.status === 'ok' && vendors.saasProtection.installed
-        ? [`Backup health: ${vendors.saasProtection.backupPercentage}%`, `Billable seats: ${vendors.saasProtection.billableSeatCount ?? '--'}`, `App types healthy: ${vendors.saasProtection.appTypesHealthy}/${vendors.saasProtection.appTypesTotal}`]
-        : null
-    ),
-    row(
-      'Datto EDR',
-      vendors.dattoEdr.status,
-      vendors.dattoEdr.status === 'ok' && vendors.dattoEdr.installed
-        ? [`Locations: ${vendors.dattoEdr.locationCount}`, `Agents (active): ${vendors.dattoEdr.agentCount} (${vendors.dattoEdr.activeAgentCount})`, `Open alerts: ${vendors.dattoEdr.alertCount}`]
-        : null
-    ),
-    row('Huntress', vendors.huntress.status, vendors.huntress.status === 'ok' && vendors.huntress.installed ? [`Agents monitored: ${vendors.huntress.agentsCount ?? '--'}`, `Incident reports (lifetime): ${vendors.huntress.incidentReportsCount ?? '--'}`] : null),
-    row('AutoElevate', vendors.autoElevate.status, vendors.autoElevate.status === 'ok' && vendors.autoElevate.installed && vendors.autoElevate.deployedSince ? [`Deployed since: ${formatDateShort(vendors.autoElevate.deployedSince)}`] : null),
-  ];
+// Cybersecurity Layers (renamed from "Other Systems", by request) --
+// rebuilt to use the same KPI-tile-row look the on-screen page's own
+// vendor widgets use (kpiTileRow(), meeting-prep-report-render.js)
+// instead of plain text lines, via drawTile() (already used for At a
+// Glance's own tiles) rather than a second tile-drawing implementation.
+// No placeholder card for a vendor with nothing live to show, same as the
+// on-screen page's own vendorWidgetsHtml() -- "a vendor with nothing live
+// just contributes no card at all, no placeholder of any kind".
+// `cols` defaults to one row (every tile across); pass a smaller `cols` to
+// wrap into a grid instead -- added for Datto EDR's own 4 tiles (by
+// request, 2x2 instead of a cramped single row of 4).
+function kpiTileGridRows(tileCount, cols) {
+  return Math.ceil(tileCount / cols);
+}
+function drawKpiTileRow(doc, x, y, w, tiles, cols = tiles.length, h = 38) {
+  const gap = 6;
+  const tileW = (w - gap * (cols - 1)) / cols;
+  tiles.forEach((t, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const tx = x + col * (tileW + gap);
+    const ty = y + row * (h + gap);
+    const color = t.tier === 'good' ? BRAND_GREEN : t.tier === 'warn' ? AMBER : t.tier === 'bad' ? RED : INK;
+    drawTile(doc, tx, ty, tileW, h, t.label, t.value, color);
+  });
+  return y + kpiTileGridRows(tiles.length, cols) * h + (kpiTileGridRows(tiles.length, cols) - 1) * gap;
 }
 
-function drawOtherSystems(doc, y, vendors) {
-  y = drawSectionHeading(doc, y, 'Other Systems');
+function vendorCardSpecs(vendors) {
+  const specs = [];
+
+  // SaaS Alerts -- critical-severity Top Events coloured red, by request
+  // (same severity data buildSaasAlertsSummary() now carries through).
+  if (vendors.saasAlerts.status === 'ok' && vendors.saasAlerts.monitored) {
+    const sa = vendors.saasAlerts;
+    specs.push({
+      title: `SaaS Alerts (Last ${sa.windowDays} Days)`,
+      kpis: [
+        { label: 'Critical', value: sa.criticalCount, tier: sa.criticalCount > 0 ? 'bad' : 'good' },
+        { label: 'Medium', value: sa.mediumCount, tier: sa.mediumCount > 0 ? 'warn' : 'good' },
+        { label: 'Low', value: sa.lowCount },
+      ],
+      // Counts shown are each event name's own REAL critical/medium
+      // counts, never merged into one combined number -- confirmed live
+      // this session (Back 2 Basics) that merging them made the
+      // red-coloured numbers add up to MORE than the real Critical tile, a
+      // genuine accuracy bug a client could (and did) catch. See
+      // buildSaasAlertsSummary()'s own comment in server.js.
+      lines:
+        sa.topEvents.length > 0
+          ? sa.topEvents.map((e) => ({
+              text: `${e.name} (${e.criticalCount > 0 && e.mediumCount > 0 ? `${e.criticalCount} critical, ${e.mediumCount} medium` : e.criticalCount || e.mediumCount})`,
+              color: e.criticalCount > 0 ? RED : INK,
+              bold: e.criticalCount > 0,
+            }))
+          : [{ text: 'No alerts in this window.', color: MUTED, italic: true }],
+    });
+  }
+
+  // SaaS Protection -- per-app (Email/OneDrive/SharePoint/Teams) seat
+  // breakdown, by request, replacing the old single "Needs attention"
+  // summary line (this covers the same unhealthy-app information, just
+  // per-app and with a seat count). "Billable Seats" relabelled "Seats",
+  // by request.
+  if (vendors.saasProtection.status === 'ok' && vendors.saasProtection.installed) {
+    const sp = vendors.saasProtection;
+    const tier = sp.backupPercentage == null ? undefined : sp.backupPercentage >= 95 ? 'good' : sp.backupPercentage >= 70 ? 'warn' : 'bad';
+    specs.push({
+      title: 'SaaS Backups',
+      kpis: [
+        { label: 'Backup %', value: sp.backupPercentage ?? '--', tier },
+        { label: 'Seats', value: sp.billableSeatCount ?? '--' },
+        { label: 'App Types Healthy', value: `${sp.appTypesHealthy}/${sp.appTypesTotal}` },
+      ],
+      // One consolidated, wrapped line (mixed-colour `segments`, not one
+      // line per app) sitting right under the tile row, by request --
+      // replaces the earlier 4-line stacked list.
+      lines: [
+        {
+          segments: sp.appBreakdown.map((a) => {
+            const seatText = a.seatCount != null ? `${a.seatCount} seat${a.seatCount === 1 ? '' : 's'}` : a.status;
+            return { text: `${a.label}: ${seatText}`, color: a.healthy ? INK : AMBER };
+          }),
+        },
+      ],
+    });
+  }
+
+  // Datto EDR -- Locations tile removed, Alerts (30 Days) tile added, by
+  // request. See buildDattoEdrSummary()'s own comment for how
+  // alertCount30d is derived (the API itself has no working date filter).
+  if (vendors.dattoEdr.status === 'ok' && vendors.dattoEdr.installed) {
+    const edr = vendors.dattoEdr;
+    specs.push({
+      title: 'Datto EDR',
+      // 2x2 grid, by request (kpiCols) -- was a cramped single row of 4.
+      kpiCols: 2,
+      kpis: [
+        { label: 'Agents', value: edr.agentCount },
+        { label: 'Active', value: edr.activeAgentCount },
+        { label: 'Open Alerts', value: edr.alertCount, tier: edr.alertCount > 0 ? 'bad' : 'good' },
+        { label: 'Alerts (30d)', value: edr.alertCount30d, tier: edr.alertCount30d > 0 ? 'warn' : 'good' },
+      ],
+      lines: edr.lastScannedOn ? [{ text: `Last scanned: ${formatDate(edr.lastScannedOn)}`, color: MUTED, italic: true }] : [],
+    });
+  }
+
+  // Huntress -- caption shortened to just "Lifetime total incidents.", by request.
+  if (vendors.huntress.status === 'ok' && vendors.huntress.installed) {
+    const h = vendors.huntress;
+    const kpis = [
+      { label: 'Agents Monitored', value: h.agentsCount ?? '--' },
+      { label: 'Incident Reports', value: h.incidentReportsCount ?? '--', tier: h.incidentReportsCount > 0 ? 'warn' : 'good' },
+    ];
+    if (h.microsoft365UsersCount) kpis.push({ label: 'M365 Users', value: h.microsoft365UsersCount });
+    specs.push({ title: 'Huntress', kpis, lines: [{ text: 'Lifetime total incidents.', color: MUTED, italic: true }] });
+  }
+
+  if (vendors.autoElevate.status === 'ok' && vendors.autoElevate.installed && vendors.autoElevate.deployedSince) {
+    specs.push({ title: 'AutoElevate', kpis: [], lines: [{ text: `Deployed since ${formatDateShort(vendors.autoElevate.deployedSince)}.`, color: INK }] });
+  }
+
+  return specs;
+}
+
+function measureCyberCardHeight(doc, w, spec) {
+  let h = 8 + 16; // top padding + title line
+  if (spec.kpis.length > 0) {
+    const cols = spec.kpiCols || spec.kpis.length;
+    const rows = kpiTileGridRows(spec.kpis.length, cols);
+    h += rows * 38 + (rows - 1) * 6 + 8; // tile grid + gap
+  }
+  doc.font('Helvetica').fontSize(8);
+  spec.lines.forEach((line) => {
+    const text = line.segments ? line.segments.map((s) => s.text).join('   ') : line.text;
+    h += doc.heightOfString(text, { width: w - 20 }) + 2;
+  });
+  return h + 8; // bottom padding
+}
+
+function drawCyberCard(doc, x, y, w, spec) {
+  const h = measureCyberCardHeight(doc, w, spec);
+  doc.roundedRect(x, y, w, h, 4).fillAndStroke('#ffffff', BORDER);
+  doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(9.5).text(spec.title, x + 10, y + 8, { width: w - 20 });
+  let cy = y + 24;
+  if (spec.kpis.length > 0) {
+    cy = drawKpiTileRow(doc, x + 10, cy, w - 20, spec.kpis, spec.kpiCols || spec.kpis.length) + 8;
+  }
+  spec.lines.forEach((line) => {
+    if (line.segments) {
+      // Mixed-colour single line (SaaS Backups' own per-app breakdown,
+      // by request) -- pdfkit's own continued-text chaining, width/x/y set
+      // only on the FIRST segment of the chain (pdfkit tracks flow for the
+      // rest itself).
+      doc.font('Helvetica').fontSize(8);
+      line.segments.forEach((seg, i) => {
+        doc.fillColor(seg.color || INK);
+        const text = seg.text + (i < line.segments.length - 1 ? '   ' : '');
+        if (i === 0) doc.text(text, x + 10, cy, { continued: i < line.segments.length - 1, width: w - 20 });
+        else doc.text(text, { continued: i < line.segments.length - 1 });
+      });
+      cy = doc.y + 2;
+      return;
+    }
+    doc
+      .font(line.italic ? 'Helvetica-Oblique' : line.bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(8)
+      .fillColor(line.color || INK);
+    doc.text(line.text, x + 10, cy, { width: w - 20 });
+    cy = doc.y + 2;
+  });
+  doc.fillColor(INK);
+  return h;
+}
+
+function drawCybersecurityLayers(doc, y, vendors) {
+  // No longer guaranteed to start at the top of a fresh page (the forced
+  // addPage() before this call was removed, by request -- this section
+  // now continues straight on from Device Health's own donuts) -- guards
+  // against an orphaned heading alone at the very bottom of a page with
+  // every real card pushed onto the next one.
+  y = ensureSpace(doc, y, 150);
+  y = drawSectionHeading(doc, y, 'Cybersecurity Layers');
   const w = contentWidth(doc);
   const gap = 10;
   const colW = (w - gap) / 2;
-  const rows = vendorCardRows(vendors);
+  const specs = vendorCardSpecs(vendors);
 
-  let colX = [MARGIN, MARGIN + colW + gap];
-  let colY = [y, y];
-  rows.forEach((row, i) => {
+  const colX = [MARGIN, MARGIN + colW + gap];
+  const colY = [y, y];
+  specs.forEach((spec, i) => {
     const col = i % 2;
     const x = colX[col];
     let cy = colY[col];
-    const lineCount = row.lines ? row.lines.length : 1;
-    const h = 24 + lineCount * 12 + 6;
+    const h = measureCyberCardHeight(doc, colW, spec);
     cy = ensureSpace(doc, cy, h);
-    doc.roundedRect(x, cy, colW, h, 4).fillAndStroke(row.lines ? '#ffffff' : CARD_BG, BORDER);
-    doc.fillColor(row.lines ? BRAND_PURPLE : MUTED).font('Helvetica-Bold').fontSize(9.5).text(row.label, x + 10, cy + 8);
-    let ly = cy + 22;
-    if (row.lines) {
-      doc.font('Helvetica').fontSize(8).fillColor(INK);
-      row.lines.forEach((line) => {
-        doc.text(line, x + 10, ly, { width: colW - 20 });
-        ly += 12;
-      });
-    } else {
-      doc.font('Helvetica-Oblique').fontSize(8).fillColor(MUTED).text(row.status === 'not-configured' ? 'Not connected' : 'Not installed for this client', x + 10, ly);
-    }
+    drawCyberCard(doc, x, cy, colW, spec);
     colY[col] = cy + h + gap;
   });
 
   return Math.max(colY[0], colY[1]) + 10;
+}
+
+// Score-methodology glossary, by request -- fixed reference copy (not
+// derived from report data), placed right before Recommendations.
+const SCORE_EXPLANATIONS = [
+  {
+    title: 'Asset Management',
+    body: "The Asset Management score represents the capability of the network to function as is required by today's standards. Compliancy checks are made against the device to ensure devices meet the set criteria. Included in the checks are Warranty Status, Disk Capacity, Memory Capacity and if the Operating system is still supported.",
+  },
+  {
+    title: 'Monitoring',
+    body: 'The Monitoring score is influenced by the open monitoring alerts for the network. The total number of open alerts influence the score, a higher priority is reflected by a increased weight in the calculation. A lower score means that issues are seen but have not yet been resolved.',
+  },
+  {
+    title: 'Patch Management',
+    body: 'Regularly installing Microsoft Updates is essential for keeping the network secure. The Patch Management score represents the current state of Microsoft Updates in the network.',
+  },
+  {
+    title: 'Software Management',
+    body: 'Keeping commonly used 3rd party software applications updated significantly helps keeping the network secure. Attackers often try to exploit security vulnerabilities in these applications. This score indicates the compliance level of the managed devices.',
+  },
+  {
+    title: 'Antivirus',
+    body: 'An Antivirus product on all devices is essential for keeping the network protected against malware and other threats. The Antivirus Score represents if the Antivirus solution is installed, running and up to date on all devices.',
+  },
+  {
+    title: 'Proactive Maintenance',
+    body: 'Any network requires proactive maintenance to ensure its availability, security and performance. The report contains a list of regularly scheduled automated activities. No score is calculated based on these activities.',
+  },
+];
+
+function drawScoreExplanations(doc, y) {
+  y = drawSectionHeading(doc, y, 'Understanding Your Scores');
+  const w = contentWidth(doc);
+  SCORE_EXPLANATIONS.forEach((item) => {
+    doc.font('Helvetica').fontSize(8.5);
+    const bodyHeight = doc.heightOfString(item.body, { width: w });
+    y = ensureSpace(doc, y, 14 + bodyHeight + 10);
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(BRAND_PURPLE).text(item.title, MARGIN, y);
+    y += 14;
+    doc.font('Helvetica').fontSize(8.5).fillColor(INK).text(item.body, MARGIN, y, { width: w });
+    y += bodyHeight + 10;
+  });
+  return y;
+}
+
+// Proactive Maintenance note -- items now come from the report itself
+// (report.proactiveMaintenance, server.js's own getProactiveMaintenanceItems(),
+// configurable via PROACTIVE_MAINTENANCE_ITEMS in .env), not hardcoded
+// here, so the PDF and the on-screen page can't drift out of sync with
+// each other. Moved to the top of the Devices page, by request (used to
+// sit at the bottom of the Cybersecurity Layers page) -- see
+// buildReportPdf() below for where it's actually called now.
+function drawProactiveMaintenanceNote(doc, y, items) {
+  if (!items || items.length === 0) return y;
+  const w = contentWidth(doc);
+  doc.font('Helvetica').fontSize(8);
+  const itemHeights = items.map((item) => doc.heightOfString(`-  ${item}`, { width: w - 14 }) + 2);
+  const totalHeight = 16 + itemHeights.reduce((sum, h) => sum + h, 0) + 6;
+  y = ensureSpace(doc, y, totalHeight);
+
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(BRAND_PURPLE).text('Proactive Maintenance', MARGIN, y);
+  y += 16;
+  doc.font('Helvetica').fontSize(8).fillColor(INK);
+  items.forEach((item, i) => {
+    doc.text(`-  ${item}`, MARGIN + 4, y, { width: w - 14 });
+    y += itemHeights[i];
+  });
+  doc.font('Helvetica-Oblique').fontSize(7).fillColor(MUTED).text('Standard activities performed across all managed devices -- not scored, and not specific to this client’s own schedule.', MARGIN, y + 2, { width: w });
+  return y + 14;
 }
 
 function drawRecommendations(doc, y, commentary) {
@@ -532,7 +808,10 @@ function drawRecommendations(doc, y, commentary) {
       key: 'priority',
       label: 'PRIORITY',
       width: w * 0.16,
-      render: (doc, x, y, width, row) => drawPill(doc, x, y, row.priority, row.priority === 'Action needed' ? RED : AMBER),
+      // "Action needed" displays as "In Progress", by request -- same
+      // relabel as the Scorecard's own scorecardStatus(), kept colour-coded
+      // off the real underlying priority value (unchanged).
+      render: (doc, x, y, width, row) => drawPill(doc, x, y, row.priority === 'Action needed' ? 'In Progress' : row.priority, row.priority === 'Action needed' ? RED : AMBER),
     },
     { key: 'recommendation', label: 'RECOMMENDATION', width: w * 0.42 },
     { key: 'whyItMatters', label: 'WHY IT MATTERS', width: w * 0.42 },
@@ -587,9 +866,32 @@ function buildReportPdf({ report, vendors, commentary }) {
       y = doc.page.margins.top;
       y = drawDeviceHealth(doc, y, report);
 
+      // No forced page break here, by request -- Cybersecurity Layers
+      // continues straight on from Device Health's own donuts, same page
+      // when it fits (ensureSpace()'s normal per-card page-break logic,
+      // inside drawCybersecurityLayers() itself, still applies if it
+      // doesn't).
+      y = drawCybersecurityLayers(doc, y, vendors);
+
+      // Device list and the score-explanations glossary both sit right
+      // before Recommendations now, by request -- the device-by-device
+      // table used to live directly under Device Health's own donuts;
+      // moved here instead. Proactive Maintenance now sits at the TOP of
+      // this same page, above the table, by request (used to sit at the
+      // bottom of the Cybersecurity Layers page). Both skipped (no blank
+      // page) when there's genuinely no device list to show, same as the
+      // old inline placement did.
+      if (report.dattoLive && report.dattoLive.devices && report.dattoLive.devices.length > 0) {
+        doc.addPage();
+        y = doc.page.margins.top;
+        y = drawProactiveMaintenanceNote(doc, y, report.proactiveMaintenance);
+        y += 10;
+        y = drawDeviceList(doc, y, report);
+      }
+
       doc.addPage();
       y = doc.page.margins.top;
-      y = drawOtherSystems(doc, y, vendors);
+      y = drawScoreExplanations(doc, y);
 
       if (commentary && commentary.recommendations && commentary.recommendations.length > 0) {
         doc.addPage();
