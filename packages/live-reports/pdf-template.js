@@ -17,6 +17,11 @@ const PDFDocument = require('pdfkit');
 // Invoice Intake's own email-pdf.js already made for its own (much
 // simpler) PDF, just with real layout instead of plain flowing text.
 const LOGO_PATH = path.join(__dirname, '..', 'shell', 'public', 'logo.png');
+// Cover header's decorative wave graphic, by request -- copied into the
+// repo (same shared-assets location logo.png already uses) rather than
+// read from the user's own OneDrive path, which wouldn't exist on the
+// production server.
+const WAVE_PATH = path.join(__dirname, '..', 'shell', 'public', 'cover-wave.png');
 
 // Ambient iT's own brand colours, eyeballed from the real logo.png (no
 // documented brand guide found in this repo).
@@ -315,14 +320,36 @@ function drawCoverHeader(doc, report) {
   // widening the date's own text column.
   const logoBoxW = rightColW * 1.2;
   const logoH = 26 * 1.2;
+  // Flush against the box's own top-left corner, by request -- a literal
+  // 0 now (was a small 1pt dodge of the border stroke, no longer needed --
+  // see the draw-order comment below).
+  const flushInset = 0;
+  const waveGap = 0; // no gap, by request -- image reaches all the way down to the client name
 
+  // Client name/subtitle are bottom-anchored, by request -- back to the
+  // ORIGINAL pre-wave-image layout (boxH driven by the text + the normal
+  // pad, same as the right column's logo/date), not grown to also fit the
+  // image. The wave image instead fills whatever space is left ABOVE that
+  // bottom-anchored text -- "make the corner image fit in that bigger
+  // space" -- bound by BOTH the leftover height above the title and the
+  // leftColW width (the same width the client name itself wraps to),
+  // whichever is the tighter constraint, so it's always exactly as big as
+  // it can be without ever touching the text.
   doc.font('Helvetica-Bold').fontSize(20);
   const titleH = doc.heightOfString(report.siteName, { width: leftColW });
-  const leftContentH = titleH + 6 + 14; // title + gap + subtitle line
+  const leftTextH = titleH + 6 + 14; // title + gap + subtitle line
   const rightContentH = logoH + 8 + 12; // logo height + gap + date line
-  const boxH = Math.max(leftContentH, rightContentH, 70) + pad * 2;
+  const boxH = Math.max(leftTextH, rightContentH, 70) + pad * 2;
 
-  doc.roundedRect(boxX, boxY, boxW, boxH, 6).lineWidth(3).fillAndStroke('#ffffff', BRAND_GREEN);
+  // Fill only here -- the green border is stroked LAST, after everything
+  // else (logo, text, and especially the wave image), by request ("sit it
+  // behind the green border so that the border is straight"). The wave
+  // image is a plain rectangle sitting right in the box's own rounded
+  // corner; drawing the border stroke UNDER it (the original single
+  // fillAndStroke() call) let the image's square corner visually square
+  // off the border's own rounded curve. Stroking on top instead always
+  // paints a clean curved border line over whatever is beneath it.
+  doc.roundedRect(boxX, boxY, boxW, boxH, 6).fill('#ffffff');
 
   const rightX = boxX + boxW - pad - rightColW;
   const logoX = boxX + boxW - pad - logoBoxW;
@@ -334,11 +361,45 @@ function drawCoverHeader(doc, report) {
   // Not bold, and the 3-char month (formatDateCover()), both by request.
   doc.fillColor(MUTED).font('Helvetica').fontSize(9.5).text(formatDateCover(report.asOf), rightX, boxY + pad + logoH + 8, { width: rightColW, align: 'right' });
 
-  // Bottom-left, not top-left, by request -- the logo/date stay top-right
-  // where they were; only the client name + subtitle move.
-  const leftStartY = boxY + boxH - pad - leftContentH;
+  const leftStartY = boxY + boxH - pad - leftTextH;
   doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(20).text(report.siteName, boxX + pad, leftStartY, { width: leftColW });
   doc.fillColor(MUTED).font('Helvetica').fontSize(12).text('Managed Services Report', boxX + pad, leftStartY + titleH + 6, { width: leftColW });
+
+  // Decorative wave graphic, real file 962x195 (confirmed via
+  // System.Drawing before copying it in), ratio ~4.93:1. Sized to fill the
+  // space between the box's own flush top-left corner and the client name
+  // above -- height-bound by whatever room is actually left there (varies
+  // per client -- a short name leaves more room above it than a 2-line
+  // one), and growing the image taller also grows it WIDER (fixed aspect
+  // ratio), by request ("make the image bigger... reach all the way to
+  // the client name and therefore consume more width"). Width-capped by
+  // actual clearance from the logo (not leftColW, the narrower TEXT
+  // column width -- the image sits in a different vertical band than the
+  // text and so isn't bound by the text's own wrap width at all, only by
+  // not visually running under the logo).
+  const availableImgH = Math.max(0, leftStartY - waveGap - (boxY + flushInset));
+  const maxWaveWByLogo = logoX - boxX - 8; // 8pt breathing room before the logo
+  const waveW = Math.min(maxWaveWByLogo, availableImgH * (962 / 195));
+  const waveH = waveW / (962 / 195);
+  // Clipped to the box's own rounded-rect shape, by request ("remove the
+  // overlap outside the box border") -- doc.image() draws a plain sharp-
+  // cornered rectangle, which otherwise pokes past the rounded corner's
+  // curve into the page margin outside the box entirely (confirmed on a
+  // real screenshot -- the border stroke drawn on top, above, only
+  // crisps up the BORDER LINE itself, it doesn't stop the image bleeding
+  // past the curve beyond that thin line). save()/clip()/restore() scopes
+  // the clip to just this one draw call.
+  doc.save();
+  doc.roundedRect(boxX, boxY, boxW, boxH, 6).clip();
+  try {
+    doc.image(fs.readFileSync(WAVE_PATH), boxX + flushInset, boxY + flushInset, { fit: [waveW, waveH] });
+  } catch (err) {
+    console.error('live-reports: could not embed cover-wave.png in PDF:', err.message);
+  }
+  doc.restore();
+
+  // Border stroke drawn LAST -- see the fill() comment above.
+  doc.roundedRect(boxX, boxY, boxW, boxH, 6).lineWidth(3).stroke(BRAND_GREEN);
 
   doc.fillColor(INK);
   return boxY + boxH + 20;
@@ -974,8 +1035,9 @@ function drawKpiTileRow(doc, x, y, w, tiles, cols = tiles.length, h = 38) {
 function vendorCardSpecs(vendors) {
   const specs = [];
 
-  // SaaS Alerts -- critical-severity Top Events coloured red, by request
-  // (same severity data buildSaasAlertsSummary() now carries through).
+  // SaaS Alerts -- critical-severity Top Events shown bold (red removed, by
+  // later request), using the same severity data buildSaasAlertsSummary()
+  // carries through.
   if (vendors.saasAlerts.status === 'ok' && vendors.saasAlerts.monitored) {
     const sa = vendors.saasAlerts;
     specs.push({
@@ -995,7 +1057,9 @@ function vendorCardSpecs(vendors) {
         sa.topEvents.length > 0
           ? sa.topEvents.map((e) => ({
               text: `${e.name} (${e.criticalCount > 0 && e.mediumCount > 0 ? `${e.criticalCount} critical, ${e.mediumCount} medium` : e.criticalCount || e.mediumCount})`,
-              color: e.criticalCount > 0 ? RED : INK,
+              // Red text removed, by request (still kept bold, the
+              // remaining visual distinction for a critical event).
+              color: INK,
               bold: e.criticalCount > 0,
             }))
           : [{ text: 'No alerts in this window.', color: MUTED, italic: true }],

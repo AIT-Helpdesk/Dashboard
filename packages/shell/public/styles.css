@@ -9974,11 +9974,9 @@ tr.accrued-time-yellow-row th {
   color: #f59e0b;
   font-style: italic;
 }
-/* Critical-severity Top Events, by request -- coloured red, same red
-   .mtg-kpi-tile--bad already uses, so a critical event reads at the same
-   urgency as a red KPI tile would. */
+/* Critical-severity Top Events -- red text removed, by request (still kept
+   bold, the remaining visual distinction for a critical event). */
 .live-reports-event-critical {
-  color: #dc2626;
   font-weight: 600;
 }
 

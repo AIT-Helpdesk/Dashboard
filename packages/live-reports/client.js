@@ -242,9 +242,9 @@ function vendorWidgetsHtml(vendors) {
   // an actual list to their right instead of a comma-joined sentence.
   if (vendors.saasAlerts.status === 'ok' && vendors.saasAlerts.monitored) {
     const sa = vendors.saasAlerts;
-    // Critical-severity event names coloured red, by request -- same
-    // "severity carried through, not lost once merged by name" data
-    // server.js's own buildSaasAlertsSummary() now returns.
+    // Critical-severity event names shown bold (red removed, by later
+    // request) -- same "severity carried through, not lost once merged by
+    // name" data server.js's own buildSaasAlertsSummary() now returns.
     // Counts shown here are each event name's own REAL critical/medium
     // counts, never merged into one combined number -- confirmed live this
     // session (Back 2 Basics) that merging them made the red-coloured
