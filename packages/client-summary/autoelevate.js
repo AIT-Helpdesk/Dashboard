@@ -85,20 +85,89 @@ function normalize(s) {
 }
 
 function matchPool(companies, field, normCompany) {
-  return companies.filter((c) => {
-    const n = normalize(c[field]);
-    if (!n) return false;
-    return n === normCompany || n.includes(normCompany) || normCompany.includes(n);
-  });
+  return companies
+    .map((c) => ({ company: c, norm: normalize(c[field]) }))
+    .filter(({ norm }) => norm && (norm === normCompany || norm.includes(normCompany) || normCompany.includes(norm)));
 }
 
+// Confirmed live this session: Sleepy's (a real multi-site account) has BOTH
+// a generic parent company ("Sleepy's") AND ~15 separate per-location
+// companies ("Sleepy's Caringbah", "Sleepy's Auburn", ...) in AutoElevate's
+// own list -- and since "Sleepy's" is a literal prefix of every one of
+// those, the bidirectional-contains check above pulled the parent into the
+// match pool alongside the real per-location entry for almost every Sleepy's
+// site, making it "ambiguous" (2+ matches) and silently returning null --
+// reported as "not installed" even though the real per-location company
+// existed and should have matched. Resolved in two tiers instead of a flat
+// "exactly one match or bust":
+//   1. An exact match (the company's normalized name equals the site's,
+//      not just contains/contained) always wins outright, even if a
+//      broader parent also happens to match via contains -- the real
+//      per-location entry ("Sleepy's Caringbah") must never lose to its own
+//      parent ("Sleepy's") just because the parent is a substring.
+//   2. With no exact match (e.g. a site name has an extra " (HO)" or
+//      "- On Demand" suffix Autotask/Datto added that AutoElevate's own
+//      name doesn't have), the MOST SPECIFIC -- i.e. longest normalized --
+//      match wins, since a longer match narrows the real company down more
+//      than a shorter one (a specific "Sleepy's Auburn" entry is a better
+//      answer than the generic "Sleepy's" parent for a site literally named
+//      "Sleepy's Auburn (HO)"). A genuine tie (two equally-specific
+//      candidates, or 2+ exact matches) still returns null -- true
+//      ambiguity, not guessed away.
 async function findCompanyMatch(companyName, force) {
   const companies = await getCompanies(force);
   const normCompany = normalize(companyName);
   if (!normCompany) return null;
   const byMgmt = matchPool(companies, 'managementSystemCompanyId', normCompany);
   const pool = byMgmt.length > 0 ? byMgmt : matchPool(companies, 'name', normCompany);
-  return pool.length === 1 ? pool[0] : null;
+  if (pool.length === 0) return null;
+
+  const exact = pool.filter((m) => m.norm === normCompany);
+  if (exact.length === 1) return exact[0].company;
+  if (exact.length > 1) return null;
+
+  const maxLen = Math.max(...pool.map((m) => m.norm.length));
+  const longest = pool.filter((m) => m.norm.length === maxLen);
+  return longest.length === 1 ? longest[0].company : null;
 }
 
-module.exports = { hasAutoElevateCredentials, getCompanies, findCompanyMatch };
+// Elevation requests/events -- confirmed live this session against the real
+// account (the OLD comment above findCompanyMatch()'s own caller in
+// server.js claiming "nothing else usable" only ever checked
+// /api/v1/companies; these two resources genuinely exist and carry real
+// per-client data). GET /api/v1/elevation-requests (one row per elevation
+// that needed a human-facing decision -- fields confirmed live:
+// approvalState: PENDING/APPROVED/DENIED/WITHDRAWN, requestedBy, file:
+// {fileName, productName, ...}, eventId, createdAt) and GET
+// /api/v1/elevation-events (one row per elevation TRIGGER, whether or not it
+// became a request -- fields confirmed live: data.ruleThatApplied, non-null
+// when an explicit admin-configured rule matched this trigger; null for
+// EITHER a technician-decided request OR some other undocumented auto-allow
+// path -- see live-reports/server.js's own comment on buildAutoElevateSummary()
+// for how that ambiguity is handled). Both take the same take/skip paging
+// plus companyId/start/end (epoch ms) filters; walked the same way
+// fetchAllCompanies() above does. No cache here (unlike getCompanies()) --
+// these are period-scoped (start/end vary per call), so a plain TTL cache
+// keyed on nothing but the company wouldn't be safe to reuse across calls
+// with different windows.
+async function fetchAllPaged(path, params) {
+  const items = [];
+  let skip = 0;
+  while (true) {
+    const page = await aeGet(path, { ...params, take: PAGE_SIZE, skip });
+    items.push(...(page.items || []));
+    if (items.length >= (page.totalCount ?? items.length) || !page.items || page.items.length === 0) break;
+    skip += PAGE_SIZE;
+  }
+  return items;
+}
+
+async function getElevationRequests(companyId, startMs, endMs) {
+  return fetchAllPaged('/api/v1/elevation-requests', { companyId, start: startMs, end: endMs });
+}
+
+async function getElevationEvents(companyId, startMs, endMs) {
+  return fetchAllPaged('/api/v1/elevation-events', { companyId, start: startMs, end: endMs });
+}
+
+module.exports = { hasAutoElevateCredentials, getCompanies, findCompanyMatch, getElevationRequests, getElevationEvents };

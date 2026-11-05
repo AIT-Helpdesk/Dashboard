@@ -3861,29 +3861,39 @@ td.ticket-number {
    uses), not the flat solid fill a text-status pill elsewhere on this
    dashboard uses, since this is a whole CARD's background, not a small
    badge. */
+/* Pinned to light mode's OWN --card (#f9fafb), not var(--card), by request
+   ("appear in their light mode colours regardless of whether the page is
+   in light mode or dark mode") -- these three used to mix against
+   var(--card), which is dark in dark mode (#1b1e24), so the same 18% mix
+   read as a muddy near-black there instead of the real red/orange/green a
+   light-mode reader sees. A literal light hex makes the mix identical in
+   both themes, which also means the dark-mode-only "too dull" override
+   Red used to get here is gone -- no longer needed once the base rule
+   itself no longer shifts with the theme. */
 .check-up-pct-tile--red {
-  background: color-mix(in srgb, #dc2626 18%, var(--card));
+  background: color-mix(in srgb, #dc2626 18%, #f9fafb);
 }
 .check-up-pct-tile--orange {
-  background: color-mix(in srgb, #f59e0b 18%, var(--card));
+  background: color-mix(in srgb, #f59e0b 18%, #f9fafb);
 }
 .check-up-pct-tile--green {
-  background: color-mix(in srgb, #16a34a 18%, var(--card));
+  background: color-mix(in srgb, #16a34a 18%, #f9fafb);
 }
-/* Dark mode ONLY, by request -- "too dull in dark mode": var(--card) is
-   dark there, so an 18% mix reads as a muddy near-black instead of a
-   real red. Bumped to a much stronger mix, same dual dark-mode guard
-   (prefers-color-scheme + the explicit [data-theme="dark"] override) the
-   Total column's own dark-mode shading further down this file already
-   uses. Orange/Green weren't reported as a problem, so only Red is
-   touched here. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .check-up-pct-tile--red {
-    background: color-mix(in srgb, #dc2626 55%, var(--card));
-  }
+/* Text pinned to light mode's own --fg/--muted too, not just the
+   background above -- in dark mode, .check-up-pct-number/.datto-card-label
+   would otherwise inherit the page's dark-mode --fg (near-white) and
+   .datto-card-sub sets var(--muted) directly on itself (so it doesn't just
+   inherit a parent colour), both unreadable against a tile now forced to
+   stay light. */
+.check-up-pct-tile--red,
+.check-up-pct-tile--orange,
+.check-up-pct-tile--green {
+  color: #1a1a1a;
 }
-:root[data-theme="dark"] .check-up-pct-tile--red {
-  background: color-mix(in srgb, #dc2626 55%, var(--card));
+.check-up-pct-tile--red .datto-card-sub,
+.check-up-pct-tile--orange .datto-card-sub,
+.check-up-pct-tile--green .datto-card-sub {
+  color: #6b7280;
 }
 /* 13-Week Trends -- small multiples, one combined chart per Support Desk
    resource, by request ("plotting of graphs for the last 13 weeks for
@@ -9944,6 +9954,26 @@ tr.accrued-time-yellow-row th {
 .live-reports-saas-alerts-events li {
   margin-bottom: 0.3rem;
 }
+/* Orange + italic for "a process is running" messages on this page, by
+   request -- #status/#pdf-status pick up the shared dashboard-wide orange
+   .status.loading convention once client.js sets their className to
+   "status loading" (not just "status"); italic is added here, scoped to
+   just these two page-specific IDs rather than the shared .status.loading
+   rule itself, so other pages reusing that same class are unaffected. */
+#status.loading,
+#pdf-status.loading {
+  font-style: italic;
+}
+/* Same orange + italic for the "Loading Other Systems.../Loading..."
+   placeholders Other Systems/Microsoft License Counts show while their own
+   section is still fetching -- a dedicated class rather than restyling
+   .inline-subtext itself, which plenty of non-loading captions on this same
+   page also use (e.g. "No alerts in this window.", "Lifetime total
+   incidents."). */
+.live-reports-loading-text {
+  color: #f59e0b;
+  font-style: italic;
+}
 /* Critical-severity Top Events, by request -- coloured red, same red
    .mtg-kpi-tile--bad already uses, so a critical event reads at the same
    urgency as a red KPI tile would. */
@@ -10073,7 +10103,15 @@ tr.accrued-time-yellow-row th {
   grid-template-columns: repeat(2, max-content);
   column-gap: 1rem;
   row-gap: 0.75rem;
-  align-items: start;
+  /* stretch, not start, by request ("make the Devices by type and check-in
+     freshness boxes the same height") -- grid's own default is stretch
+     anyway, so this just removes the earlier override that made each
+     widget size to its own content height instead of matching its row's
+     tallest sibling. Only visible effect is on row 1 (Devices by Type/
+     Check-in Freshness side by side) -- the Scorecard below spans both
+     columns alone in its own row, so there's no sibling for it to stretch
+     against either way. */
+  align-items: stretch;
   /* This grid replaced what used to be a second .mtg-widget-grid row
      (Devices by Type/Check-in Freshness) -- that class's own margin-top
      (0.75rem) doesn't apply here any more since this is a different class,
@@ -10124,22 +10162,180 @@ tr.accrued-time-yellow-row th {
   color: #2e2a7c;
 }
 
-.live-reports-proactive-maintenance {
-  margin: 0.5rem 0;
-  padding-left: 1.3rem;
-  /* Smaller text, by request -- same secondary-text size .inline-subtext
-     uses elsewhere on this page (these are standard/unscored activities,
-     not something that needs to read at full body-text weight). */
-  font-size: 0.85em;
-  /* 2 columns, by request -- CSS multi-column balances items across both
-     automatically (first half left, second half right), same even split
-     the PDF's own drawProactiveMaintenanceNote() does by hand. */
-  column-count: 2;
-  column-gap: 2rem;
+/* Proactive Maintenance box -- same purple card look as the PDF's own
+   drawProactiveMaintenanceNote() (and the Executive Summary/Cybersecurity
+   Systems purple cards elsewhere in the PDF): literal brand-purple hex
+   values, not the --purple/--card theme tokens, since this card is meant
+   to look the same regardless of light/dark mode, same as the PDF always
+   renders it on a plain white page. */
+.live-reports-proactive-maintenance-box {
+  background: #f3f1fb;
+  border-radius: 6px;
+  padding: 0.9rem 1.1rem;
+  margin: 0.75rem 0 1.25rem;
 }
-.live-reports-proactive-maintenance li {
+.live-reports-proactive-maintenance-heading {
+  margin: 0 0 0.5rem;
+  color: #2e2a7c;
+  font-weight: 700;
+  font-size: 1rem;
+}
+.live-reports-proactive-maintenance-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+.live-reports-proactive-maintenance-list {
+  flex: 1 1 240px;
+  margin: 0;
+  padding-left: 1.2rem;
+  color: #1a1a1a;
+  font-size: 0.85em;
+}
+.live-reports-proactive-maintenance-list li {
   margin-bottom: 0.3rem;
-  break-inside: avoid;
+}
+.live-reports-proactive-maintenance-caption {
+  margin: 0.6rem 0 0;
+  color: #6b7280;
+  font-size: 0.78em;
+  font-style: italic;
+}
+
+/* Generate Summary / edit-before-PDF form, by request. Outer box background
+   pinned to the same literal #f3f1fb the Proactive Maintenance box above
+   uses, by request ("match the colour of the Proactive Maintenance box")
+   -- same fixed-not-theme-following choice as that box, so the two read as
+   a matching pair regardless of light/dark mode. The entry FIELDS
+   themselves still follow the normal --token theme (var(--bg)/var(--fg)) --
+   they're real inputs, not display text, so they need to stay legible
+   against the viewer's own OS-level light/dark expectations for form
+   controls, not match a fixed brand colour. */
+.live-reports-commentary-editor {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.1rem;
+  margin: 0.75rem 0 1.25rem;
+  background: #f3f1fb;
+}
+/* This box sits OUTSIDE #results (see client.js's own mount() skeleton),
+   so the page's own `#results .client-summary-section-heading` purple rule
+   never reaches its heading -- repeated here, by request ("the section
+   heading should all be that purple colour of the other headings"). Same
+   #2e2a7c BRAND_PURPLE literal that rule and the PDF's own BRAND_PURPLE
+   constant both already use. */
+.live-reports-commentary-editor .client-summary-section-heading {
+  color: #2e2a7c;
+}
+.live-reports-commentary-label {
+  display: block;
+  margin: 0.75rem 0 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  /* Literal, not var(--fg) -- found live in dark mode: the outer box is
+     pinned to a fixed light background (#f3f1fb, above), so a theme-
+     following label color went near-invisible (light-on-light) the moment
+     dark mode's own --fg (near-white) applied. Same fixed-colour choice as
+     the rest of this box, for the same reason. */
+  color: #1a1a1a;
+}
+.live-reports-commentary-label:first-of-type {
+  margin-top: 0;
+}
+/* On Track/Action Needed/Watch shown as a solid coloured bar (green/red/
+   orange) sitting right on top of a plain white textarea, by request --
+   same look as their own PDF panel (drawStatusCard()'s solid-colour title
+   bar over a plain card body), not just coloured text. Label + textarea
+   read as one connected card: the label gets the top corners and no
+   bottom margin/border, the textarea gets the bottom corners, no top
+   border, and an explicit white background (not var(--bg), by request --
+   "the text area still in white" -- same fixed-colour choice the rest of
+   this box already uses). Literal hex, not theme tokens, same "match the
+   PDF exactly" reasoning the Proactive Maintenance box/heading already use. */
+.live-reports-commentary-label--on-track,
+.live-reports-commentary-label--action-needed,
+.live-reports-commentary-label--watch {
+  color: #ffffff;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px 6px 0 0;
+  margin-bottom: 0;
+}
+.live-reports-commentary-label--on-track {
+  background: #4da64d;
+}
+.live-reports-commentary-label--action-needed {
+  background: #dc2626;
+}
+.live-reports-commentary-label--watch {
+  background: #d97706;
+}
+.live-reports-commentary-label--on-track .inline-subtext,
+.live-reports-commentary-label--action-needed .inline-subtext,
+.live-reports-commentary-label--watch .inline-subtext {
+  color: rgba(255, 255, 255, 0.85);
+}
+.live-reports-commentary-label--on-track + textarea,
+.live-reports-commentary-label--action-needed + textarea,
+.live-reports-commentary-label--watch + textarea {
+  border-radius: 0 0 6px 6px;
+  border-top: none;
+}
+.live-reports-commentary-field {
+  font: inherit;
+  /* Smaller, by request ("make all the text a bit smaller in the entry
+     fields"). */
+  font-size: 0.8rem;
+  /* Literal, not var(--fg)/var(--bg)/var(--border) -- same dark-mode fix
+     as the label above: this box is pinned to a fixed light look overall
+     (matching the PDF, by request -- "the text area still in white"), so
+     EVERY field here (Executive Summary and the Recommendations
+     inputs/select included, not just the 3 status boxes) stays a plain
+     white field with dark text, rather than drifting dark/near-black in
+     dark mode against a box that never does. */
+  color: #1a1a1a;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+}
+.live-reports-commentary-textarea {
+  display: block;
+  width: 100%;
+  resize: vertical;
+}
+.live-reports-commentary-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  /* More breathing room under Executive Summary, by request. */
+  margin-top: 1.5rem;
+}
+.live-reports-commentary-cols > div {
+  flex: 1 1 220px;
+}
+#commentary-recommendations {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+.live-reports-commentary-rec-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.live-reports-commentary-rec-priority {
+  flex: 0 0 140px;
+}
+.live-reports-commentary-rec-text {
+  flex: 2 1 240px;
+}
+.live-reports-commentary-rec-why {
+  flex: 2 1 240px;
+}
+#commentary-add-recommendation {
+  margin-top: 0.6rem;
 }
 
 .mtg-segbar-track {

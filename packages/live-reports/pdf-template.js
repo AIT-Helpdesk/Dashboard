@@ -39,6 +39,14 @@ function formatDateShort(iso) {
   if (!iso) return '';
   return new Date(iso).toLocaleDateString('en-AU');
 }
+// Cover header's own date format, by request ("use the 3 char month") --
+// a separate formatter rather than changing formatDate() itself, which is
+// also used for Datto EDR's "Last scanned" line elsewhere in this file and
+// wasn't asked to change.
+function formatDateCover(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
 
 // Same "On track / Watch / Action needed" 3-tier language the original
 // DRG example report this was modeled on uses, mapped onto THIS
@@ -301,22 +309,30 @@ function drawCoverHeader(doc, report) {
   const pad = 16;
   const rightColW = 150;
   const leftColW = boxW - rightColW - pad * 2;
+  // ~20% bigger, by request -- scaled independently of rightColW (the date
+  // TEXT column's own width, unchanged) so the logo just grows, anchored to
+  // the same right edge as before (boxX + boxW - pad), rather than also
+  // widening the date's own text column.
+  const logoBoxW = rightColW * 1.2;
+  const logoH = 26 * 1.2;
 
   doc.font('Helvetica-Bold').fontSize(20);
   const titleH = doc.heightOfString(report.siteName, { width: leftColW });
   const leftContentH = titleH + 6 + 14; // title + gap + subtitle line
-  const rightContentH = 26 + 8 + 12; // logo height + gap + date line
+  const rightContentH = logoH + 8 + 12; // logo height + gap + date line
   const boxH = Math.max(leftContentH, rightContentH, 70) + pad * 2;
 
   doc.roundedRect(boxX, boxY, boxW, boxH, 6).lineWidth(3).fillAndStroke('#ffffff', BRAND_GREEN);
 
   const rightX = boxX + boxW - pad - rightColW;
+  const logoX = boxX + boxW - pad - logoBoxW;
   try {
-    doc.image(fs.readFileSync(LOGO_PATH), rightX, boxY + pad, { fit: [rightColW, 26], align: 'right' });
+    doc.image(fs.readFileSync(LOGO_PATH), logoX, boxY + pad, { fit: [logoBoxW, logoH], align: 'right' });
   } catch (err) {
     console.error('live-reports: could not embed logo.png in PDF:', err.message);
   }
-  doc.fillColor(MUTED).font('Helvetica-Bold').fontSize(9.5).text(formatDate(report.asOf), rightX, boxY + pad + 26 + 8, { width: rightColW, align: 'right' });
+  // Not bold, and the 3-char month (formatDateCover()), both by request.
+  doc.fillColor(MUTED).font('Helvetica').fontSize(9.5).text(formatDateCover(report.asOf), rightX, boxY + pad + logoH + 8, { width: rightColW, align: 'right' });
 
   // Bottom-left, not top-left, by request -- the logo/date stay top-right
   // where they were; only the client name + subtitle move.
@@ -374,6 +390,44 @@ function drawAtAGlance(doc, y, report) {
   return y + tileH + 18;
 }
 
+// Devices by Type / Check-in Freshness, moved onto page 1 (right after
+// Overall Health View, above Executive Summary) by request -- previously
+// shown on-screen only (deviceTypeBarWidget()/checkinFreshnessWidget(),
+// meeting-prep-report-render.js) as a coloured bar and a segmented bar; drawn
+// here as a donut row instead to match every other paired-widget row this
+// PDF already uses (drawDonutRow()/drawDonutCard()), not a second chart
+// style. Same on-screen color conventions: the 6-color rotating palette
+// deviceTypeBarWidget() cycles through for device types (assigned by the
+// same count-descending order server.js's own byType array is already
+// sorted in, so colors line up with the on-screen widget for the same
+// client), and the same green/amber/red/grey freshness colors
+// checkinFreshnessWidget() uses.
+const DEVICE_TYPE_COLOR_PALETTE = ['#2563eb', '#7c3aed', '#0891b2', '#ca8a04', '#be185d', '#4d7c0f'];
+function drawDeviceOverviewRow(doc, y, dattoLive) {
+  if (!dattoLive) return y;
+
+  const byType = dattoLive.byType || [];
+  const typeLegend = {};
+  const typeColors = {};
+  byType.forEach((t, i) => {
+    typeLegend[t.type] = t.count;
+    typeColors[t.type] = DEVICE_TYPE_COLOR_PALETTE[i % DEVICE_TYPE_COLOR_PALETTE.length];
+  });
+  const left = byType.length > 0 ? { title: 'Devices by Type', legend: typeLegend, colors: typeColors } : null;
+
+  const s = dattoLive.summary || {};
+  const right = {
+    title: 'Check-in Freshness',
+    legend: { 'Seen <7 days': s.seenRecent || 0, 'Seen 7-30 days': s.seenAgeing || 0, 'Not seen 30+ days': s.notSeenStale || 0, 'Never reported': s.unknown || 0 },
+    colors: { 'Seen <7 days': BRAND_GREEN, 'Seen 7-30 days': AMBER, 'Not seen 30+ days': RED, 'Never reported': MUTED },
+  };
+
+  const w = contentWidth(doc);
+  y = ensureSpace(doc, y, measureDonutRowHeight(doc, w, left, right));
+  y = drawDonutRow(doc, y, w, left, right);
+  return y + 14;
+}
+
 function measureStatusCardBodyHeight(doc, w, items) {
   doc.font('Helvetica').fontSize(8);
   return items && items.length > 0 ? items.reduce((sum, item) => sum + doc.heightOfString(`• ${item}`, { width: w - 16 }) + 3, 6) : 16;
@@ -396,18 +450,22 @@ function drawStatusCard(doc, x, y, w, h, title, color, items) {
 }
 
 // Split into separate pieces (Executive Summary / On Track+Action Needed
-// row / Watch), by request -- buildReportPdf() below needs to measure and
-// conditionally reorder the Watch card on its own (moved to the top of the
-// Device Health page when the full page 1 content doesn't fit), which a
-// single monolithic draw-everything function couldn't support.
+// row / Watch) so buildReportPdf() below can place Executive Summary on
+// page 1 and On Track/Action Needed/Watch on page 2, rather than one
+// monolithic draw-everything function.
 function drawExecutiveSummary(doc, y, commentary) {
   const w = contentWidth(doc);
   doc.font('Helvetica').fontSize(9);
-  const summaryHeight = doc.heightOfString(commentary.executiveSummary, { width: w - 24 }) + 34;
+  // A bit of extra breathing room between wrapped lines within the
+  // paragraph itself, by request -- pdfkit's own `lineGap` option (added to
+  // BOTH the measurement and the real draw call below, so the box's own
+  // height stays correctly sized for the taller text).
+  const textOpts = { width: w - 24, lineGap: 2.5 };
+  const summaryHeight = doc.heightOfString(commentary.executiveSummary, textOpts) + 34;
   y = ensureSpace(doc, y, summaryHeight);
   doc.roundedRect(MARGIN, y, w, summaryHeight, 4).fill('#f3f1fb');
   doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(10).text('Executive Summary', MARGIN + 12, y + 10);
-  doc.fillColor(INK).font('Helvetica').fontSize(9).text(commentary.executiveSummary, MARGIN + 12, y + 24, { width: w - 24 });
+  doc.fillColor(INK).font('Helvetica').fontSize(9).text(commentary.executiveSummary, MARGIN + 12, y + 24, textOpts);
   return y + summaryHeight + 14;
 }
 
@@ -415,9 +473,10 @@ function drawExecutiveSummary(doc, y, commentary) {
 // 3-equal-column layout, which forced these two up to whatever Watch's own
 // height happened to be (usually the longest list), wasting space in the
 // shorter two. Watch itself is now a separate full-width card (see
-// measureWatchHeight()/drawWatchCard() below) drawn either right after this
-// row (when everything fits on page 1) or at the top of the Device Health
-// page (when it doesn't) -- buildReportPdf() below decides which.
+// measureWatchHeight()/drawWatchCard() below), drawn right after this row --
+// both now always lead page 2 (right after the page break following
+// Scorecard), by request, not conditionally placed depending on whether
+// page 1 had room.
 function measureTopRowHeight(doc, commentary) {
   const w = contentWidth(doc);
   const rowGap = 10;
@@ -447,26 +506,6 @@ function drawWatchCard(doc, y, commentary) {
   y = ensureSpace(doc, y, watchH);
   drawStatusCard(doc, MARGIN, y, w, watchH, 'Watch', AMBER, commentary.watch);
   return y + watchH;
-}
-
-// Scorecard's own row count, without drawing it -- same filter logic
-// drawScorecard() itself uses (kept in sync manually; both are short and
-// read side by side), needed here only to ESTIMATE its height for the
-// page-1-overrun check below. Scorecard's own cell text (area names/%
-// results) is always short, fixed-shape strings that never wrap in
-// practice, so rowHeight*count is a safe estimate, not just a guess.
-function countScorecardRows(report, vendors) {
-  return [
-    report.assetManagement != null,
-    report.monitoring != null,
-    Boolean(report.workstation),
-    Boolean(report.workstation),
-    Boolean(report.workstation),
-    Boolean(report.server),
-    true, // Open Alerts, always shown
-    vendors.saasAlerts.status === 'ok' && vendors.saasAlerts.monitored,
-    vendors.saasProtection.status === 'ok' && vendors.saasProtection.installed,
-  ].filter(Boolean).length;
 }
 
 function drawTable(doc, startY, columns, rows, { rowHeight = 20, headerHeight = 20, showHeader = true } = {}) {
@@ -664,10 +703,6 @@ function drawDeviceHealth(doc, y, report) {
   // tight, same "bigger gap for visibility" fix as the Understanding Your
   // Scores -> Our Recommendations gap elsewhere in this file.
   y += 16;
-  y = drawSectionHeading(doc, y, 'Device Health');
-  // A bit more room under the heading too, by request ("a little more
-  // spacing... top and bottom").
-  y += 10;
   const w = contentWidth(doc);
   // Rows of bordered cards now (drawDonutRow()/drawDonutCard() above), not
   // bare donuts floating on the page, by request ("put nice boxes around
@@ -676,6 +711,24 @@ function drawDeviceHealth(doc, y, report) {
   // align, same card look the Cybersecurity Systems section already uses.
   const rowGap = 14; // was 6 -- more breathing room between rows, by request
   const bgPad = 10;
+
+  // Replacement Recommendation / Operating System -- back here, below
+  // Monitoring and above the "Device Health" heading, by request ("lets
+  // put these back in asset management and monitoring section below the
+  // monitoring") -- briefly folded into the Device Health box itself
+  // (an earlier request), now its own purple-background box again, same
+  // "still needs a purple outer box" request, just not merged into the
+  // Device Health one this time. Own ensureSpace() check, same reasoning
+  // as Device Health's own box below (a box that doesn't fit moves to a
+  // fresh page as ONE unit, never split mid-box).
+  const hlRow = buildHardwareLifecycleSpecs(report.hardwareLifecycle);
+  if (hlRow) {
+    const hlH = measureDonutRowHeight(doc, w, hlRow[0], hlRow[1]) + bgPad * 2;
+    y = ensureSpace(doc, y, hlH);
+    doc.roundedRect(MARGIN - bgPad, y - bgPad, w + bgPad * 2, hlH, 6).fill(BRAND_PURPLE);
+    y = drawDonutRow(doc, y, w, hlRow[0], hlRow[1]);
+    y += 24; // gap before the "Device Health" heading below, same weight as the 16+10 Monitoring->heading gap used to be
+  }
 
   const row1 = report.workstation
     ? [
@@ -691,30 +744,46 @@ function drawDeviceHealth(doc, y, report) {
         ]
       : null;
 
-  if (row1 || row2) {
-    // Same solid background treatment as Cybersecurity Systems
-    // (drawCybersecurityLayers()), by request -- measured up front (pure
-    // arithmetic, the same measureDonutRowHeight() drawDonutRow() itself
-    // uses, so the two can never drift apart) so it can be drawn FIRST,
-    // with the white cards on top of it after.
-    const row1H = row1 ? measureDonutRowHeight(doc, w, row1[0], row1[1]) : 0;
-    const row2H = row2 ? measureDonutRowHeight(doc, w, row2[0], row2[1]) : 0;
-    const totalH = row1H + (row1 && row2 ? rowGap : 0) + row2H;
-    doc.roundedRect(MARGIN - bgPad, y - bgPad, w + bgPad * 2, totalH + bgPad * 2, 6).fill(BRAND_PURPLE);
+  // Same solid background treatment as Cybersecurity Systems
+  // (drawCybersecurityLayers()), by request -- measured up front (pure
+  // arithmetic, the same measureDonutRowHeight() drawDonutRow() itself
+  // uses, so the two can never drift apart) so it can be drawn FIRST, with
+  // the white cards on top of it after.
+  const rows = [row1, row2].filter(Boolean);
+  const rowHeights = rows.map((r) => measureDonutRowHeight(doc, w, r[0], r[1]));
+  const boxH = rows.length > 0 ? rowHeights.reduce((sum, h) => sum + h, 0) + rowGap * (rows.length - 1) + bgPad * 2 : 0;
 
-    if (row1) {
-      y = drawDonutRow(doc, y, w, row1[0], row1[1]);
-      y += rowGap;
-    }
-    if (row2) {
-      y = drawDonutRow(doc, y, w, row2[0], row2[1]);
-      y += rowGap;
-    }
-  }
+  // The "Device Health" heading and the box below it are now ensureSpace()'d
+  // as ONE unit (heading's own 28px + the 10px gap under it + the box),
+  // fixing a real bug found live on a real PDF: drawing the heading here
+  // THEN separately ensureSpace()-ing just the box below could legally
+  // leave "Device Health" alone at the bottom of one page with every one of
+  // its own widgets pushed onto the next ("the device health heading is
+  // separated from the widgets below it"). ensureSpace() itself is the same
+  // fix CONFIRMED live earlier against a different failure mode on this
+  // exact box (G & H Civil Contractors, 62 devices): with no page-break
+  // check at all, the purple rect and every donut card were drawn at
+  // whatever page they happened to land on regardless of whether they
+  // actually fit, and pdfkit's own auto-pagination inside drawDonut()'s
+  // .text() calls (title/centre total/each legend line are all separate
+  // .text() calls, each capable of triggering its own page break) kept
+  // kicking in unaware this was supposed to be one box, scattering the
+  // title, the ring's centre number, and the legend across several
+  // near-blank trailing pages with no card border or purple background
+  // around any of them.
+  y = ensureSpace(doc, y, 28 + 10 + boxH);
+  y = drawSectionHeading(doc, y, 'Device Health');
+  // A bit more room under the heading too, by request ("a little more
+  // spacing... top and bottom").
+  y += 10;
 
-  if (report.server) {
-    doc.font('Helvetica-Oblique').fontSize(7.5).fillColor(MUTED).text('Patch Management and Software Management are not handled through this platform for servers.', MARGIN, y, { width: w });
-    y += 16;
+  if (rows.length > 0) {
+    doc.roundedRect(MARGIN - bgPad, y - bgPad, w + bgPad * 2, boxH, 6).fill(BRAND_PURPLE);
+
+    rows.forEach((r, i) => {
+      y = drawDonutRow(doc, y, w, r[0], r[1]);
+      if (i < rows.length - 1) y += rowGap;
+    });
   }
 
   return y + 14;
@@ -772,6 +841,53 @@ function drawM365LicensesTable(doc, y, m365) {
   return drawTable(doc, y, columns, rows, { rowHeight: 18, headerHeight: 18, showHeader: false }) + 18;
 }
 
+// Replacement Recommendation / Operating System specs, by request ("Get
+// the info from Datto RMM") -- see computeHardwareLifecycle()'s own comment
+// in server.js for how these are derived from live Datto RMM data
+// (warrantyDate/os, the same two fields Asset Management's own checks
+// already use). Shared by drawDeviceHealth() below (which draws this as an
+// extra row inside its own purple-background box, by request -- "move the
+// Replacement Recommendations & Operating Systems to the Device
+// [Health/management] section") and nothing else now that it's no longer
+// its own standalone page section.
+function buildHardwareLifecycleSpecs(lifecycle) {
+  if (!lifecycle) return null;
+  const left = {
+    title: 'Replacement Recommendation',
+    legend: {
+      'Within 12 months': lifecycle.replacementRecommendation.within12,
+      '12 to 24 months': lifecycle.replacementRecommendation.from12to24,
+      'Suitable 24+ months': lifecycle.replacementRecommendation.suitable24Plus,
+      Unknown: lifecycle.replacementRecommendation.unknown,
+    },
+    colors: { 'Within 12 months': RED, '12 to 24 months': AMBER, 'Suitable 24+ months': BRAND_GREEN, Unknown: '#9aa3af' },
+  };
+  // "Operating System", not "OS Support", by request. Legend lists the real
+  // OS names found (build numbers stripped -- see
+  // computeHardwareLifecycle()'s own comment in server.js), each coloured
+  // green/red by whether THAT one is supported, rather than 2 generic
+  // Supported/Unsupported rows, by request ("List what they are instead of
+  // Supported and Unsupported but colour them red and green to match") --
+  // the donut ring itself still only ever uses those same 2 colours either
+  // way, so it still reads as a plain supported-vs-unsupported split at a
+  // glance ("Keep the widget as just supported and unsupported though").
+  // Falls back to the old 2-row legend when there's no OS data at all to
+  // name individually.
+  const byName = lifecycle.osSupport.byName || [];
+  const right = {
+    title: 'Operating System',
+    legend:
+      byName.length > 0
+        ? Object.fromEntries(byName.map((o) => [o.name, o.count]))
+        : { Supported: lifecycle.osSupport.supported, Unsupported: lifecycle.osSupport.unsupported },
+    colors:
+      byName.length > 0
+        ? Object.fromEntries(byName.map((o) => [o.name, o.supported ? BRAND_GREEN : RED]))
+        : { Supported: BRAND_GREEN, Unsupported: RED },
+  };
+  return [left, right];
+}
+
 // The full device-by-device table -- its own section now, placed right
 // before Recommendations (by request), not folded into Device Health
 // above anymore.
@@ -780,17 +896,14 @@ function drawDeviceList(doc, y, report) {
   if (!devices || devices.length === 0) return y;
   const w = contentWidth(doc);
 
-  const order = { stale: 0, unknown: 1, ageing: 2, recent: 3 };
   const freshnessLabel = { stale: 'Not seen 30+ days', ageing: 'Seen 7-30 days', recent: 'Seen <7 days', unknown: 'Unknown' };
-  const sorted = [...devices].sort((a, b) => {
-    const f = (order[a.freshness] ?? 9) - (order[b.freshness] ?? 9);
-    if (f !== 0) return f;
-    if (a.online !== b.online) return a.online ? 1 : -1;
-    return (a.hostname || '').localeCompare(b.hostname || '');
-  });
+  // Already sorted (worst check-in freshness first, then Disk Used %) by
+  // server.js, so both this PDF table and the on-screen table show the same
+  // order -- not re-sorted here.
+  const sorted = devices;
 
   y = drawSectionHeading(doc, y, `All Devices (${sorted.length})`);
-  doc.font('Helvetica-Oblique').fontSize(7.5).fillColor(MUTED).text('Oldest check-in first.', MARGIN, y);
+  doc.font('Helvetica-Oblique').fontSize(7.5).fillColor(MUTED).text('Oldest check-in first, then by Disk Used %.', MARGIN, y);
   y += 14;
 
   // Disk Used % replaces Online, by request (matching Datto's own Storage
@@ -948,8 +1061,36 @@ function vendorCardSpecs(vendors) {
     specs.push({ title: 'Huntress', kpis, lines: [{ text: 'Lifetime total incidents.', color: MUTED, italic: true }] });
   }
 
+  // AutoElevate -- elevation requests/events widgets, by request ("Add
+  // widgets for the AutoElevate section"). Donut is the headline widget
+  // (Approved (Auto)/Approved (Manual)/Denied/Pending -- "Manual" is
+  // deliberately not labelled "by a technician", see
+  // classifyElevationOutcomes()'s own comment in server.js for why), then
+  // the top-apps list. Donut always drawn now, by request, even with zero
+  // activity in the window -- drawDonut() already renders a plain empty
+  // ring + "0" centre label for an all-zero legend, same as every other
+  // zero-count donut in this PDF, so no special-case needed beyond always
+  // building spec.donut whenever `el` exists. Requests Handled tile/trend
+  // line and the "Deployed since" line both removed, by request -- the
+  // window length moved into the title itself instead (grey, via
+  // titleSuffix -- see drawCyberCard() above), rather than only showing
+  // inside that now-removed tile's own label.
   if (vendors.autoElevate.status === 'ok' && vendors.autoElevate.installed && vendors.autoElevate.deployedSince) {
-    specs.push({ title: 'AutoElevate', kpis: [], lines: [{ text: `Deployed since ${formatDateShort(vendors.autoElevate.deployedSince)}.`, color: INK }] });
+    const ae = vendors.autoElevate;
+    const el = ae.elevation;
+    const spec = { title: 'AutoElevate', titleSuffix: el ? `(${el.windowDays} days)` : null, kpis: [], lines: [] };
+    if (el) {
+      spec.donut = {
+        legend: { 'Approved (Auto)': el.outcomes.autoApproved, 'Approved (Manual)': el.outcomes.manualApproved, Denied: el.outcomes.denied, Pending: el.outcomes.pending },
+        colors: { 'Approved (Auto)': BRAND_GREEN, 'Approved (Manual)': '#2563eb', Denied: RED, Pending: AMBER },
+      };
+      if (el.topApps.length > 0) {
+        el.topApps.forEach((a) => spec.lines.push({ text: `${a.name} (${a.count})`, color: INK }));
+      } else {
+        spec.lines.push({ text: 'No elevation requests in this window.', color: MUTED, italic: true });
+      }
+    }
+    specs.push(spec);
   }
 
   return specs;
@@ -957,6 +1098,9 @@ function vendorCardSpecs(vendors) {
 
 function measureCyberCardHeight(doc, w, spec) {
   let h = 8 + 16; // top padding + title line
+  if (spec.donut) {
+    h += measureDonutHeight(doc, w - 20, spec.donut.legend) + 8;
+  }
   if (spec.kpis.length > 0) {
     const cols = spec.kpiCols || spec.kpis.length;
     const rows = kpiTileGridRows(spec.kpis.length, cols);
@@ -973,8 +1117,30 @@ function measureCyberCardHeight(doc, w, spec) {
 function drawCyberCard(doc, x, y, w, spec) {
   const h = measureCyberCardHeight(doc, w, spec);
   doc.roundedRect(x, y, w, h, 4).fillAndStroke('#ffffff', BORDER);
-  doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(9.5).text(spec.title, x + 10, y + 8, { width: w - 20 });
+  // Optional grey suffix right after the title (AutoElevate's own
+  // "(30 days)", by request) -- pdfkit's own continued-text chaining, same
+  // mechanism `line.segments` below already uses for a mixed-colour line.
+  doc
+    .fillColor(BRAND_PURPLE)
+    .font('Helvetica-Bold')
+    .fontSize(9.5)
+    .text(spec.title, x + 10, y + 8, spec.titleSuffix ? { continued: true } : { width: w - 20 });
+  if (spec.titleSuffix) {
+    doc.fillColor(MUTED).font('Helvetica').fontSize(8.5).text(` ${spec.titleSuffix}`);
+  }
+  doc.fillColor(INK);
   let cy = y + 24;
+  if (spec.donut) {
+    // '' title -- this card already drew its own title above; drawDonut()
+    // always advances y by 16 for a title line regardless, which
+    // measureDonutHeight() already accounts for, so this stays in sync.
+    cy = drawDonut(doc, x + 10, cy, w - 20, '', spec.donut.legend, spec.donut.colors) + 8;
+    // drawDonut()/drawDonutArcSegment() leave a thick (13px) lineWidth set
+    // for the arc strokes -- reset here, same reasoning drawDonutCard()'s
+    // own comment gives, or this card's own KPI tiles/border drawn right
+    // after would inherit it and render with an absurdly thick outline.
+    doc.lineWidth(1);
+  }
   if (spec.kpis.length > 0) {
     cy = drawKpiTileRow(doc, x + 10, cy, w - 20, spec.kpis, spec.kpiCols || spec.kpis.length) + 8;
   }
@@ -1003,6 +1169,101 @@ function drawCyberCard(doc, x, y, w, spec) {
   });
   doc.fillColor(INK);
   return h;
+}
+
+// Fixed reference copy explaining each cybersecurity layer, by request --
+// same "not derived from report data" convention as SCORE_EXPLANATIONS
+// below, but placed right after the Cybersecurity Systems cards rather
+// than down with the score-methodology glossary, since these aren't
+// scored items -- some (Email Security, Dark Web Monitoring, Security
+// Awareness Training) have no live card/data at all yet, and are
+// included here anyway, same as every other entry, for client education
+// rather than reporting on a live number.
+const CYBERSECURITY_EXPLANATIONS = [
+  {
+    title: 'SaaS/Cloud/Activity Alerts',
+    body: 'Spots suspicious sign-ins and risky activity in Microsoft 365 and cloud apps, and locks down compromised accounts.',
+  },
+  {
+    title: 'SaaS Protection',
+    body: 'Backs up your Microsoft 365 Email, SharePoint, OneDrive and Teams or Google WorkSpace data so anything lost or deleted can be restored.',
+  },
+  {
+    title: 'Antivirus, Anti-Malware and Anti-Ransomware',
+    body: 'Blocks viruses, malware and ransomware before they can disrupt your business or lock up your data.',
+  },
+  {
+    title: 'Endpoint Detection and Response',
+    body: 'Monitors every computer around the clock to detect and contain threats that traditional antivirus misses.',
+  },
+  {
+    title: 'Huntress',
+    body: 'Human threat hunters find and help remove hidden attacker footholds before they cause damage.',
+  },
+  {
+    title: 'AutoElevate',
+    body: 'Lets staff run approved software without permanent admin rights, closing off a common attack route without slowing them down.',
+  },
+  {
+    title: 'Email Security',
+    body: 'Stops phishing and impersonation emails before they reach your staff, and flags anything suspicious so it can be spotted at a glance.',
+  },
+  {
+    title: 'Dark Web Monitoring',
+    body: 'Watches the dark web for leaked staff passwords and company credentials, so exposure can be fixed before criminals use it.',
+  },
+  {
+    title: 'Security Awareness Training',
+    body: 'Teaches staff to recognise phishing through short lessons and simulated attacks, turning your people into a strong line of defence.',
+  },
+];
+
+// Shared boxed glossary-list renderer -- title on its own line, its
+// description on the line directly under it (not inline -- reverted back
+// to this, by request, after a brief stint with them run together),
+// smaller type (8pt, was 10pt title/8.5pt body), the whole list inside one
+// soft-purple card (same #f3f1fb style drawExecutiveSummary() above uses
+// for its own callout) rather than plain on-white text. Used for both
+// Cybersecurity's own list (no heading above it, by request -- "About
+// These Systems" was removed entirely) and Understanding Your Scores
+// (which keeps its own drawSectionHeading() above this, only the list
+// itself switched to this format) -- one function so the two can't drift
+// apart style-wise.
+function drawExplanationsBox(doc, y, items) {
+  const w = contentWidth(doc);
+  const pad = 12;
+  const fontSize = 8;
+  const titleGap = 2; // between a title line and its own body
+  const itemGap = 8; // between one item and the next
+
+  // Title and body measured separately (own font each) rather than one
+  // combined string at a single font -- same reasoning as the bold-font
+  // safety margin below: measuring at the wrong weight can under-wrap and
+  // overlap the next item (confirmed on a real PDF earlier this session).
+  doc.font('Helvetica-Bold').fontSize(fontSize);
+  const titleHeights = items.map((item) => doc.heightOfString(item.title, { width: w - pad * 2 }));
+  doc.font('Helvetica').fontSize(fontSize);
+  const bodyHeights = items.map((item) => doc.heightOfString(item.body, { width: w - pad * 2 }));
+  const itemHeights = items.map((item, i) => titleHeights[i] + titleGap + bodyHeights[i]);
+  const boxHeight = pad * 2 + itemHeights.reduce((sum, h) => sum + h, 0) + itemGap * (items.length - 1);
+
+  y = ensureSpace(doc, y, boxHeight);
+  doc.roundedRect(MARGIN, y, w, boxHeight, 4).fill('#f3f1fb');
+
+  let iy = y + pad;
+  items.forEach((item, i) => {
+    doc.font('Helvetica-Bold').fontSize(fontSize).fillColor(BRAND_PURPLE).text(item.title, MARGIN + pad, iy, { width: w - pad * 2 });
+    iy += titleHeights[i] + titleGap;
+    doc.font('Helvetica').fontSize(fontSize).fillColor(INK).text(item.body, MARGIN + pad, iy, { width: w - pad * 2 });
+    iy += bodyHeights[i] + itemGap;
+  });
+
+  doc.fillColor(INK);
+  return y + boxHeight + 14;
+}
+
+function drawCybersecurityExplanations(doc, y) {
+  return drawExplanationsBox(doc, y, CYBERSECURITY_EXPLANATIONS);
 }
 
 function drawCybersecurityLayers(doc, y, vendors) {
@@ -1094,18 +1355,11 @@ const SCORE_EXPLANATIONS = [
 ];
 
 function drawScoreExplanations(doc, y) {
+  // Heading stays, by request -- only the list below it moved to
+  // drawExplanationsBox()'s smaller/boxed format (same one Cybersecurity's
+  // own list now uses).
   y = drawSectionHeading(doc, y, 'Understanding Your Scores');
-  const w = contentWidth(doc);
-  SCORE_EXPLANATIONS.forEach((item) => {
-    doc.font('Helvetica').fontSize(8.5);
-    const bodyHeight = doc.heightOfString(item.body, { width: w });
-    y = ensureSpace(doc, y, 14 + bodyHeight + 10);
-    doc.font('Helvetica-Bold').fontSize(10).fillColor(BRAND_PURPLE).text(item.title, MARGIN, y);
-    y += 14;
-    doc.font('Helvetica').fontSize(8.5).fillColor(INK).text(item.body, MARGIN, y, { width: w });
-    y += bodyHeight + 10;
-  });
-  return y;
+  return drawExplanationsBox(doc, y, SCORE_EXPLANATIONS);
 }
 
 // Proactive Maintenance note -- items now come from the report itself
@@ -1121,6 +1375,48 @@ function drawScoreExplanations(doc, y) {
 // (roundedRect, #f3f1fb fill, bold purple title at +10, body content
 // starting at +24, 12px side padding), not the plain on-white heading this
 // used before.
+// Measured separately from drawProactiveMaintenanceNote() below (same
+// measure/draw split this file uses elsewhere -- measureDonutHeight()/
+// drawDonut(), etc.) so buildReportPdf() can ALSO use it to decide, up
+// front, whether this box and the All Devices table right after it will
+// both fit on the current page together (see the call site below) -- not
+// just whether this box alone fits, which is all ensureSpace() inside
+// drawProactiveMaintenanceNote() itself still separately guards against.
+function measureProactiveMaintenanceHeight(doc, items) {
+  if (!items || items.length === 0) return 0;
+  const w = contentWidth(doc);
+  const pad = 12;
+  const gap = 20;
+  const colW = (w - pad * 2 - gap) / 2;
+  const half = Math.ceil(items.length / 2);
+  const leftItems = items.slice(0, half);
+  const rightItems = items.slice(half);
+  doc.font('Helvetica').fontSize(8);
+  const measureCol = (colItems) => colItems.reduce((sum, item) => sum + doc.heightOfString(`-  ${item}`, { width: colW - 10 }) + 2, 0);
+  const colHeight = Math.max(measureCol(leftItems), measureCol(rightItems));
+  const captionText = 'Standard activities performed across all managed devices -- not scored.';
+  doc.font('Helvetica-Oblique').fontSize(7);
+  const captionHeight = doc.heightOfString(captionText, { width: w - pad * 2 });
+  return 24 + colHeight + 6 + captionHeight + 10;
+}
+
+// Estimates the All Devices table's own height WITHOUT drawing it, same
+// reasoning as measureProactiveMaintenanceHeight() above -- lets
+// buildReportPdf() below decide up front whether BOTH sections fit
+// together. Every device row here is a short, fixed-shape 16px row
+// (device name/type/user are real-world short enough not to wrap in
+// practice), so rowHeight*count is a safe estimate, not a guess -- same
+// "safe estimate" reasoning drawTable()'s own callers elsewhere in this
+// file already rely on. drawTable() itself still page-breaks correctly
+// mid-table on the rare row that DOES wrap taller than estimated, so a
+// slightly-short estimate here is never unsafe, just occasionally
+// over-cautious by one row's worth of height.
+function estimateDeviceListHeight(report) {
+  const devices = report.dattoLive && report.dattoLive.devices;
+  if (!devices || devices.length === 0) return 0;
+  return 28 + 14 + 18 + devices.length * 16 + 18; // heading + caption/gap + table header + rows + trailing gap
+}
+
 function drawProactiveMaintenanceNote(doc, y, items) {
   if (!items || items.length === 0) return y;
   const w = contentWidth(doc);
@@ -1238,45 +1534,33 @@ function buildReportPdf({ report, vendors, commentary }) {
       let y = drawCoverHeader(doc, report);
       y = drawAtAGlance(doc, y, report);
 
-      // Watch moves to the top of the Device Health page, by request --
-      // but ONLY when the full page 1 content (Executive Summary + On
-      // Track/Action Needed + Watch + Scorecard) genuinely wouldn't all
-      // fit on page 1 anyway; On Track/Action Needed always stay put
-      // either way. Decided by measuring everything up front (nothing
-      // drawn yet), not by reacting after the fact, so On Track/Action
-      // Needed's own position never has to move regardless of which way
-      // this goes.
-      let pendingWatchCommentary = null;
+      // Devices by Type / Check-in Freshness, on page 1 now, above
+      // Executive Summary, by request.
+      y = drawDeviceOverviewRow(doc, y, report.dattoLive);
+
       if (commentary) {
         y = drawExecutiveSummary(doc, y, commentary);
-        const topRowH = measureTopRowHeight(doc, commentary);
-        const watchH = measureWatchHeight(doc, commentary);
-        const scorecardH = countScorecardRows(report, vendors) * 19 + 28 + 18;
-        const pageBottom = doc.page.height - doc.page.margins.bottom;
-        const allFitsOnPage1 = y + topRowH + 10 + watchH + 10 + scorecardH <= pageBottom;
-
-        y = drawTopRow(doc, y, commentary);
-        y += 10;
-
-        if (allFitsOnPage1) {
-          y = drawWatchCard(doc, y, commentary);
-          y += 18;
-        } else {
-          pendingWatchCommentary = commentary;
-        }
       }
       y = drawScorecard(doc, y, report, vendors);
 
+      // On Track/Action Needed/Watch now ALWAYS lead the next page, by
+      // request ("Move On track Action needed and watch to always start on
+      // the next page. keep scorecard on page 1") -- replaces the old
+      // measure-everything-up-front "does it all fit on page 1 anyway"
+      // check (and the pendingWatchCommentary deferral it fed), which is no
+      // longer needed now that these three never compete with page 1's own
+      // content for space in the first place.
       doc.addPage();
       y = doc.page.margins.top;
-      // Watch, if it didn't fit on page 1, leads the Device Health page --
-      // immediately followed by Asset Management (drawDeviceHealth() below
-      // starts with it), not a further page break, by request ("follow it
-      // by the Asset Management section without pushing that to page 3").
-      if (pendingWatchCommentary) {
-        y = drawWatchCard(doc, y, pendingWatchCommentary);
+      if (commentary) {
+        y = drawTopRow(doc, y, commentary);
+        y += 10;
+        y = drawWatchCard(doc, y, commentary);
         y += 18;
       }
+      // Followed straight by Asset Management (drawDeviceHealth() below
+      // starts with it), not a further page break, same "don't push this to
+      // page 3" reasoning the old deferred-Watch case already established.
       y = drawDeviceHealth(doc, y, report);
 
       // Cybersecurity Layers now always starts on its own fresh page, by
@@ -1287,7 +1571,12 @@ function buildReportPdf({ report, vendors, commentary }) {
       // A bit more breathing room than the standard inter-section gap, by
       // request -- Cybersecurity Systems' own purple background card ends
       // right at its return value, so the plain gap read as tight next to
-      // Microsoft License Counts' heading immediately below it.
+      // the heading immediately below it.
+      y += 14;
+
+      // Fixed "what each of these systems does" reference copy, directly
+      // under Cybersecurity Systems, by request.
+      y = drawCybersecurityExplanations(doc, y);
       y += 14;
 
       // Microsoft License Counts, between Cybersecurity Systems and All
@@ -1301,14 +1590,34 @@ function buildReportPdf({ report, vendors, commentary }) {
       // Device list and the score-explanations glossary both sit right
       // before Recommendations now, by request -- the device-by-device
       // table used to live directly under Device Health's own donuts;
-      // moved here instead. Proactive Maintenance now sits at the TOP of
-      // this same page, above the table, by request (used to sit at the
-      // bottom of the Cybersecurity Layers page). Both skipped (no blank
-      // page) when there's genuinely no device list to show, same as the
-      // old inline placement did.
+      // moved here instead. Proactive Maintenance sits right above the
+      // table, by request (used to sit at the bottom of the Cybersecurity
+      // Layers page). Replacement Recommendation/Operating System used to
+      // sit here too -- moved back into Device Health itself, by request
+      // (drawDeviceHealth() above). Skipped entirely (no blank page) when
+      // there's genuinely no device list to show, same as the old inline
+      // placement did.
+      //
+      // Proactive Maintenance no longer forces a fresh page UNconditionally,
+      // by request ("Proactive maintenance doesn't need to go to the next
+      // page if the whole of it and the All Devices section will fit") --
+      // both are measured/estimated up front (measureProactiveMaintenanceHeight()/
+      // estimateDeviceListHeight() above) and ensureSpace()'d as ONE
+      // combined check, so the decision is "does everything below fit
+      // together on THIS page", not just whichever section's own internal
+      // ensureSpace() would have reacted to on its own (which could have
+      // left Proactive Maintenance fitting alone while orphaning the All
+      // Devices heading below it, same class of bug fixed earlier for
+      // Device Health's own heading+box). For a client with enough devices
+      // that the table alone would already need to continue onto further
+      // pages, the combined estimate naturally comes out taller than any
+      // single page, so this still pushes to a fresh page exactly like the
+      // old unconditional behaviour did -- the forced break is only
+      // skipped when everything genuinely fits.
       if (report.dattoLive && report.dattoLive.devices && report.dattoLive.devices.length > 0) {
-        doc.addPage();
-        y = doc.page.margins.top;
+        const pmH = measureProactiveMaintenanceHeight(doc, report.proactiveMaintenance);
+        const dlH = estimateDeviceListHeight(report);
+        y = ensureSpace(doc, y, pmH + (pmH > 0 ? 10 : 0) + dlH);
         y = drawProactiveMaintenanceNote(doc, y, report.proactiveMaintenance);
         y += 10;
         y = drawDeviceList(doc, y, report);

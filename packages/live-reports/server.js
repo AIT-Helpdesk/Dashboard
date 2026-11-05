@@ -356,6 +356,87 @@ function computeAssetManagementDetail(devices, audits) {
   return { score, checks };
 }
 
+// Replacement Recommendation / Operating System donuts, in the Device
+// Health section, by request ("Get the info from Datto RMM"). Live Datto
+// RMM data -- NOT the periodically-ingested hardware-lifecycle report
+// Meeting Prep's own equivalent widget pair reads (packages/meeting-prep/
+// parsers/hardware-lifecycle.js, dated snapshots under meeting-prep/data/
+// <client>/, weeks old by the time anyone looks at them). This page has no
+// ingestion pipeline, so both are approximated from fields already live on
+// the bulk device list, the same two fields Asset Management's own checks
+// above already use: `d.os` (via isOsSupported()) for Operating System, and
+// `d.warrantyDate` for Replacement Recommendation, bucketed by how much
+// runway is left on it. Operating System is simplified to 2 categories
+// (Supported/Unsupported) rather than Meeting Prep's 3, by request -- the
+// richer "unsupported unless extended support arranged" middle tier isn't
+// something isOsSupported() (or Datto's own live OS string) distinguishes.
+const MS_PER_MONTH = (365.25 / 12) * 24 * 60 * 60 * 1000;
+
+// Datto's own operatingSystem string carries a trailing dotted build/version
+// number -- confirmed live against a real account's own devices (e.g.
+// "Microsoft Windows 11 Business 10.0.26200", "Microsoft Windows 10 Pro
+// 10.0.19045"), NOT the "(Build NNNNN)" parenthetical form first assumed --
+// stripped here, by request ("Leave off build numbers"), for the per-name
+// breakdown below. Both forms are stripped (the parenthetical one kept as a
+// defensive fallback in case some device/OS type reports that way instead).
+// isOsSupported() itself is unaffected (matched against the ORIGINAL string
+// either way -- the EOL patterns it checks never look at build info in the
+// first place).
+function stripOsBuildNumber(os) {
+  return (os || '')
+    .replace(/\s*\(Build[^)]*\)/gi, '')
+    .replace(/\s+\d+(\.\d+){2,}\s*$/, '')
+    .trim();
+}
+
+function computeHardwareLifecycle(devices) {
+  const osSupported = devices.filter((d) => isOsSupported(d.os)).length;
+  const osUnsupported = devices.length - osSupported;
+
+  // Distinct OS names (build numbers stripped), each tagged supported/
+  // unsupported -- by request ("List what they are instead of Supported
+  // and Unsupported but colour them red and green to match... Keep the
+  // widget as just supported and unsupported though"). Fed into the
+  // donut's own `legend` as real OS names instead of the 2 generic
+  // "Supported"/"Unsupported" rows, with every supported name's colour set
+  // to the same green and every unsupported name's to the same red -- so
+  // the donut's RING still reads as a plain 2-colour supported/unsupported
+  // split (same arcs, just drawn as several same-coloured segments instead
+  // of one each), while the legend beside it now names the real versions.
+  const osCounts = new Map(); // strippedName -> count
+  const osSupportByName = new Map(); // strippedName -> boolean
+  for (const d of devices) {
+    if (!d.os || d.os === '—') continue;
+    const name = stripOsBuildNumber(d.os);
+    if (!name) continue;
+    osCounts.set(name, (osCounts.get(name) || 0) + 1);
+    osSupportByName.set(name, isOsSupported(d.os));
+  }
+  const osByName = [...osCounts.entries()]
+    .map(([name, count]) => ({ name, count, supported: osSupportByName.get(name) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  let within12 = 0;
+  let from12to24 = 0;
+  let suitable24Plus = 0;
+  let unknown = 0;
+  for (const d of devices) {
+    if (!d.warrantyDate) {
+      unknown++;
+      continue;
+    }
+    const monthsRemaining = (new Date(d.warrantyDate).getTime() - Date.now()) / MS_PER_MONTH;
+    if (monthsRemaining <= 12) within12++;
+    else if (monthsRemaining <= 24) from12to24++;
+    else suitable24Plus++;
+  }
+
+  return {
+    osSupport: { supported: osSupported, unsupported: osUnsupported, byName: osByName },
+    replacementRecommendation: { within12, from12to24, suitable24Plus, unknown },
+  };
+}
+
 // Monitoring, Datto's own real resolution-ratio-per-priority-tier formula,
 // confirmed off its own canned report's "Total Alerts by Priority" table --
 // replaces the earlier weighted-open-alert-count-penalty approximation.
@@ -690,17 +771,84 @@ async function buildDattoEdrSummary(siteName, force) {
 }
 
 // --- AutoElevate (CyberFOX) ---------------------------------------------
-// Confirmed live this session: AutoElevate's own /api/v1/companies row has
-// almost nothing on it beyond id/name/managementSystemCompanyId/createdAt/
-// updatedAt -- no elevation-request count, no endpoint count, nothing else
-// usable. "Something to report" here honestly means just a match + since-
-// date, the same scope buildInstalledServices() already has -- not
-// under-building this, there's genuinely nothing more the API returns.
+// The OLD version of this comment said AutoElevate's API had "nothing else
+// usable" beyond a match + deployed-since date -- that was only ever true
+// of /api/v1/companies specifically. Confirmed live THIS session: there are
+// separate /api/v1/elevation-requests and /api/v1/elevation-events
+// resources with real per-client data (requested app, who requested it,
+// approve/deny/pending outcome, timestamps), by request ("Add widgets for
+// the AutoElevate section").
+//
+// Same 30-day window SaaS Alerts' own buildSaasAlertsSummary() already
+// uses, for the same reason (a fixed, documented, dashboard-wide convention
+// rather than a bespoke one just for this vendor).
+const ELEVATION_WINDOW_DAYS = 30;
+
+// Splitting "Approved" into auto-vs-manual, by request -- deliberately NOT
+// labelled "approved by a technician": confirmed live against a real
+// client (G & H Civil Contractors) that an elevation-event with NO rule
+// attached (data.ruleThatApplied null) does not reliably produce a
+// corresponding elevation-request either, meaning "no rule matched" does
+// NOT cleanly mean "a technician decided it" -- there's a third, apparently
+// undocumented auto-allow path (a trusted-publisher heuristic is the likely
+// candidate, going by the sample data, but that's not confirmed). "Manual"
+// is therefore everything approved that ISN'T a confirmed rule match, by
+// request -- an honest "not an explicit rule" label, not a claim about who
+// or what actually approved it.
+function classifyElevationOutcomes(requests, eventById) {
+  const outcomes = { autoApproved: 0, manualApproved: 0, denied: 0, pending: 0 };
+  const appCounts = new Map();
+  for (const r of requests) {
+    if (r.approvalState === 'APPROVED') {
+      const event = eventById.get(r.eventId);
+      if (event && event.data && event.data.ruleThatApplied) outcomes.autoApproved++;
+      else outcomes.manualApproved++;
+    } else if (r.approvalState === 'DENIED') {
+      outcomes.denied++;
+    } else if (r.approvalState === 'PENDING') {
+      outcomes.pending++;
+    }
+    // WITHDRAWN excluded from the outcomes breakdown, by request (the donut
+    // is Approved(Auto)/Approved(Manual)/Denied/Pending, 4 slices) -- still
+    // counted toward topApps below, a withdrawn request was still a real
+    // request for that app.
+    if (r.file) {
+      const appName = r.file.productName || r.file.fileName;
+      if (appName) appCounts.set(appName, (appCounts.get(appName) || 0) + 1);
+    }
+  }
+  const topApps = [...appCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, count]) => ({ name, count }));
+  return { outcomes, topApps };
+}
+
 async function buildAutoElevateSummary(siteName, force) {
   if (!autoElevate.hasAutoElevateCredentials()) return { status: 'not-configured' };
   const match = await autoElevate.findCompanyMatch(siteName, force);
   if (!match) return { status: 'ok', installed: false };
-  return { status: 'ok', installed: true, deployedSince: match.createdAt ? new Date(match.createdAt).toISOString() : null };
+  const deployedSince = match.createdAt ? new Date(match.createdAt).toISOString() : null;
+
+  const now = Date.now();
+  const windowMs = ELEVATION_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  // Previous-period fetch (for a trend-vs-last-period indicator) removed --
+  // by request, the Requests Handled tile that figure fed is gone from both
+  // surfaces now, so there's nothing left to compute it for.
+  const [currentRequests, currentEvents] = await Promise.all([
+    autoElevate.getElevationRequests(match.id, now - windowMs, now),
+    autoElevate.getElevationEvents(match.id, now - windowMs, now),
+  ]);
+  const eventById = new Map(currentEvents.map((e) => [e.id, e]));
+  const { outcomes, topApps } = classifyElevationOutcomes(currentRequests, eventById);
+  const handledCount = outcomes.autoApproved + outcomes.manualApproved + outcomes.denied;
+
+  return {
+    status: 'ok',
+    installed: true,
+    deployedSince,
+    elevation: { windowDays: ELEVATION_WINDOW_DAYS, outcomes, handledCount, topApps },
+  };
 }
 
 // --- Huntress -------------------------------------------------------------
@@ -961,6 +1109,7 @@ router.get('/', async (req, res) => {
     ]);
     const assetManagementDetail = computeAssetManagementDetail(devices, audits);
     const monitoringDetail = computeMonitoringDetail(siteAlertsBreakdown);
+    const hardwareLifecycle = computeHardwareLifecycle(devices);
     const assetManagement = assetManagementDetail?.score ?? null;
     const monitoring = monitoringDetail?.score ?? null;
     const { workstation, server, overallScore } = computeOverallHealth(devices, { assetManagement, monitoring });
@@ -995,6 +1144,21 @@ router.get('/', async (req, res) => {
         const diskUsedPercent = audit?.systemDiskFreePercent != null ? 100 - audit.systemDiskFreePercent : null;
         return { ...row, diskUsedPercent };
       });
+      // Sorted here (once, server-side) rather than separately in client.js
+      // and pdf-template.js, so the on-screen table and the PDF's own device
+      // list always show the exact same order -- by request: the worst
+      // check-in freshness first ("Not Seen 30+ days" devices, then
+      // "Not Seen 7-30 days"), then by Disk Used % (highest/most-full first,
+      // nulls -- no audit data -- last within their tier) once freshness is
+      // tied. Hostname is a final stable tiebreak, not part of the request.
+      const freshnessOrder = { stale: 0, ageing: 1, recent: 2, unknown: 3 };
+      dattoLive.devices.sort((a, b) => {
+        const f = (freshnessOrder[a.freshness] ?? 9) - (freshnessOrder[b.freshness] ?? 9);
+        if (f !== 0) return f;
+        const d = (b.diskUsedPercent ?? -1) - (a.diskUsedPercent ?? -1);
+        if (d !== 0) return d;
+        return (a.hostname || '').localeCompare(b.hostname || '');
+      });
     }
 
     const siteName = devices[0].site;
@@ -1016,6 +1180,7 @@ router.get('/', async (req, res) => {
       monitoring,
       assetManagementDetail,
       monitoringDetail,
+      hardwareLifecycle,
       proactiveMaintenance: getProactiveMaintenanceItems(),
       alertsByPriority,
       alertsTotalCount: alerts.length,
@@ -1074,18 +1239,41 @@ router.get('/vendors', async (req, res) => {
 // with a long device list genuinely exceeds that.
 router.use(express.json({ limit: '5mb' }));
 
-router.post('/pdf', async (req, res) => {
+// Generates just the AI commentary (Executive Summary/On Track/Action
+// Needed/Watch/Recommendations), separately from the PDF itself, by
+// request ("a button to generate the ... sections before requesting the
+// PDF ... allow us to edit the content before creating the PDF") --
+// client.js's own Generate Summary button calls this, shows the result in
+// an editable form, then sends whatever's in that form (edited or not)
+// along as `commentary` on the /pdf call below, which uses it as-is
+// instead of calling Claude a second time.
+router.post('/commentary', async (req, res) => {
   const { report, vendors } = req.body || {};
   if (!report || !vendors) return res.status(400).json({ error: 'Both "report" and "vendors" are required in the request body.' });
+  if (!hasAnthropicCredentials()) return res.status(400).json({ error: 'AI commentary is not configured on this server (missing ANTHROPIC_API_KEY).' });
   try {
-    // AI commentary is optional -- a missing ANTHROPIC_API_KEY or a
-    // failed Claude call both just mean the PDF ships without the
-    // Executive Summary/On Track-Watch-Action Needed/Recommendations
-    // sections (pdf-template.js already renders fine with commentary ==
-    // null), never block the rest of the (real, live) report from
-    // generating.
-    let commentary = null;
-    if (hasAnthropicCredentials()) {
+    const commentary = await buildCommentary(report, vendors);
+    if (!commentary) return res.status(502).json({ error: 'The AI call failed or returned something that could not be parsed -- see the server log for details.' });
+    res.json({ commentary });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/pdf', async (req, res) => {
+  const { report, vendors, commentary: suppliedCommentary } = req.body || {};
+  if (!report || !vendors) return res.status(400).json({ error: 'Both "report" and "vendors" are required in the request body.' });
+  try {
+    // A commentary object from the client (the Generate Summary/edit flow
+    // above) is used exactly as given, no second AI call. Otherwise falls
+    // back to the original behaviour -- generate it here automatically, or
+    // ship the PDF without these sections entirely when a missing
+    // ANTHROPIC_API_KEY or a failed Claude call means there's nothing to
+    // use (pdf-template.js already renders fine with commentary == null),
+    // never blocking the rest of the (real, live) report from generating.
+    let commentary = suppliedCommentary || null;
+    if (!commentary && hasAnthropicCredentials()) {
       try {
         commentary = await buildCommentary(report, vendors);
       } catch (err) {

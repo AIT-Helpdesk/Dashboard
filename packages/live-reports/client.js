@@ -11,7 +11,7 @@
 // below), computed via server.js's own real re-creation of Datto's canned-
 // report formulas (see server.js's own computeAssetManagementDetail()/
 // computeMonitoringDetail() comments).
-import { gaugeSvg, donutWidget, kpiTileRow, deviceTypeBarWidget, checkinFreshnessWidget, deviceListTableHtml, wireDeviceFilters } from '/meeting-prep-report-render.js';
+import { gaugeSvg, donutWidget, donutSvg, kpiTileRow, deviceTypeBarWidget, checkinFreshnessWidget, deviceListTableHtml, wireDeviceFilters } from '/meeting-prep-report-render.js';
 
 export const id = 'live-reports';
 export const label = 'Live Reports';
@@ -162,13 +162,23 @@ function monitoringTableHtml(detail) {
 // its own Devices page), server.js's own getProactiveMaintenanceItems()
 // (configurable via PROACTIVE_MAINTENANCE_ITEMS in .env), sourced once on
 // the server rather than duplicated here, so the two surfaces can't drift
-// apart. Placed at the very end of the page, by request.
+// apart. Moved above the Replacement Recommendation/Operating System
+// donuts and styled as the same purple card the PDF's own
+// drawProactiveMaintenanceNote() draws (2 columns, dash-bulleted, italic
+// caption) -- literal brand-purple hex values, not the --purple/--card
+// theme tokens, by design: this is the dashboard's one fixed brand-colour
+// card treatment (same as the PDF, which is always on a white page), not
+// something that should shift with light/dark mode.
 function proactiveMaintenanceHtml(items) {
   if (!items || items.length === 0) return '';
+  const half = Math.ceil(items.length / 2);
+  const col = (colItems) => `<ul class="live-reports-proactive-maintenance-list">${colItems.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   return `
-    <h2 class="client-summary-section-heading">Proactive Maintenance</h2>
-    <ul class="live-reports-proactive-maintenance">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
-    <p class="inline-subtext">Standard activities performed across all managed devices -- not scored.</p>`;
+    <div class="live-reports-proactive-maintenance-box">
+      <p class="live-reports-proactive-maintenance-heading">Proactive Maintenance</p>
+      <div class="live-reports-proactive-maintenance-cols">${col(items.slice(0, half))}${col(items.slice(half))}</div>
+      <p class="live-reports-proactive-maintenance-caption">Standard activities performed across all managed devices -- not scored.</p>
+    </div>`;
 }
 
 // Microsoft License Counts, by request ("add a set of Microsoft license
@@ -353,14 +363,57 @@ function vendorWidgetsHtml(vendors) {
       </div>`);
   }
 
-  // AutoElevate -- confirmed live there's genuinely nothing more than a
-  // match + deployed-since date available (see server.js's own comment),
-  // so no KPI tiles here, just the one fact.
+  // AutoElevate -- elevation requests/events widgets, by request. "Approved
+  // (Manual)" is deliberately not labelled "by a technician" -- see
+  // server.js's own classifyElevationOutcomes() comment for why that
+  // distinction isn't reliably knowable from the API. donutSvg() used
+  // directly rather than the full donutWidget() (which wraps itself in its
+  // OWN .mtg-widget card) -- this already has its own outer .mtg-widget
+  // card below, same as every other vendor widget here; nesting another
+  // .mtg-widget inside it would double the border/padding.
   if (vendors.autoElevate.status === 'ok' && vendors.autoElevate.installed && vendors.autoElevate.deployedSince) {
+    const ae = vendors.autoElevate;
+    const el = ae.elevation;
+    let body = '';
+    if (el) {
+      // Donut/KPI tile/top-apps widgets always shown now, by request --
+      // even with zero elevation activity in the window (donutSvg() itself
+      // already renders a plain empty ring + "0" centre label when every
+      // segment is 0, same as every other zero-count donut on this page,
+      // so there's no special-case rendering needed here beyond always
+      // building `body` whenever `el` exists).
+      const segments = [
+        { label: 'Approved (Auto)', value: el.outcomes.autoApproved, color: '#16a34a' },
+        { label: 'Approved (Manual)', value: el.outcomes.manualApproved, color: '#2563eb' },
+        { label: 'Denied', value: el.outcomes.denied, color: '#dc2626' },
+        { label: 'Pending', value: el.outcomes.pending, color: '#f59e0b' },
+      ];
+      const legendRows = segments
+        .map(
+          (s) =>
+            `<div class="mtg-donut-legend-row" title="${escapeHtml(s.label)}"><span class="mtg-swatch" style="background:${s.color}"></span><span class="mtg-donut-legend-label">${escapeHtml(s.label)}</span><span class="mtg-donut-val">${s.value}</span></div>`
+        )
+        .join('');
+      const topAppsHtml =
+        el.topApps.length > 0
+          ? `<ul class="live-reports-saas-alerts-events">${el.topApps.map((a) => `<li>${escapeHtml(a.name)} <span class="muted">(${a.count})</span></li>`).join('')}</ul>`
+          : '<p class="inline-subtext">No elevation requests in this window.</p>';
+      // Requests Handled KPI tile (and the "Deployed since" line below, and
+      // the trend-vs-previous-period calc it used to need) removed, by
+      // request -- the donut + legend + top-apps list already say
+      // everything that tile repeated. "(30 days)" moved into the title
+      // itself (grey, via .muted), also by request, instead of the window
+      // length only showing inside that now-removed tile's own label.
+      body = `
+        <div class="live-reports-saas-alerts-layout">
+          <div class="mtg-donut-row">${donutSvg(segments, el.handledCount)}<div class="mtg-donut-legend">${legendRows}</div></div>
+          ${topAppsHtml}
+        </div>`;
+    }
     widgets.push(`
       <div class="mtg-widget">
-        <p class="mtg-widget-title">AutoElevate</p>
-        <p class="inline-subtext">Deployed since ${new Date(vendors.autoElevate.deployedSince).toLocaleDateString()}.</p>
+        <p class="mtg-widget-title">AutoElevate${el ? ` <span class="muted">(${el.windowDays} days)</span>` : ''}</p>
+        ${body}
       </div>`);
   }
 
@@ -377,6 +430,110 @@ function vendorSummariesHtml(vendors) {
   return `<h2 class="client-summary-section-heading">Cybersecurity Systems</h2><div class="mtg-widget-grid live-reports-other-systems">${vendorWidgetsHtml(vendors)}</div>`;
 }
 
+// Generate Summary / edit-before-PDF, by request -- see server.js's own
+// /commentary route comment for the full flow. `commentary` here is
+// exactly the shape ai-commentary.js's buildCommentary() returns:
+// { executiveSummary, onTrack, actionNeeded, watch, recommendations }.
+// Bullet lists are edited as one-line-per-item plain text (simplest
+// reliable editing UI for a short list, no add/remove-row wiring needed) --
+// only Recommendations (each row has 3 distinct fields: priority/
+// recommendation/why it matters) gets its own repeatable-row UI below.
+function commentaryEditorHtml(commentary) {
+  const bulletsToText = (arr) => (arr || []).join('\n');
+  const recRows = (commentary.recommendations || []).map((r) => recommendationRowHtml(r)).join('');
+  return `
+    <div class="live-reports-commentary-editor">
+      <h2 class="client-summary-section-heading">Report Narrative (Editable)</h2>
+      <p class="inline-subtext">AI-drafted from the report above -- edit anything below before creating the PDF. The PDF uses exactly what's here, as-is.</p>
+
+      <label class="live-reports-commentary-label" for="commentary-exec-summary">Executive Summary</label>
+      <textarea id="commentary-exec-summary" class="live-reports-commentary-field live-reports-commentary-textarea" rows="4">${escapeHtml(commentary.executiveSummary || '')}</textarea>
+
+      <div class="live-reports-commentary-cols">
+        <div>
+          <label class="live-reports-commentary-label live-reports-commentary-label--on-track" for="commentary-on-track">On Track <span class="inline-subtext">(one per line)</span></label>
+          <textarea id="commentary-on-track" class="live-reports-commentary-field live-reports-commentary-textarea" rows="4">${escapeHtml(bulletsToText(commentary.onTrack))}</textarea>
+        </div>
+        <div>
+          <label class="live-reports-commentary-label live-reports-commentary-label--action-needed" for="commentary-action-needed">Action Needed <span class="inline-subtext">(one per line)</span></label>
+          <textarea id="commentary-action-needed" class="live-reports-commentary-field live-reports-commentary-textarea" rows="4">${escapeHtml(bulletsToText(commentary.actionNeeded))}</textarea>
+        </div>
+        <div>
+          <label class="live-reports-commentary-label live-reports-commentary-label--watch" for="commentary-watch">Watch <span class="inline-subtext">(one per line)</span></label>
+          <textarea id="commentary-watch" class="live-reports-commentary-field live-reports-commentary-textarea" rows="4">${escapeHtml(bulletsToText(commentary.watch))}</textarea>
+        </div>
+      </div>
+
+      <label class="live-reports-commentary-label">Our Recommendations</label>
+      <div id="commentary-recommendations">${recRows}</div>
+      <button type="button" id="commentary-add-recommendation" class="button-link button-link--small">+ Add Recommendation</button>
+    </div>
+  `;
+}
+
+function recommendationRowHtml(r) {
+  const rec = r || { priority: 'Watch', recommendation: '', whyItMatters: '' };
+  return `
+    <div class="live-reports-commentary-rec-row" data-rec-row>
+      <select class="live-reports-commentary-field live-reports-commentary-rec-priority">
+        <option value="Action needed" ${rec.priority === 'Action needed' ? 'selected' : ''}>Action needed</option>
+        <option value="Watch" ${rec.priority === 'Watch' ? 'selected' : ''}>Watch</option>
+      </select>
+      <input type="text" class="live-reports-commentary-field live-reports-commentary-rec-text" placeholder="Recommendation" value="${escapeHtml(rec.recommendation || '')}" />
+      <input type="text" class="live-reports-commentary-field live-reports-commentary-rec-why" placeholder="Why it matters" value="${escapeHtml(rec.whyItMatters || '')}" />
+      <button type="button" class="button-link button-link--small live-reports-commentary-rec-remove" title="Remove this recommendation">Remove</button>
+    </div>`;
+}
+
+// Event delegation (one listener on the editor root) rather than wiring
+// each row's own Remove button individually -- rows can be added/removed
+// after this runs once (the +Add Recommendation button itself), so a
+// per-row listener would need re-wiring on every add anyway.
+function wireCommentaryEditor(root) {
+  const addButton = root.querySelector('#commentary-add-recommendation');
+  const rowsEl = root.querySelector('#commentary-recommendations');
+  if (addButton && rowsEl) {
+    addButton.addEventListener('click', () => {
+      rowsEl.insertAdjacentHTML('beforeend', recommendationRowHtml(null));
+    });
+  }
+  root.addEventListener('click', (e) => {
+    const removeButton = e.target.closest('.live-reports-commentary-rec-remove');
+    if (removeButton) removeButton.closest('[data-rec-row]').remove();
+  });
+}
+
+// Reads whatever's CURRENTLY in the editor form (edited or not) at the
+// moment Create PDF is clicked -- not a copy kept in sync on every
+// keystroke, so there's exactly one source of truth (the DOM itself) and
+// no risk of it drifting from what's actually on screen. Returns null when
+// the editor was never opened (Generate Summary not clicked this session),
+// which createPdf() uses to mean "let the server draft its own", same as
+// before this feature existed.
+function readCommentaryFromEditor(root) {
+  const editor = root.querySelector('.live-reports-commentary-editor');
+  if (!editor) return null;
+  const linesOf = (selector) =>
+    (editor.querySelector(selector).value || '')
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  const recommendations = [...editor.querySelectorAll('[data-rec-row]')]
+    .map((row) => ({
+      priority: row.querySelector('.live-reports-commentary-rec-priority').value,
+      recommendation: row.querySelector('.live-reports-commentary-rec-text').value.trim(),
+      whyItMatters: row.querySelector('.live-reports-commentary-rec-why').value.trim(),
+    }))
+    .filter((r) => r.recommendation); // a row left blank (e.g. added then never filled in) is dropped, not sent as an empty row
+  return {
+    executiveSummary: editor.querySelector('#commentary-exec-summary').value.trim(),
+    onTrack: linesOf('#commentary-on-track'),
+    actionNeeded: linesOf('#commentary-action-needed'),
+    watch: linesOf('#commentary-watch'),
+    recommendations,
+  };
+}
+
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
@@ -391,11 +548,14 @@ export function mount(container) {
         </label>
         <button type="submit" id="search-button" class="button-link button-link--small refresh-button--emphasis" title="Pull a report for this client (uses the 20-minute cache if still warm)">Search</button>
         <button type="button" id="refresh-button" class="button-link button-link--small" title="Re-fetch live Datto RMM data (bypasses the 20-minute cache) -- use this when you need the absolute latest, not what was cached up to 20 minutes ago">Refresh</button>
+        <button type="button" id="generate-commentary-button" class="button-link button-link--small" disabled title="Loads with the report above">Generate Summary</button>
         <button type="button" id="pdf-button" class="button-link button-link--small" disabled title="Loads with the report above">Create PDF</button>
       </div>
     </form>
     <p id="status" class="status">Type a client's Datto Site name above to pull a live report.</p>
     <p id="pdf-status" class="status" hidden></p>
+    <p id="commentary-status" class="status" hidden></p>
+    <div id="commentary-editor-container"></div>
     <div id="results"></div>
   `;
 
@@ -404,8 +564,11 @@ export function mount(container) {
   const exactInput = container.querySelector('#exact-site-input');
   const refreshButton = container.querySelector('#refresh-button');
   const pdfButton = container.querySelector('#pdf-button');
+  const generateCommentaryButton = container.querySelector('#generate-commentary-button');
   const statusEl = container.querySelector('#status');
   const pdfStatusEl = container.querySelector('#pdf-status');
+  const commentaryStatusEl = container.querySelector('#commentary-status');
+  const commentaryEditorContainer = container.querySelector('#commentary-editor-container');
   const resultsEl = container.querySelector('#results');
 
   // The PDF (ai-commentary.js/pdf-template.js on the server) is built
@@ -417,12 +580,57 @@ export function mount(container) {
   let currentReportData = null;
   let currentVendorsData = null;
 
+  function resetCommentaryEditor() {
+    commentaryEditorContainer.innerHTML = '';
+    commentaryStatusEl.hidden = true;
+  }
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     load(false);
   });
   refreshButton.addEventListener('click', () => load(true));
   pdfButton.addEventListener('click', createPdf);
+  generateCommentaryButton.addEventListener('click', generateCommentary);
+
+  // Generate Summary -> edit -> Create PDF, by request ("a button to
+  // generate the Executive Summary, On Track, Action Needed, Watch, and
+  // Our Recommendations sections before requesting the PDF... allow us to
+  // edit the content before creating the PDF"). Separate from createPdf()
+  // below -- this only drafts the narrative and renders it as an editable
+  // form; nothing is sent to /pdf until the Create PDF button is clicked,
+  // at which point readCommentaryFromEditor() reads whatever is currently
+  // in that form (edited or not) and sends it along instead of letting the
+  // server draft its own (see server.js's own /commentary and /pdf
+  // routes).
+  async function generateCommentary() {
+    if (!currentReportData || !currentVendorsData) return;
+    generateCommentaryButton.disabled = true;
+    generateCommentaryButton.textContent = 'Generating...';
+    pdfButton.disabled = true;
+    commentaryStatusEl.hidden = false;
+    commentaryStatusEl.className = 'status loading';
+    commentaryStatusEl.textContent = 'Drafting the report narrative with AI... this can take up to a minute.';
+    try {
+      const res = await fetch('/api/live-reports/commentary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ report: currentReportData, vendors: currentVendorsData }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      commentaryEditorContainer.innerHTML = commentaryEditorHtml(data.commentary);
+      wireCommentaryEditor(commentaryEditorContainer);
+      commentaryStatusEl.hidden = true;
+    } catch (err) {
+      commentaryStatusEl.className = 'status error';
+      commentaryStatusEl.textContent = `Could not generate report narrative: ${err.message}`;
+    } finally {
+      generateCommentaryButton.disabled = false;
+      generateCommentaryButton.textContent = 'Generate Summary';
+      pdfButton.disabled = !currentReportData || !currentVendorsData;
+    }
+  }
 
   async function createPdf() {
     if (!currentReportData || !currentVendorsData) return;
@@ -432,15 +640,25 @@ export function mount(container) {
     // read the same way every other "disabled because something's in
     // flight" moment on this page does).
     pdfButton.disabled = true;
-    pdfButton.textContent = 'Wait';
+    pdfButton.textContent = 'Loading';
+    generateCommentaryButton.disabled = true;
     pdfStatusEl.hidden = false;
-    pdfStatusEl.className = 'status';
+    // 'status loading', not plain 'status', by request -- picks up the
+    // shared orange .status.loading convention (styles.css) instead of the
+    // default muted grey, same "a process is running" treatment Microsoft
+    // License Counts/Other Systems' own loading placeholders below now get.
+    pdfStatusEl.className = 'status loading';
     pdfStatusEl.textContent = 'Generating PDF... this can take up to a minute.';
+    // Whatever's currently in the (possibly-edited) Generate Summary form
+    // is used as-is -- null when that form was never opened at all (no
+    // commentary key sent), which falls back to server.js's own
+    // auto-generate-or-skip behaviour, same as before this feature existed.
+    const editedCommentary = readCommentaryFromEditor(commentaryEditorContainer);
     try {
       const res = await fetch('/api/live-reports/pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ report: currentReportData, vendors: currentVendorsData }),
+        body: JSON.stringify({ report: currentReportData, vendors: currentVendorsData, ...(editedCommentary ? { commentary: editedCommentary } : {}) }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -462,11 +680,18 @@ export function mount(container) {
     } finally {
       pdfButton.disabled = false;
       pdfButton.textContent = 'Create PDF';
+      generateCommentaryButton.disabled = false;
     }
   }
 
   async function load(force) {
     const site = siteInput.value.trim();
+    // A previous client's (or a previous fetch's) generated/edited
+    // narrative is no longer valid once new report data is about to load --
+    // cleared unconditionally here, same as currentReportData/
+    // currentVendorsData themselves get reset below, so a stale edited
+    // paragraph can never silently end up in a different client's PDF.
+    resetCommentaryEditor();
     if (!site) {
       statusEl.hidden = false;
       statusEl.className = 'status';
@@ -475,7 +700,9 @@ export function mount(container) {
       return;
     }
     statusEl.hidden = false;
-    statusEl.className = 'status';
+    // 'status loading', not plain 'status', by request -- same orange
+    // "a process is running" treatment as the PDF status line above.
+    statusEl.className = 'status loading';
     statusEl.textContent = 'Loading...';
     resultsEl.innerHTML = '';
     // Disabled + "Wait" from the moment a fetch starts, by request -- not
@@ -485,7 +712,8 @@ export function mount(container) {
     // is still sitting in currentReportData/currentVendorsData) would
     // silently generate a PDF for the WRONG client.
     pdfButton.disabled = true;
-    pdfButton.textContent = 'Wait';
+    pdfButton.textContent = 'Loading';
+    generateCommentaryButton.disabled = true;
     try {
       const params = new URLSearchParams({ site });
       if (exactInput.checked) params.set('exactSite', 'true');
@@ -582,8 +810,10 @@ export function mount(container) {
     // Still waiting (a newer search landed its report but not its vendor
     // data yet) vs. genuinely ready -- same Wait/Create PDF distinction as
     // everywhere else this button's label changes.
-    pdfButton.textContent = pdfButton.disabled ? 'Wait' : 'Create PDF';
+    pdfButton.textContent = pdfButton.disabled ? 'Loading' : 'Create PDF';
     pdfButton.title = pdfButton.disabled ? 'Loads with the report above' : 'Download a branded PDF of this report';
+    generateCommentaryButton.disabled = pdfButton.disabled;
+    generateCommentaryButton.title = pdfButton.title;
   }
 
   function render(data, force) {
@@ -597,6 +827,7 @@ export function mount(container) {
       // "still loading" state.
       pdfButton.disabled = true;
       pdfButton.textContent = 'Create PDF';
+      generateCommentaryButton.disabled = true;
       return;
     }
     if (!data.found) {
@@ -608,6 +839,7 @@ export function mount(container) {
       // until the user changes the search, not something to wait out.
       pdfButton.disabled = true;
       pdfButton.textContent = 'Create PDF';
+      generateCommentaryButton.disabled = true;
       return;
     }
     statusEl.hidden = true;
@@ -617,7 +849,8 @@ export function mount(container) {
     // (loadVendorSummaries(), called at the end of this function) hasn't
     // finished yet, and the PDF needs both.
     pdfButton.disabled = true;
-    pdfButton.textContent = 'Wait';
+    pdfButton.textContent = 'Loading';
+    generateCommentaryButton.disabled = true;
     pdfStatusEl.hidden = true;
 
     // Gauge first, by request -- no section heading (both "Executive
@@ -653,6 +886,38 @@ export function mount(container) {
     const typeWidget = dattoLive && dattoLive.byType.length > 0 ? deviceTypeBarWidget(dattoLive.byType, dattoLive.summary.total) : '';
     const freshnessWidget = dattoLive ? checkinFreshnessWidget(dattoLive.summary) : '';
     const deviceList = dattoLive ? deviceListTableHtml(dattoLive) : '';
+
+    // Replacement Recommendation / Operating System, in the Device Health
+    // area now (moved off the device list, by request -- "move the
+    // Replacement Recommendations & Operating Systems to the Device
+    // [Health] section") -- see computeHardwareLifecycle()'s own comment in
+    // server.js for how these are derived from live Datto RMM data.
+    // "Operating System" (not "OS Support") and the donut itself only ever
+    // uses 2 colours (not a 3rd "unsupported unless extended support
+    // arranged" tier), both by request -- but its LEGEND now lists the real
+    // OS names found (build numbers stripped), each coloured green/red by
+    // whether THAT one is supported, rather than 2 generic Supported/
+    // Unsupported rows, by request ("List what they are instead of
+    // Supported and Unsupported but colour them red and green to match...
+    // Keep the widget as just supported and unsupported though" -- the ring
+    // itself still only ever uses those same 2 colours). Falls back to the
+    // old 2-row legend when there's no OS data at all to name individually.
+    // Same shape the PDF's own buildHardwareLifecycleSpecs() builds.
+    const hl = data.hardwareLifecycle;
+    const osByName = (hl && hl.osSupport.byName) || [];
+    const osLegend = osByName.length > 0 ? Object.fromEntries(osByName.map((o) => [o.name, o.count])) : hl ? { Supported: hl.osSupport.supported, Unsupported: hl.osSupport.unsupported } : {};
+    const osColors =
+      osByName.length > 0 ? Object.fromEntries(osByName.map((o) => [o.name, o.supported ? '#16a34a' : '#dc2626'])) : { Supported: '#16a34a', Unsupported: '#dc2626' };
+    const hardwareLifecycleWidgets = hl
+      ? `<div class="mtg-widget-grid">
+          ${donutFromLegend(
+            'Replacement Recommendation',
+            { 'Within 12 months': hl.replacementRecommendation.within12, '12 to 24 months': hl.replacementRecommendation.from12to24, 'Suitable 24+ months': hl.replacementRecommendation.suitable24Plus, Unknown: hl.replacementRecommendation.unknown },
+            { 'Within 12 months': '#dc2626', '12 to 24 months': '#f59e0b', 'Suitable 24+ months': '#16a34a', Unknown: '#9aa3af' }
+          )}
+          ${donutFromLegend('Operating System', osLegend, osColors)}
+        </div>`
+      : '';
 
     const groupWidgets = (groupLabel, g, note) => {
       if (!g) return '';
@@ -690,11 +955,12 @@ export function mount(container) {
         data.server,
         'Patch Management and Software Management are not handled through this platform for servers, so they will always show as No Policy / Unmanaged below -- not counted in the Servers Health Score.'
       )}
-      <div id="vendor-summaries"><p class="inline-subtext">Loading Other Systems...</p></div>
-      <div id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext">Loading...</p></div>
+      ${hardwareLifecycleWidgets}
+      <div id="vendor-summaries"><p class="inline-subtext live-reports-loading-text">Loading Other Systems...</p></div>
+      <div id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
+      ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
       <div class="live-reports-device-list">${deviceList}</div>
       ${data.alertsTruncated ? '<p class="inline-subtext">Note: the account-wide open-alerts list hit its safety cap -- this client\'s alert count may be incomplete.</p>' : ''}
-      ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
     `;
     wireDeviceFilters(resultsEl);
     loadVendorSummaries(data.siteName, force);

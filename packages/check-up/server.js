@@ -137,15 +137,37 @@ async function fetchResourceRoleIds(client, resourceIds) {
   return byResource;
 }
 
-async function fetchHandlerOptions(client) {
-  if (handlerOptionsCache && Date.now() < handlerOptionsCache.expiresAt) return handlerOptionsCache.data;
+async function fetchHandlerOptions(client, force) {
+  // Confirmed a real bug live: a resource deactivated in Autotask kept
+  // showing a square for up to this cache's own 10-minute TTL after the
+  // change, even though every route above it (/today-figures, /this-week-
+  // figures, etc.) was clicked with its own "force refresh" -- none of
+  // those passed their own `force` down into this function at all, so it
+  // had no way to know a refresh was asked for. `force` is now threaded
+  // all the way down from every caller (see each one's own comment below)
+  // so a real refresh click actually bypasses THIS cache too, not just
+  // the outer one.
+  if (!force && handlerOptionsCache && Date.now() < handlerOptionsCache.expiresAt) return handlerOptionsCache.data;
   const membership = await fetchServiceDeskAndProfessionalServicesMembership(client);
   const allIds = [...new Set([...membership.serviceDesk, ...membership.professionalServices, ...membership.leadership])];
   if (allIds.length === 0) return { serviceDesk: [], professionalServices: [], leadership: [] };
   const [resources, roleIdByResource] = await Promise.all([fetchByFieldIn(client.resources, 'id', allIds), fetchResourceRoleIds(client, allIds)]);
   const byId = new Map(
     resources
-      .filter((r) => r.licenseType !== API_USER_LICENSE_TYPE)
+      // Inactive staff excluded, by request -- unlike Time Summaries' own
+      // resource list (times/server.js's own comment on this exact field:
+      // activity-presence-based, isActive deliberately ignored, for a
+      // historical report about a past period where a since-deactivated
+      // resource's real history still belongs), Check-Up's squares are a
+      // live, current-staff view -- a department member no longer active
+      // in Autotask shouldn't keep showing a square (zeroed or not), or be
+      // selectable as the Helpdesk Handler (this same list feeds that
+      // dropdown too). `!== false`, not `=== true` -- same defensive
+      // "missing/null reads as active, only an explicit false excludes"
+      // convention fetchResourceRoleIds() above already uses for this
+      // field, in case it's ever absent on a row rather than guaranteed
+      // boolean.
+      .filter((r) => r.licenseType !== API_USER_LICENSE_TYPE && r.isActive !== false)
       .map((r) => [
         r.id,
         {
@@ -327,11 +349,13 @@ function yesterdayAestKey() {
 // `options.pctDenominatorHours`, when given, replaces each resource's own
 // totalTechHours as the Billable % denominator -- used by /today-figures
 // below, where totalTechHours is near-meaningless for a still-in-progress
-// day (see hoursSince830AmAest()'s own comment for why).
+// day (see hoursSince830AmAest()'s own comment for why). `options.force`
+// passed straight through to fetchHandlerOptions() -- see that function's
+// own comment.
 async function computeResourceFiguresForRange(client, from, to, options = {}) {
   const ranges = [{ from, to }];
   const [handlerOptions, roleRatesById, hoursByRange, ticketsByRange] = await Promise.all([
-    fetchHandlerOptions(client),
+    fetchHandlerOptions(client, options.force),
     getRoleHourlyRates(client),
     timesRouter.computePerResourceWeeklyTotals(client, ranges, timesRouter.TEAM_SERVICE_DESK),
     fetchWeeklyTicketsClosedByResource(client, ranges),
@@ -408,7 +432,14 @@ router.get('/today-figures', async (req, res) => {
     const client = await getClient();
     const todayKey = todayAestKey();
     const { elapsedHours, cutoffReached, nowLabel } = hoursSince830AmAest();
-    const resources = await computeResourceFiguresForRange(client, todayKey, todayKey, { pctDenominatorHours: elapsedHours });
+    // force: this route is otherwise always live/uncached (see its own
+    // original comment), but fetchHandlerOptions() underneath it still has
+    // its own 10-minute cache -- threaded through so a real refresh click
+    // bypasses that too.
+    const resources = await computeResourceFiguresForRange(client, todayKey, todayKey, {
+      pctDenominatorHours: elapsedHours,
+      force: req.query.force === 'true',
+    });
     res.json({ date: todayKey, elapsedHours, cutoffReached, nowLabel, resources });
   } catch (err) {
     console.error(err);
@@ -431,7 +462,14 @@ function createHourlyCache(computeFn) {
   return async function get(force) {
     if (!force && cache && Date.now() < cache.expiresAt) return cache.data;
     if (!force && inFlight) return inFlight;
-    inFlight = computeFn()
+    // `force` passed into computeFn() now, not called bare -- otherwise a
+    // real refresh click bypassed only THIS outer cache while
+    // fetchHandlerOptions()'s own separate 10-minute cache underneath kept
+    // silently serving a stale resource list regardless (confirmed a real
+    // bug live: a resource deactivated in Autotask kept a square for up to
+    // 10 minutes after the change no matter how many times the page was
+    // force-refreshed).
+    inFlight = computeFn(force)
       .then((data) => {
         cache = { data, expiresAt: Date.now() + HOURLY_CACHE_TTL_MS };
         return data;
@@ -464,15 +502,15 @@ function thisWeekRange() {
   return { from, to };
 }
 
-const getThisWeekFigures = createHourlyCache(async () => {
+const getThisWeekFigures = createHourlyCache(async (force) => {
   const client = await getClient();
   const { from, to } = thisWeekRange();
   if (!to) {
-    const handlerOptions = await fetchHandlerOptions(client);
+    const handlerOptions = await fetchHandlerOptions(client, force);
     const resources = handlerOptions.serviceDesk.map((r) => ({ id: r.id, name: r.name, billablePct: 0, billableHours: 0, billableDollars: 0, ticketsClosed: 0 }));
     return { from, to: from, resources };
   }
-  const resources = await computeResourceFiguresForRange(client, from, to);
+  const resources = await computeResourceFiguresForRange(client, from, to, { force });
   return { from, to, resources };
 });
 
@@ -496,10 +534,10 @@ function lastCompletedWeekRange() {
   return { from: mondayDate.toISOString().slice(0, 10), to: sundayDate.toISOString().slice(0, 10) };
 }
 
-const getLastWeekFigures = createHourlyCache(async () => {
+const getLastWeekFigures = createHourlyCache(async (force) => {
   const client = await getClient();
   const { from, to } = lastCompletedWeekRange();
-  const resources = await computeResourceFiguresForRange(client, from, to);
+  const resources = await computeResourceFiguresForRange(client, from, to, { force });
   return { from, to, resources };
 });
 
@@ -512,10 +550,10 @@ router.get('/last-week-figures', async (req, res) => {
   }
 });
 
-async function computeResourceTrends(client) {
+async function computeResourceTrends(client, force) {
   const weeks = last13Weeks();
   const [handlerOptions, hoursByWeek, ticketsByWeek] = await Promise.all([
-    fetchHandlerOptions(client),
+    fetchHandlerOptions(client, force),
     timesRouter.computePerResourceWeeklyTotals(client, weeks, timesRouter.TEAM_SERVICE_DESK),
     fetchWeeklyTicketsClosedByResource(client, weeks),
   ]);
@@ -552,7 +590,7 @@ async function getResourceTrends(force) {
   if (!force && resourceTrendsCache && Date.now() < resourceTrendsCache.expiresAt) return resourceTrendsCache.data;
   if (!force && resourceTrendsInFlight) return resourceTrendsInFlight;
   const client = await getClient();
-  resourceTrendsInFlight = computeResourceTrends(client)
+  resourceTrendsInFlight = computeResourceTrends(client, force)
     .then((data) => {
       resourceTrendsCache = { data, expiresAt: Date.now() + RESOURCE_TRENDS_CACHE_TTL_MS };
       return data;
@@ -586,7 +624,7 @@ router.get('/weekly-hours-pct', async (req, res) => {
 router.get('/handler-options', async (req, res) => {
   try {
     const client = await getClient();
-    res.json(await fetchHandlerOptions(client));
+    res.json(await fetchHandlerOptions(client, req.query.force === 'true'));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: errorDetail(err) });
