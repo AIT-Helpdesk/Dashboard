@@ -10572,8 +10572,8 @@ tr.accrued-time-yellow-row th {
   border-left: 4px solid #f59e0b;
 }
 .ann-severity-info {
-  color: #16a34a;
-  border-left: 4px solid #16a34a;
+  color: var(--muted);
+  border-left: 4px solid var(--muted);
 }
 .history-modal-panel.ann-popup-modal-panel {
   width: 36rem;

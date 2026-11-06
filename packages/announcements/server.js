@@ -15,6 +15,7 @@ const {
   unretireAnnouncement,
   deleteAnnouncement,
   acknowledge,
+  listAcknowledgements,
   listActiveAnnouncementsForUser,
 } = require('./db.js');
 
@@ -158,6 +159,16 @@ router.put('/:id', requireAdmin, (req, res) => {
   }
 });
 
+// Who's acknowledged a given announcement -- admin-only, same gate as the
+// other write/management routes here (the acknowledger list is who-saw-it
+// data about everyone, not something every signed-in user should see).
+router.get('/:id/acknowledgements', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
+  if (!getAnnouncement(id)) return res.status(404).json({ error: 'Announcement not found.' });
+  res.json({ acknowledgements: listAcknowledgements(id) });
+});
+
 router.post('/:id/retire', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
@@ -174,10 +185,20 @@ router.post('/:id/unretire', requireAdmin, (req, res) => {
   res.json({ announcement: toApiAnnouncement(announcement) });
 });
 
-router.delete('/:id', requireAdmin, (req, res) => {
+// Delete is narrower than the other admin routes above: the creator may
+// delete their own announcement even if they're not the dashboard admin,
+// and the admin may delete anyone's -- everyone else gets a clear message
+// instead of the button just silently not working.
+router.delete('/:id', (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
-  if (!deleteAnnouncement(id)) return res.status(404).json({ error: 'Announcement not found.' });
+  const announcement = getAnnouncement(id);
+  if (!announcement) return res.status(404).json({ error: 'Announcement not found.' });
+  const actor = actorFrom(req);
+  if (!isDashboardAdmin(req) && announcement.created_by_email !== actor.email) {
+    return res.status(403).json({ error: 'Only the person who created this announcement, or the dashboard admin, can delete it.' });
+  }
+  deleteAnnouncement(id);
   res.status(204).end();
 });
 

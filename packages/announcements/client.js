@@ -57,7 +57,7 @@ export function mount(container) {
         <button type="button" id="ann-refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh</button>
       </div>
     </header>
-    <p class="status">Shown as a pop-up to everyone on dashboard open/refresh, filtered to whatever currently applies to them -- add, edit, or retire announcements here, no code change needed.</p>
+    <p class="status">Shown as a pop-up to everyone on dashboard open/refresh, filtered to whatever currently applies to them -- add, edit, or retire announcements here.</p>
     <label class="inline-checkbox-label"><input type="checkbox" id="ann-show-retired-input" /> Show retired</label>
     <p id="ann-status" class="status">Loading...</p>
     <div id="ann-table-wrap"></div>
@@ -112,7 +112,6 @@ export function mount(container) {
           <th>Severity</th>
           <th>Window</th>
           <th>Targets</th>
-          <th>Ack Required</th>
           <th>Status</th>
           ${editable ? '<th></th>' : ''}
         </tr>
@@ -125,9 +124,10 @@ export function mount(container) {
         const retired = !!a.retiredAt;
         const actionsCell = editable
           ? `<td class="ann-actions-cell">
-               <button type="button" class="link-button ann-edit-button" data-id="${a.id}">Edit</button>
-               <button type="button" class="link-button ann-retire-button" data-id="${a.id}">${retired ? 'Restore' : 'Retire'}</button>
-               <button type="button" class="link-button ann-delete-button" data-id="${a.id}">Delete</button>
+               <button type="button" class="button-link button-link--small ann-edit-button" data-id="${a.id}">Edit</button>
+               <button type="button" class="button-link button-link--small ann-retire-button" data-id="${a.id}">${retired ? 'Restore' : 'Retire'}</button>
+               <button type="button" class="button-link button-link--small ann-delete-button" data-id="${a.id}">Delete</button>
+               ${a.ackRequired ? `<button type="button" class="button-link button-link--small ann-ack-view-button" data-id="${a.id}">Ack's</button>` : ''}
              </td>`
           : '';
         return `
@@ -136,7 +136,6 @@ export function mount(container) {
             <td><span class="ann-badge ann-severity-${a.severity}">${SEVERITY_LABELS[a.severity] || a.severity}</span></td>
             <td>${escapeHtml(windowLabel(a))}</td>
             <td>${escapeHtml(targetsLabel(a.targets))}</td>
-            <td>${a.ackRequired ? 'Yes' : 'No'}</td>
             <td>${retired ? 'Retired' : 'Active'}</td>
             ${actionsCell}
           </tr>
@@ -148,6 +147,12 @@ export function mount(container) {
         btn.addEventListener('click', () => {
           const a = lastAnnouncements.find((x) => x.id === Number(btn.dataset.id));
           if (a) openAnnouncementModal(a);
+        });
+      });
+      tbody.querySelectorAll('.ann-ack-view-button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const a = lastAnnouncements.find((x) => x.id === Number(btn.dataset.id));
+          if (a) openAcknowledgementsModal(a);
         });
       });
       tbody.querySelectorAll('.ann-retire-button').forEach((btn) => {
@@ -181,6 +186,76 @@ export function mount(container) {
       await load();
     } catch (err) {
       alert(`Error deleting: ${err.message}`);
+    }
+  }
+
+  // Who's acknowledged a given announcement -- same shared .history-modal-*
+  // overlay/panel shell as openAnnouncementModal below, just a read-only list.
+  async function openAcknowledgementsModal(announcement) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel ann-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>Acknowledgements -- ${escapeHtml(announcement.title)}</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">
+          <p class="status ann-ack-status">Loading...</p>
+          <div class="ann-ack-list-wrap"></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const statusEl = overlay.querySelector('.ann-ack-status');
+    const listWrapEl = overlay.querySelector('.ann-ack-list-wrap');
+    try {
+      const data = await fetchJson(`/api/announcements/${announcement.id}/acknowledgements`, 'GET');
+      const acks = data.acknowledgements || [];
+      if (acks.length === 0) {
+        statusEl.textContent = 'No one has acknowledged this yet.';
+        return;
+      }
+      statusEl.hidden = true;
+      listWrapEl.innerHTML = `
+        <table class="ann-table">
+          <thead>
+            <tr class="shaded-row">
+              <th>Name</th>
+              <th>Email</th>
+              <th>Acknowledged</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${acks
+              .map(
+                (ack) => `
+              <tr>
+                <td>${escapeHtml(ack.name || '')}</td>
+                <td>${escapeHtml(ack.email)}</td>
+                <td>${escapeHtml(new Date(ack.acknowledgedAt).toLocaleString('en-AU'))}</td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      `;
+    } catch (err) {
+      statusEl.className = 'status error';
+      statusEl.textContent = `Error: ${err.message}`;
     }
   }
 

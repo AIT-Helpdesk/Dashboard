@@ -64,6 +64,26 @@ db.exec(`
   );
 `);
 
+// Migration: created_by_email/created_by_name -- the initial schema only
+// tracked updated_by_email/updated_by_name, which get overwritten on every
+// edit, so "who created this" was lost the moment an announcement was
+// edited. Needed so Delete can be restricted to "the creator, or an admin"
+// without that identity disappearing. Same idempotent
+// ALTER-TABLE-ADD-COLUMN pattern packages/shell/rollout-tracker-db.js
+// already uses.
+function migrateAddCreatedBy() {
+  const current = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'announcements'`).get();
+  if (!current || current.sql.includes('created_by_email')) return;
+  db.exec('ALTER TABLE announcements ADD COLUMN created_by_email TEXT');
+  db.exec('ALTER TABLE announcements ADD COLUMN created_by_name TEXT');
+  // Best-effort backfill for rows that already existed -- updated_by_email
+  // is exactly the creator for any row nobody has edited since creation,
+  // and the closest available guess otherwise (there's no way to recover
+  // the true original creator for an already-edited row).
+  db.exec('UPDATE announcements SET created_by_email = updated_by_email, created_by_name = updated_by_name WHERE created_by_email IS NULL');
+}
+migrateAddCreatedBy();
+
 const VALID_SEVERITIES = new Set(['info', 'warning', 'critical']);
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 
@@ -100,8 +120,8 @@ function createAnnouncement(fields, actor) {
   const info = db
     .prepare(
       `INSERT INTO announcements
-         (title, body, severity, ack_required, start_at, end_at, targets_json, created_at, updated_at, updated_by_email, updated_by_name)
-       VALUES ($title, $body, $severity, $ackRequired, $startAt, $endAt, $targetsJson, $now, $now, $email, $name)`
+         (title, body, severity, ack_required, start_at, end_at, targets_json, created_at, updated_at, updated_by_email, updated_by_name, created_by_email, created_by_name)
+       VALUES ($title, $body, $severity, $ackRequired, $startAt, $endAt, $targetsJson, $now, $now, $email, $name, $email, $name)`
     )
     .run({
       $title: fields.title,
@@ -187,6 +207,18 @@ function hasAcknowledged(announcementId, byEmail) {
     .get(announcementId, byEmail);
 }
 
+// Who has acknowledged a given announcement, most recent first -- the
+// admin-only "who's seen this" view. Reads straight off the table built
+// by acknowledge() above; no extra bookkeeping needed.
+function listAcknowledgements(announcementId) {
+  return db
+    .prepare(
+      `SELECT acknowledged_by_email AS email, acknowledged_by_name AS name, acknowledged_at AS acknowledgedAt
+       FROM acknowledgements WHERE announcement_id = ? ORDER BY acknowledged_at DESC`
+    )
+    .all(announcementId);
+}
+
 // Extensible targeting dispatch -- today only 'team' exists (OR'd against
 // the current user's own 3 real Autotask team-membership Sets, fetched by
 // server.js via @dashboard/autotask-client's own
@@ -236,5 +268,6 @@ module.exports = {
   unretireAnnouncement,
   deleteAnnouncement,
   acknowledge,
+  listAcknowledgements,
   listActiveAnnouncementsForUser,
 };
