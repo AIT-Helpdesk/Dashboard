@@ -309,12 +309,12 @@ export function mount(container) {
             ).join('')}
           </div>
           <label class="inline-checkbox-label">
-            <input type="checkbox" id="ann-f-ack" ${announcement && announcement.ackRequired ? 'checked' : ''} /> Requires Acknowledge to dismiss
+            <input type="checkbox" id="ann-f-ack" ${(announcement ? announcement.ackRequired : true) ? 'checked' : ''} /> Requires Acknowledge to dismiss
           </label>
           <p class="status error ann-modal-error" hidden></p>
-          <div class="wsp-form-actions">
-            <button type="button" class="button-link ann-save-button">Save</button>
+          <div class="wsp-form-actions ann-form-actions">
             <button type="button" class="ann-cancel-button">Cancel</button>
+            <button type="button" class="button-link ann-save-button">Save</button>
           </div>
         </div>
       </div>

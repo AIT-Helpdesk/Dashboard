@@ -10575,6 +10575,11 @@ tr.accrued-time-yellow-row th {
   color: var(--muted);
   border-left: 4px solid var(--muted);
 }
+/* Save on the right, by request -- scoped class so it doesn't touch
+   .wsp-form-actions' own left-aligned default on Workshop Board. */
+.ann-form-actions {
+  justify-content: flex-end;
+}
 .history-modal-panel.ann-popup-modal-panel {
   width: 36rem;
   max-width: 92vw;
