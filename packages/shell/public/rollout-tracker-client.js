@@ -62,6 +62,20 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
   // stages within its detail sheet (see wireHeaderDragReorder below) --
   // a drag is inherently one-at-a-time, so one variable covers both.
   let draggedHeaderId = null;
+  // The row-level mirror of draggedHeaderId above, for dragging a row
+  // within <tbody> (by request -- "we can drag them into any order
+  // manually") -- a SEPARATE variable rather than reusing draggedHeaderId,
+  // so a row drag and a column/stage drag never cross-talk even though
+  // neither can actually happen at the same time in practice.
+  let draggedRowId = null;
+  // Set from loadGrid()'s own GET /'s `sortAlphabetically` field on every
+  // load -- the server is the source of truth for this per-tracker
+  // setting (same "server decides, client just reflects it" convention
+  // isManager/canDeleteRowColumn above already follow), read back into
+  // `sortAlphaToggle.checked` each time. wireRowDragReorder's own drop
+  // handler also reads this closure variable to decide whether a drag
+  // needs to flip the setting to false first.
+  let sortAlphabetically = true;
   // Compound-column detail-sheet state -- which one (if any) is currently
   // open below the master grid, its own Show All (separate from the
   // master grid's), and the last detail payload loaded (so the column
@@ -102,6 +116,9 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         <div class="date-form">
           <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
             <input type="checkbox" id="show-all-toggle" /> Show All
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+            <input type="checkbox" id="sort-alpha-toggle" /> Sort alphabetically
           </label>
           <button type="button" id="clear-filters-button" class="button-link button-link--small rt-clear-filters-button">Clear All Filters</button>
           <button type="button" id="add-row-button" class="button-link button-link--small">Add ${escapeHtml(rowNoun)}</button>
@@ -147,6 +164,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
           <input type="text" id="new-row-name" placeholder="${escapeHtml(rowNoun)} name" />
           <label><input type="radio" name="new-row-kind" value="simple" checked /> Simple</label>
           <label><input type="radio" name="new-row-kind" value="compound" /> Compound (has its own sub-rows)</label>
+          <label><input type="radio" name="new-row-kind" value="text" /> Text (label only, no status -- added at the top)</label>
           <div id="new-row-subrows-fields" hidden>
             <input type="text" id="new-row-subrows" placeholder="Sub-rows, comma-separated (e.g. Site A, Site B)" />
           </div>
@@ -197,6 +215,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     const statusEl = container.querySelector('#status');
     const refreshButton = container.querySelector('#refresh-button');
     const showAllToggle = container.querySelector('#show-all-toggle');
+    const sortAlphaToggle = container.querySelector('#sort-alpha-toggle');
     const clearFiltersButton = container.querySelector('#clear-filters-button');
     const addRowButton = container.querySelector('#add-row-button');
     const bulkAddRowsButton = container.querySelector('#bulk-add-rows-button');
@@ -220,6 +239,24 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     refreshButton.addEventListener('click', () => loadGrid());
     showAllToggle.addEventListener('change', () => {
       showAll = showAllToggle.checked;
+      loadGrid();
+    });
+    // "Sort alphabetically" (by request, Nov 2026) -- a per-tracker
+    // setting (PUT persists it, GET's own response is the source of
+    // truth read back into `sortAlphaToggle.checked` on every loadGrid(),
+    // same pattern isManager/canDeleteRowColumn already follow), not a
+    // purely client-side toggle like Show All.
+    sortAlphaToggle.addEventListener('change', async () => {
+      try {
+        await fetch(`${apiBase}/settings/sort-alphabetically`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: sortAlphaToggle.checked }),
+        });
+      } catch {
+        // best-effort -- loadGrid() below still reflects whatever the
+        // server actually ended up with, even if this particular PUT failed
+      }
       loadGrid();
     });
 
@@ -481,7 +518,9 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         errorEl.textContent = `${rowNoun} name is required.`;
         return;
       }
-      const kind = container.querySelector('input[name="new-row-kind"]:checked').value;
+      const selectedKind = container.querySelector('input[name="new-row-kind"]:checked').value;
+      const isTextRow = selectedKind === 'text';
+      const kind = isTextRow ? 'simple' : selectedKind;
       const subRows = [];
       if (kind === 'compound') {
         subRows.push(...container.querySelector('#new-row-subrows').value.split(',').map((s) => s.trim()).filter(Boolean));
@@ -495,7 +534,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         const res = await fetch(`${apiBase}/rows`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, kind, subRows }),
+          body: JSON.stringify({ name, kind, subRows, isTextRow }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -638,6 +677,11 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         // row's Delete button.
         isManager = !!data.isManager;
         canDelete = !!data.canDeleteRowColumn;
+        // Set BEFORE renderGrid(data) too -- renderTbodyRows() reads this
+        // closure variable (via wireRowDragReorder) the same way it reads
+        // canDelete above, not `data` directly.
+        sortAlphabetically = data.sortAlphabetically !== false;
+        sortAlphaToggle.checked = sortAlphabetically;
         renderGrid(data);
         renderDetailButtons(data.columns, data.rows);
         addColumnButton.hidden = !isManager;
@@ -766,6 +810,15 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     function applyLocalFilters(rows, columns) {
       return rows.filter((row) => {
         if (rowNameFilterText && !matchesWildcard(row.name, rowNameFilterText)) return false;
+        // A text row's own cell in every simple column is free text, not
+        // a real status (see masterCellHtml's own isTextRow branch) --
+        // its underlying placeholder status is always 'not_done' and
+        // means nothing, so a column status filter that excludes
+        // 'not_done' would otherwise wrongly hide it. Exempted
+        // unconditionally (once the name filter above already passed),
+        // same reasoning as the `col.cellType === 'text'` skip a few
+        // lines down, just the transposed case.
+        if (row.isTextRow) return true;
         for (const col of columns) {
           if (col.cellType === 'text') {
             const textFilter = columnTextFilters.get(col.id);
@@ -813,12 +866,12 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
           ? visibleRows
               .map(
                 (row) => `
-            <tr>
+            <tr draggable="true" data-row-id="${row.id}"${row.isTextRow ? ' class="rt-row-text"' : ''}>
               <td>
                 <button type="button" class="rt-rename-btn" data-row-id="${row.id}" data-row-name="${escapeHtml(row.name)}" title="Rename">${RENAME_ICON_SVG}</button>
                 ${canDelete ? `<button type="button" class="rt-rename-btn rt-delete-row-btn" data-row-id="${row.id}" data-row-name="${escapeHtml(row.name)}" title="Delete ${escapeHtml(rowNoun)}">${DELETE_ICON_SVG}</button>` : ''}
                 ${escapeHtml(row.name)}
-                ${row.kind === 'simple' ? ` <button type="button" class="rt-bulk-row-btn" data-row-id="${row.id}" title="Set every column in this row to the same value">⚙</button>` : ''}
+                ${row.kind === 'simple' && !row.isTextRow ? ` <button type="button" class="rt-bulk-row-btn" data-row-id="${row.id}" title="Set every column in this row to the same value">⚙</button>` : ''}
               </td>
               ${columns.map((col) => masterCellHtml(row, col)).join('')}
             </tr>`
@@ -832,6 +885,10 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       wireBulkRowButtons(table, 'master');
       wireRenameButtons(table);
       wireDeleteRowButtons(table);
+      // Rows live in <tbody>, destroyed/recreated on every filter change
+      // just like the buttons above -- unlike wireHeaderDragReorder, which
+      // lives in the persistent <thead> and is wired once in renderGrid().
+      wireRowDragReorder(table, visibleRows.map((r) => r.id), loadGrid);
     }
 
     function wireRowNameFilterInput(table, columns, rows) {
@@ -1002,6 +1059,74 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       });
     }
 
+    // The row-level mirror of wireHeaderDragReorder above (by request,
+    // Nov 2026 -- "we can drag them into any order manually") -- a
+    // separate sibling function, not a generalization of it: rows live in
+    // <tbody> (destroyed/recreated on every filter change, so this is
+    // called from renderTbodyRows, not once from renderGrid like the
+    // header version) and have no Tracker-Manager gate at all -- every
+    // row is always draggable, ticked or not.
+    //
+    // "If we drag a row while the box is ticked, the tick turns itself
+    // off automatically" -- handled here, not in the checkbox's own
+    // change handler: on a successful drop, if `sortAlphabetically` (the
+    // closure variable, kept in sync by loadGrid()) is currently true,
+    // this flips the setting to false FIRST (awaited, so it lands before
+    // the reorder write below) and unchecks the box in the DOM, THEN PUTs
+    // the new row order, THEN calls onDone(). Sequencing the setting-flip
+    // strictly before the reorder write (rather than in parallel, or one
+    // combined endpoint) means the server is never in a state where
+    // sortAlphabetically=true but sort_order has already been overwritten
+    // by this drag -- a concurrent reload (this user or anyone else on
+    // the same tracker) can't land on a half-applied state.
+    function wireRowDragReorder(table, rowIds, onDone) {
+      table.querySelectorAll('tr[draggable="true"][data-row-id]').forEach((tr) => {
+        tr.addEventListener('dragstart', () => {
+          draggedRowId = Number(tr.dataset.rowId);
+          tr.classList.add('rt-row-dragging');
+        });
+        tr.addEventListener('dragend', () => tr.classList.remove('rt-row-dragging'));
+        tr.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          if (Number(tr.dataset.rowId) !== draggedRowId) tr.classList.add('rt-row-drag-over');
+        });
+        tr.addEventListener('dragleave', () => tr.classList.remove('rt-row-drag-over'));
+        tr.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          tr.classList.remove('rt-row-drag-over');
+          const targetId = Number(tr.dataset.rowId);
+          if (draggedRowId === null || draggedRowId === targetId) return;
+          const order = rowIds.slice();
+          const fromIndex = order.indexOf(draggedRowId);
+          const toIndex = order.indexOf(targetId);
+          order.splice(fromIndex, 1);
+          order.splice(toIndex, 0, draggedRowId);
+          draggedRowId = null;
+          try {
+            if (sortAlphabetically) {
+              await fetch(`${apiBase}/settings/sort-alphabetically`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: false }),
+              });
+              sortAlphabetically = false;
+              sortAlphaToggle.checked = false;
+            }
+            const res = await fetch(`${apiBase}/rows/order`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ order }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+            await onDone();
+          } catch (err) {
+            alert(`Error reordering: ${err.message}`);
+          }
+        });
+      });
+    }
+
     // A simple column's cell is directly editable; a compound column's
     // cell is its own auto-computed rollup -- never directly editable,
     // same tcr-cell--editable split tc-elite-rollout/client.js uses for
@@ -1014,6 +1139,22 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
     // history instead of an editor (see wireCellInteractions below).
     function masterCellHtml(row, col) {
       const cell = row.cells[col.id] || { status: 'not_done', reason: null };
+      // A TEXT row (by request, Nov 2026 -- "I expected to be able to
+      // enter Text in that row for each column") makes EVERY SIMPLE
+      // column's cell a free-text field for this row, overriding that
+      // column's own cellType ('status' included) -- the direct
+      // transposed counterpart of a TEXT COLUMN's cell always being
+      // free-text for every row (just below). Same markup/data-kind
+      // ("cell-text") as that branch, so the exact same editor/save/
+      // history machinery already handles it with no further changes.
+      // A COMPOUND column has nothing sensible to show instead (no
+      // stages were ever seeded for this row there -- see
+      // rollout-tracker-db.js's own seedNewRow isTextRow branch), so it
+      // stays a plain blank, non-interactive cell.
+      if (row.isTextRow) {
+        if (col.kind === 'compound') return `<td class="rt-cell rt-cell--divider"></td>`;
+        return `<td class="rt-cell rt-cell--text rt-cell--editable" data-kind="cell-text" data-row-id="${row.id}" data-column-id="${col.id}" data-reason="${escapeHtml(cell.reason || '')}" data-label="${escapeHtml(col.label)}" data-row-name="${escapeHtml(row.name)}">${escapeHtml(cell.reason || '')}</td>`;
+      }
       // A TEXT column's cell is untouched by a row's own kind -- always
       // directly editable regardless (see rollout-tracker-db.js's own
       // seedNewRow comment for why).

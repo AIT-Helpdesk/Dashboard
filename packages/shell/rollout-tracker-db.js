@@ -208,6 +208,18 @@ function createRolloutTrackerDb(dbPath) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_audit_cell ON audit_log(row_id, column_id, changed_at);
+
+    -- Generic per-tracker key/value settings (by request, Nov 2026 --
+    -- "Sort alphabetically" is the first one), rather than a single
+    -- hardcoded boolean column -- a future per-tracker setting is a new
+    -- key, never a schema change. A brand-new table, so (unlike rows/
+    -- columns/audit_log above) it needs no ALTER-TABLE migration below --
+    -- CREATE TABLE IF NOT EXISTS already handles a pre-existing data.db
+    -- that predates this table just fine.
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   // Migrations for a tracker's data.db created before each of these
@@ -265,6 +277,43 @@ function createRolloutTrackerDb(dbPath) {
   }
   migrateAddAuditSubRowColumnId();
 
+  // Text rows (by request, Nov 2026 -- "a plain text row, where we just
+  // type in the label ourselves") -- a new column, not a new `kind` value:
+  // widening the existing `kind IN ('simple','compound')` CHECK would need
+  // a full SQLite table-rebuild (ALTER TABLE can't touch an existing
+  // CHECK), which isn't worth the risk to every tracker's live data.db for
+  // what's really an orthogonal flag. A text row stays kind='simple' with
+  // is_text_row=1 -- it never gets any cell_status seeded (see
+  // seedNewRow/seedNewColumn below), so every bulk/single cell-edit path
+  // already skips it for free via their existing `if (!existing) continue`
+  // guards, no further special-casing needed there.
+  function migrateAddRowIsTextRow() {
+    const current = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rows'`).get();
+    if (!current || current.sql.includes('is_text_row')) return;
+    db.exec('ALTER TABLE rows ADD COLUMN is_text_row INTEGER NOT NULL DEFAULT 0');
+  }
+  migrateAddRowIsTextRow();
+
+  // Manual row order (by request, Nov 2026 -- the "Sort alphabetically"
+  // toggle) -- rows never had their own sort_order before this; getGrid()
+  // always sorted by name. Used ONLY for manual order -- alphabetical mode
+  // is computed at read time in getGrid(), never persisted into this
+  // column, so toggling the setting is non-destructive either way.
+  // Backfilled from each tracker's CURRENT alphabetical order (not
+  // insertion order) the first time this runs against an older data.db --
+  // so the first time anyone unticks "Sort alphabetically" on an existing
+  // tracker, they see the exact order they already had, not something
+  // scrambled.
+  function migrateAddRowSortOrder() {
+    const current = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rows'`).get();
+    if (!current || current.sql.includes('sort_order')) return;
+    db.exec('ALTER TABLE rows ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+    const existingRows = db.prepare('SELECT id FROM rows ORDER BY name COLLATE NOCASE').all();
+    const stmt = db.prepare('UPDATE rows SET sort_order = ? WHERE id = ?');
+    existingRows.forEach((row, index) => stmt.run(index, row.id));
+  }
+  migrateAddRowSortOrder();
+
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_stage_cell ON audit_log(row_id, stage_id, changed_at)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_subrow_cell ON audit_log(sub_row_id, column_id, changed_at)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_subrowcol_cell ON audit_log(sub_row_id, sub_row_column_id, changed_at)');
@@ -272,6 +321,64 @@ function createRolloutTrackerDb(dbPath) {
   function nowIso() {
     return new Date().toISOString();
   }
+
+  // Generic get/set for the settings table above -- values are always
+  // stored as strings (JSON.stringify/parse round-trip handles booleans/
+  // numbers/objects alike), kept generic rather than typed per-key so a
+  // future per-tracker setting is just a new key, not a new function.
+  function getSetting(key, defaultValue) {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    if (!row) return defaultValue;
+    try {
+      return JSON.parse(row.value);
+    } catch {
+      return defaultValue;
+    }
+  }
+  function setSetting(key, value) {
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES ($key, $value)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run({ $key: key, $value: JSON.stringify(value) });
+  }
+
+  // One-time repair, run on every open (cheap -- bounded by however many
+  // text rows x simple columns exist) rather than gated behind a schema
+  // check: a text row created before this file's seedNewRow/seedNewColumn
+  // got their isTextRow branches (an early version of this feature
+  // shipped with "a text row gets NO cell at all", confirmed live on
+  // training-test-tracker-tracker's own "Text Row Test" row) has zero
+  // cell_status rows for any simple column -- this backfills exactly
+  // what seedNewRow would have inserted for it at creation time, had the
+  // current logic existed then. Naturally idempotent: a text row already
+  // fully seeded (by the current addRow, or by a previous run of this
+  // same backfill) has nothing left to insert, so this is a no-op for it.
+  function backfillTextRowCells() {
+    const textRows = db.prepare('SELECT id FROM rows WHERE is_text_row = 1').all();
+    if (textRows.length === 0) return;
+    const simpleColumns = db.prepare(`SELECT id FROM columns WHERE kind = 'simple'`).all();
+    if (simpleColumns.length === 0) return;
+    const systemActor = { email: 'system@dashboard', name: 'System (text row backfill)' };
+    db.exec('BEGIN');
+    try {
+      for (const row of textRows) {
+        for (const col of simpleColumns) {
+          const existing = db.prepare('SELECT 1 FROM cell_status WHERE row_id = ? AND column_id = ?').get(row.id, col.id);
+          if (existing) continue;
+          db.prepare(
+            `INSERT INTO cell_status (row_id, column_id, status, updated_at, updated_by_email, updated_by_name)
+             VALUES ($rowId, $columnId, 'not_done', $updatedAt, $email, $name)`
+          ).run({ $rowId: row.id, $columnId: col.id, $updatedAt: nowIso(), $email: systemActor.email, $name: systemActor.name });
+          recordAudit({ rowId: row.id, columnId: col.id, newStatus: 'not_done', actor: systemActor });
+        }
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+  backfillTextRowCells();
 
   // Same slugify/uniqueKey pure helpers rollout-tracker-server.js already
   // has of its own (for column keys) -- duplicated here rather than
@@ -486,13 +593,35 @@ function createRolloutTrackerDb(dbPath) {
   //   - everything else (a text column regardless of row kind, or a
   //     status-type simple column for a plain simple row): the original
   //     direct not_done insert.
+  // A TEXT row (isTextRow -- by request, "I expected to be able to enter
+  // Text in that row for each column") gets that same direct not_done
+  // insert for EVERY SIMPLE column, regardless of that column's OWN
+  // cell_type -- a text row overrides a simple column's cell to mean
+  // "free text for this row" the same way a text-type COLUMN overrides it
+  // for every row, just the transposed case (see masterCellHtml's own
+  // isTextRow branch in rollout-tracker-client.js, and the PATCH
+  // /cells/:rowId/:columnId text-edit branch in rollout-tracker-server.js,
+  // which both key off row.isTextRow the same way they already key off
+  // col.cellType === 'text'). A COMPOUND column is skipped for a text row
+  // -- there's no sensible per-row text to show in place of a column-wide
+  // stage-derived rollup, so it stays blank/non-interactive there
+  // instead, same as before.
   // Runs inside a transaction so a half-seeded row is never left behind by
   // a crash partway through.
-  function seedNewRow(rowId, kind, subRows, actor) {
+  function seedNewRow(rowId, kind, subRows, actor, isTextRow = false) {
     db.exec('BEGIN');
     try {
       const columns = db.prepare('SELECT id, kind, cell_type FROM columns').all();
       for (const col of columns) {
+        if (isTextRow) {
+          if (col.kind === 'compound') continue;
+          db.prepare(
+            `INSERT INTO cell_status (row_id, column_id, status, updated_at, updated_by_email, updated_by_name)
+             VALUES ($rowId, $columnId, 'not_done', $updatedAt, $email, $name)`
+          ).run({ $rowId: rowId, $columnId: col.id, $updatedAt: nowIso(), $email: actor.email, $name: actor.name });
+          recordAudit({ rowId, columnId: col.id, newStatus: 'not_done', actor });
+          continue;
+        }
         if (col.kind === 'compound') {
           const stages = db.prepare('SELECT id, type FROM stages WHERE column_id = ?').all(col.id);
           for (const stage of stages) seedOneStageStatus(rowId, stage, actor);
@@ -529,11 +658,26 @@ function createRolloutTrackerDb(dbPath) {
   //     via recomputeRowRollup(), same reasoning as seedNewRow's own
   //     mirrored branch.
   //   - everything else: the original direct not_done insert.
+  // A TEXT row (is_text_row=1), same mirrored reasoning as seedNewRow's
+  // own isTextRow branch: gets the direct not_done insert for this new
+  // column too when it's SIMPLE (regardless of its own cellType -- a
+  // text row's cell is free text everywhere a simple column exists,
+  // including ones added after the row itself), skipped entirely when
+  // the new column is COMPOUND (nothing sensible to seed there).
   function seedNewColumn(columnId, kind, cellType, stages, actor) {
     db.exec('BEGIN');
     try {
-      const rows = db.prepare('SELECT id, kind FROM rows').all();
+      const rows = db.prepare('SELECT id, kind, is_text_row FROM rows').all();
       for (const row of rows) {
+        if (row.is_text_row) {
+          if (kind === 'compound') continue;
+          db.prepare(
+            `INSERT INTO cell_status (row_id, column_id, status, updated_at, updated_by_email, updated_by_name)
+             VALUES ($rowId, $columnId, 'not_done', $updatedAt, $email, $name)`
+          ).run({ $rowId: row.id, $columnId: columnId, $updatedAt: nowIso(), $email: actor.email, $name: actor.name });
+          recordAudit({ rowId: row.id, columnId, newStatus: 'not_done', actor });
+          continue;
+        }
         if (kind === 'compound') {
           for (const stage of stages) seedOneStageStatus(row.id, stage, actor);
           recomputeRollup(row.id, columnId, actor);
@@ -608,22 +752,41 @@ function createRolloutTrackerDb(dbPath) {
   // 'compound' (an initial sub-row label list, by request -- "Need
   // Compound Rows as well as Compound Columns", same "typed in right on
   // the Add form" shape a compound column's own initial stage list
-  // already uses). Name required, unique. Seeds every existing column.
-  // Returns the new row id, or null if the name is already taken (caller
-  // returns 409).
-  function addRow(name, kind, subRowLabels, actor) {
+  // already uses). Name required, unique. Seeds every existing column
+  // (skipped entirely for a text row -- see seedNewRow's own isTextRow
+  // branch). `isTextRow` (by request, Nov 2026) forces `kind` to 'simple'
+  // and gets no sub-rows, regardless of what's passed in -- a text row is
+  // always just a label, never compound. sort_order: a text row goes
+  // ABOVE every existing row (MIN - 1, lands at the top without
+  // renumbering anything else, even in manual-order mode); a normal/
+  // compound row is simply appended (MAX + 1), same "new stuff goes at
+  // the end unless told otherwise" convention columns/stages/sub_rows
+  // already use for their own sort_order. Returns the new row id, or null
+  // if the name is already taken (caller returns 409).
+  function addRow(name, kind, subRowLabels, actor, isTextRow = false) {
     const existing = db.prepare('SELECT id FROM rows WHERE name = ?').get(name);
     if (existing) return null;
+    const effectiveKind = isTextRow ? 'simple' : kind;
+    const sortRow = db.prepare('SELECT COALESCE(MIN(sort_order), 0) AS minSort, COALESCE(MAX(sort_order), -1) AS maxSort FROM rows').get();
+    const sortOrderForNewRow = isTextRow ? sortRow.minSort - 1 : sortRow.maxSort + 1;
     const info = db
       .prepare(
-        `INSERT INTO rows (name, kind, created_at, created_by_email, created_by_name)
-         VALUES ($name, $kind, $createdAt, $email, $name2)`
+        `INSERT INTO rows (name, kind, is_text_row, sort_order, created_at, created_by_email, created_by_name)
+         VALUES ($name, $kind, $isTextRow, $sortOrder, $createdAt, $email, $name2)`
       )
-      .run({ $name: name, $kind: kind, $createdAt: nowIso(), $email: actor.email, $name2: actor.name });
+      .run({
+        $name: name,
+        $kind: effectiveKind,
+        $isTextRow: isTextRow ? 1 : 0,
+        $sortOrder: sortOrderForNewRow,
+        $createdAt: nowIso(),
+        $email: actor.email,
+        $name2: actor.name,
+      });
     const rowId = Number(info.lastInsertRowid);
 
     const createdSubRows = []; // { id } for every sub-row just created
-    if (kind === 'compound' && Array.isArray(subRowLabels)) {
+    if (!isTextRow && effectiveKind === 'compound' && Array.isArray(subRowLabels)) {
       const existingKeys = new Set();
       let sortOrder = 0;
       for (const label of subRowLabels) {
@@ -642,7 +805,7 @@ function createRolloutTrackerDb(dbPath) {
       }
     }
 
-    seedNewRow(rowId, kind, createdSubRows, actor);
+    seedNewRow(rowId, effectiveKind, createdSubRows, actor, isTextRow);
     return rowId;
   }
 
@@ -791,6 +954,27 @@ function createRolloutTrackerDb(dbPath) {
     }
   }
 
+  // The row-level mirror of reorderColumns() above -- by request ("we can
+  // drag them into any order manually"). Only meaningful while the
+  // tracker's own "Sort alphabetically" setting is off (getGrid() ignores
+  // sort_order entirely while it's on), but this function itself doesn't
+  // need to know or care about that setting -- it just writes positions,
+  // same "trust the caller already validated the id set" convention
+  // reorderColumns() already follows (rollout-tracker-server.js's own PUT
+  // /rows/order does that validation).
+  function reorderRows(orderedRowIds) {
+    db.exec('BEGIN');
+    try {
+      orderedRowIds.forEach((rowId, index) => {
+        db.prepare('UPDATE rows SET sort_order = ? WHERE id = ?').run(index, rowId);
+      });
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // Re-numbers one compound column's own stages to match
   // `orderedStageIds`' position -- the detail-sheet mirror of
   // reorderColumns() above ("move the columns on a compound tab like they
@@ -931,16 +1115,23 @@ function createRolloutTrackerDb(dbPath) {
   // column specifically, any COMPOUND row among the targeted set is
   // silently skipped (its cell is derived from its own sub-rows, never
   // directly settable) -- same exclusion bulkSetRow() above already
-  // applies the other way around; a TEXT column stays settable
-  // regardless of a row's own kind (text cells are untouched by compound
-  // rows, see seedNewRow's own comment). Returns the affected row ids
-  // (every id the caller asked for, whether or not it was actually
-  // skipped -- same "report what was targeted" shape this function
-  // already had).
+  // applies the other way around -- and, same reasoning, any TEXT row is
+  // skipped too: for a status-type column, a text row's own cell is its
+  // free-text field (see seedNewRow's own isTextRow comment), not a real
+  // status, so a bulk status-set must never land there. A TEXT column
+  // stays settable regardless of a row's own kind (text cells are
+  // untouched by compound rows, see seedNewRow's own comment, AND a text
+  // row's own free-text cell in a text column is exactly what this bulk
+  // action is supposed to overwrite -- no exclusion needed there either).
+  // Returns the affected row ids (every id the caller asked for, whether
+  // or not it was actually skipped -- same "report what was targeted"
+  // shape this function already had).
   function bulkSetColumn(columnId, status, reason, actor, rowIds = null) {
     const column = db.prepare('SELECT cell_type FROM columns WHERE id = ?').get(columnId);
     const compoundRowIds =
-      column.cell_type === 'status' ? new Set(db.prepare(`SELECT id FROM rows WHERE kind = 'compound'`).all().map((r) => r.id)) : new Set();
+      column.cell_type === 'status'
+        ? new Set(db.prepare(`SELECT id FROM rows WHERE kind = 'compound' OR is_text_row = 1`).all().map((r) => r.id))
+        : new Set();
     const rows = rowIds ? rowIds.map((id) => ({ id })) : db.prepare('SELECT id FROM rows').all();
     db.exec('BEGIN');
     try {
@@ -1166,17 +1357,25 @@ function createRolloutTrackerDb(dbPath) {
   // its response (columns[] carrying `kind`/`cellType`, rows[] now also
   // carrying `kind` -- a compound row's cell in a status-type simple
   // column is just its current rollup, same shape as a plain simple row's
-  // directly-set cell).
-  function getGrid() {
+  // directly-set cell). `sortAlphabetically` (by request, Nov 2026 --
+  // the "Sort alphabetically" toggle) picks the row ORDER BY here, not a
+  // re-sort downstream -- same place `columns` is already ordered by its
+  // own sort_order. Ticked (the default, matching this function's
+  // original always-alphabetical behaviour): text rows grouped at top
+  // (`is_text_row DESC` puts 1s first), alphabetical within each group.
+  // Unticked: manual order (`sort_order`), text rows wherever they've
+  // been dragged -- no forced grouping in manual mode.
+  function getGrid({ sortAlphabetically = true } = {}) {
     const columns = db.prepare('SELECT * FROM columns ORDER BY sort_order, id').all();
-    const rowRows = db.prepare('SELECT * FROM rows ORDER BY name COLLATE NOCASE').all();
+    const rowOrderSql = sortAlphabetically ? 'is_text_row DESC, name COLLATE NOCASE' : 'sort_order, id';
+    const rowRows = db.prepare(`SELECT * FROM rows ORDER BY ${rowOrderSql}`).all();
     const cellRows = db.prepare('SELECT * FROM cell_status').all();
     const cellsByRow = new Map();
     for (const cell of cellRows) {
       if (!cellsByRow.has(cell.row_id)) cellsByRow.set(cell.row_id, {});
       cellsByRow.get(cell.row_id)[cell.column_id] = { status: cell.status, reason: cell.reason };
     }
-    const rows = rowRows.map((r) => ({ id: r.id, name: r.name, kind: r.kind, cells: cellsByRow.get(r.id) || {} }));
+    const rows = rowRows.map((r) => ({ id: r.id, name: r.name, kind: r.kind, isTextRow: !!r.is_text_row, cells: cellsByRow.get(r.id) || {} }));
     return { columns: columns.map((c) => ({ id: c.id, key: c.key, label: c.label, kind: c.kind, cellType: c.cell_type })), rows, totalRows: rows.length };
   }
 
@@ -1290,6 +1489,8 @@ function createRolloutTrackerDb(dbPath) {
     computeRollupStatus,
     recomputeRollup,
     recomputeRowRollup,
+    getSetting,
+    setSetting,
     seedNewRow,
     seedNewColumn,
     seedNewStage,
@@ -1300,6 +1501,7 @@ function createRolloutTrackerDb(dbPath) {
     addSubRow,
     addSubRowColumn,
     reorderColumns,
+    reorderRows,
     reorderStages,
     setCell,
     setStage,

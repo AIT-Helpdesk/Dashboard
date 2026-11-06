@@ -78,22 +78,38 @@ function applyDefaultFilter(columns, rows) {
   // never hidden by the default filter, and never what makes a ROW count
   // as "outstanding" either (its placeholder status never actually
   // means anything, see cell_type's own comment in rollout-tracker-db.js).
+  // A text ROW's own cell in a simple column is the exact transposed
+  // case -- also a free-text field now (by request, "I expected to be
+  // able to enter Text in that row for each column"), also always a
+  // placeholder status underneath, so it must NEVER be what keeps a
+  // normally-resolvable column stuck "visible" -- excluded from this
+  // check via r.isTextRow the same way a text column's own cellType
+  // exempts it above, just the other way round.
   const visibleColumns = columns.filter((col) => {
     if (col.cellType === 'text') return true;
     return rows.some((r) => {
+      if (r.isTextRow) return false;
       const cell = r.cells[col.id];
       return cell && !RESOLVED_STATUSES.includes(cell.status);
     });
   });
   const visibleColumnIds = new Set(visibleColumns.map((c) => c.id));
-  const visibleRows = rows.filter((r) =>
-    Object.entries(r.cells).some(([colId, cell]) => {
-      const id = Number(colId);
-      if (!visibleColumnIds.has(id)) return false;
-      const col = columnById.get(id);
-      if (col && col.cellType === 'text') return false;
-      return !RESOLVED_STATUSES.includes(cell.status);
-    })
+  // A text row's own placeholder status (always 'not_done', same
+  // convention a text column's cell already uses) must never make it
+  // count as genuinely "outstanding" either -- exempted unconditionally
+  // here too, so toggling columns in/out of view (Show All) never hides
+  // a text row for the wrong reason, mirroring the column-side exemption
+  // just above.
+  const visibleRows = rows.filter(
+    (r) =>
+      r.isTextRow ||
+      Object.entries(r.cells).some(([colId, cell]) => {
+        const id = Number(colId);
+        if (!visibleColumnIds.has(id)) return false;
+        const col = columnById.get(id);
+        if (col && col.cellType === 'text') return false;
+        return !RESOLVED_STATUSES.includes(cell.status);
+      })
   );
   return { columns: visibleColumns, rows: visibleRows };
 }
@@ -226,7 +242,10 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     addSubRow,
     addSubRowColumn,
     reorderColumns,
+    reorderRows,
     reorderStages,
+    getSetting,
+    setSetting,
     setCell,
     setStage,
     setSubRowCell,
@@ -282,7 +301,15 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
 
   router.get('/', (req, res) => {
     try {
-      const { columns, rows, totalRows } = getGrid();
+      // "Sort alphabetically" (by request, Nov 2026) -- a per-tracker
+      // setting, not per-user, so it's read straight from this tracker's
+      // own data.db on every load (same "remembered per tracker" shape
+      // isManager/canDeleteRowColumn already follow, just stored instead
+      // of permission-list-derived). Defaults to true -- matches this
+      // engine's original always-alphabetical behaviour for any tracker
+      // that's never touched the setting.
+      const sortAlphabetically = getSetting('sort_alphabetically', true);
+      const { columns, rows, totalRows } = getGrid({ sortAlphabetically });
       const shaped = req.query.all === 'true' ? { columns, rows } : applyDefaultFilter(columns, rows);
       // isManager rides along on every grid load -- rollout-tracker-
       // client.js uses it to show/hide Add Column and Tracking Complete/
@@ -297,6 +324,7 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
         rowNoun,
         isManager: isTrackerManager(req),
         canDeleteRowColumn: isTrackerDeleteAllowed(req),
+        sortAlphabetically,
       });
     } catch (err) {
       console.error(err);
@@ -310,18 +338,24 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
   // the Add form" shape POST /columns' own initial stage list already
   // uses. A compound row needs at least one real (non-blank) sub-row,
   // same validation a compound column's own stage list enforces.
+  // `isTextRow` (by request, Nov 2026 -- "a plain text row, where we just
+  // type in the label ourselves") forces `kind` to 'simple' and empties
+  // `subRows` regardless of what the client sent -- a text row is always
+  // just a label, never compound (never trust the client alone here
+  // either, same as every other gated/validated field in this file).
   router.post('/rows', (req, res) => {
     try {
       const name = (req.body?.name || '').trim();
       if (!name) return res.status(400).json({ error: `${rowNoun} name is required.` });
-      const kind = req.body?.kind === 'compound' ? 'compound' : 'simple';
-      const subRows = Array.isArray(req.body?.subRows) ? req.body.subRows.map((s) => String(s).trim()).filter(Boolean) : [];
+      const isTextRow = !!req.body?.isTextRow;
+      const kind = !isTextRow && req.body?.kind === 'compound' ? 'compound' : 'simple';
+      const subRows = !isTextRow && Array.isArray(req.body?.subRows) ? req.body.subRows.map((s) => String(s).trim()).filter(Boolean) : [];
       if (kind === 'compound' && subRows.length === 0) {
         return res.status(400).json({ error: 'A compound row needs at least one sub-row.' });
       }
-      const rowId = addRow(name, kind, subRows, actorFrom(req));
+      const rowId = addRow(name, kind, subRows, actorFrom(req), isTextRow);
       if (rowId === null) return res.status(409).json({ error: `A ${rowNoun.toLowerCase()} named "${name}" already exists.` });
-      res.status(201).json({ id: rowId, name, kind });
+      res.status(201).json({ id: rowId, name, kind, isTextRow });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
@@ -565,6 +599,60 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const fullOrder = existingIds.map((id) => (mentioned.has(id) ? order[i++] : id));
       reorderColumns(fullOrder);
       res.json({ ok: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The row-level mirror of PUT /columns/order above (by request, Nov
+  // 2026 -- "we can drag them into any order manually"). Same subset
+  // tolerance and same reason -- Show All/local filters can hide a row
+  // from the browser entirely, so requiring the full row-id set here
+  // would hit the exact same bug column-reorder already had to fix.
+  // Open to everyone, unlike columns -- every other row-level route in
+  // this file (POST /rows, bulk-add, rename) is ungated too; only
+  // column/stage STRUCTURAL changes are Tracker-Manager-gated, and
+  // dragging existing rows isn't structural.
+  router.put('/rows/order', (req, res) => {
+    try {
+      const order = req.body?.order;
+      if (!Array.isArray(order) || order.length === 0 || !order.every((id) => Number.isInteger(id))) {
+        return res.status(400).json({ error: 'order must be a non-empty array of row ids.' });
+      }
+      if (new Set(order).size !== order.length) {
+        return res.status(400).json({ error: 'order must not contain the same row id more than once.' });
+      }
+      const existingIds = db.prepare('SELECT id FROM rows ORDER BY sort_order, id').all().map((r) => r.id);
+      const existingSet = new Set(existingIds);
+      if (!order.every((id) => existingSet.has(id))) {
+        return res.status(400).json({ error: 'order must only contain existing row ids.' });
+      }
+      const mentioned = new Set(order);
+      let i = 0;
+      const fullOrder = existingIds.map((id) => (mentioned.has(id) ? order[i++] : id));
+      reorderRows(fullOrder);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The "Sort alphabetically" toggle's own write side -- a shared,
+  // per-tracker display preference (not per-user), so it's ungated like
+  // every other row-level action here. rollout-tracker-client.js's own
+  // row-drag handler also calls this (flipping it to false) BEFORE it
+  // calls PUT /rows/order whenever a drag happens while this is still
+  // true -- that sequencing (not a combined endpoint) is what keeps the
+  // setting and the manual order from ever disagreeing on a concurrent
+  // reload.
+  router.put('/settings/sort-alphabetically', (req, res) => {
+    try {
+      const value = req.body?.value;
+      if (typeof value !== 'boolean') return res.status(400).json({ error: 'value must be a boolean.' });
+      setSetting('sort_alphabetically', value);
+      res.json({ value });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
@@ -818,7 +906,11 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
   // just { reason }, and `status` is always written as the 'not_done'
   // placeholder (see cell_type's own comment in rollout-tracker-db.js),
   // same branch-by-type shape PATCH /stages/:rowId/:stageId already uses
-  // for a text-type stage.
+  // for a text-type stage. A TEXT ROW's cell is treated the same way
+  // regardless of the column's OWN cell_type (by request, "I expected to
+  // be able to enter Text in that row for each column") -- row.is_text_row
+  // overrides a status-type column's cell to also mean free text, for
+  // this one row only.
   router.patch('/cells/:rowId/:columnId', (req, res) => {
     try {
       const rowId = Number(req.params.rowId);
@@ -826,21 +918,21 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       const column = db.prepare('SELECT * FROM columns WHERE id = ?').get(columnId);
       if (!column) return res.status(404).json({ error: 'Column not found.' });
       if (column.kind !== 'simple') return res.status(400).json({ error: 'This column is compound -- edit its stages instead, not the cell directly.' });
+      const row = db.prepare('SELECT kind, is_text_row FROM rows WHERE id = ?').get(rowId);
       // A status-type column's cell for a COMPOUND row is a derived
       // rollup over that row's own sub-rows, same reasoning as the
       // compound-column check just above, transposed -- a text column's
       // cell stays directly editable regardless of the row's own kind
-      // (see rollout-tracker-db.js's own seedNewRow comment).
-      if (column.cell_type === 'status') {
-        const row = db.prepare('SELECT kind FROM rows WHERE id = ?').get(rowId);
-        if (row && row.kind === 'compound') {
-          return res.status(400).json({ error: `This ${rowNoun.toLowerCase()} is compound -- edit its sub-rows instead, not the cell directly.` });
-        }
+      // (see rollout-tracker-db.js's own seedNewRow comment). Never
+      // reachable for a text row -- is_text_row always implies kind
+      // 'simple', never 'compound'.
+      if (column.cell_type === 'status' && row && row.kind === 'compound') {
+        return res.status(400).json({ error: `This ${rowNoun.toLowerCase()} is compound -- edit its sub-rows instead, not the cell directly.` });
       }
 
       let status;
       let reason;
-      if (column.cell_type === 'text') {
+      if (column.cell_type === 'text' || (row && row.is_text_row)) {
         status = 'not_done';
         reason = typeof req.body?.reason === 'string' ? req.body.reason : null;
       } else {
@@ -970,13 +1062,23 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
   router.patch('/rows/:rowId/bulk-cells', (req, res) => {
     try {
       const rowId = Number(req.params.rowId);
-      const row = db.prepare('SELECT kind FROM rows WHERE id = ?').get(rowId);
+      const row = db.prepare('SELECT kind, is_text_row FROM rows WHERE id = ?').get(rowId);
       if (!row) return res.status(404).json({ error: `No such ${rowNoun.toLowerCase()}.` });
       // Every status-type-simple column this action could touch is
       // derived for a compound row (see bulkSetRow's own comment in
-      // rollout-tracker-db.js) -- nothing left to "Set Row" on.
+      // rollout-tracker-db.js) -- nothing left to "Set Row" on. A TEXT
+      // row is rejected for the opposite reason -- every one of those
+      // same columns is now its own free-text field (by request, "I
+      // expected to be able to enter Text in that row for each column"),
+      // so a bulk STATUS-set would corrupt it, not merely be pointless.
+      // The client already hides this button for both (see
+      // renderTbodyRows's own bulk-row-btn gate), but this is the real
+      // trust boundary.
       if (row.kind === 'compound') {
         return res.status(400).json({ error: `This ${rowNoun.toLowerCase()} is compound -- edit its sub-rows instead, not the whole row directly.` });
+      }
+      if (row.is_text_row) {
+        return res.status(400).json({ error: `This ${rowNoun.toLowerCase()} is a text row -- edit each cell individually, not the whole row at once.` });
       }
       const status = req.body?.status;
       if (!STATUSES.includes(status)) return res.status(400).json({ error: `Invalid status. Must be one of: ${STATUSES.join(', ')}.` });

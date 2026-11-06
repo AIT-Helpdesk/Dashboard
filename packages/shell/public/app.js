@@ -2260,6 +2260,120 @@ function maybeResumeRotationAfterWatchdogReload() {
   if (shouldResume) startRotation();
 }
 
+// Announcements pop-up (packages/announcements/), by request -- shown on
+// every dashboard open/refresh (init() runs once per full page load, which
+// is exactly that), filtered server-side to whatever currently applies to
+// this signed-in user (time window/team targeting/not-yet-acknowledged --
+// see that package's own db.js). Best-effort: a failed fetch here must
+// never break the rest of page load, same convention openHelpModal()'s own
+// fetch already follows for the exact same reason.
+//
+// showAnnouncementsPopup(announcements) is the actual overlay-building
+// logic, pulled out so it's reusable: maybeShowAnnouncements() calls it on
+// every page load (unchanged behaviour), and window.openAnnouncementsPopup
+// below is the on-demand entry point for another page's own client.js (by
+// request -- a green "Announcements" button on What's On) to trigger the
+// exact same shared pop-up/ack flow without duplicating its markup.
+function showAnnouncementsPopup(announcements) {
+  // One shared .history-modal-overlay/.history-modal-panel shell (same
+  // convention openHelpModal()/every page's own confirm dialogs use) with
+  // every applicable announcement stacked inside -- the array already
+  // comes back most-severe-first from the server.
+  const overlay = document.createElement('div');
+  overlay.className = 'history-modal-overlay';
+  overlay.innerHTML = `
+    <div class="history-modal-panel ann-popup-modal-panel">
+      <div class="history-modal-panel-header">
+        <span>Announcements</span>
+        <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="history-modal-body" id="ann-popup-body"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKeydown);
+  };
+  function onKeydown(e) {
+    if (e.key === 'Escape') close();
+  }
+  document.addEventListener('keydown', onKeydown);
+  overlay.querySelector('.history-modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  const bodyEl = overlay.querySelector('#ann-popup-body');
+  function renderItems() {
+    if (announcements.length === 0) {
+      close();
+      return;
+    }
+    bodyEl.innerHTML = announcements
+      .map(
+        (a) => `
+        <div class="ann-popup-item ann-severity-${a.severity}" data-ann-id="${a.id}">
+          <p class="ann-popup-item-title">${escapeHtml(a.title)}</p>
+          ${a.body ? `<p class="ann-popup-item-body">${escapeHtml(a.body)}</p>` : ''}
+          ${a.ackRequired ? '<button type="button" class="button-link button-link--small ann-popup-ack-button">Acknowledge</button>' : ''}
+        </div>
+      `
+      )
+      .join('');
+    bodyEl.querySelectorAll('.ann-popup-ack-button').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const item = btn.closest('[data-ann-id]');
+        const annId = Number(item.dataset.annId);
+        btn.disabled = true;
+        try {
+          await fetch(`/api/announcements/${annId}/acknowledge`, { method: 'POST' });
+          announcements = announcements.filter((a) => a.id !== annId);
+          renderItems();
+        } catch {
+          btn.disabled = false; // best-effort -- leave the item up, user can retry
+        }
+      });
+    });
+  }
+  renderItems();
+}
+
+async function maybeShowAnnouncements() {
+  let announcements = [];
+  try {
+    const res = await fetch('/api/announcements/active');
+    const data = await res.json();
+    announcements = data.announcements || [];
+  } catch {
+    return;
+  }
+  if (announcements.length === 0) return;
+  showAnnouncementsPopup(announcements);
+}
+
+// On-demand entry point (by request -- a green "Announcements" button on
+// What's On), same best-effort fetch-then-render shape as
+// maybeShowAnnouncements() above, just callable from any page's own
+// client.js instead of only firing once on page load. app.js is always
+// loaded and evaluated before any page's own client.js module is mounted,
+// so this is guaranteed to exist by the time a button elsewhere calls it
+// -- same convention this file's own top-of-file window.fetch=/window.open=
+// overrides already use for exposing shell-level behaviour to the rest of
+// the dashboard.
+window.openAnnouncementsPopup = async function () {
+  try {
+    const res = await fetch('/api/announcements/active');
+    const data = await res.json();
+    const announcements = data.announcements || [];
+    if (announcements.length === 0) return;
+    showAnnouncementsPopup(announcements);
+  } catch {
+    // best-effort, same as maybeShowAnnouncements -- a failed fetch here
+    // just means the button quietly does nothing for this one click
+  }
+};
+
 async function init() {
   tree = await loadTree();
   // Only actually reveal the preview-user button once loadTree() has come
@@ -2270,6 +2384,7 @@ async function init() {
   window.addEventListener('hashchange', () => loadPage(currentPageId()));
   await loadPage(currentPageId());
   renderUserInfo();
+  maybeShowAnnouncements();
   maybeAutoStartRotation();
   maybeAutoEnterFullScreen();
   maybeResumeRotationAfterWatchdogReload();

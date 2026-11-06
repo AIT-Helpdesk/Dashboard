@@ -525,6 +525,7 @@ export function mount(container) {
       </div>
       <div class="wo-handler-right">
         <button type="button" id="special-staff-hours-button" class="button-link button-link--small">Special Staff Hours</button>
+        <button type="button" id="wo-announcements-button" class="button-link button-link--small wo-announcements-button" hidden>Announcements</button>
         <div id="handler-pct-grid" class="wo-handler-pct-grid" hidden></div>
       </div>
     </div>
@@ -586,6 +587,28 @@ export function mount(container) {
   `;
 
   container.querySelector('#special-staff-hours-button').addEventListener('click', openSpecialStaffHoursPopup);
+
+  // Green "Announcements" button, by request -- sits next to Special
+  // Staff Hours inside .wo-handler-right, with its own `hidden` so its
+  // visibility (whether there's currently anything to show) stays
+  // independent of #handler-section's own hidden state even though it's
+  // nested inside it. Opens the real shared pop-up via
+  // window.openAnnouncementsPopup (app.js), rather than duplicating its
+  // markup/ack-handling logic here. Checked once at mount (same "one
+  // check per page load" cadence the automatic on-load pop-up itself
+  // uses) -- a Refresh of the page is what picks up a newly published
+  // announcement, same as every other section on this page.
+  const announcementsButtonEl = container.querySelector('#wo-announcements-button');
+  announcementsButtonEl.addEventListener('click', () => window.openAnnouncementsPopup());
+  (async () => {
+    try {
+      const res = await fetch('/api/announcements/active');
+      const data = await res.json();
+      announcementsButtonEl.hidden = !(data.announcements && data.announcements.length > 0);
+    } catch {
+      announcementsButtonEl.hidden = true;
+    }
+  })();
 
   const handlerSectionEl = container.querySelector('#handler-section');
   const handlerSelectEl = container.querySelector('#handler-select');

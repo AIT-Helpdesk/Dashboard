@@ -98,6 +98,12 @@ packages/updates/data.db
 packages/updates/data.db-shm
 packages/updates/data.db-wal
 
+# Same reasoning, for Announcements' own SQLite database (real admin-
+# maintained announcements + per-user acknowledgements -- not source).
+packages/announcements/data.db
+packages/announcements/data.db-shm
+packages/announcements/data.db-wal
+
 # Same reasoning, for SaaS Protection's own SQLite database (accepted-
 # failure records -- real decisions, not source).
 packages/saas-protection/data.db

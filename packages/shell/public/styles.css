@@ -2827,6 +2827,14 @@ h1 {
   background: color-mix(in srgb, #16a34a 20%, transparent);
   color: #16a34a;
 }
+/* The "Announcements" button next to Special Staff Hours, by request --
+   same green tint as the Service Calls section's own active All/Just
+   Mine/Unallocated filter button above (.tt-filter-btn--active), not the
+   solid-fill #16a34a .refresh-button--emphasis uses elsewhere. */
+.wo-announcements-button {
+  background: color-mix(in srgb, #16a34a 20%, transparent);
+  color: #16a34a;
+}
 .tt-column-body {
   flex: 1;
 }
@@ -5756,6 +5764,29 @@ tr.row-text-highlight-blue td {
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
 }
+/* Drag-to-reorder ROWS, by request (Nov 2026) -- the row-level mirror of
+   the three rules just above, applied to tr[draggable="true"] instead of
+   th.rt-col-header. Every row is draggable (no Tracker-Manager gate), so
+   unlike .rt-col-header[draggable="true"] there's no [draggable="false"]
+   state to exclude here. */
+tbody tr[draggable="true"] {
+  cursor: grab;
+}
+.rt-row-dragging {
+  opacity: 0.4;
+}
+.rt-row-drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+/* A text row's own label cell, by request -- same bold weight as a
+   normal row's name, just visually set apart as a divider/heading rather
+   than an ordinary data row (a light tint matching the data cells'
+   own .rt-cell--divider below). */
+.rt-row-text td:first-child {
+  background: var(--bg-alt, #f3f4f6);
+  font-weight: 700;
+}
 .rt-cell {
   font-weight: 600;
 }
@@ -5870,6 +5901,15 @@ tr.row-text-highlight-blue td {
   font-weight: 400;
   color: var(--fg);
   text-align: left;
+}
+
+/* A TEXT ROW's own cell in every column, by request (Nov 2026) -- always
+   blank/non-interactive (see masterCellHtml's own isTextRow branch), so
+   it gets no status color at all, just the same light tint as that row's
+   own label cell (.rt-row-text above) so the whole row reads as one
+   visual unit. */
+.rt-cell--divider {
+  background: var(--bg-alt, #f3f4f6);
 }
 
 .rt-form-body {
@@ -10479,6 +10519,101 @@ tr.accrued-time-yellow-row th {
 .pm-form-field label {
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+/* Announcements (admin-managed pop-up shown dashboard-wide, by request) --
+   both the admin list page (.ann-*) and the global pop-up itself
+   (.ann-popup-*), which app.js builds on every page open/refresh. */
+.ann-table th,
+.ann-table td {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.5rem;
+}
+.ann-actions-cell {
+  white-space: nowrap;
+}
+.ann-actions-cell .ann-delete-button {
+  margin-left: 0.5rem;
+  color: #dc2626;
+}
+.ann-team-label {
+  display: block;
+  margin: 0.15rem 0;
+}
+/* Compound selector, not a bare .ann-modal-panel -- same same-specificity
+   footgun .pm-modal-panel's own comment documents just above. */
+.history-modal-panel.ann-modal-panel {
+  width: 34rem;
+  max-width: 92vw;
+}
+/* Severity badge (admin list) and left-border/heading color (pop-up) --
+   critical reuses .status.error's own #dc2626; warning uses #f59e0b, this
+   dashboard's own established "yellowy orange" (same shade as
+   .text-highlight-orange/.cell-flag-orange elsewhere), swapped in by
+   request after the original #b45309 (a muted amber-brown, same as
+   .status.warn) read as muddy/brown rather than a clear warning color;
+   info uses #16a34a, the same green used dashboard-wide
+   (.chk-section-heading, .cell-flag-green), by request -- not the
+   "no color, just the default border" treatment this used to have. */
+.ann-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--bg-alt, #f3f4f6);
+}
+.ann-severity-critical {
+  color: #dc2626;
+  border-left: 4px solid #dc2626;
+}
+.ann-severity-warning {
+  color: #f59e0b;
+  border-left: 4px solid #f59e0b;
+}
+.ann-severity-info {
+  color: #16a34a;
+  border-left: 4px solid #16a34a;
+}
+.history-modal-panel.ann-popup-modal-panel {
+  width: 36rem;
+  max-width: 92vw;
+}
+/* Grey box around each announcement, by request -- individual border-
+   top/right/bottom (not the `border` shorthand) so this never clobbers
+   the colored border-LEFT the severity classes below already set on this
+   same element (class="ann-popup-item ann-severity-X") -- the shorthand
+   would reset all four sides regardless of source order, wiping out
+   whichever severity accent came first. */
+.ann-popup-item {
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.8rem;
+  border-radius: 4px;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.ann-popup-item:last-child {
+  margin-bottom: 0;
+}
+.ann-popup-item-title {
+  font-weight: 700;
+  margin: 0 0 0.3rem;
+}
+.ann-popup-item-body {
+  margin: 0 0 0.5rem;
+  white-space: pre-wrap;
+}
+/* "Black for the text on Warning and Info", by request -- the heading
+   stays in severity color (inherited from .ann-severity-warning/-info's
+   own `color`, which the admin list's own badge above also relies on, so
+   that rule itself stays untouched); only the body text is reset back to
+   the normal/black foreground for these two specifically. Critical is
+   left as-is (not asked for) -- its body stays red too. */
+.ann-severity-warning .ann-popup-item-body,
+.ann-severity-info .ann-popup-item-body {
+  color: var(--fg);
 }
 
 /* Database Schema -- new page, by request. */

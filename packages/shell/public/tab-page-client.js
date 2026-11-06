@@ -361,10 +361,13 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     // uses in app.js, for a consistent interaction feel across the
     // dashboard -- drop on another tab REORDERS the shared tabOrder;
     // dropping OUTSIDE any valid target entirely (dragend's dropEffect
-    // comes back 'none') REMOVES the tab (a built-in one via
-    // removeDefaultTab(), an admin-added one via removePermanent()),
-    // "dragging it back out", by request -- same effect right-click's
-    // own "Remove This Tab" has. Admin-only: only an admin's own tab
+    // comes back 'none') asks confirmDeleteTab() below, then REMOVES the
+    // tab on Confirm (a built-in one via removeDefaultTab(), an
+    // admin-added one via removePermanent()) -- "dragging it back out",
+    // by request, with a confirmation step added so an accidental drag
+    // can't silently delete a tab. Same underlying effect right-click's
+    // own "Remove This Tab" has (that one has no confirmation step, by
+    // scope of the original request). Admin-only: only an admin's own tab
     // buttons render draggable="true" at all (see renderTabBar() above),
     // so this whole function only ever wires up real listeners for them;
     // a non-admin's tab bar is read-only. Uses a plain closure variable
@@ -374,6 +377,48 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     // the dataTransfer.types check in both handlers here, which lets a
     // sidebar-page drag fall through/bubble up to the tab bar's own drop
     // target instead of being swallowed here).
+    // Same .history-modal-overlay/-panel shell + Promise<boolean> pattern
+    // contract-checks/client.js's confirmReopenTicket() uses for its own
+    // Confirm/Cancel dialogs. On Cancel/Escape/outside-click (all resolve
+    // false), nothing needs undoing: the dragged button was never actually
+    // moved in the DOM -- HTML5 drag only shows a ghost image -- so the
+    // browser's own drag-return animation already snaps it back on its own.
+    function confirmDeleteTab() {
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'history-modal-overlay';
+        overlay.innerHTML = `
+          <div class="history-modal-panel wsp-qa-modal-panel">
+            <div class="history-modal-panel-header">
+              <span>Delete Tab?</span>
+            </div>
+            <div class="history-modal-body">
+              <p class="status">Do you want to delete this tab?</p>
+              <div class="wsp-form-actions">
+                <button type="button" class="button-link tab-delete-confirm-button">Confirm</button>
+                <button type="button" class="tab-delete-cancel-button">Cancel</button>
+              </div>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(overlay);
+        const finish = (value) => {
+          overlay.remove();
+          document.removeEventListener('keydown', onKeydown);
+          resolve(value);
+        };
+        function onKeydown(e) {
+          if (e.key === 'Escape') finish(false);
+        }
+        document.addEventListener('keydown', onKeydown);
+        overlay.querySelector('.tab-delete-confirm-button').addEventListener('click', () => finish(true));
+        overlay.querySelector('.tab-delete-cancel-button').addEventListener('click', () => finish(false));
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) finish(false);
+        });
+      });
+    }
+
     function wireDragReorder() {
       let dragSrcId = null;
       tabBarEl.querySelectorAll('.tab-button[draggable="true"]').forEach((btn) => {
@@ -387,8 +432,11 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
           btn.classList.remove('dragging');
           if (e.dataTransfer.dropEffect !== 'none') return; // dropped somewhere valid -- already handled by that drop
           if (tabId === HELP_TAB.id) return; // Help is always fixed
-          if (DEFAULT_TAB_IDS.has(tabId)) removeDefaultTab(tabId);
-          else removePermanent(tabId);
+          confirmDeleteTab().then((confirmed) => {
+            if (!confirmed) return;
+            if (DEFAULT_TAB_IDS.has(tabId)) removeDefaultTab(tabId);
+            else removePermanent(tabId);
+          });
         });
         btn.addEventListener('dragover', (e) => {
           if (e.dataTransfer.types.includes(SIDEBAR_DRAG_TYPE)) return; // a sidebar-page drag -- let it bubble to wireSidebarDropTarget() instead
