@@ -10114,6 +10114,16 @@ tr.accrued-time-yellow-row th {
    variable (not a flat hex) so it stays one step darker than the stripe
    in BOTH themes, light and dark, rather than needing a separate value
    for each. */
+/* "All Devices" toggle sits right in the filter row, by request --
+   injected as the filter box's first child (client.js's own deviceList
+   string-splice above deviceListTableHtml()), scoped to just this page's
+   own device list rather than changing .mtg-device-filter's shared layout
+   everywhere else it's used (Meeting Prep). */
+.live-reports-device-list .mtg-device-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
 .live-reports-scorecard-table th,
 .live-reports-device-list table th {
   background: color-mix(in srgb, var(--row-alt-bg), black 12%);
@@ -10376,6 +10386,347 @@ tr.accrued-time-yellow-row th {
   margin-top: 0.6rem;
 }
 
+/* Mail Domain Protection -- joins the SAME Cybersecurity Systems
+   .mtg-widget-grid as the vendor cards now, by request ("put it in the
+   Cybersecurity section" / "size more like the other Cybersecurity
+   items"), so it's .mtg-widget itself plus a min-width (that grid's cards
+   otherwise shrink-to-fit, which would cramp the score circle + 3 rows
+   below) rather than a separate bigger panel. */
+.live-reports-mdp-widget {
+  min-width: 300px;
+  padding-top: 0.5rem;
+  padding-bottom: 0.6rem;
+}
+/* Cog in the corner instead of a "Manual Entry Required" label, by
+   request -- sits just left of the card's own "include in PDF" checkbox
+   (.live-reports-card-toggle, right: 0.7rem) so the two don't overlap;
+   the title gets extra right padding here specifically (overriding
+   .live-reports-cyber-card's own 1.4rem) to clear both. */
+.live-reports-mdp-widget .mtg-widget-title {
+  padding-right: 2.6rem;
+}
+/* Now a real <button>, by request ("enable the edit capability ... only
+   after the cog is clicked") -- browser button chrome reset off so it
+   still just reads as the same plain cog glyph it always was. */
+.live-reports-mdp-cog {
+  position: absolute;
+  top: 0.65rem;
+  right: 1.9rem;
+  font-size: 0.95rem;
+  color: var(--muted);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  line-height: 1;
+}
+.live-reports-mdp-cog:hover {
+  color: var(--fg);
+}
+.live-reports-mdp-body {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-top: 0.3rem;
+}
+/* Same donutSvg() ring AutoElevate's own card uses (144x144 .mtg-donut
+   SVG), scaled down here via CSS (the shared donutSvg() function itself
+   is untouched -- other pages/cards still render it at the full 144px),
+   by request ("make the widget ... smaller so that the height is only
+   just bigger than the 3 listed services beside it") -- the score number
+   is a real <input> overlaid on top (centered, same spot donutSvg()'s own
+   SVG <text> would sit) so it stays editable; the SVG itself is given an
+   empty centerLabel. */
+.live-reports-mdp-score-wrap {
+  position: relative;
+  flex-shrink: 0;
+  width: 92px;
+  height: 92px;
+}
+.live-reports-mdp-score-wrap svg {
+  width: 100%;
+  height: 100%;
+}
+.live-reports-mdp-score-overlay {
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--fg);
+  width: 1.8rem;
+  text-align: center;
+  border: none;
+  background: transparent;
+  padding: 0;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  /* Chrome's number-input spin buttons were eating into this width once
+     it shrank from the old 2.6rem (there was room to spare there) --
+     clipping "10" down to what looked like "1(" (confirmed from a
+     screenshot). No spinner was ever wanted on this overlay anyway --
+     it's a centered label first, an editable field second. */
+  -moz-appearance: textfield;
+}
+.live-reports-mdp-score-overlay::-webkit-outer-spin-button,
+.live-reports-mdp-score-overlay::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.live-reports-mdp-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1 1 auto;
+}
+/* Hidden, not just disabled, until the cog unlocks the card, by request --
+   covers the level dropdowns and the rate-input+"%" spans (client.js'
+   mdpCardHtml()/wireMdpWidget()). */
+.live-reports-mdp-edit-only {
+  display: none;
+}
+.live-reports-mdp-widget.live-reports-mdp-unlocked .live-reports-mdp-edit-only {
+  display: revert;
+}
+/* The name sits right next to the dots, by request ("put the name of the
+   widget next to the green Dots"). */
+.live-reports-mdp-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.live-reports-mdp-dots {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.live-reports-mdp-row-name {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #1a1a1a;
+  width: 2.8rem;
+  flex-shrink: 0;
+}
+.live-reports-mdp-level-select {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.2rem;
+}
+.live-reports-mdp-rate-input {
+  width: 3.2rem;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.2rem;
+}
+/* Pill-styled <select> on the DMARC row itself now, by request -- reuses
+   .mtg-score-badge--good/warn/bad's own tint (client.js's own
+   MDP_POLICY_TIERS maps reject/quarantine/none to good/warn/bad), just a
+   rounded pill shape with no native select chrome. */
+.live-reports-mdp-policy-select {
+  border: none;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.1rem 0.5rem;
+}
+/* Mail Domain Protection (live DNS checks, by request -- was "Email
+   Domain Protection" until renamed), a separate card from Mail Domain
+   Protection Monitoring above. */
+.live-reports-edp-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.3rem;
+}
+/* The 'ok' card's own hidden re-pick UI, by request ("allow untick/tick
+   to re-choose or enter primary domain even if the correct domain was
+   selected automatically") -- revealed by unticking the include-in-PDF
+   checkbox (see renderEmailDomainProtection() in client.js). */
+.live-reports-edp-picker {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border);
+}
+.live-reports-edp-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.live-reports-edp-row-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+/* Right next to the DMARC label, by request -- no longer pushed to the
+   far right of the row. Pill-shaped now too, by request ("put the
+   Reject, Quarantine, etc in a pill like the Mail Domain Protection
+   Monitoring section has") -- same tinted-badge shape
+   .mtg-score-badge--good/warn/bad and .live-reports-mdp-policy-select
+   already use, just its own color set (muted for "Exists"/p=none isn't
+   one of theirs). */
+.live-reports-edp-row-status {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+}
+/* Domain name on its own line under the heading, by request -- plain
+   weight, normal body size (not the bold title, not a smaller/muted
+   caption either). */
+.live-reports-edp-domain {
+  font-weight: normal;
+  font-size: 0.85rem;
+  color: var(--fg);
+  margin: 0.1rem 0 0.4rem;
+}
+.live-reports-edp-row-status--good {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: #16a34a;
+}
+.live-reports-edp-row-status--warn {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #f59e0b;
+}
+.live-reports-edp-row-status--muted {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted);
+}
+/* Stacked, by request ("go back to ... being under ... because it's too
+   wide" -- the earlier side-by-side layout made the card too wide).
+   Plain <select>/<input>, no custom box styling, by request ("make these
+   ... look like the Client selector field at the top of Live Reports
+   page") -- #site-input up in the search form carries no custom CSS of
+   its own either, just the browser's own native control appearance. */
+#edp-card label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin: 0.5rem 0 0.2rem;
+}
+.live-reports-edp-action-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.4rem;
+}
+#edp-save-button {
+  flex-shrink: 0;
+}
+/* Small text, by request -- the "no domain resolved" reason line. */
+.live-reports-edp-reason {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin: 0.2rem 0 0;
+}
+/* Red (not bold), small print, by request -- only shown in the
+   'needs-domain' state (emailDomainProtectionCardHtml() in client.js). */
+.live-reports-edp-fix-note {
+  color: #dc2626;
+  font-weight: normal;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  margin: 0;
+}
+/* The note's 2nd line sits on its own row under the button, full width,
+   by request ("have this under the Use this domain button so that it
+   doesn't widen the box so much") -- it was wrapping beside the button
+   and stretching the card wider to fit. */
+.live-reports-edp-fix-note--full {
+  margin-top: 0.3rem;
+}
+/* Surrounds Mail Domain Protection + Mail Domain Protection Monitoring
+   together, on screen only, by request -- a visual flag that both
+   commonly need manual attention (an unresolved IT Glue domain; the
+   EasyDMARC values themselves). Becomes one flex item inside the
+   Cybersecurity Systems grid, the 2 cards laid out side by side (wrapping
+   on a narrow screen) within it. */
+.live-reports-domain-protection-alert {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 0.75rem;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 10px;
+}
+/* Colour set inline per dot (client.js's own mdpDotsHtml()) -- each
+   position has its own fixed shade (light/medium/dark green) when lit, by
+   request, not a single good/warn/bad tier class. */
+.mdp-dot {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  margin-right: 0.2rem;
+}
+
+/* "Include in PDF" tick boxes, by request -- ticked by default, sitting
+   right next to the heading of whatever they include/exclude (by
+   request -- no longer a separate row below it), no visible "Include in
+   PDF" text (by request -- just the checkbox + a tooltip). Unticking
+   doesn't touch what's on screen -- it only tells Create PDF to leave
+   that piece out (client.js's own sectionToggles/cyberCardToggles/
+   deviceHealthItemToggles, server.js's own parseSections(),
+   pdf-template.js's own `s.key !== false` checks). A bare
+   .live-reports-section-toggle-input/.live-reports-device-health-item-
+   toggle-input sits inline inside a real on-screen heading (<h2>, a
+   <label>, ...); .live-reports-card-toggle below is the corner-checkbox
+   variant for a widget whose own heading has no natural inline spot
+   (each Cybersecurity Systems card, each Workstations donut). */
+.live-reports-section-toggle-input,
+.live-reports-device-health-item-toggle-input {
+  vertical-align: middle;
+  margin-left: 0.35rem;
+  cursor: pointer;
+}
+/* namedSectionToggleHtml()'s own variant -- shows a label, for the
+   handful of sections with no on-screen heading of their own to sit next
+   to (Overall Health View, Devices by Type/Check-in Freshness, Device
+   Health, All Devices). */
+/* More space above than below, by request -- these have no heading of
+   their own, so this row IS effectively the heading for whatever comes
+   right after it; the old even-ish spacing read as belonging to the
+   section ABOVE instead ("SaaS Protection ... [tight gap] Device Health
+   [bigger gap] Asset Management" looked like Device Health was still part
+   of SaaS Protection). Flipped so it now reads as clearly separated from
+   what's above and tight against what it's actually labelling below. */
+.live-reports-section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin: 1.5rem 0 0.2rem;
+  cursor: pointer;
+}
+.live-reports-section-toggle input {
+  margin: 0;
+}
+/* Corner checkbox on each Cybersecurity Systems card and each Workstations
+   donut, by request ("every ... widget box"). */
+.live-reports-cyber-card {
+  position: relative;
+}
+.live-reports-cyber-card .mtg-widget-title {
+  padding-right: 1.4rem;
+}
+.live-reports-card-toggle {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.7rem;
+  cursor: pointer;
+}
+.live-reports-card-toggle input {
+  margin: 0;
+}
+/* Less space above the heading specifically, by request -- every other
+   .mtg-widget keeps its usual 1rem top padding. */
+.live-reports-autoelevate-card {
+  padding-top: 0.5rem;
+}
+
 .mtg-segbar-track {
   display: flex;
   height: 0.85rem;
@@ -10619,6 +10970,13 @@ tr.accrued-time-yellow-row th {
 .ann-severity-warning .ann-popup-item-body,
 .ann-severity-info .ann-popup-item-body {
   color: var(--fg);
+}
+/* Writer's name, by request -- very small, bottom-right of each item. */
+.ann-popup-item-author {
+  margin: 0.3rem 0 0;
+  text-align: right;
+  font-size: 0.65rem;
+  color: var(--muted);
 }
 
 /* Database Schema -- new page, by request. */

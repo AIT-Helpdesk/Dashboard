@@ -66,6 +66,30 @@ function statusForScore(score) {
   return { label: 'Action needed', color: RED };
 }
 
+// Mail Domain Protection -- DMARC/SPF/DKIM status for the client's own
+// mail domain, by request (EasyDMARC's own per-domain dashboard is the
+// visual model). There's no EasyDMARC API connected to this dashboard
+// yet, so these values are looked up manually and typed into client.js's
+// own editable widget -- never fabricated server-side (see server.js's own
+// parseMailDomainProtection(), which returns null rather than a guessed
+// default on anything malformed/missing). The overall score and each of
+// the 3 dot levels are picked by hand there too, by request ("I want to
+// choose the X of 10, light green, medium green, dark green dots ...
+// these aren't related to the Pass Rates") -- spfPassRate/dkimPassRate are
+// shown here purely as their own display numbers, with no effect on the
+// score or dots. Same 3 named levels/colours as client.js's own
+// MDP_LEVELS -- kept in sync by hand (small enough, and one's browser JS/
+// the other's Node, so there's no single module both could import from
+// without a bigger refactor than this feature needs).
+const MDP_LEVELS = {
+  light: { dots: 1, color: '#86efac' },
+  medium: { dots: 2, color: '#4ade80' },
+  dark: { dots: 3, color: '#16a34a' },
+};
+function mdpLevel(key) {
+  return MDP_LEVELS[key] || MDP_LEVELS.dark;
+}
+
 function contentWidth(doc) {
   return doc.page.width - doc.page.margins.left - doc.page.margins.right;
 }
@@ -188,12 +212,18 @@ function drawDonut(doc, x, y, w, title, legend, colors) {
 
   const legendX = x + diameter + 14;
   const legendW = Math.max(60, w - diameter - 14);
-  let ly = y;
+  // Legend vertically centred next to the ring now, by request -- it used
+  // to start flush with the ring's own top edge (ly = y), which read as
+  // misaligned whenever the ring (64px tall) was noticeably taller than a
+  // short legend (e.g. AutoElevate's 4 rows).
   doc.font('Helvetica').fontSize(8);
-  entries.forEach(([label, val]) => {
+  const rowHeights = entries.map(([label, val]) => doc.heightOfString(`${label}: ${val}`, { width: legendW - 11 }) + 3);
+  const legendBlockH = rowHeights.reduce((sum, h) => sum + h, 0);
+  let ly = y + Math.max(0, (diameter - legendBlockH) / 2);
+  entries.forEach(([label, val], i) => {
     doc.circle(legendX + 3, ly + 5, 3).fillColor(colors[label] || '#9aa3af').fill();
     doc.fillColor(INK).text(`${label}: ${val}`, legendX + 11, ly, { width: legendW - 11 });
-    ly = doc.y + 3;
+    ly += rowHeights[i];
   });
 
   doc.fillColor(INK).lineWidth(1);
@@ -268,6 +298,40 @@ function drawPill(doc, x, y, label, color) {
   return w;
 }
 
+// Same ring geometry as drawDonut() above (diameter 64, strokeW 13) -- by
+// request ("use the same circle widget type as the AutoElevate one, size,
+// width, etc"), AutoElevate's own card uses that exact ring via
+// spec.donut/drawDonut(). Just the ring + centred number here, no
+// title/legend (there's nothing to break out by category for a single
+// score). `score`/10 is the filled fraction, reusing drawDonutArcSegment()
+// (the same primitive drawDonut() itself draws its arcs with).
+function drawScoreDonut(doc, x, y, score, color) {
+  const diameter = 64;
+  const strokeW = 13;
+  const cx = x + diameter / 2;
+  const cy = y + diameter / 2;
+  const r = diameter / 2 - strokeW / 2;
+  doc.lineWidth(strokeW).strokeColor(BORDER);
+  doc.circle(cx, cy, r).stroke();
+  if (score > 0) {
+    drawDonutArcSegment(doc, cx, cy, r, 0, Math.min(1, score / 10), strokeW, color);
+  }
+  doc.fillColor(INK).font('Helvetica-Bold').fontSize(11).text(String(score), x, cy - 5, { width: diameter, align: 'center' });
+  doc.fillColor(INK).lineWidth(1);
+  return diameter;
+}
+
+// 3 small dots, left-to-right, the first `tier.dots` of them filled in
+// `tier.color` -- the same "how many lit" shorthand EasyDMARC's own
+// DMARC/SPF/DKIM cards use for their status at a glance.
+function drawMdpDots(doc, x, y, level) {
+  const shades = [MDP_LEVELS.light.color, MDP_LEVELS.medium.color, MDP_LEVELS.dark.color];
+  for (let i = 0; i < 3; i++) {
+    doc.circle(x + i * 11, y, 4).fillColor(i < level.dots ? shades[i] : '#e5e7eb').fill();
+  }
+  doc.fillColor(INK);
+}
+
 // `h` varies a lot by caller (a tall single score tile vs. 4 small tiles
 // packed into the same overall height) -- font sizes are chosen from `h`
 // itself rather than one fixed layout, so a short tile's value/label never
@@ -302,6 +366,46 @@ function drawTile(doc, x, y, w, h, label, value, color) {
 // layout, by request). Box height is computed from the actual title
 // height, not a fixed guess -- a long client name wrapping to 2 lines
 // pushes the subtitle down with it instead of overlapping it.
+// Small caps, by request ("the client name in Smallcaps") -- pdfkit has no
+// font-variant: small-caps support, so this fakes it the standard way: the
+// text is split into runs of "stays as-is" characters (already uppercase,
+// digits, spaces, punctuation) vs "was lowercase" characters (drawn
+// uppercased, at a smaller size).
+//
+// Each run is positioned by hand (own x via accumulated widthOfString(),
+// own y via the ASCENT_RATIO math below) rather than pdfkit's own
+// continued-text chaining -- confirmed live that chaining 2 different
+// font SIZES on one line top-aligns them (every run starts from the same
+// y), which reads as the small letters hanging off the top of the caps;
+// what's wanted is real small-caps, where every run shares the same
+// BASELINE instead (by request, "lined up with the bottom of the
+// capitals, not the top"). Helvetica/Helvetica-Bold's own AFM ascender
+// metric is 718/1000 em -- same ratio for any size of the same font, so
+// solving "both runs' own (topY + size*ASCENT_RATIO) are equal" gives
+// each run's top y from one shared baseline.
+const SMALL_CAPS_ASCENT_RATIO = 0.718;
+function drawSmallCapsText(doc, text, x, y, { font, capSize, smallSize, color }) {
+  const runs = [];
+  for (const ch of text) {
+    const isLower = ch >= 'a' && ch <= 'z';
+    const kind = isLower ? 'small' : 'cap';
+    const chText = isLower ? ch.toUpperCase() : ch;
+    const last = runs[runs.length - 1];
+    if (last && last.kind === kind) last.text += chText;
+    else runs.push({ kind, text: chText });
+  }
+  const baseline = y + capSize * SMALL_CAPS_ASCENT_RATIO;
+  doc.fillColor(color);
+  let cx = x;
+  runs.forEach((run) => {
+    const size = run.kind === 'cap' ? capSize : smallSize;
+    doc.font(font).fontSize(size);
+    doc.text(run.text, cx, baseline - size * SMALL_CAPS_ASCENT_RATIO, { lineBreak: false });
+    cx += doc.widthOfString(run.text);
+  });
+  doc.fillColor(INK);
+}
+
 function drawCoverHeader(doc, report) {
   const pageWidth = doc.page.width;
   const boxX = MARGIN;
@@ -335,8 +439,15 @@ function drawCoverHeader(doc, report) {
   // leftColW width (the same width the client name itself wraps to),
   // whichever is the tighter constraint, so it's always exactly as big as
   // it can be without ever touching the text.
-  doc.font('Helvetica-Bold').fontSize(20);
-  const titleH = doc.heightOfString(report.siteName, { width: leftColW });
+  // A little smaller than before (20 -> 18), by request, plus the small
+  // caps treatment below -- measured off the CAP size against the
+  // all-uppercase form of the name, a safe upper-bound height estimate
+  // since small-caps' own lowercase-origin runs are always drawn smaller,
+  // never taller, than that.
+  const titleCapSize = 18;
+  const titleSmallSize = 13;
+  doc.font('Helvetica-Bold').fontSize(titleCapSize);
+  const titleH = doc.heightOfString(report.siteName.toUpperCase(), { width: leftColW });
   const leftTextH = titleH + 6 + 14; // title + gap + subtitle line
   const rightContentH = logoH + 8 + 12; // logo height + gap + date line
   const boxH = Math.max(leftTextH, rightContentH, 70) + pad * 2;
@@ -361,8 +472,18 @@ function drawCoverHeader(doc, report) {
   // Not bold, and the 3-char month (formatDateCover()), both by request.
   doc.fillColor(MUTED).font('Helvetica').fontSize(9.5).text(formatDateCover(report.asOf), rightX, boxY + pad + logoH + 8, { width: rightColW, align: 'right' });
 
+  // Single line, no wrapping -- drawSmallCapsText() positions each run by
+  // hand (see its own comment) rather than through pdfkit's width-wrapped
+  // text flow, so an unusually long name runs past leftColW rather than
+  // wrapping; every real client name seen on this dashboard so far fits
+  // comfortably on one line at this width.
   const leftStartY = boxY + boxH - pad - leftTextH;
-  doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(20).text(report.siteName, boxX + pad, leftStartY, { width: leftColW });
+  drawSmallCapsText(doc, report.siteName, boxX + pad, leftStartY, {
+    font: 'Helvetica-Bold',
+    capSize: titleCapSize,
+    smallSize: titleSmallSize,
+    color: BRAND_PURPLE,
+  });
   doc.fillColor(MUTED).font('Helvetica').fontSize(12).text('Managed Services Report', boxX + pad, leftStartY + titleH + 6, { width: leftColW });
 
   // Decorative wave graphic, real file 962x195 (confirmed via
@@ -516,17 +637,27 @@ function drawStatusCard(doc, x, y, w, h, title, color, items) {
 // monolithic draw-everything function.
 function drawExecutiveSummary(doc, y, commentary) {
   const w = contentWidth(doc);
+  // null when Generate Summary was never run (by request, the PDF never
+  // triggers that AI call itself any more -- see server.js's own /pdf
+  // route) -- a placeholder line keeps this box, and the page flow below
+  // it, the same shape as a report that does have a real summary, rather
+  // than this section just vanishing.
+  const text = (commentary && commentary.executiveSummary) || 'Summary to be discussed.';
   doc.font('Helvetica').fontSize(9);
   // A bit of extra breathing room between wrapped lines within the
   // paragraph itself, by request -- pdfkit's own `lineGap` option (added to
   // BOTH the measurement and the real draw call below, so the box's own
   // height stays correctly sized for the taller text).
   const textOpts = { width: w - 24, lineGap: 2.5 };
-  const summaryHeight = doc.heightOfString(commentary.executiveSummary, textOpts) + 34;
+  const summaryHeight = doc.heightOfString(text, textOpts) + 34;
   y = ensureSpace(doc, y, summaryHeight);
   doc.roundedRect(MARGIN, y, w, summaryHeight, 4).fill('#f3f1fb');
   doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(10).text('Executive Summary', MARGIN + 12, y + 10);
-  doc.fillColor(INK).font('Helvetica').fontSize(9).text(commentary.executiveSummary, MARGIN + 12, y + 24, textOpts);
+  if (commentary) {
+    doc.fillColor(INK).font('Helvetica').fontSize(9).text(text, MARGIN + 12, y + 24, textOpts);
+  } else {
+    doc.fillColor(MUTED).font('Helvetica-Oblique').fontSize(9).text(text, MARGIN + 12, y + 24, textOpts);
+  }
   return y + summaryHeight + 14;
 }
 
@@ -756,9 +887,18 @@ function drawMonitoringTable(doc, y, detail) {
   return drawTable(doc, y, columns, rows, { rowHeight: 16, headerHeight: 18 }) + 14;
 }
 
-function drawDeviceHealth(doc, y, report) {
-  y = drawAssetManagementTable(doc, y, report.assetManagementDetail);
-  y = drawMonitoringTable(doc, y, report.monitoringDetail);
+function drawDeviceHealth(doc, y, report, deviceHealthItems) {
+  // Per-widget "include in PDF" tick boxes within Device Health, by
+  // request -- Asset Management/Monitoring tables and each of the
+  // Workstations donuts (Patch/Software/Antivirus) can each be left out
+  // individually, same missing/undefined-still-shows convention every
+  // other toggle in this file uses. Nested under deviceHealthItems (not
+  // flat top-level section keys) for the same reason cyberCards is nested
+  // under drawCybersecurityLayers() -- these are sub-items of the
+  // deviceHealth section toggle, not sections of their own.
+  const t = deviceHealthItems || {};
+  if (t.assetManagement !== false) y = drawAssetManagementTable(doc, y, report.assetManagementDetail);
+  if (t.monitoring !== false) y = drawMonitoringTable(doc, y, report.monitoringDetail);
   // Extra breathing room before Device Health, by request -- the Monitoring
   // table's own trailing gap (14px, drawMonitoringTable above) read as too
   // tight, same "bigger gap for visibility" fix as the Understanding Your
@@ -782,7 +922,17 @@ function drawDeviceHealth(doc, y, report) {
   // Device Health one this time. Own ensureSpace() check, same reasoning
   // as Device Health's own box below (a box that doesn't fit moves to a
   // fresh page as ONE unit, never split mid-box).
-  const hlRow = buildHardwareLifecycleSpecs(report.hardwareLifecycle);
+  let hlRow = buildHardwareLifecycleSpecs(report.hardwareLifecycle);
+  // Same "include in PDF" sub-toggles as everything else in Device
+  // Health, by request. hlRow is [Replacement Recommendation, Operating
+  // System] -- drawDonutRow()/measureDonutRowHeight() already tolerate
+  // either slot being null (just leaves that side blank), so unticking
+  // one doesn't need its own special case here.
+  if (hlRow) {
+    if (t.replacementRecommendation === false) hlRow[0] = null;
+    if (t.operatingSystem === false) hlRow[1] = null;
+    if (!hlRow[0] && !hlRow[1]) hlRow = null;
+  }
   if (hlRow) {
     const hlH = measureDonutRowHeight(doc, w, hlRow[0], hlRow[1]) + bgPad * 2;
     y = ensureSpace(doc, y, hlH);
@@ -791,19 +941,21 @@ function drawDeviceHealth(doc, y, report) {
     y += 24; // gap before the "Device Health" heading below, same weight as the 16+10 Monitoring->heading gap used to be
   }
 
-  const row1 = report.workstation
+  let row1 = report.workstation
     ? [
-        { title: `Workstations -- Patch Management (${report.workstation.patch.score}%)`, legend: report.workstation.patch.legend, colors: PATCH_COLORS },
-        { title: `Workstations -- Software (${report.workstation.software.score}%)`, legend: report.workstation.software.legend, colors: SOFTWARE_COLORS },
+        t.workstationPatch !== false ? { title: `Workstations -- Patch Management (${report.workstation.patch.score}%)`, legend: report.workstation.patch.legend, colors: PATCH_COLORS } : null,
+        t.workstationSoftware !== false ? { title: `Workstations -- Software (${report.workstation.software.score}%)`, legend: report.workstation.software.legend, colors: SOFTWARE_COLORS } : null,
       ]
     : null;
-  const row2 =
+  if (row1 && !row1[0] && !row1[1]) row1 = null; // both unticked -- no empty row/gap for nothing
+  let row2 =
     report.workstation || report.server
       ? [
-          report.workstation ? { title: `Workstations -- Antivirus (${report.workstation.antivirus.score}%)`, legend: report.workstation.antivirus.legend, colors: ANTIVIRUS_COLORS } : null,
+          report.workstation && t.workstationAntivirus !== false ? { title: `Workstations -- Antivirus (${report.workstation.antivirus.score}%)`, legend: report.workstation.antivirus.legend, colors: ANTIVIRUS_COLORS } : null,
           report.server ? { title: `Servers -- Antivirus (${report.server.antivirus.score}%)`, legend: report.server.antivirus.legend, colors: ANTIVIRUS_COLORS } : null,
         ]
       : null;
+  if (row2 && !row2[0] && !row2[1]) row2 = null;
 
   // Same solid background treatment as Cybersecurity Systems
   // (drawCybersecurityLayers()), by request -- measured up front (pure
@@ -1041,6 +1193,7 @@ function vendorCardSpecs(vendors) {
   if (vendors.saasAlerts.status === 'ok' && vendors.saasAlerts.monitored) {
     const sa = vendors.saasAlerts;
     specs.push({
+      key: 'saasAlerts',
       title: `SaaS Alerts (Last ${sa.windowDays} Days)`,
       kpis: [
         { label: 'Critical', value: sa.criticalCount, tier: sa.criticalCount > 0 ? 'bad' : 'good' },
@@ -1075,6 +1228,7 @@ function vendorCardSpecs(vendors) {
     const sp = vendors.saasProtection;
     const tier = sp.backupPercentage == null ? undefined : sp.backupPercentage >= 95 ? 'good' : sp.backupPercentage >= 70 ? 'warn' : 'bad';
     specs.push({
+      key: 'saasProtection',
       title: 'SaaS Backups',
       kpis: [
         { label: 'Backup %', value: sp.backupPercentage ?? '--', tier },
@@ -1101,7 +1255,8 @@ function vendorCardSpecs(vendors) {
   if (vendors.dattoEdr.status === 'ok' && vendors.dattoEdr.installed) {
     const edr = vendors.dattoEdr;
     specs.push({
-      title: 'Datto EDR',
+      key: 'dattoEdr',
+      title: 'Endpoint Detection and Response (EDR)',
       // 2x2 grid, by request (kpiCols) -- was a cramped single row of 4.
       kpiCols: 2,
       kpis: [
@@ -1122,7 +1277,7 @@ function vendorCardSpecs(vendors) {
       { label: 'Incident Reports', value: h.incidentReportsCount ?? '--', tier: h.incidentReportsCount > 0 ? 'warn' : 'good' },
     ];
     if (h.microsoft365UsersCount) kpis.push({ label: 'M365 Users', value: h.microsoft365UsersCount });
-    specs.push({ title: 'Huntress', kpis, lines: [{ text: 'Lifetime total incidents.', color: MUTED, italic: true }] });
+    specs.push({ key: 'huntress', title: 'Huntress Threat Watch', kpis, lines: [{ text: 'Lifetime total incidents.', color: MUTED, italic: true }] });
   }
 
   // AutoElevate -- elevation requests/events widgets, by request ("Add
@@ -1142,16 +1297,18 @@ function vendorCardSpecs(vendors) {
   if (vendors.autoElevate.status === 'ok' && vendors.autoElevate.installed && vendors.autoElevate.deployedSince) {
     const ae = vendors.autoElevate;
     const el = ae.elevation;
-    const spec = { title: 'AutoElevate', titleSuffix: el ? `(${el.windowDays} days)` : null, kpis: [], lines: [] };
+    const spec = { key: 'autoElevate', title: 'AutoElevate', titleSuffix: el ? `(${el.windowDays} days)` : null, kpis: [], lines: [] };
     if (el) {
       spec.donut = {
         legend: { 'Approved (Auto)': el.outcomes.autoApproved, 'Approved (Manual)': el.outcomes.manualApproved, Denied: el.outcomes.denied, Pending: el.outcomes.pending },
         colors: { 'Approved (Auto)': BRAND_GREEN, 'Approved (Manual)': '#2563eb', Denied: RED, Pending: AMBER },
       };
+      // No "No elevation requests" placeholder line for the empty case, by
+      // request -- the donut/legend above already show 0 for every
+      // category, so the caption was just repeating what's obvious from
+      // the zero.
       if (el.topApps.length > 0) {
         el.topApps.forEach((a) => spec.lines.push({ text: `${a.name} (${a.count})`, color: INK }));
-      } else {
-        spec.lines.push({ text: 'No elevation requests in this window.', color: MUTED, italic: true });
       }
     }
     specs.push(spec);
@@ -1261,7 +1418,7 @@ const CYBERSECURITY_EXPLANATIONS = [
     body: 'Monitors every computer around the clock to detect and contain threats that traditional antivirus misses.',
   },
   {
-    title: 'Huntress',
+    title: 'Huntress Threat Watch',
     body: 'Human threat hunters find and help remove hidden attacker footholds before they cause damage.',
   },
   {
@@ -1293,6 +1450,61 @@ const CYBERSECURITY_EXPLANATIONS = [
 // (which keeps its own drawSectionHeading() above this, only the list
 // itself switched to this format) -- one function so the two can't drift
 // apart style-wise.
+// A real check mark, drawn as 2 stroked line segments -- NOT the U+2713
+// text character, by request ("Need to display a tick - check mark not
+// ' please"): confirmed live that pdfkit's base-14 Helvetica has no glyph
+// for it and silently substitutes something else (an apostrophe-ish
+// mark). x,y is the check's own top-left corner, drawn within a size x
+// size box.
+function drawCheckMark(doc, x, y, size, color) {
+  const lw = Math.max(1, size * 0.16);
+  doc.lineCap('round').lineJoin('round').lineWidth(lw).strokeColor(color);
+  doc
+    .moveTo(x + size * 0.06, y + size * 0.52)
+    .lineTo(x + size * 0.38, y + size * 0.82)
+    .lineTo(x + size * 0.94, y + size * 0.14)
+    .stroke();
+  doc.lineCap('butt').lineJoin('miter').lineWidth(1);
+}
+
+// Same vector-not-text-glyph reasoning as drawCheckMark() above -- a red
+// X for Email Domain Protection's own not-found checks.
+function drawXMark(doc, x, y, size, color) {
+  const lw = Math.max(1, size * 0.16);
+  doc.lineCap('round').lineWidth(lw).strokeColor(color);
+  doc.moveTo(x + size * 0.12, y + size * 0.12).lineTo(x + size * 0.88, y + size * 0.88).stroke();
+  doc.moveTo(x + size * 0.88, y + size * 0.12).lineTo(x + size * 0.12, y + size * 0.88).stroke();
+  doc.lineCap('butt').lineWidth(1);
+}
+
+// item.implemented === true gets a green check mark drawn right after its
+// own title text (not before, by request), via drawCheckMark() above --
+// undefined/false (every Understanding Your Scores item, and any
+// Cybersecurity Systems item this dashboard has no live status for) draws
+// exactly as before, no mark.
+// Measures drawExplanationsBox()'s own box height without drawing it, by
+// request ("if the Cybersecurity product descriptions doesn't fit...") --
+// buildReportPdf() needs to know this UP FRONT, before committing to
+// drawing the Cybersecurity Systems one in place, to decide whether to
+// defer it to after Understanding Your Scores instead. Duplicates
+// drawExplanationsBox()'s own measuring step rather than sharing state
+// with it -- cheap, deterministic text measurement, same "measure and
+// draw functions each do their own pdfkit calls" convention every other
+// measure/draw pair in this file already follows.
+function measureExplanationsBoxHeight(doc, items) {
+  const w = contentWidth(doc);
+  const pad = 12;
+  const fontSize = 8;
+  const titleGap = 2;
+  const itemGap = 8;
+  doc.font('Helvetica-Bold').fontSize(fontSize);
+  const titleHeights = items.map((item) => doc.heightOfString(item.title, { width: w - pad * 2 }));
+  doc.font('Helvetica').fontSize(fontSize);
+  const bodyHeights = items.map((item) => doc.heightOfString(item.body, { width: w - pad * 2 }));
+  const itemHeights = items.map((item, i) => titleHeights[i] + titleGap + bodyHeights[i]);
+  return pad * 2 + itemHeights.reduce((sum, h) => sum + h, 0) + itemGap * (items.length - 1);
+}
+
 function drawExplanationsBox(doc, y, items) {
   const w = contentWidth(doc);
   const pad = 12;
@@ -1304,6 +1516,8 @@ function drawExplanationsBox(doc, y, items) {
   // combined string at a single font -- same reasoning as the bold-font
   // safety margin below: measuring at the wrong weight can under-wrap and
   // overlap the next item (confirmed on a real PDF earlier this session).
+  // The check mark is a vector graphic, not part of this string, so it
+  // never affects title wrapping/height.
   doc.font('Helvetica-Bold').fontSize(fontSize);
   const titleHeights = items.map((item) => doc.heightOfString(item.title, { width: w - pad * 2 }));
   doc.font('Helvetica').fontSize(fontSize);
@@ -1316,7 +1530,17 @@ function drawExplanationsBox(doc, y, items) {
 
   let iy = y + pad;
   items.forEach((item, i) => {
-    doc.font('Helvetica-Bold').fontSize(fontSize).fillColor(BRAND_PURPLE).text(item.title, MARGIN + pad, iy, { width: w - pad * 2 });
+    doc.font('Helvetica-Bold').fontSize(fontSize).fillColor(BRAND_PURPLE);
+    doc.text(item.title, MARGIN + pad, iy, { width: w - pad * 2 });
+    if (item.implemented) {
+      // widthOfString() measures the title as ONE line -- fine for these
+      // (short service names that don't wrap in practice); a title that
+      // did wrap would still get a mark, just positioned off the first
+      // line's own measured width rather than hunting for the true last
+      // line's end.
+      const titleWidth = doc.widthOfString(item.title, { width: w - pad * 2 });
+      drawCheckMark(doc, MARGIN + pad + titleWidth + 6, iy + 1, fontSize, BRAND_GREEN);
+    }
     iy += titleHeights[i] + titleGap;
     doc.font('Helvetica').fontSize(fontSize).fillColor(INK).text(item.body, MARGIN + pad, iy, { width: w - pad * 2 });
     iy += bodyHeights[i] + itemGap;
@@ -1326,11 +1550,186 @@ function drawExplanationsBox(doc, y, items) {
   return y + boxHeight + 14;
 }
 
-function drawCybersecurityExplanations(doc, y) {
-  return drawExplanationsBox(doc, y, CYBERSECURITY_EXPLANATIONS);
+// `items` comes from server.js's own buildCyberServiceItems() (the live
+// SharePoint table, by request -- "Use that table to fill the
+// Cybersecurity Systems descriptions panel"), already filtered to
+// Show != 'N' rows and marked with `implemented` per this client's real
+// vendor data. Falls back to the old hardcoded CYBERSECURITY_EXPLANATIONS
+// list when that's missing/empty (SharePoint unreachable, or an older
+// caller) -- same "never block the rest of the real report over one
+// optional live-data call" reasoning the commentary/vendors fallbacks
+// elsewhere in this file already follow.
+function resolveCyberExplanationItems(items) {
+  return items && items.length > 0 ? items : CYBERSECURITY_EXPLANATIONS;
+}
+function drawCybersecurityExplanations(doc, y, items) {
+  return drawExplanationsBox(doc, y, resolveCyberExplanationItems(items));
 }
 
-function drawCybersecurityLayers(doc, y, vendors) {
+// Email Domain Protection -- live DNS checks (DMARC/SPF/DKIM), by
+// request, a separate card from Mail Domain Protection Monitoring (the
+// manual-entry one just below). `data` is server.js's own
+// emailDomainProtection.getStatus() result when status === 'ok' (null
+// otherwise, which drawCybersecurityLayers() above already skips before
+// this is ever called -- see its own gridItems comment).
+const EMAIL_DOMAIN_ROW_H = 18;
+// Title line + its own domain-name line, by request ("change the
+// position of the domain name to under the heading in normal sized text
+// with no bold") -- was inline next to the heading before.
+const EMAIL_DOMAIN_TITLE_H = 16;
+const EMAIL_DOMAIN_NAME_H = 13;
+function measureEmailDomainCardHeight() {
+  const pad = 10;
+  return pad + EMAIL_DOMAIN_TITLE_H + EMAIL_DOMAIN_NAME_H + EMAIL_DOMAIN_ROW_H * 3 + pad;
+}
+function drawEmailDomainCard(doc, x, y, w, data) {
+  const h = measureEmailDomainCardHeight();
+  doc.roundedRect(x, y, w, h, 4).lineWidth(1).fillAndStroke('#ffffff', BORDER);
+
+  const pad = 10;
+  doc.font('Helvetica-Bold').fontSize(9.5).fillColor(BRAND_PURPLE).text('Mail Domain Protection DNS Check', x + pad, y + 8, { width: w - pad * 2 });
+  // Normal weight, normal size, plain ink -- not bold, not muted/smaller.
+  doc.font('Helvetica').fontSize(8.5).fillColor(INK).text(`Domain: ${data.domain}`, x + pad, y + 8 + EMAIL_DOMAIN_TITLE_H, { width: w - pad * 2 });
+
+  const markSize = 10;
+  const labelX = x + pad + markSize + 6;
+  let ry = y + pad + EMAIL_DOMAIN_TITLE_H + EMAIL_DOMAIN_NAME_H + 2;
+
+  // Tagged with whichever provider's own record was actually found
+  // (Microsoft/Google), by request -- email-domain-protection.js's own
+  // checkSpf()/checkDkim() set `provider`; neither found (or not present
+  // at all) leaves the row untagged, same as the on-screen card.
+  const providerTag = (provider) => (provider === 'microsoft' ? ' (Microsoft)' : provider === 'google' ? ' (Google)' : '');
+  const rows = [
+    {
+      key: 'dmarc',
+      label: 'DMARC',
+      present: data.dmarc.exists,
+      status: data.dmarc.exists
+        ? data.dmarc.policy === 'reject'
+          ? { text: 'Reject', color: BRAND_GREEN }
+          : data.dmarc.policy === 'quarantine'
+            ? { text: 'Quarantine', color: AMBER }
+            : { text: 'Exists', color: MUTED }
+        : null,
+    },
+    { key: 'spf', label: `SPF${providerTag(data.spf.provider)}`, present: data.spf.exists, status: null },
+    { key: 'dkim', label: `DKIM${providerTag(data.dkim.provider)}`, present: data.dkim.exists, status: null },
+  ];
+  rows.forEach((row) => {
+    if (row.present) drawCheckMark(doc, x + pad, ry, markSize, BRAND_GREEN);
+    else drawXMark(doc, x + pad, ry, markSize, RED);
+    // DMARC's own status, in a solid pill at the row's right edge, by
+    // request ("put the Reject, Quarantine, etc in a pill like the Mail
+    // Domain Protection Monitoring section has") -- same drawPill()
+    // drawMdpCard()'s own DMARC Policy pill uses, just this card's own
+    // colour/label logic (Reject/Quarantine/Exists, not MDP_POLICY_LABELS'
+    // Reject/Quarantine/None -- "Exists" here means the record's present
+    // but p=none, a neutral state, not the "nothing set at all" MDP
+    // Monitoring's own None label means).
+    let labelW = w - pad * 2 - markSize - 6;
+    if (row.status) {
+      doc.font('Helvetica-Bold').fontSize(8);
+      const pillW = doc.widthOfString(row.status.text) + 16;
+      labelW -= pillW + 6;
+      drawPill(doc, x + w - pad - pillW, ry - 2, row.status.text, row.status.color);
+    }
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(INK).text(row.label, labelX, ry, { width: labelW });
+    ry += EMAIL_DOMAIN_ROW_H;
+  });
+
+  doc.fillColor(INK);
+  return h;
+}
+
+// `mdp` is null whenever the 3 values weren't sent (or didn't parse) --
+// skips the section entirely rather than ever drawing invented numbers,
+// same "null means omit, not guess" reasoning server.js's own
+// parseMailDomainProtection() already documents.
+// DMARC Policy pill colour -- its own small map, independent of the dot
+// levels above (the enforcement policy and the picked dot level are 2
+// separate manual fields now, not derived from one another).
+const MDP_POLICY_COLORS = { reject: BRAND_GREEN, quarantine: AMBER, none: RED };
+const MDP_POLICY_LABELS = { reject: 'Reject', quarantine: 'Quarantine', none: 'None' };
+
+// Card-sized to match the other Cybersecurity Systems cards, by request --
+// this joins the SAME 2-column packed grid as vendorCardSpecs()' own cards
+// (drawCybersecurityLayers() below), not a separate full-width section, so
+// it's the shortest-column-first packing + shared purple background that
+// actually makes it "sized like the other items", not just a similar
+// width. Score ring on the left, DMARC/SPF/DKIM as 3 rows (dots + name,
+// by request -- "put the name of the widget next to the green dots") down
+// the right. No "Manual Entry Required" label in the PDF itself, by
+// request -- that's only an on-screen cue now (client.js's own
+// .live-reports-mdp-cog), not something a client reading the finished
+// report needs to see.
+function measureMdpCardHeight() {
+  const pad = 10;
+  const titleH = 16;
+  const ringD = 64; // same ring diameter drawDonut() uses (AutoElevate's own card)
+  const rowH = 16;
+  const bodyH = Math.max(ringD, rowH * 3);
+  return pad + titleH + bodyH + pad;
+}
+function drawMdpCard(doc, x, y, w, mdp) {
+  const h = measureMdpCardHeight();
+  doc.roundedRect(x, y, w, h, 4).lineWidth(1).fillAndStroke('#ffffff', BORDER);
+
+  doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(9.5).text('Mail Domain Protection Monitoring', x + 10, y + 8, { width: w - 20 });
+  doc.fillColor(INK);
+
+  const score = Math.max(0, Math.min(10, Math.round(mdp.score)));
+  const scoreColor = score >= 8 ? BRAND_GREEN : score >= 5 ? AMBER : RED;
+  const dmarcLevel = mdpLevel(mdp.dmarcLevel);
+  const spfLevel = mdpLevel(mdp.spfLevel);
+  const dkimLevel = mdpLevel(mdp.dkimLevel);
+
+  const pad = 10;
+  const titleH = 16;
+  const ringD = 64;
+  const rowH = 16;
+  const rowsBlockH = rowH * 3;
+  const bodyY = y + pad + titleH;
+
+  drawScoreDonut(doc, x + pad, bodyY, score, scoreColor);
+
+  // Rows vertically centred next to the ring, by request ("centre the
+  // dmarc, spf & dkim vertically next to the widget") -- the 3-row block
+  // (48px) is shorter than the ring (64px), so it's offset down to sit in
+  // the middle rather than flush with the ring's own top edge.
+  const rowsX = x + pad + ringD + 14;
+  const rowsW = w - pad * 2 - ringD - 14;
+  const rowsStartY = bodyY + (ringD - rowsBlockH) / 2;
+
+  // DMARC Policy as a pill on the DMARC row itself now, by request ("put
+  // the Dmarc policy in a pill next to the Dmarc row") -- no longer its
+  // own line underneath.
+  const policyLabel = MDP_POLICY_LABELS[mdp.dmarcPolicy] || 'None';
+  doc.font('Helvetica-Bold').fontSize(8);
+  const pillW = doc.widthOfString(policyLabel) + 16;
+
+  const rows = [
+    { level: dmarcLevel, name: 'DMARC', pill: { label: policyLabel, color: MDP_POLICY_COLORS[mdp.dmarcPolicy] || RED, w: pillW } },
+    { level: spfLevel, name: 'SPF', suffix: `${mdp.spfPassRate}%` },
+    { level: dkimLevel, name: 'DKIM', suffix: `${mdp.dkimPassRate}%` },
+  ];
+  rows.forEach((r, i) => {
+    const ry = rowsStartY + i * rowH + 4;
+    drawMdpDots(doc, rowsX, ry, r.level);
+    const reserved = r.pill ? r.pill.w + 6 : 30;
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(INK).text(r.name, rowsX + 36, ry - 4, { width: rowsW - 36 - reserved });
+    if (r.pill) {
+      drawPill(doc, rowsX + rowsW - r.pill.w, ry - 7, r.pill.label, r.pill.color);
+    } else if (r.suffix) {
+      doc.font('Helvetica').fontSize(7).fillColor(MUTED).text(r.suffix, rowsX + rowsW - 30, ry - 4, { width: 30, align: 'right' });
+    }
+  });
+
+  doc.fillColor(INK);
+  return h;
+}
+
+function drawCybersecurityLayers(doc, y, vendors, mailDomainProtection, cyberCards, emailDomainProtectionData) {
   // Always its own fresh page now, by request -- the earlier "continues
   // straight on from Device Health when it fits" behaviour is gone.
   doc.addPage();
@@ -1338,10 +1737,50 @@ function drawCybersecurityLayers(doc, y, vendors) {
   const pageBottom = doc.page.height - doc.page.margins.bottom;
   y = pageTop;
   y = drawSectionHeading(doc, y, 'Cybersecurity Systems');
+  // Gap under the heading before the purple box starts, by request (it
+  // was overlapping the heading's own underline, erasing it -- same fix
+  // drawDeviceHealth()'s own heading->box gap already has).
+  y += 10;
   const w = contentWidth(doc);
   const gap = 10;
   const colW = (w - gap) / 2;
-  const specs = vendorCardSpecs(vendors);
+  // Per-card "include in PDF" tick boxes, by request -- cyberCards is
+  // {key: boolean}, keyed by each spec's own `key` (set where it's
+  // pushed, above); explicitly false is the only thing that excludes a
+  // card -- missing/undefined (an older client that didn't send this, or
+  // a key this file doesn't know about) still shows, same "only an
+  // explicit false hides it" convention the section-level toggles in
+  // buildReportPdf() below also use.
+  const cards = cyberCards || {};
+  // Mail Domain Protection joins this SAME grid now, by request ("put it
+  // in the Cybersecurity section" / "size more like the other
+  // Cybersecurity items") -- one list of {measure, draw} closures rather
+  // than two separate per-type arrays, so the shortest-column-first
+  // packing below treats every card (vendor or mdp) identically; it's
+  // what actually makes mdp's card "sized like the others", not just
+  // similar dimensions drawn separately.
+  const gridItems = vendorCardSpecs(vendors)
+    .filter((spec) => cards[spec.key] !== false)
+    .map((spec) => ({
+      measure: () => measureCyberCardHeight(doc, colW, spec),
+      draw: (x, y_) => drawCyberCard(doc, x, y_, colW, spec),
+    }));
+  // Email Domain Protection pushed BEFORE Mail Domain Protection
+  // Monitoring, by request ("Put it before the ... Monitoring section") --
+  // gridItems' own insertion order, same "earlier means it's offered to
+  // the packing loop first" convention every card here already follows.
+  if (emailDomainProtectionData && cards.emailDomainProtection !== false) {
+    gridItems.push({
+      measure: () => measureEmailDomainCardHeight(),
+      draw: (x, y_) => drawEmailDomainCard(doc, x, y_, colW, emailDomainProtectionData),
+    });
+  }
+  if (mailDomainProtection && cards.mailDomainProtection !== false) {
+    gridItems.push({
+      measure: () => measureMdpCardHeight(),
+      draw: (x, y_) => drawMdpCard(doc, x, y_, colW, mailDomainProtection),
+    });
+  }
 
   // Layout simulated first (pure arithmetic, nothing drawn yet) -- same
   // shortest-column-first packing as before (fixes a real bug confirmed on
@@ -1357,8 +1796,8 @@ function drawCybersecurityLayers(doc, y, vendors) {
   const colX = [MARGIN, MARGIN + colW + gap];
   let colY = [y, y];
   const pages = [[]];
-  specs.forEach((spec) => {
-    const h = measureCyberCardHeight(doc, colW, spec);
+  gridItems.forEach((item) => {
+    const h = item.measure();
     const col = colY[0] <= colY[1] ? 0 : 1;
     let cy = colY[col];
     if (cy + h > pageBottom) {
@@ -1366,7 +1805,7 @@ function drawCybersecurityLayers(doc, y, vendors) {
       colY = [cy, cy];
       pages.push([]);
     }
-    pages[pages.length - 1].push({ spec, x: colX[col], y: cy, h });
+    pages[pages.length - 1].push({ item, x: colX[col], y: cy, h });
     colY[col] = cy + h + gap;
   });
 
@@ -1381,7 +1820,7 @@ function drawCybersecurityLayers(doc, y, vendors) {
     // move, only the purple rect's own top edge extends upward by bgPad to
     // sit evenly above them, same amount of purple as below.
     doc.roundedRect(MARGIN - bgPad, top - bgPad, w + bgPad * 2, bottom - top + bgPad * 2, 6).fill(BRAND_PURPLE);
-    items.forEach((it) => drawCyberCard(doc, it.x, it.y, colW, it.spec));
+    items.forEach((it) => it.item.draw(it.x, it.y));
   });
 
   const lastPageItems = pages[pages.length - 1];
@@ -1526,6 +1965,23 @@ function drawProactiveMaintenanceNote(doc, y, items) {
   return y + boxHeight + 14;
 }
 
+// Same coloured, full-width box style as Proactive Maintenance above
+// (#f3f1fb fill, 12px pad, 4px corners), by request -- used for the "see
+// the end of this report" pointer note left behind when the Cybersecurity
+// Systems descriptions box itself gets deferred (buildReportPdf() below).
+function drawNoteBox(doc, y, text) {
+  const w = contentWidth(doc);
+  const pad = 12;
+  doc.font('Helvetica').fontSize(9);
+  const textHeight = doc.heightOfString(text, { width: w - pad * 2 });
+  const boxHeight = pad * 2 + textHeight;
+  y = ensureSpace(doc, y, boxHeight);
+  doc.roundedRect(MARGIN, y, w, boxHeight, 4).fill('#f3f1fb');
+  doc.fillColor(INK).text(text, MARGIN + pad, y + pad, { width: w - pad * 2 });
+  doc.fillColor(INK);
+  return y + boxHeight;
+}
+
 function drawRecommendations(doc, y, commentary) {
   // No longer guaranteed to start at the top of a fresh page (the forced
   // addPage() before this call was removed, by request -- this section
@@ -1535,6 +1991,16 @@ function drawRecommendations(doc, y, commentary) {
   y = ensureSpace(doc, y, 80);
   y = drawSectionHeading(doc, y, 'Our Recommendations');
   const w = contentWidth(doc);
+  const recommendations = (commentary && commentary.recommendations) || [];
+  // null/empty when Generate Summary was never run -- a placeholder note
+  // reserves a fixed bit of space here instead of this section just
+  // disappearing (same reasoning as drawExecutiveSummary above).
+  if (recommendations.length === 0) {
+    const noteH = 24;
+    y = ensureSpace(doc, y, noteH);
+    doc.font('Helvetica-Oblique').fontSize(9).fillColor(MUTED).text('Recommendations to be discussed.', MARGIN, y + 4);
+    return y + noteH;
+  }
   const columns = [
     {
       key: 'priority',
@@ -1548,7 +2014,7 @@ function drawRecommendations(doc, y, commentary) {
     { key: 'recommendation', label: 'RECOMMENDATION', width: w * 0.42 },
     { key: 'whyItMatters', label: 'WHY IT MATTERS', width: w * 0.42 },
   ];
-  return drawTable(doc, y, columns, commentary.recommendations, { rowHeight: 30, headerHeight: 20 }) + 18;
+  return drawTable(doc, y, columns, recommendations, { rowHeight: 30, headerHeight: 20 }) + 18;
 }
 
 // Page numbers/footer, drawn in one final pass once every page exists --
@@ -1580,7 +2046,13 @@ function addFootersAndPageNumbers(doc, footerText) {
   }
 }
 
-function buildReportPdf({ report, vendors, commentary }) {
+function buildReportPdf({ report, vendors, commentary, mailDomainProtection, sections, cyberServiceItems, emailDomainProtectionData }) {
+  // Per-section "include in PDF" tick boxes, by request -- explicitly
+  // false is the only thing that hides a section; missing/undefined (an
+  // older client, or server.js's own parseSections() default) still
+  // shows, same convention drawCybersecurityLayers()' own per-card
+  // cyberCards filter above uses.
+  const s = sections || {};
   return new Promise((resolve, reject) => {
     // Top margin slightly reduced from the other 3 sides, by request ("a
     // little bit more room on the page if needed") -- left/right/bottom
@@ -1594,18 +2066,26 @@ function buildReportPdf({ report, vendors, commentary }) {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
+    // Set below if the Cybersecurity Systems descriptions box doesn't fit
+    // where it's normally drawn (by request) -- carries the already-
+    // resolved item list (real SharePoint data, or the static fallback)
+    // across to right after Understanding Your Scores, where it's drawn
+    // under its own "Cybersecurity Module Descriptions" heading instead.
+    let deferredCyberExplanationItems = null;
     try {
       let y = drawCoverHeader(doc, report);
-      y = drawAtAGlance(doc, y, report);
+      if (s.overallHealthView !== false) y = drawAtAGlance(doc, y, report);
 
       // Devices by Type / Check-in Freshness, on page 1 now, above
       // Executive Summary, by request.
-      y = drawDeviceOverviewRow(doc, y, report.dattoLive);
+      if (s.deviceOverview !== false) y = drawDeviceOverviewRow(doc, y, report.dattoLive);
 
-      if (commentary) {
-        y = drawExecutiveSummary(doc, y, commentary);
-      }
-      y = drawScorecard(doc, y, report, vendors);
+      // Drawn regardless of whether commentary exists -- drawExecutiveSummary()
+      // itself renders a placeholder when it's null, by request, so the
+      // page layout doesn't vary depending on whether Generate Summary was
+      // run before Create PDF.
+      if (s.executiveSummary !== false) y = drawExecutiveSummary(doc, y, commentary);
+      if (s.scorecard !== false) y = drawScorecard(doc, y, report, vendors);
 
       // On Track/Action Needed/Watch now ALWAYS lead the next page, by
       // request ("Move On track Action needed and watch to always start on
@@ -1616,32 +2096,57 @@ function buildReportPdf({ report, vendors, commentary }) {
       // content for space in the first place.
       doc.addPage();
       y = doc.page.margins.top;
-      if (commentary) {
-        y = drawTopRow(doc, y, commentary);
+      if (s.onTrackActionWatch !== false) {
+        // Same reasoning as drawExecutiveSummary above -- drawStatusCard()
+        // already renders "Nothing to report" for an empty/missing list, so
+        // passing commentary || {} here keeps On Track/Action Needed/Watch
+        // on the page at their usual size instead of omitting them when
+        // Generate Summary hasn't been run.
+        y = drawTopRow(doc, y, commentary || {});
         y += 10;
-        y = drawWatchCard(doc, y, commentary);
+        y = drawWatchCard(doc, y, commentary || {});
         y += 18;
       }
       // Followed straight by Asset Management (drawDeviceHealth() below
       // starts with it), not a further page break, same "don't push this to
       // page 3" reasoning the old deferred-Watch case already established.
-      y = drawDeviceHealth(doc, y, report);
+      if (s.deviceHealth !== false) y = drawDeviceHealth(doc, y, report, s.deviceHealthItems);
 
-      // Cybersecurity Layers now always starts on its own fresh page, by
-      // request -- drawCybersecurityLayers() calls doc.addPage() itself,
-      // so `y` going in here doesn't matter.
-      y = drawCybersecurityLayers(doc, y, vendors);
+      if (s.cybersecurity !== false) {
+        // Cybersecurity Layers now always starts on its own fresh page, by
+        // request -- drawCybersecurityLayers() calls doc.addPage() itself,
+        // so `y` going in here doesn't matter. Mail Domain Protection is
+        // just one more card in this same grid now, by request -- see its
+        // own comment above gridItems inside drawCybersecurityLayers().
+        y = drawCybersecurityLayers(doc, y, vendors, mailDomainProtection, s.cyberCards, emailDomainProtectionData);
 
-      // A bit more breathing room than the standard inter-section gap, by
-      // request -- Cybersecurity Systems' own purple background card ends
-      // right at its return value, so the plain gap read as tight next to
-      // the heading immediately below it.
-      y += 14;
+        // A bit more breathing room than the standard inter-section gap, by
+        // request -- Cybersecurity Systems' own purple background card ends
+        // right at its return value, so the plain gap read as tight next to
+        // the heading immediately below it.
+        y += 14;
 
-      // Fixed "what each of these systems does" reference copy, directly
-      // under Cybersecurity Systems, by request.
-      y = drawCybersecurityExplanations(doc, y);
-      y += 14;
+        // Fixed "what each of these systems does" reference copy, directly
+        // under Cybersecurity Systems, by request -- UNLESS it wouldn't
+        // fit on this page, in which case it's deferred to after
+        // Understanding Your Scores instead (by request, "if the
+        // Cybersecurity product descriptions doesn't fit and therefore
+        // pushes onto the next page..."), with just a short pointer left
+        // here so it doesn't silently vanish from this page's flow. Fit is
+        // checked directly against the page bottom (not ensureSpace(),
+        // which would just start a fresh page and draw it there anyway --
+        // exactly the case being avoided here).
+        const resolvedCyberItems = resolveCyberExplanationItems(cyberServiceItems);
+        const explanationsBoxHeight = measureExplanationsBoxHeight(doc, resolvedCyberItems);
+        if (y + explanationsBoxHeight <= doc.page.height - doc.page.margins.bottom) {
+          y = drawExplanationsBox(doc, y, resolvedCyberItems);
+          y += 14;
+        } else {
+          deferredCyberExplanationItems = resolvedCyberItems;
+          y = drawNoteBox(doc, y, 'See the end of this report for cybersecurity systems and modules descriptions.');
+          y += 14;
+        }
+      }
 
       // Microsoft License Counts, between Cybersecurity Systems and All
       // Devices now, by request (was after All Devices) --
@@ -1649,7 +2154,7 @@ function buildReportPdf({ report, vendors, commentary }) {
       // wouldn't otherwise fit, so this doesn't need a forced addPage()
       // here, same as every other section that continues straight on from
       // whatever came before it when there's room.
-      y = drawM365LicensesTable(doc, y, vendors.m365Licenses);
+      if (s.m365Licenses !== false) y = drawM365LicensesTable(doc, y, vendors.m365Licenses);
 
       // Device list and the score-explanations glossary both sit right
       // before Recommendations now, by request -- the device-by-device
@@ -1660,7 +2165,9 @@ function buildReportPdf({ report, vendors, commentary }) {
       // sit here too -- moved back into Device Health itself, by request
       // (drawDeviceHealth() above). Skipped entirely (no blank page) when
       // there's genuinely no device list to show, same as the old inline
-      // placement did.
+      // placement did. Proactive Maintenance and All Devices are 2
+      // separate "include in PDF" toggles now, by request, even though
+      // they share one combined measure/ensureSpace() call below.
       //
       // Proactive Maintenance no longer forces a fresh page UNconditionally,
       // by request ("Proactive maintenance doesn't need to go to the next
@@ -1678,30 +2185,53 @@ function buildReportPdf({ report, vendors, commentary }) {
       // single page, so this still pushes to a fresh page exactly like the
       // old unconditional behaviour did -- the forced break is only
       // skipped when everything genuinely fits.
-      if (report.dattoLive && report.dattoLive.devices && report.dattoLive.devices.length > 0) {
-        const pmH = measureProactiveMaintenanceHeight(doc, report.proactiveMaintenance);
-        const dlH = estimateDeviceListHeight(report);
-        y = ensureSpace(doc, y, pmH + (pmH > 0 ? 10 : 0) + dlH);
-        y = drawProactiveMaintenanceNote(doc, y, report.proactiveMaintenance);
-        y += 10;
-        y = drawDeviceList(doc, y, report);
+      const showProactiveMaintenance = s.proactiveMaintenance !== false;
+      const showDeviceList = s.deviceList !== false;
+      if (report.dattoLive && report.dattoLive.devices && report.dattoLive.devices.length > 0 && (showProactiveMaintenance || showDeviceList)) {
+        const pmH = showProactiveMaintenance ? measureProactiveMaintenanceHeight(doc, report.proactiveMaintenance) : 0;
+        const dlH = showDeviceList ? estimateDeviceListHeight(report) : 0;
+        y = ensureSpace(doc, y, pmH + (pmH > 0 && showDeviceList ? 10 : 0) + dlH);
+        if (showProactiveMaintenance) {
+          y = drawProactiveMaintenanceNote(doc, y, report.proactiveMaintenance);
+          y += 10;
+        }
+        if (showDeviceList) y = drawDeviceList(doc, y, report);
       }
 
+      // Understanding Your Scores has no "include in PDF" toggle, by
+      // request ("No need for the tick for 'Understanding your scores'
+      // This one can be always included.") -- always drawn, unlike every
+      // other section in this file.
       doc.addPage();
       y = doc.page.margins.top;
       y = drawScoreExplanations(doc, y);
       // Extra breathing room before Our Recommendations, by request -- the
-      // last explanation item's own trailing gap (10px, drawScoreExplanations
-      // above) read as too tight between the two sections on the same page.
+      // last explanation item's own trailing gap (10px,
+      // drawScoreExplanations above) read as too tight between the two
+      // sections on the same page.
       y += 16;
+
+      // Cybersecurity Systems' own descriptions box, deferred here because
+      // it didn't fit back where it's normally drawn (see the Cybersecurity
+      // Systems block above) -- its own heading, by request ("move it to
+      // after Understanding Your Scores with a heading of 'Cybersecurity
+      // Module Descriptions'"). Continues straight on from Understanding
+      // Your Scores when it fits, same as every other section here;
+      // drawExplanationsBox()'s own ensureSpace() still starts a fresh page
+      // for it if it doesn't.
+      if (deferredCyberExplanationItems) {
+        y = drawSectionHeading(doc, y, 'Cybersecurity Module Descriptions');
+        y = drawExplanationsBox(doc, y, deferredCyberExplanationItems);
+        y += 16;
+      }
 
       // No forced page break here, by request -- Our Recommendations
       // continues straight on from Understanding Your Scores, same page
       // when it fits (ensureSpace()'s normal per-row page-break logic,
       // inside drawTable() itself, still applies if it doesn't).
-      if (commentary && commentary.recommendations && commentary.recommendations.length > 0) {
-        drawRecommendations(doc, y, commentary);
-      }
+      // drawRecommendations() itself renders a placeholder note when there
+      // are none, by request -- always drawn now, same reasoning as above.
+      if (s.recommendations !== false) drawRecommendations(doc, y, commentary);
 
       addFootersAndPageNumbers(doc, `Ambient iT | Managed Services Report | ${report.siteName}`);
       doc.end();

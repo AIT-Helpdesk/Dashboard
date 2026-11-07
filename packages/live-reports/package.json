@@ -14,6 +14,7 @@
     "@dashboard/autotask-client": "*",
     "@dashboard/client-summary": "*",
     "@dashboard/datto-rmm": "*",
+    "@dashboard/itglue-client": "*",
     "@dashboard/meeting-prep": "*",
     "@dashboard/saas-protection": "*",
     "@dashboard/saasalerts-client": "*",

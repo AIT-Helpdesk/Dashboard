@@ -2317,6 +2317,7 @@ function showAnnouncementsPopup(announcements) {
           <p class="ann-popup-item-title">${escapeHtml(a.title)}</p>
           ${a.body ? `<p class="ann-popup-item-body">${escapeHtml(a.body)}</p>` : ''}
           ${a.ackRequired ? '<button type="button" class="button-link button-link--small ann-popup-ack-button">Acknowledge</button>' : ''}
+          ${a.updatedByName ? `<p class="ann-popup-item-author">${escapeHtml(a.updatedByName)}</p>` : ''}
         </div>
       `
       )

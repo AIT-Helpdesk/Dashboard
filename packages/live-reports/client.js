@@ -11,7 +11,7 @@
 // below), computed via server.js's own real re-creation of Datto's canned-
 // report formulas (see server.js's own computeAssetManagementDetail()/
 // computeMonitoringDetail() comments).
-import { gaugeSvg, donutWidget, donutSvg, kpiTileRow, deviceTypeBarWidget, checkinFreshnessWidget, deviceListTableHtml, wireDeviceFilters } from '/meeting-prep-report-render.js';
+import { gaugeSvg, donutWidget, donutSvg, kpiTileRow, deviceTypeBarWidget, checkinFreshnessWidget, deviceListTableHtml, wireDeviceFilters, checkIconSvg } from '/meeting-prep-report-render.js';
 
 export const id = 'live-reports';
 export const label = 'Live Reports';
@@ -48,10 +48,23 @@ const SOFTWARE_COLORS = {
 };
 const ALERT_COLORS = { Critical: '#dc2626', High: '#f59e0b' };
 
-function donutFromLegend(title, legend, colors) {
+function donutFromLegend(title, legend, colors, deviceHealthItemKey) {
   const segments = Object.entries(legend).map(([label, value]) => ({ label, value, color: colors[label] || '#9aa3af' }));
   const total = segments.reduce((sum, s) => sum + s.value, 0);
-  return donutWidget(title, segments, total);
+  const widget = donutWidget(title, segments, total);
+  if (!deviceHealthItemKey) return widget;
+  // Corner checkbox, by request ("Allow Each of the Workstation widgets to
+  // have their own tick box") -- donutWidget() is shared with other pages
+  // (meeting-prep-report-render.js), so its own markup is never touched
+  // beyond adding a class and inserting the checkbox right after its own
+  // opening tags (string surgery, not a wrapping div -- a wrapper div
+  // would sit OUTSIDE the flex item .mtg-widget-grid actually sizes/
+  // stretches, breaking row-height matching with its siblings; this way
+  // .live-reports-cyber-card lands on the real .mtg-widget div itself,
+  // same as the 6 Cybersecurity Systems cards above do directly).
+  return widget
+    .replace('class="mtg-widget"', 'class="mtg-widget live-reports-cyber-card"')
+    .replace('<p class="mtg-widget-title">', `${deviceHealthItemCornerToggleHtml(deviceHealthItemKey)}<p class="mtg-widget-title">`);
 }
 
 // Module scope, not nested inside mount() like it used to be -- the
@@ -65,6 +78,52 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// "Include in PDF" tick boxes, by request -- every section (sits inline
+// right next to its own heading, by request) and every Cybersecurity
+// Systems/Device Health widget box (small checkbox in its own corner)
+// gets one, ticked by default. No visible "Include in PDF" text, by
+// request -- just the checkbox, with a tooltip. Pure markup here --
+// mount() below tracks the actual on/off state (sectionToggles/
+// cyberCardToggles/deviceHealthItemToggles, via one delegated change
+// listener on `container` itself) and sends it as `sections`/
+// `sections.cyberCards`/`sections.deviceHealthItems` on the /pdf request;
+// pdf-template.js treats a missing/undefined key as shown, so an unticked
+// box is the only thing that ever hides something.
+function sectionToggleHtml(key, label) {
+  return `<input type="checkbox" class="live-reports-section-toggle-input" data-section="${key}" title="Untick to leave ${escapeHtml(label)} out of the PDF" checked />`;
+}
+// Same toggle, but WITH the section's own name shown -- for the 4
+// narrative sections below, which have no on-screen heading of their own
+// to sit next to (they're PDF-only, written by Generate Summary), so the
+// name has to be shown here or nowhere.
+function namedSectionToggleHtml(key, label) {
+  return `<label class="live-reports-section-toggle" title="Untick to leave ${escapeHtml(label)} out of the PDF"><input type="checkbox" class="live-reports-section-toggle-input" data-section="${key}" checked /> ${escapeHtml(label)}</label>`;
+}
+// `checked` defaults true (every card starts ticked) -- Email Domain
+// Protection passes false when there's no resolvable domain yet, by
+// request ("untick this section so that it is excluded from the PDF"),
+// since there's nothing real to show in that case.
+function cyberCardToggleHtml(key, checked = true) {
+  return `<label class="live-reports-card-toggle" title="Untick to leave this card out of the PDF"><input type="checkbox" class="live-reports-card-toggle-input" data-cyber-card="${key}" ${checked ? 'checked' : ''} /></label>`;
+}
+// Device Health's own sub-items (Asset Management/Monitoring tables, each
+// Workstations donut), by request -- a separate tracked bucket/data
+// attribute from cyberCardToggleHtml above since these nest under
+// sections.deviceHealthItems, not sections.cyberCards, on the server.
+function deviceHealthItemToggleHtml(key, label) {
+  return `<input type="checkbox" class="live-reports-device-health-item-toggle-input" data-device-health-item="${key}" title="Untick to leave ${escapeHtml(label)} out of the PDF" checked />`;
+}
+// Corner-positioned variant of the above, for a widget (like each
+// Workstations donut) whose own heading lives inside a SHARED component
+// (donutWidget(), meeting-prep-report-render.js) this file can't reach
+// into without touching a module other pages also use -- same
+// .live-reports-cyber-card/.live-reports-card-toggle corner treatment the
+// Cybersecurity Systems cards already use, just a different data
+// attribute so it's tracked separately.
+function deviceHealthItemCornerToggleHtml(key) {
+  return `<label class="live-reports-card-toggle" title="Untick to leave this out of the PDF"><input type="checkbox" class="live-reports-device-health-item-toggle-input" data-device-health-item="${key}" checked /></label>`;
 }
 
 // Scorecard, by request ("show the Scorecard on the on screen view before
@@ -115,7 +174,7 @@ function scorecardHtml(report, vendors) {
     .join('');
   return `
     <div id="scorecard-table">
-      <h2 class="client-summary-section-heading">Scorecard</h2>
+      <h2 class="client-summary-section-heading">Scorecard ${sectionToggleHtml('scorecard', 'Scorecard')}</h2>
       <table class="live-reports-scorecard-table">
         <thead><tr><th>Area</th><th>Result</th><th>Status</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -139,7 +198,7 @@ function assetManagementTableHtml(detail) {
     .map((c) => `<tr><td>${escapeHtml(c.label)}</td><td>${c.passed} / ${c.total}</td><td><span class="mtg-score-badge mtg-score-badge--${scorecardStatus(c.score).tier}">${c.score == null ? 'No data' : `${c.score}%`}</span></td></tr>`)
     .join('');
   return `
-    <h2 class="client-summary-section-heading">Asset Management <span class="inline-subtext">${detail.score != null ? `(${detail.score}%)` : ''}</span></h2>
+    <h2 class="client-summary-section-heading">Asset Management <span class="inline-subtext">${detail.score != null ? `(${detail.score}%)` : ''}</span> ${deviceHealthItemToggleHtml('assetManagement', 'Asset Management')}</h2>
     <table class="live-reports-scorecard-table">
       <thead><tr><th>Check</th><th>Passed</th><th>Score</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -151,7 +210,7 @@ function monitoringTableHtml(detail) {
     .map((p) => `<tr><td>${escapeHtml(p.priority)}</td><td>${p.raised}</td><td>${p.resolved}</td><td>${p.unresolved}</td><td><span class="mtg-score-badge mtg-score-badge--${scorecardStatus(p.score).tier}">${p.score}%</span></td></tr>`)
     .join('');
   return `
-    <h2 class="client-summary-section-heading">Monitoring <span class="inline-subtext">(${detail.score}%)</span></h2>
+    <h2 class="client-summary-section-heading">Monitoring <span class="inline-subtext">(${detail.score}%)</span> ${deviceHealthItemToggleHtml('monitoring', 'Monitoring')}</h2>
     <table class="live-reports-scorecard-table">
       <thead><tr><th>Priority</th><th>Raised</th><th>Resolved</th><th>Unresolved</th><th>Score</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -175,7 +234,7 @@ function proactiveMaintenanceHtml(items) {
   const col = (colItems) => `<ul class="live-reports-proactive-maintenance-list">${colItems.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   return `
     <div class="live-reports-proactive-maintenance-box">
-      <p class="live-reports-proactive-maintenance-heading">Proactive Maintenance</p>
+      <p class="live-reports-proactive-maintenance-heading">Proactive Maintenance ${sectionToggleHtml('proactiveMaintenance', 'Proactive Maintenance')}</p>
       <div class="live-reports-proactive-maintenance-cols">${col(items.slice(0, half))}${col(items.slice(half))}</div>
       <p class="live-reports-proactive-maintenance-caption">Standard activities performed across all managed devices -- not scored.</p>
     </div>`;
@@ -192,7 +251,7 @@ function proactiveMaintenanceHtml(items) {
 // centred last column) rather than a new table style.
 function m365LicensesHtml(m365) {
   if (!m365) return '';
-  const plainHeading = '<h2 class="client-summary-section-heading">Microsoft License Counts</h2>';
+  const plainHeading = `<h2 class="client-summary-section-heading">Microsoft License Counts ${sectionToggleHtml('m365Licenses', 'Microsoft License Counts')}</h2>`;
   if (m365.status === 'ambiguous') {
     return `${plainHeading}<p class="inline-subtext">Multiple Autotask companies match this client's name -- can't show license counts without risking the wrong one. Matches: ${m365.matches.map((m) => escapeHtml(m.companyName)).join(', ')}</p>`;
   }
@@ -209,7 +268,7 @@ function m365LicensesHtml(m365) {
   // name (which could be more than one contract anyway now that several
   // active M365*-named contracts are combined -- see server.js's own
   // getM365LicenseCounts()).
-  const heading = '<h2 class="client-summary-section-heading">Microsoft License Counts <span class="inline-subtext">(from contract)</span></h2>';
+  const heading = `<h2 class="client-summary-section-heading">Microsoft License Counts <span class="inline-subtext">(from contract)</span> ${sectionToggleHtml('m365Licenses', 'Microsoft License Counts')}</h2>`;
   if (!m365.items || m365.items.length === 0) {
     return `${heading}<p class="inline-subtext">No current license counts found.</p>`;
   }
@@ -258,7 +317,8 @@ function vendorWidgetsHtml(vendors) {
             .join('')}</ul>`
         : '<p class="inline-subtext">No alerts in this window.</p>';
     widgets.push(`
-      <div class="mtg-widget">
+      <div class="mtg-widget live-reports-cyber-card">
+        ${cyberCardToggleHtml('saasAlerts')}
         <p class="mtg-widget-title">SaaS Alerts (Last ${sa.windowDays} Days)</p>
         <div class="live-reports-saas-alerts-layout">
           <div class="live-reports-saas-alerts-kpis">
@@ -302,7 +362,8 @@ function vendorWidgetsHtml(vendors) {
             .join('')}</ul>`
         : '';
     widgets.push(`
-      <div class="mtg-widget">
+      <div class="mtg-widget live-reports-cyber-card">
+        ${cyberCardToggleHtml('saasProtection')}
         <p class="mtg-widget-title">SaaS Backups</p>
         <div class="live-reports-saas-protection-row live-reports-saas-protection-row1">
           ${kpiTileRow([
@@ -331,8 +392,9 @@ function vendorWidgetsHtml(vendors) {
   if (vendors.dattoEdr.status === 'ok' && vendors.dattoEdr.installed) {
     const edr = vendors.dattoEdr;
     widgets.push(`
-      <div class="mtg-widget">
-        <p class="mtg-widget-title">Datto EDR</p>
+      <div class="mtg-widget live-reports-cyber-card">
+        ${cyberCardToggleHtml('dattoEdr')}
+        <p class="mtg-widget-title">Endpoint Detection and Response (EDR)</p>
         <div class="live-reports-dattoedr-kpis">
           ${kpiTileRow([
             { label: 'Agents', value: edr.agentCount },
@@ -356,8 +418,9 @@ function vendorWidgetsHtml(vendors) {
     ];
     if (h.microsoft365UsersCount) tiles.push({ label: 'M365 Users', value: h.microsoft365UsersCount });
     widgets.push(`
-      <div class="mtg-widget">
-        <p class="mtg-widget-title">Huntress</p>
+      <div class="mtg-widget live-reports-cyber-card">
+        ${cyberCardToggleHtml('huntress')}
+        <p class="mtg-widget-title">Huntress Threat Watch</p>
         ${kpiTileRow(tiles)}
         <p class="inline-subtext">Lifetime total incidents.</p>
       </div>`);
@@ -394,10 +457,10 @@ function vendorWidgetsHtml(vendors) {
             `<div class="mtg-donut-legend-row" title="${escapeHtml(s.label)}"><span class="mtg-swatch" style="background:${s.color}"></span><span class="mtg-donut-legend-label">${escapeHtml(s.label)}</span><span class="mtg-donut-val">${s.value}</span></div>`
         )
         .join('');
-      const topAppsHtml =
-        el.topApps.length > 0
-          ? `<ul class="live-reports-saas-alerts-events">${el.topApps.map((a) => `<li>${escapeHtml(a.name)} <span class="muted">(${a.count})</span></li>`).join('')}</ul>`
-          : '<p class="inline-subtext">No elevation requests in this window.</p>';
+      // No "No elevation requests" placeholder for the empty case, by
+      // request -- the donut/legend already show 0 for every category, so
+      // the caption was just repeating what's obvious from the zero.
+      const topAppsHtml = el.topApps.length > 0 ? `<ul class="live-reports-saas-alerts-events">${el.topApps.map((a) => `<li>${escapeHtml(a.name)} <span class="muted">(${a.count})</span></li>`).join('')}</ul>` : '';
       // Requests Handled KPI tile (and the "Deployed since" line below, and
       // the trend-vs-previous-period calc it used to need) removed, by
       // request -- the donut + legend + top-apps list already say
@@ -411,7 +474,8 @@ function vendorWidgetsHtml(vendors) {
         </div>`;
     }
     widgets.push(`
-      <div class="mtg-widget">
+      <div class="mtg-widget live-reports-cyber-card live-reports-autoelevate-card">
+        ${cyberCardToggleHtml('autoElevate')}
         <p class="mtg-widget-title">AutoElevate${el ? ` <span class="muted">(${el.windowDays} days)</span>` : ''}</p>
         ${body}
       </div>`);
@@ -420,14 +484,166 @@ function vendorWidgetsHtml(vendors) {
   return widgets.join('');
 }
 
-function vendorSummariesHtml(vendors) {
+// Email Domain Protection -- live DNS checks (DMARC/SPF/DKIM), by
+// request. A brand new, separate card from Mail Domain Protection
+// Monitoring (the manual-entry one, mdpCardHtml() below).
+//
+// IT Glue's own Domains feature turned out to be READ-ONLY via their
+// public API (confirmed live -- GET works, every write shape tried
+// 404s), so there's no "Save to IT Glue" button here any more. Instead,
+// by request ("Allow the user of Live Reports to choose or enter a
+// domain and prompt them to fix IT Glue"): when IT Glue has no
+// resolvable primary domain, the admin can pick one of the client's
+// existing IT Glue domains or type a brand new one, which runs the real
+// DNS checks for THIS report only -- the 'needs-domain' card itself (not
+// the resolved 'ok' card, by request) carries the small red reminder to
+// go fix it for real in IT Glue, next to its own "Use this domain"
+// button.
+//
+// The "include in PDF" checkbox starts UNTICKED whenever there's no
+// resolved domain yet, by request ("untick this section so that it is
+// excluded from the PDF") -- there's nothing real to show in that case,
+// unlike every other card here which defaults ticked.
+// Shared select/input pair, by request ("allow untick/tick to re-choose
+// or enter primary domain even if the correct domain was selected
+// automatically") -- used both by the 'ok' card's own hidden picker
+// (revealed by unticking the include-in-PDF checkbox, see
+// renderEmailDomainProtection() below) and the unresolved states' own
+// always-visible one. `selectedDomain` pre-selects the dropdown's current
+// match (the 'ok' case only -- there's nothing to pre-select when
+// nothing's resolved yet).
+function edpPickerFieldsHtml(domains, selectedDomain) {
+  return `
+    ${
+      domains.length > 0
+        ? `<label for="edp-domain-select">Use an existing IT Glue domain</label>
+           <select id="edp-domain-select">
+             <option value="">-- choose a domain --</option>
+             ${domains.map((d) => `<option value="${escapeHtml(d.name)}" ${d.name === selectedDomain ? 'selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}
+           </select>`
+        : ''
+    }
+    <label for="edp-new-domain">Or use this domain instead</label>
+    <input type="text" id="edp-new-domain" placeholder="example.com.au" />
+  `;
+}
+
+function emailDomainProtectionCardHtml(state) {
+  if (state.status === 'loading') {
+    return `
+      <div class="mtg-widget live-reports-cyber-card" id="edp-card">
+        ${cyberCardToggleHtml('emailDomainProtection', false)}
+        <p class="mtg-widget-title">Mail Domain Protection DNS Check</p>
+        <p class="inline-subtext live-reports-loading-text">Loading...</p>
+      </div>`;
+  }
+  if (state.status === 'ok') {
+    // Tagged with whichever provider's own record was actually found
+    // (Microsoft/Google), by request -- email-domain-protection.js's own
+    // checkSpf()/checkDkim() set `provider`; neither found (or not
+    // present at all) leaves the row untagged.
+    const providerTag = (provider) => (provider === 'microsoft' ? ' (Microsoft)' : provider === 'google' ? ' (Google)' : '');
+    const rows = [
+      {
+        label: 'DMARC',
+        present: state.dmarc.exists,
+        status: !state.dmarc.exists
+          ? null
+          : state.dmarc.policy === 'reject'
+            ? { text: 'Reject', cls: 'good' }
+            : state.dmarc.policy === 'quarantine'
+              ? { text: 'Quarantine', cls: 'warn' }
+              : { text: 'Exists', cls: 'muted' },
+      },
+      { label: `SPF${providerTag(state.spf.provider)}`, present: state.spf.exists, status: null },
+      { label: `DKIM${providerTag(state.dkim.provider)}`, present: state.dkim.exists, status: null },
+    ];
+    const rowsHtml = rows
+      .map(
+        (r) => `
+      <div class="live-reports-edp-row">
+        ${checkIconSvg(r.present ? 'pass' : 'fail')}
+        <span class="live-reports-edp-row-label">${escapeHtml(r.label)}</span>
+        ${r.status ? `<span class="live-reports-edp-row-status live-reports-edp-row-status--${r.status.cls}">${escapeHtml(r.status.text)}</span>` : ''}
+      </div>`
+      )
+      .join('');
+    // No "fix IT Glue" reminder here any more, by request -- that
+    // instruction now lives only on the 'needs-domain' card itself (next
+    // to its own Use this domain button, below), not repeated again here
+    // once a domain's actually resolved. The picker itself DOES still live
+    // here though, just hidden -- untick the "include in PDF" box to
+    // reveal it (renderEmailDomainProtection() below wires that), by
+    // request, so a correctly auto-resolved domain can still be
+    // overridden for this report.
+    return `
+      <div class="mtg-widget live-reports-cyber-card" id="edp-card">
+        ${cyberCardToggleHtml('emailDomainProtection')}
+        <p class="mtg-widget-title">Mail Domain Protection DNS Check</p>
+        <p class="live-reports-edp-domain">Domain: ${escapeHtml(state.domain)}</p>
+        <div class="live-reports-edp-rows">${rowsHtml}</div>
+        <div class="live-reports-edp-picker" id="edp-picker" hidden>
+          <p class="live-reports-edp-reason">Pick a different domain for this report:</p>
+          ${edpPickerFieldsHtml(state.domains || [], state.domain)}
+          <div class="live-reports-edp-action-row">
+            <button type="button" id="edp-save-button" class="button-link button-link--small">Use this domain</button>
+          </div>
+          <p class="status error" id="edp-error" hidden></p>
+        </div>
+      </div>`;
+  }
+  // 'needs-domain' / 'org-not-found' / 'org-ambiguous' / 'error' -- no
+  // resolvable domain from IT Glue, for whatever reason. The manual
+  // picker/entry shows regardless of WHY (even an unresolved organization
+  // doesn't stop the admin typing a domain by hand), by request.
+  const domains = state.domains || [];
+  // Short, by request ("Change this ... to be small text and just 'No
+  // primary domain found in IT Glue'") -- the other 3 reasons keep their
+  // own instruction sentence (there's genuinely more to explain there:
+  // WHY there's no org match at all), just needs-domain is trimmed down.
+  const reason =
+    state.status === 'org-not-found'
+      ? "Could not find this client's organization in IT Glue. Pick one below, or type one, to check it for this report."
+      : state.status === 'org-ambiguous'
+        ? "More than one IT Glue organization matches this client's name. Pick one below, or type one, to check it for this report."
+        : state.status === 'needs-domain'
+          ? 'No primary domain found in IT Glue'
+          : 'Could not load Mail Domain Protection. Pick one below, or type one, to check it for this report.';
+  return `
+    <div class="mtg-widget live-reports-cyber-card" id="edp-card">
+      ${cyberCardToggleHtml('emailDomainProtection', false)}
+      <p class="mtg-widget-title">Mail Domain Protection DNS Check</p>
+      <p class="live-reports-edp-reason">${escapeHtml(reason)}</p>
+      ${edpPickerFieldsHtml(domains, null)}
+      <div class="live-reports-edp-action-row">
+        <button type="button" id="edp-save-button" class="button-link button-link--small">Use this domain</button>
+        ${state.status === 'needs-domain' ? `<p class="live-reports-edp-fix-note">Please update IT Glue Domain Tracker</p>` : ''}
+      </div>
+      ${
+        state.status === 'needs-domain'
+          ? `<p class="live-reports-edp-fix-note live-reports-edp-fix-note--full">Add the domain or type "Primary." at the beginning of the Notes field</p>`
+          : ''
+      }
+      <p class="status error" id="edp-error" hidden></p>
+    </div>`;
+}
+
+function vendorSummariesHtml(vendors, mdpState) {
   if (!vendors) return '';
   // "Cybersecurity Systems" heading restored, by request (removed earlier
   // this session, now wanted back) -- same name as the PDF's own section
   // (pdf-template.js's drawCybersecurityLayers(), renamed from
   // "Cybersecurity Layers" at the same time) so the two surfaces read as
-  // the same section.
-  return `<h2 class="client-summary-section-heading">Cybersecurity Systems</h2><div class="mtg-widget-grid live-reports-other-systems">${vendorWidgetsHtml(vendors)}</div>`;
+  // the same section. Mail Domain Protection (the live DNS one, its own
+  // placeholder slot filled in once loadEmailDomainProtection() below has
+  // run) and Mail Domain Protection Monitoring (the manual-entry one,
+  // mdpCardHtml() below) sit together inside their own light-red
+  // surrounding box, on screen only, by request -- both commonly need
+  // manual attention (an unresolved IT Glue domain; the EasyDMARC values
+  // themselves), so the shared box is a visual flag for that, not a PDF
+  // concept (pdf-template.js's own drawCybersecurityLayers() just packs
+  // them as 2 plain cards like everything else there).
+  return `<h2 class="client-summary-section-heading">Cybersecurity Systems ${sectionToggleHtml('cybersecurity', 'Cybersecurity Systems')}</h2><div class="mtg-widget-grid live-reports-other-systems">${vendorWidgetsHtml(vendors)}<div class="live-reports-domain-protection-alert"><div id="edp-card-slot">${emailDomainProtectionCardHtml({ status: 'loading' })}</div>${mdpCardHtml(mdpState)}</div></div>`;
 }
 
 // Generate Summary / edit-before-PDF, by request -- see server.js's own
@@ -446,12 +662,12 @@ function commentaryEditorHtml(commentary) {
       <h2 class="client-summary-section-heading">Report Narrative (Editable)</h2>
       <p class="inline-subtext">AI-drafted from the report above -- edit anything below before creating the PDF. The PDF uses exactly what's here, as-is.</p>
 
-      <label class="live-reports-commentary-label" for="commentary-exec-summary">Executive Summary</label>
+      <label class="live-reports-commentary-label" for="commentary-exec-summary">Executive Summary ${sectionToggleHtml('executiveSummary', 'Executive Summary')}</label>
       <textarea id="commentary-exec-summary" class="live-reports-commentary-field live-reports-commentary-textarea" rows="4">${escapeHtml(commentary.executiveSummary || '')}</textarea>
 
       <div class="live-reports-commentary-cols">
         <div>
-          <label class="live-reports-commentary-label live-reports-commentary-label--on-track" for="commentary-on-track">On Track <span class="inline-subtext">(one per line)</span></label>
+          <label class="live-reports-commentary-label live-reports-commentary-label--on-track" for="commentary-on-track">On Track <span class="inline-subtext">(one per line)</span> ${sectionToggleHtml('onTrackActionWatch', 'On Track / Action Needed / Watch')}</label>
           <textarea id="commentary-on-track" class="live-reports-commentary-field live-reports-commentary-textarea" rows="4">${escapeHtml(bulletsToText(commentary.onTrack))}</textarea>
         </div>
         <div>
@@ -464,7 +680,7 @@ function commentaryEditorHtml(commentary) {
         </div>
       </div>
 
-      <label class="live-reports-commentary-label">Our Recommendations</label>
+      <label class="live-reports-commentary-label">Our Recommendations ${sectionToggleHtml('recommendations', 'Our Recommendations')}</label>
       <div id="commentary-recommendations">${recRows}</div>
       <button type="button" id="commentary-add-recommendation" class="button-link button-link--small">+ Add Recommendation</button>
     </div>
@@ -534,6 +750,170 @@ function readCommentaryFromEditor(root) {
   };
 }
 
+// Mail Domain Protection -- same look as EasyDMARC's own per-domain
+// dashboard (score + DMARC/SPF/DKIM status + enforcement policy), by
+// request, but there's no EasyDMARC API connected to this dashboard yet.
+// These values are looked up manually in EasyDMARC for whichever client
+// is loaded and typed in here -- never fabricated -- and Create PDF sends
+// exactly what's currently set here through to the PDF (mdpState, tracked
+// live by mount()'s own wireMdpWidget() below, the same way
+// currentReportData/currentVendorsData are tracked). Reset to
+// mdpDefaults() on every new client search (load() below), same reasoning
+// resetCommentaryEditor() already has -- a previous client's
+// manually-entered numbers must never silently end up in a different
+// client's PDF. Card joins the SAME Cybersecurity Systems grid as the
+// vendor widgets now, by request ("put it in the Cybersecurity section" /
+// "size more like the other Cybersecurity items") -- see
+// vendorSummariesHtml() below, which appends mdpCardHtml() into the same
+// .mtg-widget-grid.
+//
+// Score and the 3 dot levels are picked by hand, by request ("I want to
+// choose the X of 10, light green, medium green, dark green dots ...
+// these aren't related to the Pass Rates") -- NOT derived from
+// spfPassRate/dkimPassRate/dmarcPolicy any more. Those 2 rate numbers and
+// the policy stay in the form purely as their own separate display fields
+// (EasyDMARC data worth showing), with zero effect on score/dots. Same 3
+// named levels/colours as pdf-template.js's own MDP_LEVELS -- kept in sync
+// by hand (small enough, and one's browser JS/the other's Node, so
+// there's no single module both could import from without a bigger
+// refactor than this feature needs).
+const MDP_LEVELS = {
+  light: { label: 'Light Green', dots: 1, color: '#86efac' },
+  medium: { label: 'Medium Green', dots: 2, color: '#4ade80' },
+  dark: { label: 'Dark Green', dots: 3, color: '#16a34a' },
+};
+// Defaults are 10/10, Dark Green across the board, 100% -- "best case", by
+// request -- rather than a lower starting point that would otherwise read
+// as a real finding before anyone's actually looked anything up.
+function mdpDefaults() {
+  return { score: 10, dmarcPolicy: 'reject', dmarcLevel: 'dark', spfLevel: 'dark', dkimLevel: 'dark', spfPassRate: 100, dkimPassRate: 100 };
+}
+function mdpScoreTier(score) {
+  if (score >= 8) return 'good';
+  if (score >= 5) return 'warn';
+  return 'bad';
+}
+// Each dot has its OWN fixed shade at its position (1st = light, 2nd =
+// medium, 3rd = dark) when lit, regardless of which level is picked --
+// only how many are lit changes, same "signal strength" shorthand the
+// pdf-template.js side draws.
+function mdpDotsHtml(levelKey) {
+  const level = MDP_LEVELS[levelKey] || MDP_LEVELS.dark;
+  const shades = [MDP_LEVELS.light.color, MDP_LEVELS.medium.color, MDP_LEVELS.dark.color];
+  return Array.from({ length: 3 }, (_, i) => `<span class="mdp-dot" style="background:${i < level.dots ? shades[i] : '#e5e7eb'}"></span>`).join('');
+}
+function mdpLevelSelectHtml(id, selected) {
+  return `<select id="${id}" class="live-reports-mdp-level-select live-reports-mdp-edit-only" disabled>
+    ${Object.entries(MDP_LEVELS)
+      .map(([key, l]) => `<option value="${key}" ${selected === key ? 'selected' : ''}>${l.label}</option>`)
+      .join('')}
+  </select>`;
+}
+
+// DMARC Policy as a pill-styled <select> (reuses .mtg-score-badge--good/
+// warn/bad's own tint, same as the score badge above), by request ("put
+// the Dmarc policy in a pill next to the Dmarc row") -- no longer its own
+// line underneath the card.
+const MDP_POLICY_TIERS = { reject: 'good', quarantine: 'warn', none: 'bad' };
+function mdpPolicySelectHtml(selected) {
+  return `<select id="mdp-dmarc-policy" class="live-reports-mdp-policy-select mtg-score-badge--${MDP_POLICY_TIERS[selected] || 'bad'}" disabled>
+    <option value="none" ${selected === 'none' ? 'selected' : ''}>None</option>
+    <option value="quarantine" ${selected === 'quarantine' ? 'selected' : ''}>Quarantine</option>
+    <option value="reject" ${selected === 'reject' ? 'selected' : ''}>Reject</option>
+  </select>`;
+}
+// 2 segments (score-coloured + a light grey remainder) so donutSvg() draws
+// a ring filled score/10 -- centerLabel passed as '' since the number sits
+// in its own overlay <input> instead (see mdpCardHtml() below), not
+// donutSvg()'s own plain SVG <text>, so it stays editable.
+function mdpScoreSegments(score) {
+  const color = mdpScoreTier(score) === 'good' ? '#16a34a' : mdpScoreTier(score) === 'warn' ? '#f59e0b' : '#dc2626';
+  return [
+    { label: 'Score', value: score, color },
+    { label: 'Remaining', value: Math.max(0, 10 - score), color: '#e5e7eb' },
+  ];
+}
+
+// Card-sized like the other Cybersecurity Systems widgets (.mtg-widget),
+// by request -- same ring widget AutoElevate's own card uses (donutSvg(),
+// same size/geometry) on the left, DMARC/SPF/DKIM as 3 rows (dots right
+// next to the name, by request), vertically centred next to the ring, by
+// request. A cog in the corner (not "Manual Entry Required" text, by
+// request) flags that there's no EasyDMARC API connected yet -- these
+// values are typed in by hand; see pdf-template.js's own drawMdpCard() for
+// why the PDF itself shows no such flag at all.
+// Every editable control here starts `disabled`, by request ("enable the
+// edit capability of Mail Domain Protection Monitoring only after the cog
+// is clicked") -- clicking the cog (wireMdpWidget() below) is what enables
+// them, guarding against an accidental edit while just reading the card.
+// The DMARC/SPF/DKIM level dropdowns and the SPF/DKIM rate inputs
+// (.live-reports-mdp-edit-only, CSS-hidden by default) go further and
+// stay HIDDEN until then too, by request ("hidden, not just disabled" --
+// a disabled <select>/<input> still rendered as a grey box, redundant
+// with the dots already showing the same level). The score input and the
+// DMARC policy pill stay visible either way -- they're each the only
+// place their own value is shown at all (the ring's own centerLabel is
+// deliberately blank; the policy pill already reads as a plain colored
+// label, not a boxy control), so hiding them would hide real information,
+// not just an edit affordance.
+function mdpCardHtml(state) {
+  return `
+    <div class="mtg-widget live-reports-mdp-widget live-reports-cyber-card" id="mdp-widget">
+      ${cyberCardToggleHtml('mailDomainProtection')}
+      <button type="button" id="mdp-cog" class="live-reports-mdp-cog" title="Manual entry -- EasyDMARC isn't connected yet, these values are looked up and typed in by hand. Click to edit.">⚙</button>
+      <p class="mtg-widget-title">Mail Domain Protection Monitoring</p>
+      <div class="live-reports-mdp-body">
+        <div class="live-reports-mdp-score-wrap">
+          <span id="mdp-score-svg">${donutSvg(mdpScoreSegments(state.score), '')}</span>
+          <input type="number" id="mdp-score" class="live-reports-mdp-score-overlay" min="0" max="10" step="1" value="${state.score}" disabled />
+        </div>
+        <div class="live-reports-mdp-rows">
+          <div class="live-reports-mdp-row">
+            <span id="mdp-dmarc-dots" class="live-reports-mdp-dots">${mdpDotsHtml(state.dmarcLevel)}</span>
+            <span class="live-reports-mdp-row-name">DMARC</span>
+            ${mdpLevelSelectHtml('mdp-dmarc-level', state.dmarcLevel)}
+            ${mdpPolicySelectHtml(state.dmarcPolicy)}
+          </div>
+          <div class="live-reports-mdp-row">
+            <span id="mdp-spf-dots" class="live-reports-mdp-dots">${mdpDotsHtml(state.spfLevel)}</span>
+            <span class="live-reports-mdp-row-name">SPF</span>
+            ${mdpLevelSelectHtml('mdp-spf-level', state.spfLevel)}
+            <span class="live-reports-mdp-edit-only"><input type="number" id="mdp-spf-rate" class="live-reports-mdp-rate-input" min="0" max="100" step="0.01" value="${state.spfPassRate}" disabled />%</span>
+          </div>
+          <div class="live-reports-mdp-row">
+            <span id="mdp-dkim-dots" class="live-reports-mdp-dots">${mdpDotsHtml(state.dkimLevel)}</span>
+            <span class="live-reports-mdp-row-name">DKIM</span>
+            ${mdpLevelSelectHtml('mdp-dkim-level', state.dkimLevel)}
+            <span class="live-reports-mdp-edit-only"><input type="number" id="mdp-dkim-rate" class="live-reports-mdp-rate-input" min="0" max="100" step="0.01" value="${state.dkimPassRate}" disabled />%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Reads whatever's CURRENTLY in the form (not a copy kept in sync on every
+// keystroke), same "the DOM is the one source of truth" convention
+// readCommentaryFromEditor() above already follows. Takes the #mdp-widget
+// element itself (not a container to query into) -- mount()'s own
+// wireMdpWidget() below is the only caller, and it always has the widget
+// element in hand already (outerHTML replaces during a vendor-data
+// refresh mean the ORIGINAL container reference goes stale, so re-querying
+// from resultsEl there each time is what actually stays correct).
+function readMdpStateFromWidget(widget) {
+  if (!widget) return mdpDefaults();
+  const score = Math.max(0, Math.min(10, Math.round(Number(widget.querySelector('#mdp-score').value) || 0)));
+  return {
+    score,
+    dmarcPolicy: widget.querySelector('#mdp-dmarc-policy').value,
+    dmarcLevel: widget.querySelector('#mdp-dmarc-level').value,
+    spfLevel: widget.querySelector('#mdp-spf-level').value,
+    dkimLevel: widget.querySelector('#mdp-dkim-level').value,
+    spfPassRate: Number(widget.querySelector('#mdp-spf-rate').value) || 0,
+    dkimPassRate: Number(widget.querySelector('#mdp-dkim-rate').value) || 0,
+  };
+}
+
 export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
@@ -579,6 +959,181 @@ export function mount(container) {
   // see before clicking the button.
   let currentReportData = null;
   let currentVendorsData = null;
+  // Mail Domain Protection's own tracked state -- kept in sync on every
+  // keystroke/select by wireMdpWidget() below, rather than read fresh from
+  // the DOM at Create PDF time, because its card lives inside the
+  // Cybersecurity Systems grid, which loadVendorSummaries() below replaces
+  // wholesale (vendorEl.outerHTML = ...) once vendor data loads -- this is
+  // what survives that replace instead of needing to re-derive "what was
+  // on screen" from a DOM node that may already be gone.
+  let mdpState = mdpDefaults();
+
+  // "Include in PDF" tick boxes -- every key defaults true (ticked), only
+  // ever flipped false by an explicit untick (see the delegated listener
+  // below). Delegated on `container` itself (not resultsEl/vendorEl,
+  // which get destroyed and rebuilt by render()/loadVendorSummaries()) so
+  // it keeps working across every re-render without needing to be rewired
+  // -- the SAME reason mdpState above is tracked in a variable rather than
+  // read from the DOM at Create PDF time, just via delegation instead of
+  // per-field listeners since there are a couple dozen of these checkboxes
+  // scattered across the page.
+  let sectionToggles = {};
+  let cyberCardToggles = {};
+  let deviceHealthItemToggles = {};
+  // Email Domain Protection's own resolved domain -- whatever's currently
+  // shown on screen (IT Glue's own automatic match, or an admin's manual
+  // pick/typed domain for this report), kept in sync by
+  // renderEmailDomainProtection() below. Sent through on Create PDF so
+  // the PDF's own fresh DNS re-check runs against the SAME domain that's
+  // on screen, not an independent IT Glue re-resolution that could land
+  // on "unresolved" again if IT Glue itself was never actually fixed.
+  let edpDomain = null;
+  container.addEventListener('change', (e) => {
+    const sectionInput = e.target.closest('.live-reports-section-toggle-input');
+    if (sectionInput) {
+      sectionToggles[sectionInput.dataset.section] = sectionInput.checked;
+      return;
+    }
+    const cardInput = e.target.closest('.live-reports-card-toggle-input');
+    if (cardInput) {
+      cyberCardToggles[cardInput.dataset.cyberCard] = cardInput.checked;
+      return;
+    }
+    const itemInput = e.target.closest('.live-reports-device-health-item-toggle-input');
+    if (itemInput) deviceHealthItemToggles[itemInput.dataset.deviceHealthItem] = itemInput.checked;
+  });
+
+  // Re-reads the #mdp-widget inside resultsEl (NOT a stale element
+  // reference -- loadVendorSummaries() below replaces it via outerHTML,
+  // which detaches any previously queried node) and wires its inputs to
+  // keep mdpState in sync, patching just the derived bits (score badge
+  // tint, dots) in place rather than a full re-render that would blow away
+  // focus/cursor position in whichever field is being edited.
+  function wireMdpWidget() {
+    const widget = resultsEl.querySelector('#mdp-widget');
+    if (!widget) return;
+    const editableFields = ['#mdp-score', '#mdp-dmarc-policy', '#mdp-dmarc-level', '#mdp-spf-level', '#mdp-dkim-level', '#mdp-spf-rate', '#mdp-dkim-rate'];
+    // Locked until the cog's clicked, by request -- mdpCardHtml() above
+    // renders every one of these `disabled`; this is the only thing that
+    // turns editing on, one-way for as long as this card stays rendered
+    // (a fresh Search re-renders it locked again).
+    widget.querySelector('#mdp-cog').addEventListener('click', () => {
+      editableFields.forEach((sel) => {
+        widget.querySelector(sel).disabled = false;
+      });
+      // Reveals .live-reports-mdp-edit-only (the level dropdowns + rate
+      // inputs, CSS-hidden by default), by request.
+      widget.classList.add('live-reports-mdp-unlocked');
+    });
+    const onChange = () => {
+      mdpState = readMdpStateFromWidget(widget);
+      // Only the SVG inside #mdp-score-svg is replaced -- never the
+      // sibling <input> itself, which is what keeps focus/cursor position
+      // intact while actively typing a score.
+      widget.querySelector('#mdp-score-svg').innerHTML = donutSvg(mdpScoreSegments(mdpState.score), '');
+      widget.querySelector('#mdp-dmarc-dots').innerHTML = mdpDotsHtml(mdpState.dmarcLevel);
+      widget.querySelector('#mdp-spf-dots').innerHTML = mdpDotsHtml(mdpState.spfLevel);
+      widget.querySelector('#mdp-dkim-dots').innerHTML = mdpDotsHtml(mdpState.dkimLevel);
+      widget.querySelector('#mdp-dmarc-policy').className = `live-reports-mdp-policy-select mtg-score-badge--${MDP_POLICY_TIERS[mdpState.dmarcPolicy] || 'bad'}`;
+    };
+    editableFields.forEach((sel) => {
+      const el = widget.querySelector(sel);
+      el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', onChange);
+    });
+  }
+
+  // Email Domain Protection -- fills #edp-card-slot (created by
+  // vendorSummariesHtml() above) once the real IT Glue + DNS status is
+  // known. Its own fetch, separate from /vendors above -- the slot
+  // genuinely doesn't exist until AFTER that vendors HTML lands, so this
+  // can't start any earlier anyway, unlike the independent-for-speed
+  // split that reasoning above describes for Other Systems/M365 itself.
+  async function loadEmailDomainProtection(siteName) {
+    const slot = resultsEl.querySelector('#edp-card-slot');
+    if (!slot) return;
+    let state;
+    try {
+      const res = await fetch(`/api/live-reports/email-domain-protection?siteName=${encodeURIComponent(siteName)}`, { cache: 'no-store' });
+      state = await res.json();
+      if (!res.ok) throw new Error(state.error || `Request failed (${res.status})`);
+    } catch (err) {
+      console.error('Live Reports: Email Domain Protection load failed:', err);
+      state = { status: 'error' };
+    }
+    if (slot.isConnected) renderEmailDomainProtection(slot, siteName, state);
+  }
+
+  // Renders the card for whatever state was just fetched/checked, and
+  // keeps 2 bits of TRACKED state in sync with it (not just the DOM,
+  // which the admin may never interact with by hand): cyberCardToggles.
+  // emailDomainProtection (Create PDF's own "include in PDF" source of
+  // truth -- see this file's own sectionToggles/cyberCardToggles comment)
+  // and edpDomain (the domain name Create PDF sends through for the PDF's
+  // own fresh re-check -- see createPdf() below). Wires the picker's own
+  // "Use this domain" button always now, by request ("allow untick/tick
+  // to re-choose or enter primary domain even if the correct domain was
+  // selected automatically") -- the 'ok' card has one too now, just
+  // hidden inside #edp-picker until the checkbox below reveals it.
+  function renderEmailDomainProtection(slot, siteName, state) {
+    slot.innerHTML = emailDomainProtectionCardHtml(state);
+    cyberCardToggles.emailDomainProtection = state.status === 'ok';
+    edpDomain = state.status === 'ok' ? state.domain : null;
+    const card = slot.querySelector('#edp-card');
+
+    // Untick to reveal the 'ok' card's own hidden picker, by request --
+    // a SECOND, direct listener on this same checkbox (the delegated one
+    // on `container`, wired once in mount() above, still separately
+    // updates cyberCardToggles -- the two don't conflict). Re-ticking
+    // without having picked anything new just hides it again; nothing
+    // else changes, since nothing was actually re-checked.
+    const picker = card.querySelector('#edp-picker');
+    if (picker) {
+      const toggle = card.querySelector('.live-reports-card-toggle-input');
+      toggle.addEventListener('change', () => {
+        picker.hidden = toggle.checked;
+      });
+    }
+
+    const select = card.querySelector('#edp-domain-select');
+    const newInput = card.querySelector('#edp-new-domain');
+    const saveButton = card.querySelector('#edp-save-button');
+    if (!saveButton) return;
+    const errorEl = card.querySelector('#edp-error');
+    saveButton.addEventListener('click', async () => {
+      errorEl.hidden = true;
+      const existingDomain = select ? select.value : '';
+      const newDomain = newInput.value.trim();
+      const domain = existingDomain || newDomain;
+      if (!domain) {
+        errorEl.hidden = false;
+        errorEl.textContent = 'Pick an existing domain, or type one.';
+        return;
+      }
+      saveButton.disabled = true;
+      saveButton.textContent = 'Checking...';
+      try {
+        const res = await fetch('/api/live-reports/email-domain-protection/check-domain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain }),
+        });
+        const newState = await res.json();
+        if (!res.ok) throw new Error(newState.error || `Request failed (${res.status})`);
+        // check-domain only ever returns the DNS result, not the client's
+        // own IT Glue domains list (it doesn't touch IT Glue at all) --
+        // carried forward from whatever was last known so the dropdown
+        // stays populated across a manual re-check, instead of emptying
+        // out after the first one.
+        if (!newState.domains) newState.domains = state.domains || [];
+        if (slot.isConnected) renderEmailDomainProtection(slot, siteName, newState);
+      } catch (err) {
+        errorEl.hidden = false;
+        errorEl.textContent = `Could not check this domain: ${err.message}`;
+        saveButton.disabled = false;
+        saveButton.textContent = 'Use this domain';
+      }
+    });
+  }
 
   function resetCommentaryEditor() {
     commentaryEditorContainer.innerHTML = '';
@@ -651,14 +1206,24 @@ export function mount(container) {
     pdfStatusEl.textContent = 'Generating PDF... this can take up to a minute.';
     // Whatever's currently in the (possibly-edited) Generate Summary form
     // is used as-is -- null when that form was never opened at all (no
-    // commentary key sent), which falls back to server.js's own
-    // auto-generate-or-skip behaviour, same as before this feature existed.
+    // commentary key sent), in which case server.js's /pdf route no longer
+    // calls the AI itself either, by request -- the PDF just ships with
+    // placeholder space in those sections instead.
     const editedCommentary = readCommentaryFromEditor(commentaryEditorContainer);
+    const mailDomainProtection = mdpState;
+    const sections = { ...sectionToggles, cyberCards: cyberCardToggles, deviceHealthItems: deviceHealthItemToggles };
     try {
       const res = await fetch('/api/live-reports/pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ report: currentReportData, vendors: currentVendorsData, ...(editedCommentary ? { commentary: editedCommentary } : {}) }),
+        body: JSON.stringify({
+          report: currentReportData,
+          vendors: currentVendorsData,
+          mailDomainProtection,
+          emailDomainProtectionDomain: edpDomain,
+          sections,
+          ...(editedCommentary ? { commentary: editedCommentary } : {}),
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -692,6 +1257,19 @@ export function mount(container) {
     // currentVendorsData themselves get reset below, so a stale edited
     // paragraph can never silently end up in a different client's PDF.
     resetCommentaryEditor();
+    // Same reasoning for Mail Domain Protection -- back to the defaults,
+    // not whatever the previous client's manually-looked-up numbers were.
+    mdpState = mdpDefaults();
+    // Same for every "include in PDF" tick box -- back to all-ticked.
+    // Every one of these checkboxes lives inside either resultsEl/the
+    // Cybersecurity grid (rebuilt fresh by load()/loadVendorSummaries()
+    // below) or the commentary editor (cleared by resetCommentaryEditor()
+    // above), so their own markup already defaults back to checked -- no
+    // DOM to reset by hand here, just the tracked state objects.
+    sectionToggles = {};
+    cyberCardToggles = {};
+    deviceHealthItemToggles = {};
+    edpDomain = null;
     if (!site) {
       statusEl.hidden = false;
       statusEl.className = 'status';
@@ -764,7 +1342,9 @@ export function mount(container) {
       // the browser console now, so a real bug shows up there instead of
       // just reading as "nothing happened".
       try {
-        vendorEl.outerHTML = vendorSummariesHtml(data.vendors);
+        vendorEl.outerHTML = vendorSummariesHtml(data.vendors, mdpState);
+        wireMdpWidget();
+        loadEmailDomainProtection(siteName);
       } catch (err) {
         console.error('Live Reports: failed to render Other Systems:', err);
         if (vendorEl.isConnected) vendorEl.innerHTML = `<p class="inline-subtext">Could not render Other Systems: ${escapeHtml(err.message)}</p>`;
@@ -851,6 +1431,11 @@ export function mount(container) {
     pdfButton.disabled = true;
     pdfButton.textContent = 'Loading';
     generateCommentaryButton.disabled = true;
+    // Generate Summary only shows for people in ALLOW_REPORT_AI_GENERATION
+    // (.env), by request -- the real gate is server-side (the /commentary
+    // route itself 403s for anyone else), this just keeps the button from
+    // ever appearing for someone it would only reject anyway.
+    generateCommentaryButton.hidden = !data.canGenerateAi;
     pdfStatusEl.hidden = true;
 
     // Gauge first, by request -- no section heading (both "Executive
@@ -885,7 +1470,15 @@ export function mount(container) {
 
     const typeWidget = dattoLive && dattoLive.byType.length > 0 ? deviceTypeBarWidget(dattoLive.byType, dattoLive.summary.total) : '';
     const freshnessWidget = dattoLive ? checkinFreshnessWidget(dattoLive.summary) : '';
-    const deviceList = dattoLive ? deviceListTableHtml(dattoLive) : '';
+    // "All Devices" toggle sits right in the filter row, by request -- its
+    // own heading lives inside deviceListTableHtml() (a shared component,
+    // meeting-prep-report-render.js, never touched directly), so this is
+    // the same string-surgery approach donutFromLegend() uses above:
+    // inject the checkbox as the filter box's first child instead.
+    // No-ops harmlessly when there are no devices at all (that branch
+    // returns a plain "No devices to list." paragraph with no filter row
+    // to match against).
+    const deviceList = dattoLive ? deviceListTableHtml(dattoLive).replace('<div class="mtg-device-filter">', `<div class="mtg-device-filter">${sectionToggleHtml('deviceList', 'All Devices')}`) : '';
 
     // Replacement Recommendation / Operating System, in the Device Health
     // area now (moved off the device list, by request -- "move the
@@ -913,21 +1506,27 @@ export function mount(container) {
           ${donutFromLegend(
             'Replacement Recommendation',
             { 'Within 12 months': hl.replacementRecommendation.within12, '12 to 24 months': hl.replacementRecommendation.from12to24, 'Suitable 24+ months': hl.replacementRecommendation.suitable24Plus, Unknown: hl.replacementRecommendation.unknown },
-            { 'Within 12 months': '#dc2626', '12 to 24 months': '#f59e0b', 'Suitable 24+ months': '#16a34a', Unknown: '#9aa3af' }
+            { 'Within 12 months': '#dc2626', '12 to 24 months': '#f59e0b', 'Suitable 24+ months': '#16a34a', Unknown: '#9aa3af' },
+            'replacementRecommendation'
           )}
-          ${donutFromLegend('Operating System', osLegend, osColors)}
+          ${donutFromLegend('Operating System', osLegend, osColors, 'operatingSystem')}
         </div>`
       : '';
 
-    const groupWidgets = (groupLabel, g, note) => {
+    // itemKeys (Device Health "include in PDF" sub-toggles, by request --
+    // "Allow Each of the Workstation widgets to have their own tick box")
+    // is only ever passed for the Workstations call below, not Servers --
+    // Servers' own Antivirus donut stays bundled under the Device Health
+    // section toggle, same as before, since that's all that was asked for.
+    const groupWidgets = (groupLabel, g, note, itemKeys) => {
       if (!g) return '';
       return `
         <h2 class="client-summary-section-heading">${escapeHtml(groupLabel)} <span class="inline-subtext">(${g.total} device${g.total === 1 ? '' : 's'})</span></h2>
         ${note ? `<p class="inline-subtext">${escapeHtml(note)}</p>` : ''}
         <div class="mtg-widget-grid">
-          ${donutFromLegend(`Patch Management (${g.patch.score}%)`, g.patch.legend, PATCH_COLORS)}
-          ${donutFromLegend(`Software Management (${g.software.score}%)`, g.software.legend, SOFTWARE_COLORS)}
-          ${donutFromLegend(`Antivirus (${g.antivirus.score}%)`, g.antivirus.legend, ANTIVIRUS_COLORS)}
+          ${donutFromLegend(`Patch Management (${g.patch.score}%)`, g.patch.legend, PATCH_COLORS, itemKeys && itemKeys.patch)}
+          ${donutFromLegend(`Software Management (${g.software.score}%)`, g.software.legend, SOFTWARE_COLORS, itemKeys && itemKeys.software)}
+          ${donutFromLegend(`Antivirus (${g.antivirus.score}%)`, g.antivirus.legend, ANTIVIRUS_COLORS, itemKeys && itemKeys.antivirus)}
         </div>`;
     };
 
@@ -939,17 +1538,20 @@ export function mount(container) {
 
     resultsEl.innerHTML = `
       <p class="inline-subtext">${escapeHtml(data.siteName)} -- as of ${new Date(data.asOf).toLocaleString()}</p>
+      ${namedSectionToggleHtml('overallHealthView', 'Overall Health View')}
       <div class="mtg-widget-grid">${gauge}${kpiGrid}${alertsDonut}</div>
+      ${typeWidget || freshnessWidget ? namedSectionToggleHtml('deviceOverview', 'Devices by Type / Check-in Freshness') : ''}
       <div class="live-reports-overview-grid">
         ${typeWidget}
         ${freshnessWidget}
         <div class="live-reports-scorecard-span">${scorecardHtml(data, null)}</div>
       </div>
+      ${namedSectionToggleHtml('deviceHealth', 'Device Health')}
       <div class="mtg-widget-grid">
         <div>${assetManagementTableHtml(data.assetManagementDetail)}</div>
         <div>${monitoringTableHtml(data.monitoringDetail)}</div>
       </div>
-      ${groupWidgets('Workstations', data.workstation)}
+      ${groupWidgets('Workstations', data.workstation, undefined, { patch: 'workstationPatch', software: 'workstationSoftware', antivirus: 'workstationAntivirus' })}
       ${groupWidgets(
         'Servers',
         data.server,

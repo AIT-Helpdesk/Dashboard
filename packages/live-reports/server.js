@@ -1,5 +1,5 @@
 const express = require('express');
-const { matchesWildcard, mapWithConcurrency, getClient, resolveSingleCompany, fetchByFieldIn } = require('@dashboard/autotask-client');
+const { matchesWildcard, mapWithConcurrency, getClient, resolveSingleCompany, fetchByFieldIn, getPicklistLabels } = require('@dashboard/autotask-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 // Datto RMM (Live) section, by request -- reuses Meeting Prep's own
 // buildDattoLiveDevicesComponent() in-process (same "reuse the sibling's
@@ -33,6 +33,28 @@ const huntress = require('@dashboard/client-summary/huntress.js');
 // pdfkit draws the PDF in-process, no second process launched at all.
 const { buildReportPdf } = require('./pdf-template.js');
 const { hasAnthropicCredentials, buildCommentary } = require('./ai-commentary.js');
+const { getCybersecurityServicesTable } = require('./sharepoint-client.js');
+const emailDomainProtection = require('./email-domain-protection.js');
+
+// Generate Summary (AI narrative) gated to a named allow-list, by
+// request -- same comma-separated-names-in-an-env-var convention
+// packages/shell/registry.js's own adminFullAccessNames()/isAdminFullAccess()
+// already use for "only Amber can edit shared nav structure" elsewhere on
+// this dashboard, just kept local to this file since it's only this one
+// page's own button being gated, not a dashboard-wide permission. Checked
+// server-side on the real /commentary route below (not just used to hide
+// the button in client.js) -- hiding a button is never real access
+// control on its own.
+function allowedReportAiNames() {
+  return (process.env.ALLOW_REPORT_AI_GENERATION || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+function canGenerateReportAi(req) {
+  const name = req.session?.user?.name?.trim().toLowerCase();
+  return !!name && allowedReportAiNames().includes(name);
+}
 
 // Live Reports -- "Present to Client" -- by request: a live-pulled
 // equivalent of Datto RMM's own canned "Executive Summary Report" (the
@@ -1190,6 +1212,7 @@ router.get('/', async (req, res) => {
       // own MAX_ALERT_PAGES) makes even THIS client's count potentially
       // incomplete, worth flagging rather than silently inheriting.
       alertsTruncated: alertsResult.truncated,
+      canGenerateAi: canGenerateReportAi(req),
     });
   } catch (err) {
     console.error(err);
@@ -1226,6 +1249,24 @@ router.get('/vendors', async (req, res) => {
   }
 });
 
+// Email Domain Protection -- live DNS checks, by request, loaded
+// separately from /vendors above (its own IT Glue + DNS round trips,
+// same "don't slow down the fast stuff waiting on a slower one" reasoning
+// already documented above buildVendorSummaries()) -- client.js fetches
+// this on its own once the Cybersecurity Systems grid is up, same pattern
+// loadVendorSummaries() already uses for "Other Systems" filling in
+// underneath the fast Datto RMM report.
+router.get('/email-domain-protection', async (req, res) => {
+  const siteName = (req.query.siteName || '').trim();
+  if (!siteName) return res.status(400).json({ error: 'Query param "siteName" is required.' });
+  try {
+    res.json(await emailDomainProtection.getStatus(siteName));
+  } catch (err) {
+    console.error('live-reports: Email Domain Protection status failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Branded PDF export -- by request. Takes the EXACT report/vendors JSON
 // the browser already fetched and rendered on screen (not re-fetched
 // here), so the PDF always matches what's actually showing, and this
@@ -1239,6 +1280,26 @@ router.get('/vendors', async (req, res) => {
 // with a long device list genuinely exceeds that.
 router.use(express.json({ limit: '5mb' }));
 
+// IT Glue's Domains resource turned out to be READ-ONLY via their public
+// API (confirmed live -- see email-domain-protection.js's own header
+// comment: GET /domains/{id} works, every PATCH shape tried 404s with an
+// empty body). So there's no write-back route any more -- this just runs
+// the real DNS checks against whatever domain the admin picked/typed on
+// screen for the CURRENT report, by request ("Allow the user of Live
+// Reports to choose or enter a domain and prompt them to fix IT Glue").
+// client.js's own picker shows the "go fix IT Glue" instruction itself;
+// this route only ever does the DNS part.
+router.post('/email-domain-protection/check-domain', async (req, res) => {
+  const domain = (req.body?.domain || '').trim();
+  if (!domain) return res.status(400).json({ error: '"domain" is required.' });
+  try {
+    res.json({ status: 'ok', ...(await emailDomainProtection.runDnsChecks(domain)) });
+  } catch (err) {
+    console.error('live-reports: Email Domain Protection check-domain failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Generates just the AI commentary (Executive Summary/On Track/Action
 // Needed/Watch/Recommendations), separately from the PDF itself, by
 // request ("a button to generate the ... sections before requesting the
@@ -1248,6 +1309,7 @@ router.use(express.json({ limit: '5mb' }));
 // along as `commentary` on the /pdf call below, which uses it as-is
 // instead of calling Claude a second time.
 router.post('/commentary', async (req, res) => {
+  if (!canGenerateReportAi(req)) return res.status(403).json({ error: 'Not permitted to generate the AI report narrative.' });
   const { report, vendors } = req.body || {};
   if (!report || !vendors) return res.status(400).json({ error: 'Both "report" and "vendors" are required in the request body.' });
   if (!hasAnthropicCredentials()) return res.status(400).json({ error: 'AI commentary is not configured on this server (missing ANTHROPIC_API_KEY).' });
@@ -1261,26 +1323,182 @@ router.post('/commentary', async (req, res) => {
   }
 });
 
+// Mail Domain Protection -- looked up manually in EasyDMARC and typed in
+// on screen (client.js's own editable widget, there's no EasyDMARC API
+// connected to this dashboard yet), so this is just shape validation, not
+// a live lookup. Malformed/missing input returns null, not a guessed
+// default -- pdf-template.js's own drawMailDomainProtection() skips the
+// section entirely rather than ever showing invented numbers. score and
+// the 3 dot levels are picked by hand on screen too, by request -- not
+// derived from spfPassRate/dkimPassRate, which are only ever shown as
+// their own separate numbers.
+const MDP_LEVELS = new Set(['light', 'medium', 'dark']);
+function parseMailDomainProtection(input) {
+  if (!input || typeof input !== 'object') return null;
+  const score = Number(input.score);
+  if (!Number.isFinite(score)) return null;
+  const policy = ['none', 'quarantine', 'reject'].includes(input.dmarcPolicy) ? input.dmarcPolicy : 'none';
+  const level = (key) => (MDP_LEVELS.has(input[key]) ? input[key] : 'dark');
+  const spf = Number(input.spfPassRate);
+  const dkim = Number(input.dkimPassRate);
+  if (!Number.isFinite(spf) || !Number.isFinite(dkim)) return null;
+  return {
+    score: Math.max(0, Math.min(10, Math.round(score))),
+    dmarcPolicy: policy,
+    dmarcLevel: level('dmarcLevel'),
+    spfLevel: level('spfLevel'),
+    dkimLevel: level('dkimLevel'),
+    spfPassRate: Math.max(0, Math.min(100, spf)),
+    dkimPassRate: Math.max(0, Math.min(100, dkim)),
+  };
+}
+
+// Per-section/per-card "include in PDF" tick boxes, by request -- client.js's
+// own checkboxes (ticked by default on every section heading and every
+// Cybersecurity Systems card). Pass-through only: pdf-template.js is what
+// actually decides "missing/undefined still shows, explicit false hides
+// it" (same convention everywhere there), so this just strips anything
+// that isn't a plain object down to an empty one -- an old client that
+// never sends `sections` at all still gets every section shown.
+function parseSections(input) {
+  const sections = input && typeof input === 'object' ? { ...input } : {};
+  sections.cyberCards = sections.cyberCards && typeof sections.cyberCards === 'object' ? sections.cyberCards : {};
+  sections.deviceHealthItems = sections.deviceHealthItems && typeof sections.deviceHealthItems === 'object' ? sections.deviceHealthItems : {};
+  return sections;
+}
+
+// Which of the SharePoint table's own service rows this specific client
+// actually has, by request -- 2 independent signals, either one ticks it:
+// (1) the client's own Autotask Classification matched against that row's
+// TC Elite/TC Essentials/All Clients column (below), and (2) a real "yes,
+// this client has it" signal already available elsewhere in this file
+// (this list). Matched by keyword against each row's own service name
+// (not a fixed column index/exact string), since the live table's
+// wording is edited on the intranet page, outside this file's control. A
+// row with neither signal available (Email Security, Dark Web
+// Monitoring, Security Awareness Training -- no vendor integration here
+// yet, and presumably not Y on this client's own tier column either) is
+// left unticked rather than guessed. Antivirus/Anti-Malware/Anti-
+// Ransomware is covered by Datto EDR's own install flag, by request
+// ("Antivirus is covered by EDR") -- this dashboard has no separate AV
+// vendor integration of its own.
+const CYBER_SERVICE_IMPLEMENTED_CHECKS = [
+  { match: /saas.*cloud.*activity alerts|saas alerts/i, implemented: (vendors) => vendors?.saasAlerts?.status === 'ok' && !!vendors.saasAlerts.monitored },
+  { match: /saas backups|saas protection/i, implemented: (vendors) => vendors?.saasProtection?.status === 'ok' && !!vendors.saasProtection.installed },
+  { match: /antivirus|anti-malware|anti-ransomware/i, implemented: (vendors) => vendors?.dattoEdr?.status === 'ok' && !!vendors.dattoEdr.installed },
+  { match: /endpoint detection/i, implemented: (vendors) => vendors?.dattoEdr?.status === 'ok' && !!vendors.dattoEdr.installed },
+  { match: /huntress/i, implemented: (vendors) => vendors?.huntress?.status === 'ok' && !!vendors.huntress.installed },
+  { match: /autoelevate/i, implemented: (vendors) => vendors?.autoElevate?.status === 'ok' && !!vendors.autoElevate.installed && !!vendors.autoElevate.deployedSince },
+  // Mail Domain Protection Monitoring ticks specifically off the live SPF
+  // DNS check finding the EasyDMARC-managed include, by request ("can be
+  // now included only if SPF contains easydmarc.pro") -- not just the
+  // manual-entry widget being filled in (that's its own card, no longer
+  // what this panel row's tick means).
+  { match: /mail domain protection/i, implemented: (vendors, mdp, edp) => !!edp?.spf?.easydmarc },
+];
+function isCyberServiceImplemented(name, vendors, mdp, edp) {
+  const check = CYBER_SERVICE_IMPLEMENTED_CHECKS.find((c) => c.match.test(name));
+  return check ? check.implemented(vendors, mdp, edp) : false;
+}
+
+// This client's own Autotask Classification, mapped to whichever of the
+// SharePoint table's own 3 tier columns actually applies -- "TC Elite"/
+// "TC Essentials" when the classification label matches one of those (a
+// loose substring match, not an exact string, since the exact label
+// wording lives in Autotask's own picklist config, outside this file's
+// control, same reasoning the keyword matches above use); "All Clients"
+// otherwise (no classification, an unmatched one, or the company itself
+// couldn't be resolved by name -- same honest "don't guess past an
+// ambiguous/missing match" resolveSingleCompany() already follows
+// elsewhere in this file). Never throws -- a classification lookup
+// failure degrades to "All Clients" rather than losing the whole panel.
+async function resolveCyberServiceTierColumn(siteName) {
+  try {
+    const client = await getClient();
+    const companyResult = await resolveSingleCompany(client, siteName);
+    if (companyResult.status !== 'ok') return 'All Clients';
+    const code = companyResult.company.classification;
+    if (code == null) return 'All Clients';
+    const classificationLabels = await getPicklistLabels(client.companies, 'classification');
+    const label = classificationLabels.get(code) || '';
+    if (/elite/i.test(label)) return 'TC Elite';
+    if (/essential/i.test(label)) return 'TC Essentials';
+    return 'All Clients';
+  } catch (err) {
+    console.error('live-reports: could not resolve client Classification for Cybersecurity Services tiering, defaulting to "All Clients":', err.message);
+    return 'All Clients';
+  }
+}
+
+// Rows with an 'N' in the SharePoint page's own "Show" column (admin-
+// added there, not part of the original 4 columns) are left out of the
+// panel entirely, by request -- missing/anything-else-but-'N' still
+// shows, same "only an explicit exclusion hides it" convention every
+// other toggle in this file already follows.
+function buildCyberServiceItems(rows, vendors, mdp, tierColumn, edp) {
+  return rows
+    .filter((r) => (r.raw.Show || '').trim().toUpperCase() !== 'N')
+    .map((r) => {
+      const tierTicked = (r.raw[tierColumn] || '').trim().toUpperCase() === 'Y';
+      return { title: r.name, body: r.description, implemented: tierTicked || isCyberServiceImplemented(r.name, vendors, mdp, edp) };
+    });
+}
+
 router.post('/pdf', async (req, res) => {
-  const { report, vendors, commentary: suppliedCommentary } = req.body || {};
+  const { report, vendors, commentary: suppliedCommentary, mailDomainProtection: suppliedMdp, sections: suppliedSections } = req.body || {};
   if (!report || !vendors) return res.status(400).json({ error: 'Both "report" and "vendors" are required in the request body.' });
   try {
     // A commentary object from the client (the Generate Summary/edit flow
-    // above) is used exactly as given, no second AI call. Otherwise falls
-    // back to the original behaviour -- generate it here automatically, or
-    // ship the PDF without these sections entirely when a missing
-    // ANTHROPIC_API_KEY or a failed Claude call means there's nothing to
-    // use (pdf-template.js already renders fine with commentary == null),
-    // never blocking the rest of the (real, live) report from generating.
-    let commentary = suppliedCommentary || null;
-    if (!commentary && hasAnthropicCredentials()) {
-      try {
-        commentary = await buildCommentary(report, vendors);
-      } catch (err) {
-        console.error('live-reports: AI commentary call failed, shipping the PDF without it:', err.message);
+    // above) is used exactly as given, no second AI call -- and if Generate
+    // Summary was never run, this route no longer calls Claude itself
+    // either, by request. commentary is just null in that case;
+    // pdf-template.js renders placeholder space for those sections rather
+    // than omitting them, so the PDF's layout doesn't vary depending on
+    // whether Generate Summary was run first.
+    const commentary = suppliedCommentary || null;
+    const mailDomainProtection = parseMailDomainProtection(suppliedMdp);
+    const sections = parseSections(suppliedSections);
+    // Domain name itself comes from the client (whatever's currently
+    // resolved on screen -- either IT Glue's own automatic match, or an
+    // admin's manual pick/typed-in domain for this report, since IT
+    // Glue's Domains resource turned out to be read-only via their API --
+    // see email-domain-protection.js's own header), but the DNS checks
+    // themselves are always re-run fresh here, never trusted from the
+    // client, same "the real check happens server-side at PDF time"
+    // principle Mail Domain Protection Monitoring's own manual fields
+    // don't need (those ARE the admin's input) but this partly automated
+    // one still can for the part that's cheap to re-verify. Falls back to
+    // IT Glue's own automatic resolution only when the client sent no
+    // domain at all (an older client, or the card never resolved) --
+    // `null` either way it can't resolve, same "card just doesn't show"
+    // handling as before. Computed BEFORE cyberServiceItems below, by
+    // request -- the Cybersecurity Services panel's own Mail Domain
+    // Protection Monitoring row now ticks off this same SPF result (see
+    // isCyberServiceImplemented()'s own comment), not the manual widget.
+    let emailDomainProtectionData = null;
+    try {
+      const suppliedDomain = (req.body.emailDomainProtectionDomain || '').trim();
+      if (suppliedDomain) {
+        emailDomainProtectionData = { status: 'ok', ...(await emailDomainProtection.runDnsChecks(suppliedDomain)) };
+      } else {
+        const status = await emailDomainProtection.getStatus(report.siteName);
+        if (status.status === 'ok') emailDomainProtectionData = status;
       }
+    } catch (err) {
+      console.error('live-reports: Email Domain Protection lookup failed for PDF, omitting the card:', err.message);
     }
-    const pdf = await buildReportPdf({ report, vendors, commentary });
+    // Live SharePoint table, by request -- never blocks the rest of the
+    // (real, live) report over this one optional lookup; pdf-template.js's
+    // own drawCybersecurityExplanations() falls back to its old hardcoded
+    // list when cyberServiceItems is undefined/empty.
+    let cyberServiceItems;
+    try {
+      const [rows, tierColumn] = await Promise.all([getCybersecurityServicesTable(), resolveCyberServiceTierColumn(report.siteName)]);
+      cyberServiceItems = buildCyberServiceItems(rows, vendors, mailDomainProtection, tierColumn, emailDomainProtectionData);
+    } catch (err) {
+      console.error('live-reports: Cybersecurity Services table fetch failed, falling back to the static list:', err.message);
+    }
+    const pdf = await buildReportPdf({ report, vendors, commentary, mailDomainProtection, sections, cyberServiceItems, emailDomainProtectionData });
     // Windows-illegal filename characters stripped, same reasoning every
     // other generated-filename helper on this dashboard already follows.
     const filename = `${report.siteName} - Managed Services Report - ${new Date().toISOString().slice(0, 10)}.pdf`.replace(/[\\/:*?"<>|]/g, '');

@@ -20,4 +20,23 @@ async function get(path, params) {
   return res.data;
 }
 
-module.exports = { get };
+// Write support, by request (packages/live-reports' own Email Domain
+// Protection card -- adding/marking a client's primary domain in IT
+// Glue's native Domains feature). Standard JSON:API body shape (same
+// {data: {type, attributes}} envelope every IT Glue resource uses) --
+// content-type has to be the real vnd.api+json media type, not plain
+// json, or the real API rejects the write.
+async function patch(path, body) {
+  const res = await axios.patch(`${BASE_URL}${path}`, body, {
+    headers: { 'x-api-key': API_KEY, 'Content-Type': 'application/vnd.api+json' },
+  });
+  return res.data;
+}
+async function post(path, body) {
+  const res = await axios.post(`${BASE_URL}${path}`, body, {
+    headers: { 'x-api-key': API_KEY, 'Content-Type': 'application/vnd.api+json' },
+  });
+  return res.data;
+}
+
+module.exports = { get, patch, post };
