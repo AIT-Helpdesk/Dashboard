@@ -1532,14 +1532,23 @@ function drawExplanationsBox(doc, y, items) {
   items.forEach((item, i) => {
     doc.font('Helvetica-Bold').fontSize(fontSize).fillColor(BRAND_PURPLE);
     doc.text(item.title, MARGIN + pad, iy, { width: w - pad * 2 });
-    if (item.implemented) {
+    // `item.implemented` is a real boolean (never undefined) for every
+    // Cybersecurity Module Descriptions item -- buildCyberServiceItems()
+    // in server.js always resolves it one way or the other -- so `false`
+    // here means "checked, and this client doesn't have it" and earns a
+    // red X, by request. Understanding Your Scores' own items (the other
+    // caller of this shared box) never set `implemented` at all
+    // (undefined), so they still draw neither mark, same as before --
+    // `undefined` isn't "checked and missing", it's "not applicable here".
+    if (item.implemented === true || item.implemented === false) {
       // widthOfString() measures the title as ONE line -- fine for these
       // (short service names that don't wrap in practice); a title that
       // did wrap would still get a mark, just positioned off the first
       // line's own measured width rather than hunting for the true last
       // line's end.
       const titleWidth = doc.widthOfString(item.title, { width: w - pad * 2 });
-      drawCheckMark(doc, MARGIN + pad + titleWidth + 6, iy + 1, fontSize, BRAND_GREEN);
+      if (item.implemented) drawCheckMark(doc, MARGIN + pad + titleWidth + 6, iy + 1, fontSize, BRAND_GREEN);
+      else drawXMark(doc, MARGIN + pad + titleWidth + 6, iy + 1, fontSize, RED);
     }
     iy += titleHeights[i] + titleGap;
     doc.font('Helvetica').fontSize(fontSize).fillColor(INK).text(item.body, MARGIN + pad, iy, { width: w - pad * 2 });
@@ -2241,4 +2250,10 @@ function buildReportPdf({ report, vendors, commentary, mailDomainProtection, sec
   });
 }
 
-module.exports = { buildReportPdf };
+// CYBERSECURITY_EXPLANATIONS/SCORE_EXPLANATIONS also exported -- by
+// request, server.js's own new GET /report-explanations route (the
+// on-screen "Understanding Your Scores"/"Cybersecurity Module
+// Descriptions" sections, previously PDF-only) reuses these exact same
+// constants rather than a second, separately-maintained copy of this
+// fixed reference text.
+module.exports = { buildReportPdf, CYBERSECURITY_EXPLANATIONS, SCORE_EXPLANATIONS };

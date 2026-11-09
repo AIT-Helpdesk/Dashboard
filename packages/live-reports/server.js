@@ -31,9 +31,9 @@ const huntress = require('@dashboard/client-summary/huntress.js');
 // (Local System, Session 0) fails every time, a well-documented and
 // largely unfixable-from-code limitation of that execution context.
 // pdfkit draws the PDF in-process, no second process launched at all.
-const { buildReportPdf } = require('./pdf-template.js');
+const { buildReportPdf, CYBERSECURITY_EXPLANATIONS, SCORE_EXPLANATIONS } = require('./pdf-template.js');
 const { hasAnthropicCredentials, buildCommentary } = require('./ai-commentary.js');
-const { getCybersecurityServicesTable } = require('./sharepoint-client.js');
+const { getCybersecurityServicesTable, getProactiveMaintenanceJobsTable } = require('./sharepoint-client.js');
 const emailDomainProtection = require('./email-domain-protection.js');
 
 // Generate Summary (AI narrative) gated to a named allow-list, by
@@ -130,24 +130,6 @@ async function getCachedDevices(force) {
   return devicesInFlight;
 }
 
-let alertsCache = null; // { data, expiresAt }
-let alertsInFlight = null;
-async function getCachedAlerts(force) {
-  if (!force && alertsCache && Date.now() < alertsCache.expiresAt) return alertsCache.data;
-  if (!alertsInFlight) {
-    alertsInFlight = dattoRmm
-      .getOpenAlerts()
-      .then((data) => {
-        alertsCache = { data, expiresAt: Date.now() + DATTO_CACHE_TTL_MS };
-        return data;
-      })
-      .finally(() => {
-        alertsInFlight = null;
-      });
-  }
-  return alertsInFlight;
-}
-
 // Per-device audit cache (disk free%/memory for Asset Management), keyed by
 // deviceUid -- deliberately a SEPARATE, much longer-lived cache from
 // devicesCache above: that one call is one full device-list fetch regardless
@@ -174,9 +156,15 @@ async function getCachedDeviceAudit(deviceUid, force) {
 }
 
 // Site-scoped alert Raised/Unresolved-by-priority breakdown (for Monitoring),
-// keyed by siteUid -- its own cache, same 20-minute TTL as devicesCache/
-// alertsCache above (cheap: bounded to one site's own alert volume, not the
-// whole account).
+// keyed by siteUid -- its own cache, same 20-minute TTL as devicesCache
+// above (cheap: bounded to one site's own alert volume, not the whole
+// account). This is now also the SOLE source for Open Alerts
+// (alertsByPriority/alertsTotalCount below), by request ("can it be
+// restricted by leaving out informational alerts?" -- answer was no,
+// Datto's API has no server-side priority filter, but this site-scoped
+// endpoint sidesteps the whole problem: it was already being fetched for
+// Monitoring, is genuinely scoped to just this client, and can't hit the
+// account-wide safety cap the old getOpenAlerts()-based approach could).
 const SITE_ALERTS_BREAKDOWN_CACHE_TTL_MS = DATTO_CACHE_TTL_MS;
 const siteAlertsBreakdownCache = new Map(); // siteUid -> { data, expiresAt }
 async function getCachedSiteAlertsBreakdown(siteUid, force) {
@@ -894,28 +882,35 @@ async function buildHuntressSummary(siteName, force) {
 }
 
 // Proactive Maintenance list, by request -- a standard, account-wide list
-// of regularly scheduled automated activities (NOT pulled live: confirmed
-// against Datto RMM's own real API surface this session -- its only
-// job-related endpoints are GET /v2/job/{uid} and its 3 result
+// of regularly scheduled automated activities (NOT pulled from Datto RMM
+// itself: confirmed against its own real API surface this session -- its
+// only job-related endpoints are GET /v2/job/{uid} and its 3 result
 // sub-routes, plus PUT .../quickjob to CREATE one; there is no list/
 // search endpoint, so a specific client's own scheduled jobs genuinely
-// can't be enumerated via the API at all). Configured via one env var,
-// PROACTIVE_MAINTENANCE_ITEMS, items separated by `|` (a single .env line
-// can't hold real newlines) -- e.g.
-// PROACTIVE_MAINTENANCE_ITEMS=Automated patch deployment|AV engine updates|Scheduled reboots
-// -- falls back to a drafted default list when that's not set, so the
-// report never ships with an empty section. Single source of truth for
+// can't be enumerated via the API at all). Single source of truth for
 // BOTH surfaces (the on-screen page and the PDF both read this same
 // report.proactiveMaintenance field) -- neither hardcodes its own copy.
-// Pulled from the real "Proactive Maintenance Jobs" table on the Tech
-// Handbook's own "PC Security Settings Applied" SharePoint page (read via
-// the Microsoft 365 connector, by request -- one-time manual transcription
-// for now, not a live sync; direct SharePoint/Graph API access for this
-// server itself is a separate future step). Each line is that row's own
-// bracketed client-facing description, schedule appended -- only rows
-// marked "Y" in that table's own "Show on Client Executive Reports"
-// column belong here (honour that Y/N split on every re-sync; there are
-// no N rows as of this transcription, so all 10 are currently included).
+//
+// Now pulled LIVE off the real "Proactive Maintenance Jobs" table on the
+// Tech Handbook's own "PC Security Settings Applied" SharePoint page, by
+// request ("do this now like we do for the Cybersecurity Systems
+// descriptions") -- same sharepoint-client.js, same live-fetch-with-
+// static-fallback shape that table already established, replacing what
+// used to be a one-time hand transcription of that same table (frozen at
+// whatever it said on the day someone copied it in). Each item is that
+// row's own bracketed client-facing description with its Schedule column
+// appended, e.g. "Backup of drive encryption recovery keys (Weekly)" --
+// only rows marked "Y" in the table's own "Show**"/"Show on Client
+// Executive Reports" column belong here, same Y/N convention
+// buildCyberServiceItems() above already follows for its own "Show"
+// column. PROACTIVE_MAINTENANCE_ITEMS (items separated by `|`, a single
+// .env line can't hold real newlines) still works as a manual override --
+// used only when the live fetch itself fails, same "never block the real
+// report over one optional live-data call" principle as the Cybersecurity
+// table; DEFAULT_PROACTIVE_MAINTENANCE_ITEMS (this file's own last-resort
+// copy, frozen at an earlier read of that same table) is the final
+// fallback under that, so the report never ships with an empty section
+// even when BOTH the live fetch and the env var are unavailable.
 const DEFAULT_PROACTIVE_MAINTENANCE_ITEMS = [
   'Backup of drive encryption recovery keys (Weekly)',
   'Check that threat detection monitoring is active (Daily)',
@@ -928,7 +923,21 @@ const DEFAULT_PROACTIVE_MAINTENANCE_ITEMS = [
   'Check System Restore is enabled (Monthly)',
   'Verify and enforce endpoint security hardening (Daily)',
 ];
-function getProactiveMaintenanceItems() {
+async function getProactiveMaintenanceItems() {
+  try {
+    const rows = await getProactiveMaintenanceJobsTable();
+    const items = rows
+      .filter((r) => (r.raw['Show**'] || '').trim().toUpperCase() === 'Y')
+      .map((r) => {
+        const text = r.description || r.name;
+        const schedule = (r.raw.Schedule || '').trim();
+        return schedule ? `${text} (${schedule})` : text;
+      })
+      .filter(Boolean);
+    if (items.length > 0) return items;
+  } catch (err) {
+    console.error('live-reports: Proactive Maintenance Jobs table fetch failed, falling back:', err.message);
+  }
   const raw = (process.env.PROACTIVE_MAINTENANCE_ITEMS || '').trim();
   if (!raw) return DEFAULT_PROACTIVE_MAINTENANCE_ITEMS;
   const items = raw.split('|').map((s) => s.trim()).filter(Boolean);
@@ -1108,35 +1117,54 @@ router.get('/', async (req, res) => {
   const matchesSite = (value) => (exactSite ? (value || '').trim().toLowerCase() === siteTerm.toLowerCase() : matchesWildcard(value, siteTerm));
   try {
     const force = req.query.force === 'true';
-    const [allDevices, alertsResult] = await Promise.all([getCachedDevices(force), getCachedAlerts(force)]);
+    const allDevices = await getCachedDevices(force);
     const devices = allDevices.filter((d) => matchesSite(d.site));
     if (devices.length === 0) {
       return res.json({ connected: true, siteTerm, found: false });
     }
 
-    const alerts = alertsResult.alerts.filter((a) => matchesSite(a.siteName));
-    // alertsByPriority/alertsTotalCount below stay Critical/High only,
-    // unchanged -- Monitoring's own real per-priority breakdown (ALL 5
-    // tiers, Raised/Unresolved, not just Critical/High open counts) comes
-    // from the site-scoped fetch below instead, keyed by siteUid (every
-    // matched device shares the same one). Device audits (disk/memory, one
-    // call per device) and the site's alert breakdown are fetched here,
-    // once, and handed to both the rolled-up score AND the full breakdown
-    // the on-screen/PDF widgets show -- neither re-fetches what the other
-    // already has.
+    // Device audits (disk/memory, one call per device) and the site's
+    // alert breakdown are fetched here, once, and handed to both the
+    // rolled-up score AND the full breakdown the on-screen/PDF widgets
+    // show -- neither re-fetches what the other already has.
+    // alertsByPriority/alertsTotalCount below (Open Alerts, Critical/High
+    // only) now come from this SAME site-scoped breakdown too, by
+    // request -- the account-wide getOpenAlerts()/getCachedAlerts() pull
+    // this used to filter by site name is gone: that pull could hit its
+    // own account-wide safety cap (MAX_ALERT_PAGES in datto-rmm/lib.js)
+    // and had no server-side priority filter to shrink it with, where
+    // this endpoint is already scoped to just this one site from the
+    // start and was already being fetched here anyway.
     const siteUid = devices[0].siteUid;
     const [audits, siteAlertsBreakdown] = await Promise.all([
       mapWithConcurrency(devices, 5, (d) => getCachedDeviceAudit(d.id, force)),
       siteUid ? getCachedSiteAlertsBreakdown(siteUid, force) : Promise.resolve(null),
     ]);
     const assetManagementDetail = computeAssetManagementDetail(devices, audits);
-    const monitoringDetail = computeMonitoringDetail(siteAlertsBreakdown);
+    const monitoringDetail = computeMonitoringDetail(siteAlertsBreakdown?.byPriority ?? null);
     const hardwareLifecycle = computeHardwareLifecycle(devices);
     const assetManagement = assetManagementDetail?.score ?? null;
     const monitoring = monitoringDetail?.score ?? null;
     const { workstation, server, overallScore } = computeOverallHealth(devices, { assetManagement, monitoring });
 
-    const alertsByPriority = ['Critical', 'High'].map((priority) => ({ priority, count: alerts.filter((a) => a.priority === priority).length }));
+    // Open Alerts (Critical/High), unchanged -- still what the PDF/
+    // scorecard/AI commentary show, kept to this same 2-tier scope by
+    // request (the widened Critical/High/Moderate view below is an
+    // on-screen-only addition, not a redefinition of this existing
+    // figure). Counts derived straight from `openAlerts` (now Critical/
+    // High/Moderate) rather than a separate fetch -- one source of truth,
+    // so these numbers can never drift from what the list below shows.
+    const openAlerts = siteAlertsBreakdown?.openAlertsList ?? [];
+    const alertsByPriority = ['Critical', 'High'].map((priority) => ({ priority, count: openAlerts.filter((a) => a.priority === priority).length }));
+    // New on-screen widget, by request ("show that widget with Raised in
+    // last 30 days and open alerts critical, high, moderate ... with
+    // their counts") -- Overall Health View's own alertSummaryTableHtml()
+    // in client.js (replaces the old plain Open Alerts donut).
+    const alertSummaryByPriority = ['Critical', 'High', 'Moderate'].map((priority) => ({
+      priority,
+      raisedLast30Days: siteAlertsBreakdown?.byPriority?.[priority]?.raisedLast30Days ?? 0,
+      open: siteAlertsBreakdown?.byPriority?.[priority]?.unresolved ?? 0,
+    }));
 
     const asOf = new Date().toISOString();
     // First section on the page, by request -- same component shape
@@ -1185,11 +1213,20 @@ router.get('/', async (req, res) => {
 
     const siteName = devices[0].site;
 
+    // Resolved here (not just in the /pdf route, which already uses this
+    // for the Cybersecurity Systems panel's own per-tier columns) so
+    // client.js can default Mail Domain Protection Monitoring's "include
+    // in PDF" tick to UNTICKED for anyone who isn't TC Elite, by request --
+    // never throws (see this function's own try/catch), degrading to "All
+    // Clients" (-> isTcElite: false) rather than losing the report.
+    const tierColumn = await resolveCyberServiceTierColumn(siteName);
+
     res.json({
       connected: true,
       asOf,
       siteTerm,
       siteName,
+      isTcElite: tierColumn === 'TC Elite',
       found: true,
       dattoLive,
       totalDevices: devices.length,
@@ -1203,15 +1240,18 @@ router.get('/', async (req, res) => {
       assetManagementDetail,
       monitoringDetail,
       hardwareLifecycle,
-      proactiveMaintenance: getProactiveMaintenanceItems(),
+      proactiveMaintenance: await getProactiveMaintenanceItems(),
       alertsByPriority,
-      alertsTotalCount: alerts.length,
-      // Real total (alertsResult.totalCount, account-wide High/Critical)
-      // can exceed this client's own matched count without truncation --
-      // only a genuine hit of the account-wide safety cap (see lib.js's
-      // own MAX_ALERT_PAGES) makes even THIS client's count potentially
-      // incomplete, worth flagging rather than silently inheriting.
-      alertsTruncated: alertsResult.truncated,
+      alertsTotalCount: alertsByPriority.reduce((sum, a) => sum + a.count, 0),
+      alertSummaryByPriority,
+      // The actual open Critical/High/Moderate alerts themselves, by
+      // request ("also list them") -- shown on-screen under Overall
+      // Health View (openAlertsListHtml() in client.js) so Amber can
+      // cross-check them directly against Datto RMM's own console; not
+      // sent to the PDF (that stays a plain Critical/High count, same as
+      // before -- a client report isn't the place for raw per-device
+      // Datto alert text).
+      openAlerts,
       canGenerateAi: canGenerateReportAi(req),
     });
   } catch (err) {
@@ -1228,7 +1268,7 @@ router.get('/', async (req, res) => {
 // route's own response made the whole page take 60-70+ seconds on a cold
 // per-client cache (several of these -- SaaS Protection's own per-customer
 // /applications+/seats detail in particular -- have no account-wide warm
-// path the way Datto RMM's own getCachedDevices()/getCachedAlerts() do),
+// path the way Datto RMM's own getCachedDevices()/getCachedSiteAlertsBreakdown() do),
 // which read as "the page isn't returning anything" rather than "slow".
 // Splitting it out means the fast Datto RMM report (unchanged from before
 // this section existed) shows immediately, with this section filling in
@@ -1263,6 +1303,39 @@ router.get('/email-domain-protection', async (req, res) => {
     res.json(await emailDomainProtection.getStatus(siteName));
   } catch (err) {
     console.error('live-reports: Email Domain Protection status failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reference content for the ON-SCREEN "Understanding Your Scores" and
+// "Cybersecurity Module Descriptions" sections, by request -- both were
+// PDF-only until now (pdf-template.js's own drawScoreExplanations()/
+// drawCybersecurityExplanations()). Not siteName-scoped -- this is the
+// same fixed/live reference text regardless of which client's report is
+// currently on screen, so client.js fetches and caches it ONCE per page
+// load rather than re-fetching on every client search. Cybersecurity
+// Module Descriptions reuses the exact same live SharePoint table the PDF
+// does (getCybersecurityServicesTable(), same Show!='N' filter), just
+// without the PDF's own per-vendor/per-tier tick logic -- this is a plain
+// reference glossary on screen, not a per-client status check, by design.
+// Falls back to pdf-template.js's own CYBERSECURITY_EXPLANATIONS when the
+// live table can't be reached, same as the PDF.
+async function getCyberModuleExplanationItems() {
+  try {
+    const rows = await getCybersecurityServicesTable();
+    const items = rows.filter((r) => (r.raw.Show || '').trim().toUpperCase() !== 'N').map((r) => ({ title: r.name, body: r.description }));
+    if (items.length > 0) return items;
+  } catch (err) {
+    console.error('live-reports: Cybersecurity Services table fetch failed for /report-explanations, falling back:', err.message);
+  }
+  return CYBERSECURITY_EXPLANATIONS;
+}
+
+router.get('/report-explanations', async (req, res) => {
+  try {
+    res.json({ scoreExplanations: SCORE_EXPLANATIONS, cyberModules: await getCyberModuleExplanationItems() });
+  } catch (err) {
+    console.error('live-reports: /report-explanations failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1540,7 +1613,7 @@ async function computeAssetManagementAndMonitoringScores(devices, force) {
     siteUid ? getCachedSiteAlertsBreakdown(siteUid, force) : Promise.resolve(null),
   ]);
   const assetManagementDetail = computeAssetManagementDetail(devices, audits);
-  const monitoringDetail = computeMonitoringDetail(siteAlertsBreakdown);
+  const monitoringDetail = computeMonitoringDetail(siteAlertsBreakdown?.byPriority ?? null);
   return { assetManagement: assetManagementDetail?.score ?? null, monitoring: monitoringDetail?.score ?? null };
 }
 router.computeAssetManagementAndMonitoringScores = computeAssetManagementAndMonitoringScores;

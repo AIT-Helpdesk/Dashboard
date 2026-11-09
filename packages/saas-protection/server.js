@@ -112,14 +112,17 @@ function buildReport(domains, filterTerm) {
   };
 }
 
-// Cached (20-min TTL, same convention as Ingram Subscriptions/Ingram
-// Orders) -- the filter is applied AFTER the cache, not part of the cache
-// key, since /domains returns everyone regardless and filtering is free
-// once fetched; a different search term is instant without re-hitting
-// Datto, unlike Ingram's per-filter cache keys (which exist because ITS
-// filtering has to happen server-side, before the detail-fetch step --
-// no such step exists here).
-const REPORT_CACHE_TTL_MS = 20 * 60 * 1000;
+// Cached (30-min TTL, by request -- purely lazy/on-demand: nothing pulls
+// this proactively in the background, so the first request after this
+// window lapses is the one that pays for the re-fetch, and every other
+// request/refresh inside the window gets the cached result) -- the filter
+// is applied AFTER the cache, not part of the cache key, since /domains
+// returns everyone regardless and filtering is free once fetched; a
+// different search term is instant without re-hitting Datto, unlike
+// Ingram's per-filter cache keys (which exist because ITS filtering has to
+// happen server-side, before the detail-fetch step -- no such step exists
+// here).
+const REPORT_CACHE_TTL_MS = 30 * 60 * 1000;
 let reportCache = null; // { domains, expiresAt }
 let inFlight = null;
 
@@ -241,13 +244,13 @@ async function fetchSeats(customerId) {
 }
 
 // Per-client detail, fetched on demand when a client's name is clicked --
-// cached per customerId, same 20-min TTL, same rationale as Ingram
+// cached per customerId, same 30-min TTL, same rationale as Ingram
 // Subscriptions' per-client license cache: a repeat click within a session
 // shouldn't redo the work, but this is never fetched for all ~230+ clients
 // up front. Applications and seats are cached SEPARATELY (not as one combined
 // blob) so the widget buckets below (which only ever need applications, not
 // seats) share this exact cache instead of re-fetching.
-const DETAIL_CACHE_TTL_MS = 20 * 60 * 1000;
+const DETAIL_CACHE_TTL_MS = 30 * 60 * 1000;
 const applicationsCache = new Map(); // customerId -> { data, expiresAt }
 const applicationsHistoryCache = new Map(); // customerId -> { data, expiresAt } -- the 30-day variant, separate cache (different payload shape/size, different caller)
 const seatsCache = new Map(); // customerId -> { data, expiresAt }
@@ -271,7 +274,7 @@ async function getApplicationsHistory(customerId, force) {
 
 // Client Summary's own "billable seats" detail, by request -- its own
 // small lookup rather than making the caller fetch every seat row itself.
-// Reuses getSeats()'s own cache (20-min TTL), so a client already clicked
+// Reuses getSeats()'s own cache (30-min TTL), so a client already clicked
 // on SaaS Protection's own page this session costs nothing extra here.
 async function getBillableSeatCount(customerId, force) {
   const seats = await getSeats(customerId, force);
@@ -333,12 +336,12 @@ async function getWidgetBucket(bucket, force) {
 // list to page through, so under-counting it to stay cheap would just be
 // wrong. Always over the FULL unfiltered client list (a client-name search
 // narrows the main table, but this widget set is a whole-account KPI, not
-// a per-search one). Cached as one aggregate (20-min TTL) so even a cold
-// cache only pays for the ~230+ live /applications calls once per window,
-// for every widget at once -- every individual call still goes through
-// getApplications()'s own cache too, so a later click into a specific
-// client never re-fetches what this already pulled.
-const SERVICE_AGGREGATE_CACHE_TTL_MS = 20 * 60 * 1000;
+// a per-search one). Cached as one aggregate (30-min TTL, by request) so
+// even a cold cache only pays for the ~230+ live /applications calls once
+// per window, for every widget at once -- every individual call still goes
+// through getApplications()'s own cache too, so a later click into a
+// specific client never re-fetches what this already pulled.
+const SERVICE_AGGREGATE_CACHE_TTL_MS = 30 * 60 * 1000;
 let serviceAggregateCache = null; // { data, expiresAt }
 let serviceAggregateInFlight = null;
 
@@ -373,7 +376,7 @@ async function computeServiceAggregate(force) {
   const { byClient } = buildReport(domains, null);
   const appsByClient = await mapWithConcurrency(byClient, WIDGET_FETCH_CONCURRENCY, (c) =>
     getApplications(c.customerId, force).catch((err) => {
-      console.error(`Failed to fetch applications for customer ${c.customerId} (Datto-side error, excluded):`, err.message);
+      console.error(`SaaS Protection: failed to fetch applications for "${c.clientName}" (customer ${c.customerId}) -- Datto-side error, excluded: ${err.message}`);
       return null;
     })
   );
@@ -471,30 +474,41 @@ async function getServiceAggregate(force) {
   return serviceAggregateInFlight;
 }
 
-// Background pre-warm, by request ("the initial load takes a long time")
-// -- same convention Today Things' own warmCache() uses. Without this, the
-// ~230+-call, ~75s-on-a-cold-cache computeServiceAggregate() run only ever
-// started the moment some user's browser actually asked for it (on first
-// page load after a server restart, or the first request after the 20-min
-// cache expired), making THAT request the one that waits. Warming it here
-// instead -- once immediately at server startup, then on a recurring timer
-// comfortably inside the 20-min TTL -- means a real user's request almost
-// always lands on an already-warm cache. Errors are swallowed (logged, not
-// thrown) -- a failed background warm just leaves the existing cache to
-// expire normally and the next real request pays for its own fetch, same
-// as if this warming didn't exist at all; it should never crash the
-// server. `.unref()` -- doesn't hold the process open on its own (the real
-// HTTP server's own listening socket already does that); lets a
-// short-lived script that merely requires this module still exit
-// naturally rather than hanging on a timer that runs forever.
-const SERVICE_AGGREGATE_WARM_INTERVAL_MS = 15 * 60 * 1000; // comfortably inside the 20-minute SERVICE_AGGREGATE_CACHE_TTL_MS
-function warmServiceAggregateCache() {
+// Scheduled background refresh, by request -- replaces the old always-on
+// warmer (a plain setInterval forcing a full recompute every 15 min, all
+// day, every day, regardless of whether anyone was actually using the
+// page -- that's what was re-hitting the handful of permanently-500ing
+// customers on every single cycle and spamming the same errors over and
+// over). This instead runs only within business hours, at a fixed,
+// predictable minute past each hour -- a staff member who clicks Get Full
+// Refresh at, say, 9:50am still pays for their own cold pull (`force` from
+// the client always wins, see the /service-totals route below), but the
+// account otherwise only takes this ~230+-call hit on this schedule, not
+// continuously. AEST-anchored (not the host's own TZ), same technique
+// todayAestDateString() above uses. Checked once a minute rather than
+// scheduled via setTimeout-to-next-run, so a server restart just picks the
+// schedule back up on its next minute tick instead of needing its own
+// "compute the next run" bootstrap.
+const SCHEDULED_REFRESH_START_HOUR_AEST = 7;
+const SCHEDULED_REFRESH_END_HOUR_AEST = 17; // inclusive -- last run at 17:02
+const SCHEDULED_REFRESH_MINUTE_AEST = 2;
+let lastScheduledRefreshKey = null; // 'YYYY-MM-DDTHH' -- guards against firing twice inside the same qualifying minute
+
+function checkScheduledRefresh() {
+  const aest = new Date(Date.now() + 10 * 60 * 60 * 1000);
+  const hour = aest.getUTCHours();
+  const minute = aest.getUTCMinutes();
+  if (minute !== SCHEDULED_REFRESH_MINUTE_AEST) return;
+  if (hour < SCHEDULED_REFRESH_START_HOUR_AEST || hour > SCHEDULED_REFRESH_END_HOUR_AEST) return;
+  const key = `${aest.toISOString().slice(0, 10)}T${hour}`;
+  if (key === lastScheduledRefreshKey) return;
+  lastScheduledRefreshKey = key;
+  console.log(`SaaS Protection: scheduled ${String(hour).padStart(2, '0')}:${String(SCHEDULED_REFRESH_MINUTE_AEST).padStart(2, '0')} AEST refresh starting.`);
   getServiceAggregate(true).catch((err) => {
-    console.error('saas-protection: background aggregate warm failed:', err.message);
+    console.error('SaaS Protection: scheduled refresh failed:', err.message);
   });
 }
-warmServiceAggregateCache();
-setInterval(warmServiceAggregateCache, SERVICE_AGGREGATE_WARM_INTERVAL_MS).unref();
+setInterval(checkScheduledRefresh, 60 * 1000).unref();
 
 // Same &/and normalization Meeting Prep's own siteMatches()/
 // siteInClassification() use for exactly this reason (its own comment:
@@ -615,7 +629,7 @@ router.get('/widget-detail', async (req, res) => {
 // purely a DB write, no live Datto call, so this is instant regardless of
 // how long the aggregate itself takes to (re)compute. patchServiceAggregateCache()
 // keeps any already-warm cache honest immediately, rather than leaving a
-// stale failure sitting in it until the next natural 20-min recompute.
+// stale failure sitting in it until the next natural 30-min recompute.
 router.post('/accept-failure', (req, res) => {
   const { customerId, appType, clientName, domain, endDate } = req.body || {};
   if (!customerId || !appType) return res.status(400).json({ error: 'customerId and appType are required.' });

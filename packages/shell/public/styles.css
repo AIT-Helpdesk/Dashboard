@@ -3126,6 +3126,156 @@ table {
   border-collapse: collapse;
 }
 
+/* AT Status -- an inactive ticket status still shows (so the list is
+   genuinely complete), just muted rather than removed or styled identically
+   to an active one. */
+.at-status-inactive-row {
+  color: var(--muted);
+}
+
+/* DNS Check -- the SOA section's own "no record"/"lookup failed" state is a
+   plain <p> inside a .resource-group box; every other .resource-group body
+   on the dashboard is a <table> (which brings its own padding), so this
+   gets its own matching padding rather than sitting flush against the
+   box's edges. */
+.dns-check-section-note {
+  margin: 0;
+  padding: 0.75rem 1rem;
+}
+
+/* DNS Check -- the "checked, not found" lists (DKIM selectors/Microsoft
+   365/other security records) at the bottom of the page -- one list per
+   category, by request (a single comma-joined paragraph of a dozen-plus
+   items was unreadable). */
+/* Side by side when there's more than one "checked, not found" section, by
+   request -- a plain CSS multi-column layout (not a grid) so the browser
+   balances content by actual height: the long DKIM list fills column one,
+   and the two shorter sections (Microsoft 365, Other security) flow
+   together into column two underneath each other, rather than a fixed 2x2
+   grid pairing DKIM with Microsoft 365 and stranding Other security alone
+   under DKIM. break-inside: avoid keeps a single section's own heading+list
+   from being split across the column break. Falls back to one column on a
+   narrow window. */
+/* DNS Check's own tables (NS, the main DNS Records table, SOA) -- by
+   request, smaller text and shorter rows than the plain dashboard-wide
+   th/td default (0.9rem td / 0.8rem th, 0.5rem 1rem padding), which reads
+   as too chunky once a table has 20+ rows like this page's main one can.
+   Cells also top-aligned rather than the browser's default vertical-align:
+   middle -- with the SPF value's multi-line vertical list (see
+   spfValueHtml() in client.js), a row with a tall multi-line Value cell was
+   otherwise centering every OTHER cell in that same row around it instead
+   of lining them up with its first line. */
+.dns-check-page table td,
+.dns-check-page table th {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.75rem;
+  vertical-align: top;
+}
+/* Type and Name never wrap -- by request, they're short/predictable
+   (A/MX/CNAME.../a hostname), and applying the Value column's own
+   word-break (below) to EVERY cell was letting the browser's table
+   auto-layout squeeze these two columns down to almost nothing once the
+   long Value column demanded room, breaking "CNAME" mid-word. Scoped to
+   the main DNS Records table's first two columns specifically (:nth-child
+   1/2) -- NS's own single-column table and SOA's label column both get
+   this too, which is harmless/correct for those as well. */
+.dns-check-page table td:nth-child(1),
+.dns-check-page table td:nth-child(2) {
+  white-space: nowrap;
+}
+/* A DKIM public key (or other long TXT value) is one unbroken token with no
+   spaces -- plain word-wrapping only breaks at whitespace, so without this
+   it forces the whole table far wider than the page. That, combined with
+   .resource-group's own dashboard-wide `overflow: hidden`, was clipping
+   off content entirely past the edge -- not just squeezing it, genuinely
+   cutting it off with no way to reach it. Breaking long tokens onto
+   multiple lines fixes the real cause; the overflow-x: auto below is a
+   safety net in case a row is still wider than the page even after that.
+   Scoped to just the Value column (:nth-child(3)) -- Type/Name above are
+   deliberately never broken, and SOA's own value column (its 2nd/last
+   cell) is short enough that it never needed this in the first place. */
+.dns-check-page table td:nth-child(3) {
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+.dns-check-page .resource-group {
+  overflow-x: auto;
+}
+/* The main table's "Other Info" column folded into the Value cell instead,
+   by request -- shown underneath the value in [brackets], grey/italic so
+   it reads as a secondary annotation rather than part of the value itself. */
+.dns-check-info-inline {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* The handful of records someone checking a domain's mail/web setup
+   actually cares about at a glance -- root A, www, MX, DKIM, DMARC, SPF --
+   by request. color-mix against --card (not a flat hex) so it stays a
+   light tint over whatever the current theme's card background is, same
+   convention as .saas-client-shade's own shaded rows. Qualified with
+   .dns-check-page (two classes) rather than just the one class alone --
+   confirmed the hard way that a single class selector LOSES to the
+   dashboard-wide zebra-striping rule (`tbody tr:nth-child(even)`, two
+   elements + a pseudo-class) on specificity, regardless of which rule
+   comes later in the file, so it was silently winning and hiding this
+   highlight on every even-numbered row. */
+.dns-check-page .dns-check-highlight-row {
+  background: color-mix(in srgb, #16a34a 15%, var(--card));
+}
+
+.dns-check-disclaimer {
+  margin: 0 0 0.75rem;
+}
+.dns-check-disclaimer-warning {
+  color: #dc2626;
+}
+
+/* NS and SOA tables -- short, narrow content (a handful of nameservers, or
+   a fixed set of SOA fields) -- sized to their own content instead of
+   stretching full width like every table does by default, by request.
+   Same convention as M365 Environment's own .m365-table-compact: shrinks
+   both the card and the table itself, not just the table alone, so there's
+   no empty space left inside a still-full-width card. The main DNS Records
+   table is deliberately left full-width -- its Value column genuinely
+   needs the room. */
+.dns-check-compact-table {
+  display: inline-block;
+  width: auto;
+}
+.dns-check-compact-table table {
+  width: auto;
+}
+
+.dns-check-notfound-wrap {
+  margin-bottom: 1.5rem;
+}
+.dns-check-notfound-grid {
+  columns: 2;
+  column-gap: 1.5rem;
+}
+@media (max-width: 800px) {
+  .dns-check-notfound-grid {
+    columns: 1;
+  }
+}
+.dns-check-notfound-group {
+  margin-bottom: 0.75rem;
+  break-inside: avoid;
+}
+.dns-check-notfound-label {
+  margin: 0 0 0.25rem;
+}
+.dns-check-notfound-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+.dns-check-notfound-list li + li {
+  margin-top: 0.15rem;
+}
+
 /* Check Client's Microsoft 365 Tenancy table -- by request, shouldn't
    stretch to the full page width the way a plain table does dashboard-wide
    (only 5 narrow columns, no reason to). The table sizes to its own
@@ -3230,6 +3380,14 @@ table {
    every cell in that row). Left un-shrunk rather than truncated with an
    ellipsis -- the real title is what a reader is actually here to read. */
 .scorecard-table td:first-child {
+  white-space: nowrap;
+}
+
+/* Invoice Intake Log's "When (AEST)" column -- by request, don't wrap a
+   short date/time ("9 Nov, 12:00 pm") onto 4 lines; same reasoning as
+   .scorecard-table td:first-child above, just this page's own first
+   column instead of a metric name. */
+.iil-table-wrap td:first-child {
   white-space: nowrap;
 }
 
@@ -10127,6 +10285,11 @@ tr.accrued-time-yellow-row th {
 .live-reports-scorecard-table th,
 .live-reports-device-list table th {
   background: color-mix(in srgb, var(--row-alt-bg), black 12%);
+  /* Narrower header row, by request -- overrides the dashboard-wide
+     `th, td { padding: 0.5rem 1rem; }` base rule's vertical half, just
+     for header cells on this page (body rows/`td` untouched). */
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
 }
 /* STATUS column (always last) centred, by request -- both its header
    label and the pill in every row. */
@@ -10248,6 +10411,47 @@ tr.accrued-time-yellow-row th {
   color: #6b7280;
   font-size: 0.78em;
   font-style: italic;
+}
+
+/* "Source: ..." notes (Proactive Maintenance/Understanding Your Scores/
+   Cybersecurity Module Descriptions), by request -- same small/italic/
+   muted look as .live-reports-proactive-maintenance-caption above, just
+   its own class since these sit between a heading and its content rather
+   than under a finished list. */
+.live-reports-source-note {
+  margin: 0.15rem 0 0.5rem;
+  color: #6b7280;
+  font-size: 0.78em;
+  font-style: italic;
+}
+
+/* Understanding Your Scores / Cybersecurity Module Descriptions, on
+   screen now too (previously PDF-only), by request -- same fixed purple
+   card look as the Proactive Maintenance box above and the PDF's own
+   drawExplanationsBox() (#f3f1fb + BRAND_PURPLE titles), literal hex
+   values for the same "looks the same regardless of light/dark mode"
+   reasoning that box's own comment gives. One title+body pair per item,
+   stacked (not 2 columns like Proactive Maintenance -- these bodies are
+   full sentences, not short bullet items). */
+.live-reports-explanations-box {
+  background: #f3f1fb;
+  border-radius: 6px;
+  padding: 0.9rem 1.1rem;
+  margin: 0.5rem 0 1.25rem;
+}
+.live-reports-explanations-title {
+  margin: 0;
+  color: #2e2a7c;
+  font-weight: 700;
+  font-size: 0.9em;
+}
+.live-reports-explanations-body {
+  margin: 0.15rem 0 0.7rem;
+  color: #1a1a1a;
+  font-size: 0.85em;
+}
+.live-reports-explanations-box > .live-reports-explanations-body:last-child {
+  margin-bottom: 0;
 }
 
 /* Generate Summary / edit-before-PDF form, by request. Outer box background

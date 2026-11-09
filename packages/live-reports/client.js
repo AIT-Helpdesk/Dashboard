@@ -46,7 +46,6 @@ const SOFTWARE_COLORS = {
   'Not Compliant': '#f59e0b',
   Unmanaged: '#9aa3af',
 };
-const ALERT_COLORS = { Critical: '#dc2626', High: '#f59e0b' };
 
 function donutFromLegend(title, legend, colors, deviceHealthItemKey) {
   const segments = Object.entries(legend).map(([label, value]) => ({ label, value, color: colors[label] || '#9aa3af' }));
@@ -217,11 +216,67 @@ function monitoringTableHtml(detail) {
     </table>`;
 }
 
+// Raised-in-last-30-days vs currently-Open counts, Critical/High/Moderate,
+// by request ("show that widget with Raised in last 30 days and open
+// alerts critical, high, moderate on the widget with their counts") --
+// replaces the old plain "Open Alerts (Critical/High)" donut. `summary`
+// is server.js's own alertSummaryByPriority ([{priority,
+// raisedLast30Days, open}], from datto-rmm/lib.js's own
+// getSiteAlertsBreakdown()). Wrapped in .mtg-widget itself (donutWidget()
+// did the same for the widget it's replacing) so it still sizes/sits
+// correctly inside the Overall Health View's own .mtg-widget-grid.
+const ALERT_PRIORITY_BADGE_TIER = { Critical: 'bad', High: 'warn', Moderate: 'ok' };
+function alertSummaryTableHtml(summary) {
+  if (!summary || summary.length === 0) return '';
+  const rows = summary
+    .map(
+      (p) =>
+        `<tr><td><span class="mtg-score-badge mtg-score-badge--${ALERT_PRIORITY_BADGE_TIER[p.priority] || 'warn'}">${escapeHtml(p.priority)}</span></td><td>${p.raisedLast30Days}</td><td>${p.open}</td></tr>`
+    )
+    .join('');
+  return `
+    <div class="mtg-widget">
+      <p class="mtg-widget-title">Alerts (Critical / High / Moderate)</p>
+      <table class="live-reports-scorecard-table">
+        <thead><tr><th>Priority</th><th>Raised (30d)</th><th>Open</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+// The open Critical/High/Moderate alerts themselves, by request ("also
+// list them") -- lets this be cross-checked directly against Datto RMM's
+// own console instead of just trusting the widget's counts. On-screen
+// only, not sent to the PDF (server.js's own `openAlerts` field carries
+// the same mapAlert() shape datto-rmm/lib.js's getSiteAlertsBreakdown()
+// returns).
+function openAlertsListHtml(alerts) {
+  if (!alerts || alerts.length === 0) return '';
+  const rows = alerts
+    .map(
+      (a) => `<tr>
+        <td><span class="mtg-score-badge mtg-score-badge--${ALERT_PRIORITY_BADGE_TIER[a.priority] || 'warn'}">${escapeHtml(a.priority)}</span></td>
+        <td>${escapeHtml(a.deviceName)}</td>
+        <td>${escapeHtml(a.message || '—')}</td>
+        <td>${a.timestamp ? new Date(a.timestamp).toLocaleString() : '—'}</td>
+      </tr>`
+    )
+    .join('');
+  return `
+    <h2 class="client-summary-section-heading">Open Critical/High/Moderate Alerts <span class="inline-subtext">(${alerts.length})</span></h2>
+    <table class="live-reports-scorecard-table">
+      <thead><tr><th>Priority</th><th>Device</th><th>Message</th><th>Raised</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 // Proactive Maintenance, by request -- same list the PDF now shows (top of
 // its own Devices page), server.js's own getProactiveMaintenanceItems()
-// (configurable via PROACTIVE_MAINTENANCE_ITEMS in .env), sourced once on
-// the server rather than duplicated here, so the two surfaces can't drift
-// apart. Moved above the Replacement Recommendation/Operating System
+// (live off the intranet's own Proactive Maintenance Jobs table, same as
+// the Cybersecurity Systems descriptions -- see sharepoint-client.js),
+// sourced once on the server rather than duplicated here, so the two
+// surfaces can't drift apart. Moved above the Replacement Recommendation/
+// Operating System
 // donuts and styled as the same purple card the PDF's own
 // drawProactiveMaintenanceNote() draws (2 columns, dash-bulleted, italic
 // caption) -- literal brand-purple hex values, not the --purple/--card
@@ -235,9 +290,69 @@ function proactiveMaintenanceHtml(items) {
   return `
     <div class="live-reports-proactive-maintenance-box">
       <p class="live-reports-proactive-maintenance-heading">Proactive Maintenance ${sectionToggleHtml('proactiveMaintenance', 'Proactive Maintenance')}</p>
+      <p class="live-reports-source-note">Source: live from the intranet's "Proactive Maintenance Jobs" table (falls back to a fixed built-in list if that table can't be reached). On screen only.</p>
       <div class="live-reports-proactive-maintenance-cols">${col(items.slice(0, half))}${col(items.slice(half))}</div>
       <p class="live-reports-proactive-maintenance-caption">Standard activities performed across all managed devices -- not scored.</p>
     </div>`;
+}
+
+// Understanding Your Scores / Cybersecurity Module Descriptions -- on
+// screen now too, by request (both were PDF-only before: pdf-template.js's
+// own drawScoreExplanations()/drawCybersecurityExplanations()). Fetched
+// once per page load via loadReportExplanations() below (server.js's new
+// GET /report-explanations, not siteName-scoped -- this reference text is
+// the same regardless of which client's report is currently showing) and
+// cached module-scope, same "survives a re-search, no need to re-fetch"
+// reasoning every other module-scope cache on this page already follows.
+// Sits at the very bottom of the page, after everything else, by request.
+let reportExplanationsCache = null; // { scoreExplanations, cyberModules } | null (fetch failed)
+let reportExplanationsPromise = null;
+
+async function loadReportExplanations() {
+  if (reportExplanationsCache) return reportExplanationsCache;
+  if (!reportExplanationsPromise) {
+    reportExplanationsPromise = fetch('/api/live-reports/report-explanations')
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        reportExplanationsCache = data;
+        return data;
+      })
+      .catch((err) => {
+        console.error('Live Reports: report-explanations load failed:', err);
+        return null;
+      })
+      .finally(() => {
+        reportExplanationsPromise = null;
+      });
+  }
+  return reportExplanationsPromise;
+}
+
+// Shared boxed title+body list, same purple-card look as the PDF's own
+// drawExplanationsBox() (pdf-template.js) -- see .live-reports-
+// explanations-box (styles.css) for why these are literal brand-purple
+// hex values, not theme tokens.
+function explanationsBoxHtml(items) {
+  if (!items || items.length === 0) return '';
+  return `<div class="live-reports-explanations-box">${items
+    .map((item) => `<p class="live-reports-explanations-title">${escapeHtml(item.title)}</p><p class="live-reports-explanations-body">${escapeHtml(item.body)}</p>`)
+    .join('')}</div>`;
+}
+
+// Order matches how the user asked for these two ("Understanding your
+// scores and Cybersecurity Module Descriptions"), same order the PDF
+// itself draws them in.
+function reportExplanationsHtml(data) {
+  if (!data) return '';
+  return `
+    <h2 class="client-summary-section-heading">Understanding Your Scores</h2>
+    <p class="live-reports-source-note">Source: fixed methodology notes maintained in this report's own template -- not derived from this client's live data. On screen only.</p>
+    ${explanationsBoxHtml(data.scoreExplanations)}
+    <h2 class="client-summary-section-heading">Cybersecurity Module Descriptions</h2>
+    <p class="live-reports-source-note">Source: live from the intranet's "Cybersecurity Services for Managed Service Clients" table (falls back to a fixed built-in list if that table can't be reached). On screen only.</p>
+    ${explanationsBoxHtml(data.cyberModules)}
+  `;
 }
 
 // Microsoft License Counts, by request ("add a set of Microsoft license
@@ -628,7 +743,7 @@ function emailDomainProtectionCardHtml(state) {
     </div>`;
 }
 
-function vendorSummariesHtml(vendors, mdpState) {
+function vendorSummariesHtml(vendors, mdpState, isTcElite) {
   if (!vendors) return '';
   // "Cybersecurity Systems" heading restored, by request (removed earlier
   // this session, now wanted back) -- same name as the PDF's own section
@@ -643,7 +758,7 @@ function vendorSummariesHtml(vendors, mdpState) {
   // themselves), so the shared box is a visual flag for that, not a PDF
   // concept (pdf-template.js's own drawCybersecurityLayers() just packs
   // them as 2 plain cards like everything else there).
-  return `<h2 class="client-summary-section-heading">Cybersecurity Systems ${sectionToggleHtml('cybersecurity', 'Cybersecurity Systems')}</h2><div class="mtg-widget-grid live-reports-other-systems">${vendorWidgetsHtml(vendors)}<div class="live-reports-domain-protection-alert"><div id="edp-card-slot">${emailDomainProtectionCardHtml({ status: 'loading' })}</div>${mdpCardHtml(mdpState)}</div></div>`;
+  return `<h2 class="client-summary-section-heading">Cybersecurity Systems ${sectionToggleHtml('cybersecurity', 'Cybersecurity Systems')}</h2><div class="mtg-widget-grid live-reports-other-systems">${vendorWidgetsHtml(vendors)}<div class="live-reports-domain-protection-alert"><div id="edp-card-slot">${emailDomainProtectionCardHtml({ status: 'loading' })}</div>${mdpCardHtml(mdpState, isTcElite)}</div></div>`;
 }
 
 // Generate Summary / edit-before-PDF, by request -- see server.js's own
@@ -856,10 +971,14 @@ function mdpScoreSegments(score) {
 // deliberately blank; the policy pill already reads as a plain colored
 // label, not a boxy control), so hiding them would hide real information,
 // not just an edit affordance.
-function mdpCardHtml(state) {
+// `isTcElite` (server.js's own resolveCyberServiceTierColumn() result on
+// the main report) defaults this card's own "include in PDF" tick to
+// UNTICKED for anyone who isn't TC Elite, by request -- every other card
+// here still starts ticked regardless of tier.
+function mdpCardHtml(state, isTcElite) {
   return `
     <div class="mtg-widget live-reports-mdp-widget live-reports-cyber-card" id="mdp-widget">
-      ${cyberCardToggleHtml('mailDomainProtection')}
+      ${cyberCardToggleHtml('mailDomainProtection', isTcElite)}
       <button type="button" id="mdp-cog" class="live-reports-mdp-cog" title="Manual entry -- EasyDMARC isn't connected yet, these values are looked up and typed in by hand. Click to edit.">⚙</button>
       <p class="mtg-widget-title">Mail Domain Protection Monitoring</p>
       <div class="live-reports-mdp-body">
@@ -1321,7 +1440,7 @@ export function mount(container) {
   // ready. Guarded on isConnected -- if the user searches a different
   // client before this resolves, resultsEl has already been replaced and
   // this placeholder is no longer on the page, so there's nothing to fill in.
-  async function loadVendorSummaries(siteName, force) {
+  async function loadVendorSummaries(siteName, force, isTcElite) {
     const vendorEl = resultsEl.querySelector('#vendor-summaries');
     const m365El = resultsEl.querySelector('#m365-licenses');
     if (!vendorEl) return;
@@ -1342,7 +1461,12 @@ export function mount(container) {
       // the browser console now, so a real bug shows up there instead of
       // just reading as "nothing happened".
       try {
-        vendorEl.outerHTML = vendorSummariesHtml(data.vendors, mdpState);
+        vendorEl.outerHTML = vendorSummariesHtml(data.vendors, mdpState, isTcElite);
+        // Matches the checkbox's own rendered default -- see mdpCardHtml()'s
+        // own comment -- rather than leaving this key absent, which
+        // pdf-template.js treats as "shown" regardless of what's actually
+        // ticked on screen.
+        cyberCardToggles.mailDomainProtection = isTcElite;
         wireMdpWidget();
         loadEmailDomainProtection(siteName);
       } catch (err) {
@@ -1465,8 +1589,7 @@ export function mount(container) {
         ])
       : '';
 
-    const alertSegments = (data.alertsByPriority || []).map((a) => ({ label: a.priority, value: a.count, color: ALERT_COLORS[a.priority] || '#9aa3af' }));
-    const alertsDonut = donutWidget('Open Alerts (Critical / High)', alertSegments, data.alertsTotalCount);
+    const alertsWidget = alertSummaryTableHtml(data.alertSummaryByPriority);
 
     const typeWidget = dattoLive && dattoLive.byType.length > 0 ? deviceTypeBarWidget(dattoLive.byType, dattoLive.summary.total) : '';
     const freshnessWidget = dattoLive ? checkinFreshnessWidget(dattoLive.summary) : '';
@@ -1539,7 +1662,8 @@ export function mount(container) {
     resultsEl.innerHTML = `
       <p class="inline-subtext">${escapeHtml(data.siteName)} -- as of ${new Date(data.asOf).toLocaleString()}</p>
       ${namedSectionToggleHtml('overallHealthView', 'Overall Health View')}
-      <div class="mtg-widget-grid">${gauge}${kpiGrid}${alertsDonut}</div>
+      <div class="mtg-widget-grid">${gauge}${kpiGrid}${alertsWidget}</div>
+      ${openAlertsListHtml(data.openAlerts)}
       ${typeWidget || freshnessWidget ? namedSectionToggleHtml('deviceOverview', 'Devices by Type / Check-in Freshness') : ''}
       <div class="live-reports-overview-grid">
         ${typeWidget}
@@ -1562,9 +1686,18 @@ export function mount(container) {
       <div id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
       ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
       <div class="live-reports-device-list">${deviceList}</div>
-      ${data.alertsTruncated ? '<p class="inline-subtext">Note: the account-wide open-alerts list hit its safety cap -- this client\'s alert count may be incomplete.</p>' : ''}
+      <div id="report-explanations-slot"><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
     `;
     wireDeviceFilters(resultsEl);
-    loadVendorSummaries(data.siteName, force);
+    loadVendorSummaries(data.siteName, force, data.isTcElite);
+    // "Understanding Your Scores"/"Cybersecurity Module Descriptions", by
+    // request, at the very bottom of the page -- isConnected-guarded same
+    // as every other async fill-in on this page (loadVendorSummaries() et
+    // al.), in case a different client's search already replaced
+    // resultsEl before this resolves.
+    loadReportExplanations().then((explanationsData) => {
+      const slot = resultsEl.querySelector('#report-explanations-slot');
+      if (slot && slot.isConnected) slot.outerHTML = reportExplanationsHtml(explanationsData);
+    });
   }
 }

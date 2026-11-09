@@ -56,11 +56,13 @@ export function mount(container) {
       <form id="filter-form" class="date-form">
         <label for="client-input">Client</label>
         <input type="text" id="client-input" name="client" placeholder="optional, e.g. Acme* (wildcards with *)" />
-        <button type="submit" id="refresh-button">Refresh</button>
+        <button type="submit" id="refresh-button" class="refresh-button--emphasis" title="Reloads using whatever's already cached (server-side and here) -- fast, no fresh Datto pull unless the cache has actually gone stale.">Load from Cache</button>
+        <button type="button" id="full-refresh-button" title="Forces a fresh pull from Datto for everything on this page, bypassing every cache -- can take up to 2 minutes.">Get Full Refresh</button>
       </form>
     </header>
     <p id="status" class="status">Microsoft 365 backup health, via Datto SaaS Protection. Clients with the lowest backup % are listed first -- that's where something is most likely not being backed up. Click a client's name for a breakdown by mailbox/site and by application (Exchange/SharePoint/OneDrive).</p>
     <div id="summary" class="summary" hidden></div>
+    <p id="widgets-slow-warning" class="status warn" hidden>⚠ Fetching fresh data from Datto for these widgets -- this can take up to 2 minutes.</p>
     <div id="widgets" class="datto-card-grid" hidden></div>
     <div id="results" class="results"></div>
   `;
@@ -68,8 +70,10 @@ export function mount(container) {
   const form = container.querySelector('#filter-form');
   const clientInput = container.querySelector('#client-input');
   const refreshButton = container.querySelector('#refresh-button');
+  const fullRefreshButton = container.querySelector('#full-refresh-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
+  const widgetsSlowWarningEl = container.querySelector('#widgets-slow-warning');
   const widgetsEl = container.querySelector('#widgets');
   const resultsEl = container.querySelector('#results');
 
@@ -79,63 +83,80 @@ export function mount(container) {
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(clientInput.value);
+    load(clientInput.value, false);
   });
 
-  // Cached server-side for ~20 min; Refresh always sends `force=true`,
-  // bypassing that cache -- same convention every other Ingram/Datto-style
-  // page here uses. This is the ONLY path that counts as "the refresh
-  // button was pressed" (it's also how a client-name filter is applied,
-  // since there's no separate button for that) -- `activeRender(data,
-  // true)` tells renderWidgets() below to force the two widget fetches
-  // too, rather than reusing whatever's cached.
-  async function load(clientFilter) {
+  fullRefreshButton.addEventListener('click', () => {
+    load(clientInput.value, true);
+  });
+
+  // Two distinct tiers, by request -- "Load from Cache" (the plain
+  // #refresh-button; also how a client-name filter is applied, since
+  // there's no separate button for that) is cheap: it reuses whatever's
+  // already cached, both here and server-side (see REPORT_CACHE_TTL_MS/
+  // SERVICE_AGGREGATE_CACHE_TTL_MS in server.js -- 30 min), so pressing it
+  // repeatedly costs nothing extra. "Get Full Refresh" (`forceFull`) is the
+  // expensive one -- `force=true` on every request, bypassing every
+  // server-side cache, including the ~230+-call, up-to-2-minute
+  // computeServiceAggregate() pass behind the four widgets -- so every
+  // client-side cache is cleared too, rather than left to silently mask
+  // part of what was just forced fresh server-side.
+  async function load(clientFilter, forceFull) {
     refreshButton.disabled = true;
+    fullRefreshButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
     statusEl.textContent = 'Loading...';
     summaryEl.hidden = true;
+    widgetsSlowWarningEl.hidden = true;
     widgetsEl.hidden = true;
     resultsEl.innerHTML = '';
 
     try {
-      const params = new URLSearchParams({ force: 'true' });
+      const params = new URLSearchParams();
+      if (forceFull) params.set('force', 'true');
       if (clientFilter) params.set('client', clientFilter);
-      const res = await fetch(`/api/saas-protection?${params.toString()}`);
+      const qs = params.toString();
+      const res = await fetch(`/api/saas-protection${qs ? `?${qs}` : ''}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
       lastFilter = clientFilter;
-      // A real Refresh -- every cached widget/popup result is stale as of
-      // now, so clear all of them before rendering; renderWidgets() (and
-      // any widget popup opened afterwards) will fetch fresh rather than
-      // reuse what's here.
-      lastServiceTotals = null;
-      lastAcceptedFailures = null;
-      widgetDetailCache = new Map();
-      activeRender(data, true);
+      if (forceFull) {
+        // Get Full Refresh -- every cached widget/popup result is stale as
+        // of now, so clear all of them before rendering; renderWidgets()
+        // (and any widget popup opened afterwards) will fetch fresh rather
+        // than reuse what's here. Load from Cache leaves these untouched,
+        // so an already-loaded widget grid just redraws instantly, with no
+        // new request at all.
+        lastServiceTotals = null;
+        lastAcceptedFailures = null;
+        widgetDetailCache = new Map();
+      }
+      activeRender(data, forceFull);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
     } finally {
       refreshButton.disabled = false;
+      fullRefreshButton.disabled = false;
     }
   }
 
-  // `forceWidgets` is true ONLY when called from load() above (a real
-  // Refresh-button press) -- the restore-on-remount call at the bottom of
+  // `forceFull` is true ONLY when called from load() above with the Get
+  // Full Refresh button -- the restore-on-remount call at the bottom of
   // mount() (`if (lastData) render(lastData)`) omits it, so navigating
   // away and back just redraws whatever's already cached, by request,
   // rather than re-pulling from Datto every time the page happens to
   // re-render.
-  function render(data, forceWidgets = false) {
+  function render(data, forceFull = false) {
     statusEl.hidden = true;
 
     const filterSuffix = data.filterTerm ? ` matching client "${escapeHtml(data.filterTerm)}"` : '';
     summaryEl.hidden = false;
     summaryEl.innerHTML = `<strong>${data.totalClients}</strong> client${data.totalClients === 1 ? '' : 's'} (${data.totalSeats} seats total)${filterSuffix}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
 
-    renderWidgets(data, forceWidgets);
+    renderWidgets(data, forceFull);
 
     resultsEl.innerHTML = '';
     if (data.byClient.length === 0) {
@@ -205,7 +226,10 @@ export function mount(container) {
   // from the SAME accepted-failure-aware per-application pass behind the
   // ring, not the older, cheaper /domains-level backupPercentage, so they
   // all load/cache/patch as one unit via loadServiceTotals() below.
-  function renderWidgets(data, force) {
+  // `forceFull` (true only on a Get Full Refresh) threads through to
+  // loadServiceTotals() so it can ask the server to bypass ITS OWN cache
+  // too, not just trigger a plain new HTTP round trip.
+  function renderWidgets(data, forceFull) {
     widgetsEl.hidden = false;
     widgetsEl.innerHTML = '';
     // Card itself stays "All Backups" (the two-colour ring really is every
@@ -223,14 +247,14 @@ export function mount(container) {
     succeededCardEl = placeholderCard('Clients Succeeded', () => openWidgetModal('succeeded', 'Clients Succeeded'));
     widgetsEl.appendChild(succeededCardEl);
 
-    if (!force && lastServiceTotals) {
+    if (!forceFull && lastServiceTotals) {
       fillServiceTotalsWidgets(lastServiceTotals);
     } else {
       setServiceTotalsWidgetsLoading();
-      loadServiceTotals();
+      loadServiceTotals(forceFull);
     }
 
-    acceptedFailuresCardEl = acceptedFailuresWidgetCard(force);
+    acceptedFailuresCardEl = acceptedFailuresWidgetCard(forceFull);
     widgetsEl.appendChild(acceptedFailuresCardEl);
   }
 
@@ -291,12 +315,27 @@ export function mount(container) {
   // `isConnected` first in case a later Refresh click has already replaced
   // these exact elements (a fresh renderWidgets() call rebuilds the whole
   // grid from scratch), so a slow, stale fetch can never overwrite a newer
-  // render. `force`-free, by request ("only pull up the data... again if
-  // the refresh button is specifically pressed") -- renderWidgets() above
-  // only calls this when there's no cache to use yet.
-  async function loadServiceTotals() {
+  // render. `forceFull`-aware now -- renderWidgets() above only calls this
+  // when there's no client-side cache to use yet, but `forceFull` (true
+  // only on a Get Full Refresh) is still forwarded as `?force=true` so the
+  // SERVER's own cache gets bypassed too, not just a plain new HTTP round
+  // trip against whatever the server already has cached.
+  // The warning only appears if the fetch is still running after a short
+  // grace period (SLOW_WARNING_DELAY_MS) -- an already-warm server-side
+  // cache (see getServiceAggregate() in server.js) answers in well under
+  // that, so this never flashes on a normal, already-cached load; it's
+  // only the ~230+-call, up-to-2-minute cold-cache path (no more proactive
+  // background warm now, by request -- see server.js's own scheduled
+  // refresh for the one case that still runs unattended) that lingers past
+  // the grace period and triggers it.
+  const SLOW_WARNING_DELAY_MS = 3000;
+
+  async function loadServiceTotals(forceFull) {
+    const warnTimer = setTimeout(() => {
+      if (widgetsSlowWarningEl.isConnected) widgetsSlowWarningEl.hidden = false;
+    }, SLOW_WARNING_DELAY_MS);
     try {
-      const res = await fetch('/api/saas-protection/service-totals');
+      const res = await fetch(`/api/saas-protection/service-totals${forceFull ? '?force=true' : ''}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastServiceTotals = data;
@@ -305,6 +344,9 @@ export function mount(container) {
       for (const el of [allBackupsCardEl, allFailedCardEl, someFailedCardEl, succeededCardEl]) {
         if (el.isConnected) el.querySelector('.datto-card-sub').textContent = `Error: ${err.message}`;
       }
+    } finally {
+      clearTimeout(warnTimer);
+      widgetsSlowWarningEl.hidden = true;
     }
   }
 

@@ -272,23 +272,53 @@ async function fetchAllSiteAlerts(siteUid, status) {
   return fetchAllPages(`/v2/site/${siteUid}/alerts/${status}`, {}, 'alerts', 50);
 }
 
+// Critical/High/Moderate, by request ("Open alerts critical, high,
+// moderate on the widget ... also list them") -- this site-scoped
+// widget/list's own priority scope. Deliberately a SEPARATE set from the
+// shared ALERT_PRIORITY_FILTER above (Critical/High only, untouched) --
+// that one still drives the account-wide getOpenAlerts() (Check Client,
+// the Datto RMM overview page, and live-reports' own PDF/scorecard
+// Open Alerts (Critical/High) figure, by request kept as-is, not widened
+// to Moderate), so this page's own ON-SCREEN widget needed its own
+// broader scope rather than changing what every other page already means
+// by "Open Alerts".
+const SITE_ALERT_LIST_PRIORITIES = new Set(['Critical', 'High', 'Moderate']);
+const RAISED_WINDOW_DAYS = 30;
+
 // Raised/Unresolved per priority tier for one site, matching exactly what
 // Datto's own canned report's "Total Alerts by Priority" table shows --
 // Raised = every alert this site has ever had at that priority (open +
 // resolved), Unresolved = still open right now. live-reports/server.js's
 // own monitoringScore() turns this into the real resolved-ratio score per
 // tier. A priority with zero alerts either way still gets a {raised: 0,
-// unresolved: 0} entry (not omitted) so the caller's own per-tier scoring
-// doesn't need a presence check.
+// unresolved: 0, raisedLast30Days: 0} entry (not omitted) so the caller's
+// own per-tier scoring doesn't need a presence check.
+//
+// `raisedLast30Days` (per tier, open+resolved alerts combined, filtered
+// by `timestamp`) and `openAlertsList` (the actual Critical/High/Moderate
+// open alerts themselves, same mapAlert() shape/newest-first sort as the
+// account-wide getOpenAlerts() above) both ride along on this same call,
+// by request -- live-reports' own Overall Health View shows the counts on
+// its own widget and the open ones individually below it, so Amber can
+// cross-check directly against Datto RMM's own console rather than just
+// trust a count. Built from the SAME openAlerts/resolvedAlerts fetches
+// already done for the breakdown itself -- no extra API calls.
 async function getSiteAlertsBreakdown(siteUid) {
   const [openAlerts, resolvedAlerts] = await Promise.all([fetchAllSiteAlerts(siteUid, 'open'), fetchAllSiteAlerts(siteUid, 'resolved')]);
-  const breakdown = {};
+  const allAlerts = [...openAlerts, ...resolvedAlerts];
+  const raisedCutoff = Date.now() - RAISED_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const byPriority = {};
   for (const priority of MONITORING_PRIORITIES) {
     const unresolved = openAlerts.filter((a) => a.priority === priority).length;
     const resolved = resolvedAlerts.filter((a) => a.priority === priority).length;
-    breakdown[priority] = { raised: unresolved + resolved, unresolved };
+    const raisedLast30Days = allAlerts.filter((a) => a.priority === priority && (a.timestamp || 0) >= raisedCutoff).length;
+    byPriority[priority] = { raised: unresolved + resolved, unresolved, raisedLast30Days };
   }
-  return breakdown;
+  const openAlertsList = openAlerts
+    .filter((a) => SITE_ALERT_LIST_PRIORITIES.has(a.priority))
+    .map(mapAlert)
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  return { byPriority, openAlertsList };
 }
 
 // Deliberately NOT the original client's own metricStatus() -- confirmed
