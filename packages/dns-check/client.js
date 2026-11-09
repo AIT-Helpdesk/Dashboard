@@ -52,17 +52,13 @@ function entryValueHtml(entry) {
   return boldEasyDmarc(escapeHtml(entry.value));
 }
 
-// Green-highlighted rows, by request: the root A record(s), www, every MX
-// record, every DKIM record (name contains "._domainkey."), the _dmarc
-// record, and the SPF record -- the handful of records someone checking a
-// domain's mail/web setup actually cares about at a glance, called out from
-// the rest of the table.
+// Green-highlighted rows, by request -- narrowed down to just the mail
+// security items: every DKIM record (name contains "._domainkey."), the
+// _dmarc record, and the SPF record. (Previously also covered the root A
+// record(s), www, and MX -- dropped per request, mail security only now.)
 function shouldHighlightGreen(entry, domain) {
   const name = entry.name.toLowerCase();
   const d = domain.toLowerCase();
-  if (entry.type === 'A' && name === d) return true; // root A record(s)
-  if (name === `www.${d}`) return true; // www
-  if (entry.type === 'MX') return true; // every MX record
   if (name.includes('._domainkey.')) return true; // DKIM
   if (name === `_dmarc.${d}` || name.startsWith('_dmarc.')) return true; // DMARC
   if (isSpfRecord(entry)) return true; // SPF
@@ -210,11 +206,12 @@ export function mount(container) {
 
   function entryRowHtml(entry, domain) {
     const infoPart = entry.info ? `<br><span class="dns-check-info-inline">[${boldEasyDmarc(escapeHtml(entry.info))}]</span>` : '';
-    const rowClass = shouldHighlightGreen(entry, domain) ? ' class="dns-check-highlight-row"' : '';
+    const nameHtml = boldEasyDmarc(escapeHtml(entry.name));
+    const nameCell = shouldHighlightGreen(entry, domain) ? `<span class="dns-check-highlight-name">${nameHtml}</span>` : nameHtml;
     return `
-      <tr${rowClass}>
+      <tr>
         <td>${escapeHtml(entry.type)}</td>
-        <td>${boldEasyDmarc(escapeHtml(entry.name))}</td>
+        <td>${nameCell}</td>
         <td>${entryValueHtml(entry)}${infoPart}</td>
       </tr>`;
   }

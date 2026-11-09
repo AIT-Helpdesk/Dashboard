@@ -3209,19 +3209,13 @@ table {
   font-style: italic;
 }
 
-/* The handful of records someone checking a domain's mail/web setup
-   actually cares about at a glance -- root A, www, MX, DKIM, DMARC, SPF --
-   by request. color-mix against --card (not a flat hex) so it stays a
-   light tint over whatever the current theme's card background is, same
-   convention as .saas-client-shade's own shaded rows. Qualified with
-   .dns-check-page (two classes) rather than just the one class alone --
-   confirmed the hard way that a single class selector LOSES to the
-   dashboard-wide zebra-striping rule (`tbody tr:nth-child(even)`, two
-   elements + a pseudo-class) on specificity, regardless of which rule
-   comes later in the file, so it was silently winning and hiding this
-   highlight on every even-numbered row. */
-.dns-check-page .dns-check-highlight-row {
-  background: color-mix(in srgb, #16a34a 15%, var(--card));
+/* The mail security records someone checking a domain's setup actually
+   cares about at a glance -- DKIM, DMARC, SPF -- by request. Was a
+   row-background shade; swapped for bold/green text on just the Name cell
+   instead, same green already used dashboard-wide (.cell-flag-green). */
+.dns-check-highlight-name {
+  color: #16a34a;
+  font-weight: 700;
 }
 
 .dns-check-disclaimer {
