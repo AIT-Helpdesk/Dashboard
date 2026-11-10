@@ -1,6 +1,8 @@
 const express = require('express');
 const dnsCallbacks = require('dns');
 const dns = dnsCallbacks.promises;
+const net = require('net');
+const { tppFindDnsRecords, tppRecordsToNsAndEntries, tppGetDomainWhois } = require('@dashboard/tpp-client');
 
 // Confirmed the hard way: crt.sh (below) has a real AAAA record, and this
 // network blackholes outbound IPv6 -- Node's fetch() tried IPv6 first every
@@ -422,154 +424,197 @@ function cloudflareRecordsToEntriesAndSoa(records) {
 
 // ---- TPP Wholesale (authoritative, when we manage the zone ourselves) ----
 //
-// Same "pull the real record set instead of guessing" treatment as the
-// Cloudflare block above, by request ("still don't use [crt.sh] if we've
-// accessed all the records from our own DNS CloudFlare or TPP") -- this is
-// TPP Wholesale's newer REST/JSON API (confirmed live against our own
-// reseller account, not the older auth.pl/order.pl/query.pl API, which has
-// no DNS-record capability at all). One reseller account only (TPP_API_KEY/
-// TPP_SECRET in .env, no per-account label the way CLOUDFLARE_<LABEL>_*
-// supports) -- nothing in this dashboard's own TPP account suggests more
-// than one is coming, so this stays simple rather than pre-building
-// multi-account discovery Cloudflare's own block needed.
-const TPP_API_BASE = 'https://api.tppwholesale.com.au';
-const TPP_FETCH_TIMEOUT_MS = 10000;
+// By request ("still don't use [crt.sh] if we've accessed all the records
+// from our own DNS CloudFlare or TPP") -- when a domain's DNS is actually
+// managed in our own TPP Wholesale reseller account, pull the complete,
+// real record set from TPP's own API instead of guessing, same treatment
+// as the Cloudflare block above. The actual TPP auth/request plumbing
+// (`tppFindDnsRecords`, `tppRecordsToNsAndEntries`, `tppGetDomainWhois`) now
+// lives in `@dashboard/tpp-client` (imported at the top of this file) --
+// extracted there once Coming Soon needed this same TPP client, rather than
+// duplicating it a second time.
 
-async function tppApiRequest(path, { method = 'GET', body, token } = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TPP_FETCH_TIMEOUT_MS);
-  try {
-    const headers = { Accept: 'application/json' };
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const res = await fetch(`${TPP_API_BASE}${path}`, {
-      method,
-      signal: controller.signal,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+// ---- Public WHOIS (last resort, for a domain that isn't ours in TPP) -----
+//
+// Raw WHOIS protocol (port 43, RFC 3912) -- there's no REST API for "any
+// domain's registrar/expiry", so this talks to the registry directly, same
+// as the `whois` command line tool does.
+const WHOIS_FETCH_TIMEOUT_MS = 8000;
+
+function whoisQuery(server, query) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: server, port: 43 });
+    let data = '';
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`WHOIS query to ${server} timed out`));
+    }, WHOIS_FETCH_TIMEOUT_MS);
+    socket.on('connect', () => socket.write(`${query}\r\n`));
+    socket.on('data', (chunk) => {
+      data += chunk.toString('utf8');
     });
-    return res;
-  } finally {
-    clearTimeout(timer);
-  }
+    socket.on('end', () => {
+      clearTimeout(timer);
+      resolve(data);
+    });
+    socket.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
 }
 
-// The auth token is a JWT valid for 1 hour (confirmed against a real token's
-// own iat/exp claims) and IP-bound -- cached module-scope (this dashboard's
-// own outbound IP never changes mid-process) and refreshed a minute before
-// it actually expires, rather than fetched fresh on every DNS Check search.
-let cachedTppToken = null; // { token, expiresAtMs }
+// Known authoritative WHOIS servers for the TLDs this MSP's own client base
+// is actually likely to use (mostly Australian, plus the common generic
+// ones) -- matched by the domain's own suffix, longest match winning (so
+// "com.au" beats the bare "au" entry). Anything unmapped falls through to
+// an IANA referral lookup below instead of just failing.
+const WHOIS_SERVER_BY_SUFFIX = [
+  ['com.au', 'whois.auda.org.au'],
+  ['net.au', 'whois.auda.org.au'],
+  ['org.au', 'whois.auda.org.au'],
+  ['id.au', 'whois.auda.org.au'],
+  ['asn.au', 'whois.auda.org.au'],
+  ['au', 'whois.auda.org.au'],
+  ['co.nz', 'whois.srs.net.nz'],
+  ['nz', 'whois.srs.net.nz'],
+  ['co.uk', 'whois.nic.uk'],
+  ['org.uk', 'whois.nic.uk'],
+  ['uk', 'whois.nic.uk'],
+  ['com', 'whois.verisign-grs.com'],
+  ['net', 'whois.verisign-grs.com'],
+  ['org', 'whois.pir.org'],
+  ['info', 'whois.afilias.net'],
+  ['biz', 'whois.nic.biz'],
+  ['io', 'whois.nic.io'],
+  ['co', 'whois.nic.co'],
+  ['me', 'whois.nic.me'],
+  ['us', 'whois.nic.us'],
+  ['app', 'whois.nic.google'],
+  ['dev', 'whois.nic.google'],
+  ['xyz', 'whois.nic.xyz'],
+];
 
-function decodeJwtExpiryMs(token) {
-  try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));
-    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
-  } catch (err) {
-    return null; // can't decode -- caller falls back to a short default below
-  }
-}
-
-async function getTppToken() {
-  if (cachedTppToken && Date.now() < cachedTppToken.expiresAtMs - 60000) return cachedTppToken.token;
-
-  const apiKey = (process.env.TPP_API_KEY || '').trim();
-  const secretKey = (process.env.TPP_SECRET || '').trim();
-  if (!apiKey || !secretKey) return null; // not configured -- not an error, just nothing to do
-
-  const res = await tppApiRequest('/jwt/auth/token/', { method: 'POST', body: { apiKey, secretKey } });
-  const text = (await res.text()).trim();
-  if (!res.ok) throw new Error(`TPP Wholesale auth failed: HTTP ${res.status} -- ${text.slice(0, 200)}`);
-
-  const token = text.replace(/^"|"$/g, ''); // plain-text JWT, not JSON -- defensive strip in case that ever changes
-  const expiresAtMs = decodeJwtExpiryMs(token) || Date.now() + 5 * 60000; // 5 min fallback if the token's own exp can't be read
-  cachedTppToken = { token, expiresAtMs };
-  return token;
-}
-
-// TXT content comes back from TPP wrapped in literal double-quote characters
-// (confirmed against real DKIM/SPF records -- e.g. the raw JSON value is the
-// 9-character string `"v=spf1"` rather than the 7-character `v=spf1`), unlike
-// Cloudflare's own `content` field which never carries them -- stripped here
-// so the client doesn't render doubled-up quotes.
-// Hostname-valued record types also come back with a trailing dot on their
-// content (e.g. CNAME "pop3.partnerconsole.net.", MX exchange
-// "mx1.mail-forwarder.io.") -- confirmed against real records -- stripped
-// here too, same reasoning as tppRecordName() above, so these values match
-// the no-trailing-dot shape the guess-based (Node dns.promises) and
-// Cloudflare paths both already produce.
-const TPP_HOSTNAME_VALUE_TYPES = new Set(['NS', 'CNAME', 'MX']);
-function tppRecordValue(rec) {
-  let content = rec.content || '';
-  if (content.length >= 2 && content.startsWith('"') && content.endsWith('"')) content = content.slice(1, -1);
-  if (TPP_HOSTNAME_VALUE_TYPES.has(rec.type)) content = content.replace(/\.$/, '');
-  return content;
-}
-
-// The MX "priority" a reader actually wants is in TPP's own `preference`
-// field -- confirmed against real MX records, where `priority` was 0 on
-// every single one (TPP evidently reserves that field for something else,
-// never populated on the records this account has).
-function tppRecordInfo(rec) {
-  const parts = [];
-  if (rec.type === 'MX' && rec.preference !== undefined && rec.preference !== null) parts.push(`Priority ${rec.preference}`);
-  if (rec.type === 'TXT' && /v=spf/i.test(rec.content || '')) parts.push('SPF');
-  return parts.join(' -- ');
-}
-
-// TPP's own `name` field is the apex record's full "domain.tld." (trailing
-// dot, confirmed against real NS/A/MX/TXT records at the zone root) for
-// anything at the domain's root, or just the bare relative label ("ftp",
-// "domains", "ns1") with no trailing dot for anything else -- qualified
-// here into the one full-hostname-no-trailing-dot shape this file's entries
-// already use everywhere else (matching dns.resolveNs()'s own Node
-// behaviour, which likewise strips the trailing dot).
-function tppRecordName(rec, domain) {
-  const raw = rec.name || '';
-  if (raw.endsWith('.')) return raw.slice(0, -1);
-  return `${raw}.${domain}`;
-}
-
-// Tries the one configured TPP reseller account. Returns null (not an
-// error) when TPP isn't configured at all, or when this specific domain
-// genuinely isn't managed under this reseller account (TPP's own 403 for
-// that case, confirmed against a real non-TPP domain: {"errorCode":"403",
-// ...,"message":"Given Domain does not belong to Reseller"}) -- either way,
-// the caller falls through to the normal guess-based lookups. Any OTHER
-// failure (auth broken, network hiccup, unexpected shape) throws, same
-// "degrade, don't fail the whole page" handling the route's own try/catch
-// around this call already gives the equivalent Cloudflare lookup.
-async function tppFindDnsRecords(domain) {
-  const token = await getTppToken();
-  if (!token) return null;
-
-  const res = await tppApiRequest(`/domains/${encodeURIComponent(domain)}/dns-records`, { token });
-  if (res.status === 403) {
-    const body = await res.json().catch(() => null);
-    if (body && /does not belong to reseller/i.test(body.message || '')) return null;
-    throw new Error(`TPP Wholesale DNS lookup failed: HTTP 403 -- ${body?.message || 'unknown'}`);
-  }
-  if (!res.ok) throw new Error(`TPP Wholesale DNS lookup failed: HTTP ${res.status}`);
-  return await res.json();
-}
-
-// TPP mixes NS records into the same flat list everything else comes back
-// in (unlike Cloudflare, which exposes them as separate zone-level
-// `name_servers` metadata) -- split out here into the exact same { ns,
-// entries } shape the route handler already builds from either source, and
-// SOA is simply never present in this endpoint's response (confirmed
-// against three real domains' worth of records) -- same "No SOA record"
-// fallback the Cloudflare path already uses for the same reason.
-function tppRecordsToNsAndEntries(records, domain) {
-  const ns = [];
-  const entries = [];
-  for (const rec of records) {
-    if (rec.type === 'NS') {
-      ns.push(tppRecordValue(rec)); // already trailing-dot-stripped -- NS is in TPP_HOSTNAME_VALUE_TYPES
-      continue;
+function knownWhoisServer(domain) {
+  let best = null;
+  for (const [suffix, server] of WHOIS_SERVER_BY_SUFFIX) {
+    if ((domain === suffix || domain.endsWith(`.${suffix}`)) && (!best || suffix.length > best.suffix.length)) {
+      best = { suffix, server };
     }
-    entries.push({ type: rec.type, name: tppRecordName(rec, domain), value: tppRecordValue(rec), info: tppRecordInfo(rec) });
   }
-  return { ns, entries };
+  return best ? best.server : null;
+}
+
+// For a TLD not in the curated list above, ask IANA's own root WHOIS server
+// which registry actually runs it (its "refer:" line) instead of giving up.
+async function ianaReferralServer(tld) {
+  const text = await whoisQuery('whois.iana.org', tld);
+  const match = /^refer:\s*(\S+)/im.exec(text);
+  return match ? match[1] : null;
+}
+
+function parseWhoisField(text, labels) {
+  for (const label of labels) {
+    // Leading whitespace allowed before the label -- confirmed live that
+    // Verisign's own WHOIS output (whois.verisign-grs.com, used for every
+    // .com/.net domain) indents every field with three spaces.
+    const match = new RegExp(`^\\s*${label}\\s*:\\s*(.+)$`, 'im').exec(text);
+    if (match) {
+      const value = match[1].trim();
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
+const REGISTRAR_FIELD_LABELS = ['Registrar', 'Sponsoring Registrar', 'Registrar Name'];
+const EXPIRY_FIELD_LABELS = [
+  'Registry Expiry Date',
+  'Registrar Registration Expiration Date',
+  'Expiration Date',
+  'Expiry Date',
+  'Domain Expiration Date',
+  'Expire Date',
+  'paid-till',
+];
+
+// Best-effort public WHOIS, used only when a domain isn't in our own TPP
+// Wholesale reseller account. Not every registry publishes an expiry date
+// this way -- several ccTLD registries, auDA's own .au included, often
+// deliberately don't -- so a partial or even completely empty result here
+// is the normal case, not a bug; the caller treats "nothing found" the same
+// as "couldn't look it up" either way.
+async function publicWhoisLookup(domain) {
+  let server = knownWhoisServer(domain);
+  if (!server) {
+    const tld = domain.split('.').pop();
+    server = await ianaReferralServer(tld).catch(() => null);
+  }
+  if (!server) return null;
+
+  const text = await whoisQuery(server, domain);
+  let registrar = parseWhoisField(text, REGISTRAR_FIELD_LABELS);
+  let expiryDate = parseWhoisField(text, EXPIRY_FIELD_LABELS);
+
+  // Thin registries (Verisign's .com/.net chief among them) hand back the
+  // sponsoring registrar's name plus a referral to THAT registrar's own
+  // WHOIS server for anything else -- followed once, best-effort, to fill
+  // in whichever field didn't come through the registry's own answer.
+  if (!expiryDate || !registrar) {
+    const referral = parseWhoisField(text, ['Registrar WHOIS Server']);
+    if (referral && referral.toLowerCase() !== server.toLowerCase()) {
+      try {
+        const referredText = await whoisQuery(referral, domain);
+        registrar = registrar || parseWhoisField(referredText, REGISTRAR_FIELD_LABELS);
+        expiryDate = expiryDate || parseWhoisField(referredText, EXPIRY_FIELD_LABELS);
+      } catch {
+        // Best-effort only -- the registry's own answer (if any) still stands.
+      }
+    }
+  }
+
+  // Normalized to a plain date -- WHOIS registries hand back a full
+  // timestamp ("2028-09-14T04:00:00Z"), TPP's own whois endpoint already
+  // just a date ("2028-06-22") -- matched here so both sources render the
+  // same way on the client regardless of which one answered.
+  if (expiryDate) expiryDate = expiryDate.slice(0, 10);
+
+  if (!registrar && !expiryDate) return null;
+  return { registrar, expiryDate };
+}
+
+// Both lookups run every time, by request -- TPP Wholesale is a RESELLER,
+// not itself the accredited registrar of record, so "TPP Wholesale" was
+// never actually the real registrar name; that only shows up in the
+// domain's own public WHOIS record, so the Registrar always comes from
+// there now. Expiry still prefers TPP's own data whenever this domain is in
+// our reseller account -- it's the authoritative source for OUR domains,
+// and several registries (auDA's own .au chief among them) don't publish
+// an expiry date via public WHOIS at all. Never throws -- a total failure
+// here just means the Registrar/Expiry section doesn't render (see
+// registrationHtml on the client), same "degrade, don't fail the whole
+// page" handling every other best-effort lookup in this file already gets.
+async function getRegistrationInfo(domain) {
+  const [tppWhois, whois] = await Promise.all([
+    tppGetDomainWhois(domain).catch((err) => {
+      console.error(`DNS Check: TPP Wholesale whois lookup failed for "${domain}":`, err.message);
+      return null;
+    }),
+    publicWhoisLookup(domain).catch((err) => {
+      console.error(`DNS Check: public WHOIS lookup failed for "${domain}":`, err.message);
+      return null;
+    }),
+  ]);
+
+  // This is the one accredited-registrar name TPP Wholesale's own domains
+  // actually come back as in public WHOIS (confirmed against real TPP-
+  // managed domains) -- tagged "(TPP)" so it reads as recognizably ours
+  // rather than an unfamiliar third-party name.
+  let registrar = whois?.registrar || null;
+  if (registrar && registrar.trim().toLowerCase() === 'domain directors pty ltd trading as instra') registrar = `${registrar} (TPP)`;
+  const expiryDate = tppWhois ? tppWhois.expiryDate || null : whois?.expiryDate || null;
+  if (!registrar && !expiryDate) return null;
+  return { registrar, expiryDate, source: tppWhois ? 'tpp' : 'whois' };
 }
 
 router.get('/', async (req, res) => {
@@ -580,6 +625,10 @@ router.get('/', async (req, res) => {
   // checkbox sends it as 'false'; a request with no `ct` param at all --
   // e.g. the API called directly -- defaults to on).
   const ctEnabled = req.query.ct !== 'false' && req.query.ct !== '0';
+  // Kicked off immediately, concurrently with the DNS-source detection
+  // below -- "who's the registrar" is a wholly separate question from "who
+  // serves the DNS", so there's no reason to make it wait in line.
+  const registrationPromise = getRegistrationInfo(domain);
 
   try {
     const cfMatch = await cloudflareFindZone(domain).catch((err) => {
@@ -595,12 +644,13 @@ router.get('/', async (req, res) => {
           domain,
           asOf: new Date().toISOString(),
           source: 'cloudflare',
-          hoster: `Cloudflare (managed in our "${cfMatch.account.displayName}" account)`,
+          hoster: `Cloudflare ("${cfMatch.account.displayName}")`,
           ns: { ok: true, records: cfMatch.zone.name_servers || [] },
           entries,
           notFound: { dkim: [], m365: [], security: [], legacyMail: [], website: [] },
           soa,
           certTransparency: null,
+          registration: await registrationPromise,
         });
       } catch (err) {
         // Zone was found but pulling its records failed (rate limit, token
@@ -628,6 +678,7 @@ router.get('/', async (req, res) => {
         notFound: { dkim: [], m365: [], security: [], legacyMail: [], website: [] },
         soa: { ok: false, code: 'ENODATA', message: 'No SOA record' },
         certTransparency: null,
+        registration: await registrationPromise,
       });
     }
 
@@ -782,7 +833,7 @@ router.get('/', async (req, res) => {
     // own section at the TOP (next to the hoster guess, by request), soa in
     // its own section at the bottom -- rather than as just more rows in the
     // flat table.
-    res.json({ domain, asOf: new Date().toISOString(), source: 'guess', hoster, ns, entries, notFound, soa, certTransparency });
+    res.json({ domain, asOf: new Date().toISOString(), source: 'guess', hoster, ns, entries, notFound, soa, certTransparency, registration: await registrationPromise });
   } catch (err) {
     console.error('DNS Check: lookup failed for', domain, '--', err.message);
     res.status(500).json({ error: err.message });

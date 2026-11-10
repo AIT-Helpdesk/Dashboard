@@ -134,6 +134,35 @@ function parseTraitTable(html) {
   return { headers, rows, note: noteMatch ? noteMatch[0].trim() : null };
 }
 
+// Just the licence-assignment part of this page's own lookup, by an Autotask
+// company ID directly (no name search) -- pulled out of the route below so
+// Coming Soon's Microsoft Licensing section can call it in-process, same
+// "expose a plain function alongside the router" convention
+// @dashboard/contract-services already uses for its own buildReport().
+// Returns null for "nothing to show" in every case (not IT Glue-linked, no
+// asset type configured, no asset on this org) -- a caller doesn't need to
+// distinguish WHY there's no M365 data, only that there isn't any yet.
+async function fetchM365LicencesForCompany(companyId) {
+  const [orgMap, m365TypeId] = await Promise.all([getOrgMap(), getM365TypeId()]);
+  const itglueOrgId = orgMap.get(String(companyId));
+  if (!itglueOrgId || !m365TypeId) return null;
+
+  const assetsRes = await itglueGet('/flexible_assets', {
+    'filter[flexible-asset-type-id]': m365TypeId,
+    'filter[organization-id]': itglueOrgId,
+  });
+  const asset = assetsRes.data[0]; // one MS365 Environment record per org, confirmed against real data
+  if (!asset) return null;
+
+  const t = asset.attributes.traits || {};
+  return {
+    tenantDisplayName: t['tenant-display-name'] || null,
+    itglueResourceUrl: asset.attributes['resource-url'],
+    updatedAt: asset.attributes['updated-at'],
+    licences: parseTraitTable(t.licences),
+  };
+}
+
 const router = express.Router();
 
 router.get('/', async (req, res) => {
@@ -194,4 +223,5 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.fetchM365LicencesForCompany = fetchM365LicencesForCompany;
 module.exports = router;

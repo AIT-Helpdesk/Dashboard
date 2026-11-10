@@ -144,7 +144,8 @@ export function mount(container) {
     const nsHasRecords = data.ns.ok && data.ns.records.length > 0;
     if (data.entries.length === 0 && !nsHasRecords) {
       summaryEl.innerHTML = `<span class="status error">No DNS records of any kind found for "${escapeHtml(data.domain)}" -- it may not exist, or its DNS may not be configured yet.</span>`;
-      resultsEl.innerHTML = topNoteHtml(data.source) + certTransparencyNoteHtml(data.certTransparency) + soaHtml(data.soa);
+      resultsEl.innerHTML =
+        topNoteHtml(data.source) + certTransparencyNoteHtml(data.certTransparency) + registrationHtml(data.registration) + soaHtml(data.soa);
       return;
     }
 
@@ -169,10 +170,32 @@ export function mount(container) {
     resultsEl.innerHTML =
       topNoteHtml(data.source) +
       certTransparencyNoteHtml(data.certTransparency) +
+      registrationHtml(data.registration) +
       nsHtml(data.ns, data.hoster) +
       tableHtml +
       notFoundHtml(data.notFound) +
       soaHtml(data.soa);
+  }
+
+  // Registrar + expiry date, by request -- shown above the Name Servers
+  // section, since "who's the registrar" is a different question from "who
+  // serves the DNS" (see getRegistrationInfo in server.js: a domain can be
+  // DNS-hosted on Cloudflare but still registered through our own TPP
+  // Wholesale reseller account, or vice versa). Omitted entirely rather than
+  // shown with blank fields when neither TPP nor a public WHOIS lookup
+  // turned up anything at all.
+  function registrationHtml(registration) {
+    if (!registration || (!registration.registrar && !registration.expiryDate)) return '';
+    return `
+      <div class="resource-group dns-check-compact-table">
+        <div class="resource-group-header"><span>Domain Registration</span></div>
+        <table>
+          <tbody>
+            <tr><th>Registrar</th><td>${registration.registrar ? boldEasyDmarc(escapeHtml(registration.registrar)) : '<span class="inline-subtext">Unknown</span>'}</td></tr>
+            <tr><th>Expiry Date</th><td>${registration.expiryDate ? escapeHtml(registration.expiryDate) : '<span class="inline-subtext">Unknown</span>'}</td></tr>
+          </tbody>
+        </table>
+      </div>`;
   }
 
   // Cloudflare-sourced data is the real, complete record set pulled
