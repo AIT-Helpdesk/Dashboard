@@ -177,3 +177,7 @@ packages/invoice-intake/invoice-intake-state.json
 packages/invoice-intake/data.db
 packages/invoice-intake/data.db-shm
 packages/invoice-intake/data.db-wal
+
+# A stray real client report PDF that ended up sitting untracked in the
+# repo root -- not source, never meant to be committed.
+/1834 Hotels September 2026 Managed Services Report.pdf
