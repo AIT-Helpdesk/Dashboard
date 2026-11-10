@@ -16,6 +16,17 @@ function todayAestDateString() {
   return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+// By request -- a plain "SaaS Protection: ..." console line gives no clue
+// how long ago it happened once it's scrolled past in the log, especially
+// for the scheduled-refresh ones which fire unattended throughout the
+// business day. `[YYYY-MM-DD HH:mm:ss AEST]` prefix, AEST (not server-local
+// time) per this dashboard's own convention of always working in AEST.
+function aestLogStamp() {
+  const aest = new Date(Date.now() + 10 * 60 * 60 * 1000);
+  const iso = aest.toISOString(); // 'YYYY-MM-DDTHH:mm:ss.sssZ' -- already shifted to AEST above, just reformatted below
+  return `[${iso.slice(0, 10)} ${iso.slice(11, 19)} AEST]`;
+}
+
 // Datto SaaS Protection's own REST API (api.datto.com) -- a wholly separate
 // system from both Autotask and Datto RMM (@dashboard/datto-rmm, a
 // different Datto product with its own separate API host/credentials).
@@ -376,7 +387,7 @@ async function computeServiceAggregate(force) {
   const { byClient } = buildReport(domains, null);
   const appsByClient = await mapWithConcurrency(byClient, WIDGET_FETCH_CONCURRENCY, (c) =>
     getApplications(c.customerId, force).catch((err) => {
-      console.error(`SaaS Protection: failed to fetch applications for "${c.clientName}" (customer ${c.customerId}) -- Datto-side error, excluded: ${err.message}`);
+      console.error(`${aestLogStamp()} SaaS Protection: failed to fetch applications for "${c.clientName}" (customer ${c.customerId}) -- Datto-side error, excluded: ${err.message}`);
       return null;
     })
   );
@@ -503,9 +514,9 @@ function checkScheduledRefresh() {
   const key = `${aest.toISOString().slice(0, 10)}T${hour}`;
   if (key === lastScheduledRefreshKey) return;
   lastScheduledRefreshKey = key;
-  console.log(`SaaS Protection: scheduled ${String(hour).padStart(2, '0')}:${String(SCHEDULED_REFRESH_MINUTE_AEST).padStart(2, '0')} AEST refresh starting.`);
+  console.log(`${aestLogStamp()} SaaS Protection: scheduled ${String(hour).padStart(2, '0')}:${String(SCHEDULED_REFRESH_MINUTE_AEST).padStart(2, '0')} AEST refresh starting.`);
   getServiceAggregate(true).catch((err) => {
-    console.error('SaaS Protection: scheduled refresh failed:', err.message);
+    console.error(`${aestLogStamp()} SaaS Protection: scheduled refresh failed:`, err.message);
   });
 }
 setInterval(checkScheduledRefresh, 60 * 1000).unref();

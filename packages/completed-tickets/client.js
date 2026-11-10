@@ -6,7 +6,7 @@ export const label = "Completed Tickets";
 // module itself is cached by the browser and stays alive for the session, so a
 // module-level variable survives across re-mounts and lets the last result
 // restore instantly instead of coming back blank.
-let lastParams = null; // { from, to }
+let lastParams = null; // { from, to, team }
 let lastData = null;
 
 // Whichever mount() is CURRENTLY on screen registers its own render()
@@ -38,7 +38,18 @@ export function mount(container) {
   // comment for why a navigated-away page's module can stay alive).
   container.innerHTML = `
     <header class="page-header">
-      <h1>Completed Tickets by Technician</h1>
+      <div class="tm-title-row">
+        <h1>Completed Tickets by Technician</h1>
+        <div class="tm-team-select-row">
+          <label for="ct-team-input">Team</label>
+          <select id="ct-team-input" name="team">
+            <option value="service-desk">Support Desk</option>
+            <option value="professional-services">Professional Services</option>
+            <option value="both">Both</option>
+            <option value="all-staff">All Staff</option>
+          </select>
+        </div>
+      </div>
     </header>
     <form id="ct-date-form" class="date-form date-form--stacked">
       <div class="date-form-row">
@@ -74,6 +85,7 @@ export function mount(container) {
   `;
 
   const form = container.querySelector('#ct-date-form');
+  const teamInput = container.querySelector('#ct-team-input');
   const fromInput = container.querySelector('#ct-from-input');
   const toInput = container.querySelector('#ct-to-input');
   const statusEl = container.querySelector('#status');
@@ -166,10 +178,17 @@ export function mount(container) {
   });
 
   if (lastParams) {
+    teamInput.value = lastParams.team;
     fromInput.value = lastParams.from;
     toInput.value = lastParams.to;
     setActiveQuickButton(lastActiveQuickButtonId);
   } else {
+    // Defaults to "All Staff" (unlike Ticket Times, which defaults to
+    // "Both") -- by request, this page originally just showed every
+    // resource with no team filter at all; the Team selector was added
+    // afterward for parity with Ticket Times, so All Staff keeps that
+    // original "show tickets for all resources" behaviour as the default.
+    teamInput.value = 'all-staff';
     // Today, by request ("Both should default to Today").
     const today = todayISO();
     fromInput.value = today;
@@ -183,6 +202,7 @@ export function mount(container) {
   });
 
   async function load() {
+    const team = teamInput.value;
     const from = fromInput.value;
     const to = toInput.value;
     if (!from || !to) return;
@@ -202,10 +222,11 @@ export function mount(container) {
     resultsEl.innerHTML = '';
 
     try {
-      const res = await fetch(`/api/completed-tickets?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      const qs = new URLSearchParams({ from, to, team });
+      const res = await fetch(`/api/completed-tickets?${qs.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      lastParams = { from, to };
+      lastParams = { from, to, team };
       lastData = data;
       activeRender(data);
     } catch (err) {
@@ -247,8 +268,13 @@ export function mount(container) {
     // smaller (.summary-line-compact, styles.css), by request ("Make the
     // text of the whole line smaller so that it's not so long").
     const dateLabel = data.from === data.to ? data.from : `${data.from} to ${data.to}`;
+    // Team prefix, same wording/ordering as Ticket Times' own summary line
+    // ("{team} — {date range} ...") -- added once the Team selector was
+    // added here for parity with that page.
+    const teamLabels = { 'service-desk': 'Support Desk', 'professional-services': 'Professional Services', both: 'Both', 'all-staff': 'All Staff' };
+    const teamLabel = teamLabels[data.team] || data.team;
     summaryEl.hidden = false;
-    summaryTextEl.innerHTML = `${escapeHtml(dateLabel)} - ${data.totalCount} ticket${data.totalCount === 1 ? '' : 's'} - ${formatHours(data.totalHoursWorked)} (h:mm) total - <span class="text-highlight-green">Invoiced: ${formatCurrency(data.totalInvoicedDollars)}</span> - <span class="text-highlight-orange">Posted: ${formatCurrency(data.totalPostedDollars)}</span> - <span class="text-highlight-red">Pending: ${formatCurrency(data.totalPendingDollars)}</span> (<span class="text-highlight-blue">TC Elite: ${formatCurrency(data.totalTcEliteDollars)}</span>)`;
+    summaryTextEl.innerHTML = `${escapeHtml(teamLabel)} — ${escapeHtml(dateLabel)} - ${data.totalCount} ticket${data.totalCount === 1 ? '' : 's'} - ${formatHours(data.totalHoursWorked)} (h:mm) total - <span class="text-highlight-green">Invoiced: ${formatCurrency(data.totalInvoicedDollars)}</span> - <span class="text-highlight-orange">Posted: ${formatCurrency(data.totalPostedDollars)}</span> - <span class="text-highlight-red">Pending: ${formatCurrency(data.totalPendingDollars)}</span> (<span class="text-highlight-blue">TC Elite: ${formatCurrency(data.totalTcEliteDollars)}</span>)`;
 
     if (data.totalCount === 0) {
       resultsEl.innerHTML = '<p class="status">No tickets completed in this date range.</p>';

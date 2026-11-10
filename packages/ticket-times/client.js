@@ -46,6 +46,7 @@ export function mount(container) {
             <option value="service-desk">Support Desk</option>
             <option value="professional-services">Professional Services</option>
             <option value="both">Both</option>
+            <option value="all-staff">All Staff</option>
           </select>
         </div>
       </div>
@@ -254,7 +255,7 @@ export function mount(container) {
     const dateLabel = data.from === data.to ? data.from : `${data.from} to ${data.to}`;
     // Team prefix, same wording/ordering as Time Summaries' own summary
     // line ("{team} — {date range} ...").
-    const teamLabels = { 'service-desk': 'Support Desk', 'professional-services': 'Professional Services', both: 'Both' };
+    const teamLabels = { 'service-desk': 'Support Desk', 'professional-services': 'Professional Services', both: 'Both', 'all-staff': 'All Staff' };
     const teamLabel = teamLabels[data.team] || data.team;
     summaryEl.hidden = false;
     summaryEl.innerHTML = `${escapeHtml(teamLabel)} — ${escapeHtml(dateLabel)} - ${data.totalCount} ticket${data.totalCount === 1 ? '' : 's'} - ${formatHours(data.totalHoursWorked)} (h:mm) total - <span class="text-highlight-green">Invoiced: ${formatCurrency(data.totalInvoicedDollars)}</span> - <span class="text-highlight-orange">Posted: ${formatCurrency(data.totalPostedDollars)}</span> - <span class="text-highlight-red">Pending: ${formatCurrency(data.totalPendingDollars)}</span> (<span class="text-highlight-blue">TC Elite: ${formatCurrency(data.totalTcEliteDollars)}</span>)`;

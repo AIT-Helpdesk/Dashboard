@@ -7,6 +7,9 @@ export const label = "DNS Check";
 let lastDomain = '';
 let lastData = null;
 let activeRender = null;
+// Certificate Transparency (crt.sh) toggle, by request -- on by default,
+// remembered across re-mounts same as lastDomain above.
+let lastCtEnabled = true;
 
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
@@ -76,6 +79,9 @@ export function mount(container) {
       <form id="filter-form" class="date-form">
         <label for="domain-input">Domain</label>
         <input type="text" id="domain-input" name="domain" placeholder="e.g. example.com" required />
+        <label for="ct-toggle-input" class="inline-checkbox-label">
+          <input type="checkbox" id="ct-toggle-input" /> Check Certificate Transparency (crt.sh)
+        </label>
         <button type="submit" id="search-button">Check</button>
       </form>
     </header>
@@ -86,21 +92,23 @@ export function mount(container) {
 
   const form = container.querySelector('#filter-form');
   const domainInput = container.querySelector('#domain-input');
+  const ctToggleInput = container.querySelector('#ct-toggle-input');
   const searchButton = container.querySelector('#search-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
   if (lastDomain) domainInput.value = lastDomain;
+  ctToggleInput.checked = lastCtEnabled;
 
   activeRender = render;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(domainInput.value);
+    load(domainInput.value, ctToggleInput.checked);
   });
 
-  async function load(domain) {
+  async function load(domain, ctEnabled) {
     searchButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
@@ -109,11 +117,12 @@ export function mount(container) {
     resultsEl.innerHTML = '';
 
     try {
-      const params = new URLSearchParams({ domain });
+      const params = new URLSearchParams({ domain, ct: ctEnabled ? 'true' : 'false' });
       const res = await fetch(`/api/dns-check?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastDomain = domain;
+      lastCtEnabled = ctEnabled;
       lastData = data;
       activeRender(data);
     } catch (err) {
@@ -177,6 +186,9 @@ export function mount(container) {
   function topNoteHtml(source) {
     if (source === 'cloudflare') {
       return '<p class="inline-subtext dns-check-disclaimer">This domain is managed in our Cloudflare account -- showing the complete record set pulled directly from Cloudflare, not a guess.</p>';
+    }
+    if (source === 'tpp') {
+      return '<p class="inline-subtext dns-check-disclaimer">This domain is managed in our TPP Wholesale reseller account -- showing the complete record set pulled directly from TPP, not a guess.</p>';
     }
     return '<p class="inline-subtext dns-check-disclaimer"><strong class="dns-check-disclaimer-warning">Beware</strong>: This is not a complete list of DNS records. We are only querying known common records.</p>';
   }

@@ -67,27 +67,60 @@ async function fetchTicketsCompletedInRange(client, fromKey, toKey) {
   return excludeMonitoringAlerts([...completed, ...billing]);
 }
 
+// Team selector, by request ("add the selector box like ticket times
+// has") -- same real three-team rules @dashboard/ticket-times' own
+// server.js already established (see that file's own Team selector
+// comment for the full Departments/membership story), plus the same
+// "All Staff" addition made there: Support Desk = everyone except
+// Professional Services or Leadership; Professional Services = ONLY
+// that team; Both = everyone except Leadership; All Staff = literally
+// everyone, Leadership included ("All Resources means those we have
+// plus leadership team"). Duplicated here rather than imported -- same
+// per-page-independence convention Ticket Times' own copy follows.
+const TEAM_SERVICE_DESK = 'service-desk';
+const TEAM_PROFESSIONAL_SERVICES = 'professional-services';
+const TEAM_BOTH = 'both';
+const TEAM_ALL_STAFF = 'all-staff';
+const VALID_TEAMS = new Set([TEAM_SERVICE_DESK, TEAM_PROFESSIONAL_SERVICES, TEAM_BOTH, TEAM_ALL_STAFF]);
+// Defaults to "All Staff" here (unlike Ticket Times, which defaults to
+// "Both") -- this page originally showed every resource with no team
+// filter at all; All Staff keeps that behaviour as the default now that
+// the selector exists.
+const DEFAULT_TEAM = TEAM_ALL_STAFF;
+function resolveTeam(rawTeam) {
+  return VALID_TEAMS.has(rawTeam) ? rawTeam : DEFAULT_TEAM;
+}
+function resourcePassesTeamFilter(resourceId, team, membership) {
+  if (team === TEAM_PROFESSIONAL_SERVICES) return membership.professionalServices.has(resourceId);
+  if (team === TEAM_BOTH || team === TEAM_ALL_STAFF) return true;
+  return !membership.professionalServices.has(resourceId);
+}
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const router = express.Router();
 
 router.get('/', async (req, res) => {
   const from = req.query.from;
   const to = req.query.to;
+  const team = resolveTeam((req.query.team || '').toString());
   if (!from || !DATE_RE.test(from)) return res.status(400).json({ error: 'Query param "from" is required in YYYY-MM-DD format.' });
   if (!to || !DATE_RE.test(to)) return res.status(400).json({ error: 'Query param "to" is required in YYYY-MM-DD format.' });
   if (to < from) return res.status(400).json({ error: '"to" must not be before "from".' });
 
   try {
     const client = await getClient();
-    const [rawTickets, { leadership }] = await Promise.all([fetchTicketsCompletedInRange(client, from, to), fetchServiceDeskAndProfessionalServicesMembership(client)]);
+    const [rawTickets, membership] = await Promise.all([fetchTicketsCompletedInRange(client, from, to), fetchServiceDeskAndProfessionalServicesMembership(client)]);
 
-    // Leadership Team omitted entirely, by request -- same convention
-    // @dashboard/ticket-times already established. Unlike that page (which
-    // drops individual TimeEntries rows, since a ticket there can carry
-    // several technicians' own entries), this page's own unit is one
-    // ticket credited to exactly one completedByResourceID, so the whole
-    // ticket row is dropped here rather than a partial entry within it.
-    const tickets = rawTickets.filter((t) => !leadership.has(t.completedByResourceID));
+    // Leadership Team omitted unless the "All Staff" team is selected, by
+    // request -- same convention @dashboard/ticket-times already
+    // established. Unlike that page (which drops individual TimeEntries
+    // rows, since a ticket there can carry several technicians' own
+    // entries), this page's own unit is one ticket credited to exactly one
+    // completedByResourceID, so the whole ticket row is dropped here
+    // rather than a partial entry within it.
+    const tickets = rawTickets.filter(
+      (t) => team === TEAM_ALL_STAFF || (!membership.leadership.has(t.completedByResourceID) && resourcePassesTeamFilter(t.completedByResourceID, team, membership))
+    );
 
     const uniqueResourceIDs = [...new Set(tickets.map((t) => t.completedByResourceID).filter(Boolean))];
     const uniqueCompanyIDs = [...new Set(tickets.map((t) => t.companyID).filter((id) => id !== null && id !== undefined))];
@@ -232,6 +265,7 @@ router.get('/', async (req, res) => {
     res.json({
       from,
       to,
+      team,
       totalCount: enriched.length,
       totalHoursWorked: enriched.reduce((sum, t) => sum + t.hoursWorked, 0),
       totalDollars: enriched.reduce((sum, t) => sum + t.dollars, 0),

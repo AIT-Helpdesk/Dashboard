@@ -74,7 +74,11 @@ async function fetchTimeEntriesInRange(client, fromKey, toKey) {
 const TEAM_SERVICE_DESK = 'service-desk';
 const TEAM_PROFESSIONAL_SERVICES = 'professional-services';
 const TEAM_BOTH = 'both';
-const VALID_TEAMS = new Set([TEAM_SERVICE_DESK, TEAM_PROFESSIONAL_SERVICES, TEAM_BOTH]);
+// "All Staff", by request -- unlike every other team option, this one
+// includes Leadership Team members too (every other option filters them
+// out unconditionally below, before resourcePassesTeamFilter() even runs).
+const TEAM_ALL_STAFF = 'all-staff';
+const VALID_TEAMS = new Set([TEAM_SERVICE_DESK, TEAM_PROFESSIONAL_SERVICES, TEAM_BOTH, TEAM_ALL_STAFF]);
 const DEFAULT_TEAM = TEAM_BOTH;
 function resolveTeam(rawTeam) {
   return VALID_TEAMS.has(rawTeam) ? rawTeam : DEFAULT_TEAM;
@@ -113,7 +117,11 @@ router.get('/', async (req, res) => {
     // non-Leadership technician still shows that technician's own entry
     // normally -- this excludes the PERSON, not the ticket. Team filter
     // (Support Desk/Professional Services/Both) applied in the same pass.
-    const entries = rawEntries.filter((e) => !membership.leadership.has(e.resourceID) && resourcePassesTeamFilter(e.resourceID, team, membership));
+    // "All Staff" is the one exception -- it's meant to include Leadership
+    // too, so it skips this exclusion entirely rather than running through
+    // resourcePassesTeamFilter() (which has no "include everyone" case of
+    // its own -- Both already means "everyone except Leadership").
+    const entries = rawEntries.filter((e) => team === TEAM_ALL_STAFF || (!membership.leadership.has(e.resourceID) && resourcePassesTeamFilter(e.resourceID, team, membership)));
 
     if (entries.length === 0) {
       return res.json({ from, to, team, totalCount: 0, totalHoursWorked: 0, totalDollars: 0, totalInvoicedDollars: 0, totalPostedDollars: 0, totalPendingDollars: 0, totalTcEliteDollars: 0, byResource: [] });

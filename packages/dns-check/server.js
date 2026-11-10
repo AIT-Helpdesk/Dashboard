@@ -420,9 +420,166 @@ function cloudflareRecordsToEntriesAndSoa(records) {
   return { entries, soa };
 }
 
+// ---- TPP Wholesale (authoritative, when we manage the zone ourselves) ----
+//
+// Same "pull the real record set instead of guessing" treatment as the
+// Cloudflare block above, by request ("still don't use [crt.sh] if we've
+// accessed all the records from our own DNS CloudFlare or TPP") -- this is
+// TPP Wholesale's newer REST/JSON API (confirmed live against our own
+// reseller account, not the older auth.pl/order.pl/query.pl API, which has
+// no DNS-record capability at all). One reseller account only (TPP_API_KEY/
+// TPP_SECRET in .env, no per-account label the way CLOUDFLARE_<LABEL>_*
+// supports) -- nothing in this dashboard's own TPP account suggests more
+// than one is coming, so this stays simple rather than pre-building
+// multi-account discovery Cloudflare's own block needed.
+const TPP_API_BASE = 'https://api.tppwholesale.com.au';
+const TPP_FETCH_TIMEOUT_MS = 10000;
+
+async function tppApiRequest(path, { method = 'GET', body, token } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TPP_FETCH_TIMEOUT_MS);
+  try {
+    const headers = { Accept: 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const res = await fetch(`${TPP_API_BASE}${path}`, {
+      method,
+      signal: controller.signal,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The auth token is a JWT valid for 1 hour (confirmed against a real token's
+// own iat/exp claims) and IP-bound -- cached module-scope (this dashboard's
+// own outbound IP never changes mid-process) and refreshed a minute before
+// it actually expires, rather than fetched fresh on every DNS Check search.
+let cachedTppToken = null; // { token, expiresAtMs }
+
+function decodeJwtExpiryMs(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch (err) {
+    return null; // can't decode -- caller falls back to a short default below
+  }
+}
+
+async function getTppToken() {
+  if (cachedTppToken && Date.now() < cachedTppToken.expiresAtMs - 60000) return cachedTppToken.token;
+
+  const apiKey = (process.env.TPP_API_KEY || '').trim();
+  const secretKey = (process.env.TPP_SECRET || '').trim();
+  if (!apiKey || !secretKey) return null; // not configured -- not an error, just nothing to do
+
+  const res = await tppApiRequest('/jwt/auth/token/', { method: 'POST', body: { apiKey, secretKey } });
+  const text = (await res.text()).trim();
+  if (!res.ok) throw new Error(`TPP Wholesale auth failed: HTTP ${res.status} -- ${text.slice(0, 200)}`);
+
+  const token = text.replace(/^"|"$/g, ''); // plain-text JWT, not JSON -- defensive strip in case that ever changes
+  const expiresAtMs = decodeJwtExpiryMs(token) || Date.now() + 5 * 60000; // 5 min fallback if the token's own exp can't be read
+  cachedTppToken = { token, expiresAtMs };
+  return token;
+}
+
+// TXT content comes back from TPP wrapped in literal double-quote characters
+// (confirmed against real DKIM/SPF records -- e.g. the raw JSON value is the
+// 9-character string `"v=spf1"` rather than the 7-character `v=spf1`), unlike
+// Cloudflare's own `content` field which never carries them -- stripped here
+// so the client doesn't render doubled-up quotes.
+// Hostname-valued record types also come back with a trailing dot on their
+// content (e.g. CNAME "pop3.partnerconsole.net.", MX exchange
+// "mx1.mail-forwarder.io.") -- confirmed against real records -- stripped
+// here too, same reasoning as tppRecordName() above, so these values match
+// the no-trailing-dot shape the guess-based (Node dns.promises) and
+// Cloudflare paths both already produce.
+const TPP_HOSTNAME_VALUE_TYPES = new Set(['NS', 'CNAME', 'MX']);
+function tppRecordValue(rec) {
+  let content = rec.content || '';
+  if (content.length >= 2 && content.startsWith('"') && content.endsWith('"')) content = content.slice(1, -1);
+  if (TPP_HOSTNAME_VALUE_TYPES.has(rec.type)) content = content.replace(/\.$/, '');
+  return content;
+}
+
+// The MX "priority" a reader actually wants is in TPP's own `preference`
+// field -- confirmed against real MX records, where `priority` was 0 on
+// every single one (TPP evidently reserves that field for something else,
+// never populated on the records this account has).
+function tppRecordInfo(rec) {
+  const parts = [];
+  if (rec.type === 'MX' && rec.preference !== undefined && rec.preference !== null) parts.push(`Priority ${rec.preference}`);
+  if (rec.type === 'TXT' && /v=spf/i.test(rec.content || '')) parts.push('SPF');
+  return parts.join(' -- ');
+}
+
+// TPP's own `name` field is the apex record's full "domain.tld." (trailing
+// dot, confirmed against real NS/A/MX/TXT records at the zone root) for
+// anything at the domain's root, or just the bare relative label ("ftp",
+// "domains", "ns1") with no trailing dot for anything else -- qualified
+// here into the one full-hostname-no-trailing-dot shape this file's entries
+// already use everywhere else (matching dns.resolveNs()'s own Node
+// behaviour, which likewise strips the trailing dot).
+function tppRecordName(rec, domain) {
+  const raw = rec.name || '';
+  if (raw.endsWith('.')) return raw.slice(0, -1);
+  return `${raw}.${domain}`;
+}
+
+// Tries the one configured TPP reseller account. Returns null (not an
+// error) when TPP isn't configured at all, or when this specific domain
+// genuinely isn't managed under this reseller account (TPP's own 403 for
+// that case, confirmed against a real non-TPP domain: {"errorCode":"403",
+// ...,"message":"Given Domain does not belong to Reseller"}) -- either way,
+// the caller falls through to the normal guess-based lookups. Any OTHER
+// failure (auth broken, network hiccup, unexpected shape) throws, same
+// "degrade, don't fail the whole page" handling the route's own try/catch
+// around this call already gives the equivalent Cloudflare lookup.
+async function tppFindDnsRecords(domain) {
+  const token = await getTppToken();
+  if (!token) return null;
+
+  const res = await tppApiRequest(`/domains/${encodeURIComponent(domain)}/dns-records`, { token });
+  if (res.status === 403) {
+    const body = await res.json().catch(() => null);
+    if (body && /does not belong to reseller/i.test(body.message || '')) return null;
+    throw new Error(`TPP Wholesale DNS lookup failed: HTTP 403 -- ${body?.message || 'unknown'}`);
+  }
+  if (!res.ok) throw new Error(`TPP Wholesale DNS lookup failed: HTTP ${res.status}`);
+  return await res.json();
+}
+
+// TPP mixes NS records into the same flat list everything else comes back
+// in (unlike Cloudflare, which exposes them as separate zone-level
+// `name_servers` metadata) -- split out here into the exact same { ns,
+// entries } shape the route handler already builds from either source, and
+// SOA is simply never present in this endpoint's response (confirmed
+// against three real domains' worth of records) -- same "No SOA record"
+// fallback the Cloudflare path already uses for the same reason.
+function tppRecordsToNsAndEntries(records, domain) {
+  const ns = [];
+  const entries = [];
+  for (const rec of records) {
+    if (rec.type === 'NS') {
+      ns.push(tppRecordValue(rec)); // already trailing-dot-stripped -- NS is in TPP_HOSTNAME_VALUE_TYPES
+      continue;
+    }
+    entries.push({ type: rec.type, name: tppRecordName(rec, domain), value: tppRecordValue(rec), info: tppRecordInfo(rec) });
+  }
+  return { ns, entries };
+}
+
 router.get('/', async (req, res) => {
   const domain = normalizeDomain(req.query.domain);
   if (!domain) return res.status(400).json({ error: 'A domain is required.' });
+  // Certificate Transparency (crt.sh), by request -- on by default, opted
+  // OUT of per-request via this query param (only the client's own
+  // checkbox sends it as 'false'; a request with no `ct` param at all --
+  // e.g. the API called directly -- defaults to on).
+  const ctEnabled = req.query.ct !== 'false' && req.query.ct !== '0';
 
   try {
     const cfMatch = await cloudflareFindZone(domain).catch((err) => {
@@ -454,6 +611,26 @@ router.get('/', async (req, res) => {
       }
     }
 
+    const tppRecords = await tppFindDnsRecords(domain).catch((err) => {
+      console.error('DNS Check: TPP Wholesale DNS lookup failed, falling back to guess-based lookups:', err.message);
+      return null;
+    });
+
+    if (tppRecords) {
+      const { ns, entries } = tppRecordsToNsAndEntries(tppRecords, domain);
+      return res.json({
+        domain,
+        asOf: new Date().toISOString(),
+        source: 'tpp',
+        hoster: 'TPP Wholesale (managed in our reseller account)',
+        ns: { ok: true, records: ns },
+        entries,
+        notFound: { dkim: [], m365: [], security: [], legacyMail: [], website: [] },
+        soa: { ok: false, code: 'ENODATA', message: 'No SOA record' },
+        certTransparency: null,
+      });
+    }
+
     const [ns, soa, a, mx, txt, dmarcTxt, cname, caa] = await Promise.all([
       lookup(dns.resolveNs, domain),
       lookup(dns.resolveSoa, domain),
@@ -480,7 +657,12 @@ router.get('/', async (req, res) => {
       Promise.all(M365_SRV_CHECKS.map(async (s) => ({ ...s, result: await lookup(dns.resolveSrv, `${s.name}.${domain}`) }))),
       Promise.all(MAIL_SECURITY_TXT_CHECKS.map(async (s) => ({ ...s, result: await lookup(dns.resolveTxt, `${s.name}.${domain}`) }))),
       Promise.all(LEGACY_MAIL_HOSTNAME_CHECKS.map(async (m) => ({ ...m, ...(await cnameAndA(`${m.name}.${domain}`)) }))),
-      certTransparencyExtras(domain, knownHostnames(domain)),
+      // Skipped entirely (not just "run but ignored") when the toggle is off
+      // -- ctResult stays null, and certTransparency below follows suit, the
+      // same "null means not checked" shape the client already understands
+      // from the Cloudflare path (see certTransparencyNoteHtml's own `if
+      // (!ct) return '';`).
+      ctEnabled ? certTransparencyExtras(domain, knownHostnames(domain)) : Promise.resolve(null),
       (async () => ({ ...WWW_HOSTNAME_CHECK, ...(await cnameAndA(`${WWW_HOSTNAME_CHECK.name}.${domain}`)) }))(),
     ]);
 
@@ -581,16 +763,20 @@ router.get('/', async (req, res) => {
     // Certificate Transparency's own discoveries, appended last -- genuinely
     // new hostnames found via crt.sh, each already confirmed to actually
     // resolve (that's what certTransparencyExtras() does the CNAME/A lookup
-    // for), not just a hostname that once had a cert issued.
-    entries.push(...ctResult.entries);
-    const certTransparency = {
-      ok: ctResult.ok,
-      error: ctResult.error || null,
-      totalDiscovered: ctResult.totalDiscovered,
-      checkedCount: ctResult.checkedCount,
-      truncated: ctResult.truncated,
-      foundCount: ctResult.entries.length,
-    };
+    // for), not just a hostname that once had a cert issued. ctResult is
+    // null when the toggle was off (see the Promise.all above) -- nothing
+    // to append, and certTransparency stays null too.
+    if (ctResult) entries.push(...ctResult.entries);
+    const certTransparency = ctResult
+      ? {
+          ok: ctResult.ok,
+          error: ctResult.error || null,
+          totalDiscovered: ctResult.totalDiscovered,
+          checkedCount: ctResult.checkedCount,
+          truncated: ctResult.truncated,
+          foundCount: ctResult.entries.length,
+        }
+      : null;
 
     // ns and soa are both kept separate from `entries` -- ns shown in its
     // own section at the TOP (next to the hoster guess, by request), soa in
