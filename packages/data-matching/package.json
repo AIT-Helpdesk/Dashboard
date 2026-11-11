@@ -13,6 +13,7 @@
     "@dashboard/autotask-client": "*",
     "@dashboard/datto-rmm": "*",
     "@dashboard/ingram-client": "*",
+    "@dashboard/saas-protection": "*",
     "@dashboard/tpp-client": "*",
     "express": "^4.19.2"
   }

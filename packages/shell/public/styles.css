@@ -1377,6 +1377,48 @@ h1 {
   font-size: 1.6rem;
 }
 
+/* Data Matching's own summary now carries a "UDF Field Name:X" line above
+   the count line (see client.js's udfFieldLineHtml), by request -- the
+   shared 1.6rem .summary strong above reads oversized/unbalanced next to
+   that extra line in a way it didn't as a single standalone line elsewhere,
+   so scoped back down to the surrounding text's own size here specifically
+   rather than changing the shared rule every other page's summary relies
+   on. */
+.data-matching-page .summary strong {
+  font-size: inherit;
+}
+/* "UDF Field Name:X", by request -- shown above the count line so it's
+   always obvious which Autotask UDF a concept is checking/writing. */
+.dm-udf-label {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+/* "Show Unmatched" (the renamed #load-button), by request -- same small
+   size as "Show UDF Matches" (.button-link--small's own padding/font-size),
+   but keeping its existing darker-blue .date-form button look (background/
+   color), not .button-link--small's own light accent tint. Scoped to this
+   page -- #load-button is a plain, unclassed id reused by several other
+   pages' own Load buttons, which this must not affect. */
+.data-matching-page #load-button {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+}
+/* "Show UDF Matches" table -- shrunk to its own content, by request, same
+   convention @dashboard/dns-check's own .dns-check-compact-table uses. */
+.dm-compact-table {
+  display: inline-block;
+  width: auto;
+}
+.dm-compact-table table {
+  width: auto;
+}
+/* "Show Ignored Lines (N)" -- reuses .inline-checkbox-label's own look
+   (DNS Check's "Check Certificate Transparency" toggle), just with room
+   below it before the table. */
+.dm-show-ignored-label {
+  margin-bottom: 0.75rem;
+}
+
 .resource-group {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1491,6 +1533,35 @@ h1 {
   flex-wrap: wrap;
   gap: 0.4rem;
   padding: 0.3rem 1rem 0.6rem;
+}
+/* Same CSS-specificity pitfall confirmed elsewhere on this dashboard
+   (.button-link[hidden], .rotate-controls[hidden], ...): this class's own
+   `display: flex` above ties with the browser's built-in
+   `[hidden] { display: none }` rule, and an author rule always wins that
+   tie regardless of source order -- without this, toggling `.hidden = true`
+   on an empty suggestions box (TPP's own group, before any match attempt)
+   silently left its padding visible as an empty gap. */
+.dm-match-suggestions[hidden] {
+  display: none;
+}
+
+/* Ingram/Datto's own per-row match cell -- the suggestion chips and the
+   free-text input/Update button flow on one wrapping row together, by
+   request, rather than the input always starting its own line below the
+   chips even when there's room beside them. */
+.dm-match-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+/* .dm-match-suggestions' own right/bottom padding above was sized for it
+   standing alone as a full-width block (TPP's own group, between its
+   header and the table below) -- inside .dm-match-row, .dm-match-row's own
+   `gap` already separates it from the input/Update button next to it, so
+   that padding would just double up the spacing here. */
+.dm-match-row .dm-match-suggestions {
+  padding: 0.3rem 0 0.3rem;
 }
 
 /* A .section-heading (green/red/etc.) that also shows a right-aligned
@@ -2496,6 +2567,30 @@ h1 {
   font-size: 0.9rem;
   color: var(--muted);
 }
+/* "Autotask: X / Ingram Micro: X / Microsoft: X / Datto RMM: X", one per
+   line, by request -- a 2-column grid rather than plain inline text, so
+   the value after every colon lines up at the same x position regardless
+   of how long its own label is (column 1 sizes to the widest label,
+   "Ingram Micro:"). */
+.check-client-page .chk-client-label-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 0.5rem;
+  row-gap: 0.15rem;
+}
+/* The "choose a client" picker (client.js's renderClientPicker), shown in
+   place of the normal Client: label when a plain (no "*") Autotask Client
+   search matched more than one real company -- by request, nothing else on
+   the page fetches anything until one is picked. */
+.check-client-page .chk-client-picker-select {
+  margin-left: 0.4rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.85rem;
+}
 /* "Multiple Matches", by request -- red/bold, boxed the same way a tab
    page's own active-tab pill is (.tab-button.active's own border +
    color-mix background-tint + border-radius recipe), just red (#dc2626)
@@ -2512,6 +2607,48 @@ h1 {
   border-radius: 6px;
   background: color-mix(in srgb, #dc2626 14%, var(--card));
   padding: 0.2rem 0.6rem;
+}
+
+/* Ingram Client/Datto Site's own "resolved field" UI (client.js's
+   renderResolvedField), by request -- defaults to the resolved company's
+   own Name:Ingram Micro/Name:Datto RMM UDF, shown plain with a pencil to
+   edit it; hidden entirely when there's nothing to show ("assume
+   matches"). */
+.check-client-page .chk-resolved-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+.check-client-page .chk-resolved-label {
+  color: var(--muted);
+}
+.check-client-page .chk-resolved-value {
+  font-weight: 600;
+}
+.check-client-page .chk-resolved-edit-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.check-client-page .chk-resolved-edit-btn:hover {
+  opacity: 0.7;
+}
+.check-client-page .chk-resolved-input,
+.check-client-page .chk-resolved-select {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.85rem;
+}
+.check-client-page .chk-resolved-select {
+  max-width: 100%;
 }
 
 /* Contract Checks' own table -- a DIFFERENT class from .ingram-orders-table

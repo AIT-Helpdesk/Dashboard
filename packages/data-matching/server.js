@@ -3,6 +3,7 @@ const { fetchAllDomains } = require('@dashboard/tpp-client');
 const { getClient, listAll, getCompanyUdfValueToNameMap, invalidateCompanyUdfMap, todayAestKey } = require('@dashboard/autotask-client');
 const { getToken: getIngramToken, fetchAllPages: fetchIngramPages } = require('@dashboard/ingram-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
+const saasProtection = require('@dashboard/saas-protection/server.js');
 
 // "Data Matching" -- a page for surfacing cross-system matching GAPS (not
 // renewals -- that's @dashboard/coming-soon). Each route here is one
@@ -11,12 +12,15 @@ const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 //
 // Concept 1 (TPP Wholesale) compares a short account-reference CODE
 // against the "Name:TPP" UDF, since TPP's own reference never looks like
-// a real company name. Concepts 2 (Ingram Micro) and 3 (Datto RMM) instead
-// compare a real name directly against Autotask's own company name --
-// Ingram's customer name and Datto's site name are both real-world names
-// that should just equal the matching Autotask company's name outright,
-// no UDF needed. More concepts can follow the same shape: one route +
-// one report-builder function here, one render function in client.js.
+// a real company name. Concepts 2 (Ingram Micro), 3 (Datto RMM), and 4
+// (SaaS Protection) instead compare a real name directly against
+// Autotask's own company name -- each of those three systems' own
+// customer/site name is a real-world name that should just equal the
+// matching Autotask company's name outright, no UDF needed for the
+// MATCHING itself (the UDF only comes in once writing a confirmed match,
+// same convention every one of these concepts shares). More concepts can
+// follow the same shape: one route + one report-builder function here, one
+// render function in client.js.
 
 // Plain calendar-day arithmetic on YYYY-MM-DD strings -- same convention
 // @dashboard/coming-soon and @dashboard/subscriptions-expiring already use,
@@ -85,6 +89,7 @@ async function buildTppDomainsUnmatchedReport() {
   return {
     asOf: new Date().toISOString(),
     concept: 'tpp-domains-unmatched',
+    udfName: 'Name:TPP',
     today,
     totalCount: unmatched.length,
     byClient,
@@ -108,13 +113,25 @@ async function buildTppDomainsUnmatchedReport() {
 // ---------------------------------------------------------------------------
 async function buildIngramClientsUnmatchedReport() {
   const client = await getClient();
-  const [token, autotaskCompanies] = await Promise.all([getIngramToken(), getAllCompanyNames(client)]);
+  const [token, autotaskCompanies, ingramUdfMap] = await Promise.all([
+    getIngramToken(),
+    getAllCompanyNames(client),
+    getCompanyUdfValueToNameMap(client, 'Name:Ingram Micro'),
+  ]);
   const [subscriptions, customers] = await Promise.all([
     fetchIngramPages('/subscriptions', token, { status: 'active' }),
     fetchIngramPages('/customers', token),
   ]);
   const customerNameById = new Map(customers.map((c) => [c.id, c.name]));
   const autotaskNameSet = new Set(autotaskCompanies.map((c) => normalizeForExactCompare(c.companyName)));
+  // Already matched via the UDF write path -- confirmed live, by request
+  // ("AMD Constructions" still showed up as unmatched even though
+  // company "AMD Quality Constructions" already has Name:Ingram Micro =
+  // "AMD Constructions", because the two companyNames themselves don't
+  // match -- that's exactly WHY a human wrote the UDF in the first place).
+  // Checked case/whitespace-insensitively, same as the companyName check
+  // above, since a human may have typed the UDF value slightly differently.
+  const ingramUdfValueSet = new Set([...ingramUdfMap.keys()].map(normalizeForExactCompare));
 
   const activeCountByClientName = new Map();
   for (const s of subscriptions) {
@@ -124,11 +141,24 @@ async function buildIngramClientsUnmatchedReport() {
 
   const rows = [];
   for (const [clientName, activeSubscriptionCount] of activeCountByClientName.entries()) {
-    if (autotaskNameSet.has(normalizeForExactCompare(clientName))) continue; // exact match -- not a gap
+    const normalized = normalizeForExactCompare(clientName);
+    if (autotaskNameSet.has(normalized)) continue; // exact match -- not a gap at all, not even an ignorable one
+    if (ingramUdfValueSet.has(normalized)) continue; // already matched via the UDF write path
+    // Ambient IT's own internal naming convention for a Microsoft 365
+    // subscription tied to a specific underlying client -- confirmed live
+    // against 3 real rows ("Ambient iT - W365 (Blackk Group)", "Ambient iT
+    // - W365 (Ascot Mortgage Group)", "Ambient iT - W365 (MD)", one with a
+    // double space before the hyphen) -- never a real company name of its
+    // own to match against Autotask, so flagged "ignored" rather than
+    // treated as a genuine unmatched gap. Still shown (not dropped
+    // outright), by request -- hidden by default behind "Show Ignored
+    // Lines", same convention as Concept 3's own " - On Demand" rows below.
+    const ignored = /^ambient\s+it\s*-\s*w365\s*\(.+\)$/i.test(clientName.trim());
     rows.push({
       clientName,
       activeSubscriptionCount,
-      suggestions: findFuzzySuggestionsFromList(autotaskCompanies, clientName),
+      suggestions: ignored ? [] : findFuzzySuggestionsFromList(autotaskCompanies, clientName),
+      ignored,
     });
   }
   rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
@@ -136,7 +166,9 @@ async function buildIngramClientsUnmatchedReport() {
   return {
     asOf: new Date().toISOString(),
     concept: 'ingram-clients-unmatched',
-    totalCount: rows.length,
+    udfName: 'Name:Ingram Micro',
+    totalCount: rows.filter((r) => !r.ignored).length,
+    ignoredCount: rows.filter((r) => r.ignored).length,
     rows,
   };
 }
@@ -163,12 +195,29 @@ async function buildDattoSitesUnmatchedReport() {
   if (!dattoRmm.hasDattoCredentials()) {
     // Quietly "not configured", same convention Check Client's own Datto
     // RMM section uses -- not an error, just nothing to report yet.
-    return { asOf: new Date().toISOString(), concept: 'datto-sites-unmatched', configured: false, totalCount: 0, rows: [] };
+    return {
+      asOf: new Date().toISOString(),
+      concept: 'datto-sites-unmatched',
+      udfName: 'Name:Datto RMM',
+      configured: false,
+      totalCount: 0,
+      ignoredCount: 0,
+      rows: [],
+    };
   }
 
   const client = await getClient();
-  const [devices, autotaskCompanies] = await Promise.all([dattoRmm.getAllDevices(), getAllCompanyNames(client)]);
+  const [devices, autotaskCompanies, dattoUdfMap] = await Promise.all([
+    dattoRmm.getAllDevices(),
+    getAllCompanyNames(client),
+    getCompanyUdfValueToNameMap(client, 'Name:Datto RMM'),
+  ]);
   const autotaskNameSet = new Set(autotaskCompanies.map((c) => normalizeForExactCompare(c.companyName)));
+  // Already matched via the UDF write path -- same reasoning as Concept 2's
+  // own ingramUdfValueSet above (confirmed live: a site whose own real
+  // Autotask company name differs from its Datto site name is exactly the
+  // case a human writes this UDF for).
+  const dattoUdfValueSet = new Set([...dattoUdfMap.keys()].map(normalizeForExactCompare));
 
   const siteByUid = new Map(); // siteUid -> { siteName, deviceCount }
   for (const d of devices) {
@@ -183,16 +232,79 @@ async function buildDattoSitesUnmatchedReport() {
     // device genuinely has no site set in Datto itself -- not a real site
     // name to match (or fail to match) against anything.
     if (!siteName || siteName === '—') continue;
-    if (autotaskNameSet.has(normalizeForExactCompare(siteName))) continue;
-    rows.push({ siteName, deviceCount, suggestions: findFuzzySuggestionsFromList(autotaskCompanies, siteName) });
+    const normalized = normalizeForExactCompare(siteName);
+    if (autotaskNameSet.has(normalized)) continue; // exact match -- not a gap at all, not even an ignorable one
+    if (dattoUdfValueSet.has(normalized)) continue; // already matched via the UDF write path
+    // Datto's own " - On Demand" site-name suffix (e.g. "Griffith
+    // Corporation - On Demand" for the real client "Griffith Corporation"),
+    // by request -- confirmed live this is a large, consistent chunk of this
+    // report (18 of 34 rows) and never actually worth chasing down as a real
+    // naming gap, unlike every other mismatch here. Still shown (not
+    // dropped outright), hidden by default behind "Show Ignored Lines",
+    // same convention as Concept 2's own Ambient IT/W365 rows above.
+    const ignored = / - On Demand$/i.test(siteName);
+    rows.push({ siteName, deviceCount, suggestions: ignored ? [] : findFuzzySuggestionsFromList(autotaskCompanies, siteName), ignored });
   }
   rows.sort((a, b) => a.siteName.localeCompare(b.siteName));
 
   return {
     asOf: new Date().toISOString(),
     concept: 'datto-sites-unmatched',
+    udfName: 'Name:Datto RMM',
     configured: true,
+    totalCount: rows.filter((r) => !r.ignored).length,
+    ignoredCount: rows.filter((r) => r.ignored).length,
+    rows,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Concept 4: SaaS Protection Clients Not Matching Autotask -- every distinct
+// Datto SaaS Protection customer whose own name doesn't case/whitespace-
+// exactly equal a real Autotask company name. Same direct name-to-name
+// comparison as Concepts 2/3 above, writing "Name:SaaS Backups" (confirmed
+// live against this account's real Companies UDF list) once a match is
+// confirmed.
+//
+// @dashboard/saas-protection's own GET /domains is one row per PROTECTED
+// DOMAIN, not explicitly deduped by customer -- confirmed live, though,
+// this account's real data is already 1:1 (238 domain rows, 238 distinct
+// saasCustomerId, no customer with more than one domain, no two different
+// customers sharing a display name), so no dedup/grouping is needed here
+// the way Datto RMM's own device-level data (above) needs.
+// ---------------------------------------------------------------------------
+async function buildSaasProtectionClientsUnmatchedReport() {
+  const client = await getClient();
+  const [domains, autotaskCompanies, saasUdfMap] = await Promise.all([
+    saasProtection.getDomains(false),
+    getAllCompanyNames(client),
+    getCompanyUdfValueToNameMap(client, 'Name:SaaS Backups'),
+  ]);
+  const autotaskNameSet = new Set(autotaskCompanies.map((c) => normalizeForExactCompare(c.companyName)));
+  const saasUdfValueSet = new Set([...saasUdfMap.keys()].map(normalizeForExactCompare));
+
+  const rows = [];
+  for (const d of domains) {
+    const clientName = d.saasCustomerName;
+    if (!clientName) continue;
+    const normalized = normalizeForExactCompare(clientName);
+    if (autotaskNameSet.has(normalized)) continue; // exact match -- not a gap
+    if (saasUdfValueSet.has(normalized)) continue; // already matched via the UDF write path
+    rows.push({
+      clientName,
+      seatsUsed: d.seatsUsed ?? null,
+      suggestions: findFuzzySuggestionsFromList(autotaskCompanies, clientName),
+      ignored: false,
+    });
+  }
+  rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
+
+  return {
+    asOf: new Date().toISOString(),
+    concept: 'saas-protection-clients-unmatched',
+    udfName: 'Name:SaaS Backups',
     totalCount: rows.length,
+    ignoredCount: 0,
     rows,
   };
 }
@@ -405,11 +517,20 @@ function normalizeForExactCompare(s) {
   return (s || '').trim().toLowerCase();
 }
 
-async function matchTppClient({ accountReference, companyName }) {
-  const trimmedRef = (accountReference || '').trim();
+// Generalized write path shared by every concept that has a real UDF to
+// write to -- Concept 1 (TPP, writing its own short account-reference code
+// into "Name:TPP") and Concept 2 (Ingram Micro, writing the real Ingram
+// client name itself into "Name:Ingram Micro", confirmed live against this
+// account's real Companies UDF list -- see the comment on CONCEPT_UDFS
+// below). Concept 3 (Datto RMM) has no UDF of its own yet -- there's no
+// "Name:Datto RMM" (or similar) field in this account's real UDF list, so
+// it stays read-only on the client until one is created, same convention
+// as "Name:TPP"/"Name:Ingram Micro" were (manually, in Autotask's own UI).
+async function writeNameMatchUdf({ udfName, matchValue, companyName, reportCacheKeyToInvalidate }) {
+  const trimmedValue = (matchValue || '').trim();
   const trimmedName = (companyName || '').trim();
-  if (!trimmedRef) {
-    const err = new Error('Missing TPP account reference.');
+  if (!trimmedValue) {
+    const err = new Error(`Missing value to write to ${udfName}.`);
     err.status = 400;
     throw err;
   }
@@ -434,12 +555,12 @@ async function matchTppClient({ accountReference, companyName }) {
     throw err;
   }
 
-  // Fresh, not the cached map -- see the comment above this function.
+  // Fresh, not the cached map -- see the comment above resolveCompanyForMatch.
   const fresh = await client.companies.get(result.company.id);
-  const currentUdf = (fresh.data?.userDefinedFields || []).find((u) => u.name === 'Name:TPP');
+  const currentUdf = (fresh.data?.userDefinedFields || []).find((u) => u.name === udfName);
   const currentValue = currentUdf?.value?.trim();
   if (currentValue) {
-    const err = new Error(`${fresh.data.companyName}'s Name:TPP is already set to "${currentValue}" -- refusing to overwrite.`);
+    const err = new Error(`${fresh.data.companyName}'s ${udfName} is already set to "${currentValue}" -- refusing to overwrite.`);
     err.status = 409;
     throw err;
   }
@@ -450,16 +571,167 @@ async function matchTppClient({ accountReference, companyName }) {
   // the body) and gets a real 405 back from Autotask's actual API.
   await client.companies.axios.patch(client.companies.endpoint, {
     id: result.company.id,
-    userDefinedFields: [{ name: 'Name:TPP', value: trimmedRef }],
+    userDefinedFields: [{ name: udfName, value: trimmedValue }],
   });
 
-  // Both caches need to forget this -- the shared UDF map (so Coming
-  // Soon's Domains table picks up the new match too) and this page's own
-  // report cache (so a reload stops showing this client as unmatched).
-  invalidateCompanyUdfMap('Name:TPP');
-  reportCache.delete('tpp-domains-unmatched');
+  invalidateCompanyUdfMap(udfName);
+  if (reportCacheKeyToInvalidate) reportCache.delete(reportCacheKeyToInvalidate);
 
-  return { companyId: result.company.id, companyName: fresh.data.companyName, accountReference: trimmedRef };
+  return { companyId: result.company.id, companyName: fresh.data.companyName, value: trimmedValue };
+}
+
+async function matchTppClient({ accountReference, companyName }) {
+  const trimmedRef = (accountReference || '').trim();
+  if (!trimmedRef) {
+    const err = new Error('Missing TPP account reference.');
+    err.status = 400;
+    throw err;
+  }
+  const result = await writeNameMatchUdf({
+    udfName: 'Name:TPP',
+    matchValue: trimmedRef,
+    companyName,
+    reportCacheKeyToInvalidate: 'tpp-domains-unmatched',
+  });
+  return { companyId: result.companyId, companyName: result.companyName, accountReference: trimmedRef };
+}
+
+async function matchIngramClient({ clientName, companyName }) {
+  const trimmedClientName = (clientName || '').trim();
+  if (!trimmedClientName) {
+    const err = new Error('Missing Ingram client name.');
+    err.status = 400;
+    throw err;
+  }
+  const result = await writeNameMatchUdf({
+    udfName: 'Name:Ingram Micro',
+    matchValue: trimmedClientName,
+    companyName,
+    reportCacheKeyToInvalidate: 'ingram-clients-unmatched',
+  });
+  return { companyId: result.companyId, companyName: result.companyName, clientName: trimmedClientName };
+}
+
+async function matchDattoSite({ siteName, companyName }) {
+  const trimmedSiteName = (siteName || '').trim();
+  if (!trimmedSiteName) {
+    const err = new Error('Missing Datto RMM site name.');
+    err.status = 400;
+    throw err;
+  }
+  const result = await writeNameMatchUdf({
+    udfName: 'Name:Datto RMM',
+    matchValue: trimmedSiteName,
+    companyName,
+    reportCacheKeyToInvalidate: 'datto-sites-unmatched',
+  });
+  return { companyId: result.companyId, companyName: result.companyName, siteName: trimmedSiteName };
+}
+
+async function matchSaasProtectionClient({ clientName, companyName }) {
+  const trimmedClientName = (clientName || '').trim();
+  if (!trimmedClientName) {
+    const err = new Error('Missing SaaS Protection client name.');
+    err.status = 400;
+    throw err;
+  }
+  const result = await writeNameMatchUdf({
+    udfName: 'Name:SaaS Backups',
+    matchValue: trimmedClientName,
+    companyName,
+    reportCacheKeyToInvalidate: 'saas-protection-clients-unmatched',
+  });
+  return { companyId: result.companyId, companyName: result.companyName, clientName: trimmedClientName };
+}
+
+// ---------------------------------------------------------------------------
+// "Show UDF Matches" -- by request, the reverse of every concept's own
+// unmatched report above: every Autotask company that ALREADY has a value
+// in the given "Name:*" UDF, so an existing match can be reviewed (and
+// cleared, if wrong) rather than only ever seeing the gaps still needing
+// one. Own 20-min cache, same convention as every other report on this
+// page -- a full company scan is the same real cost getAllCompanyNames()
+// already pays, just keyed per UDF name here since the VALUE (not just the
+// id/companyName) is what this needs.
+// ---------------------------------------------------------------------------
+const UDF_MATCHES_TTL_MS = 20 * 60 * 1000;
+const udfMatchesCache = new Map(); // udfName -> { data, expiresAt }
+const udfMatchesInFlight = new Map();
+
+async function getUdfMatches(udfName, force) {
+  if (!force && udfMatchesCache.has(udfName)) {
+    const cached = udfMatchesCache.get(udfName);
+    if (Date.now() < cached.expiresAt) return cached.data;
+  }
+  if (!udfMatchesInFlight.has(udfName)) {
+    const promise = (async () => {
+      const client = await getClient();
+      const companies = await listAll(client.companies, [{ op: 'gte', field: 'id', value: 0 }]);
+      const matches = [];
+      for (const c of companies) {
+        const udf = (c.userDefinedFields || []).find((u) => u.name === udfName);
+        const value = udf?.value?.trim();
+        if (value) matches.push({ id: c.id, companyName: c.companyName, value });
+      }
+      matches.sort((a, b) => a.companyName.localeCompare(b.companyName));
+      udfMatchesCache.set(udfName, { data: matches, expiresAt: Date.now() + UDF_MATCHES_TTL_MS });
+      return matches;
+    })().finally(() => udfMatchesInFlight.delete(udfName));
+    udfMatchesInFlight.set(udfName, promise);
+  }
+  return udfMatchesInFlight.get(udfName);
+}
+
+// Maps a UDF name back to the report cache key its own unmatched report
+// uses, so clearing a match correctly makes that company show back up as a
+// real gap on the next load, same as a fresh write invalidates the SAME key
+// in the other direction (see writeNameMatchUdf above).
+const REPORT_CACHE_KEY_BY_UDF = {
+  'Name:TPP': 'tpp-domains-unmatched',
+  'Name:Ingram Micro': 'ingram-clients-unmatched',
+  'Name:Datto RMM': 'datto-sites-unmatched',
+  'Name:SaaS Backups': 'saas-protection-clients-unmatched',
+};
+
+// Clear only -- by request, never an edit. A wrong UDF value is corrected
+// by clearing it here and writing the right one through the normal
+// Update/Possible-Match flow above (which re-checks the UDF is blank first
+// anyway), not by typing over it directly -- keeps exactly one path that
+// can ever SET this UDF's value, with its own exact-match/confirm
+// safeguards, rather than a second, looser one living here too.
+async function clearUdfMatch({ udfName, companyId }) {
+  const trimmedUdfName = (udfName || '').trim();
+  const id = Number(companyId);
+  if (!trimmedUdfName) {
+    const err = new Error('Missing udfName.');
+    err.status = 400;
+    throw err;
+  }
+  if (!id) {
+    const err = new Error('Missing companyId.');
+    err.status = 400;
+    throw err;
+  }
+
+  const client = await getClient();
+  const fresh = await client.companies.get(id);
+  if (!fresh.data) {
+    const err = new Error(`Company #${id} not found.`);
+    err.status = 404;
+    throw err;
+  }
+
+  await client.companies.axios.patch(client.companies.endpoint, {
+    id,
+    userDefinedFields: [{ name: trimmedUdfName, value: '' }],
+  });
+
+  invalidateCompanyUdfMap(trimmedUdfName);
+  udfMatchesCache.delete(trimmedUdfName);
+  const reportCacheKey = REPORT_CACHE_KEY_BY_UDF[trimmedUdfName];
+  if (reportCacheKey) reportCache.delete(reportCacheKey);
+
+  return { companyId: id, companyName: fresh.data.companyName, udfName: trimmedUdfName };
 }
 
 const router = express.Router();
@@ -492,6 +764,17 @@ router.get('/datto-sites-unmatched', async (req, res) => {
   }
 });
 
+router.get('/saas-protection-clients-unmatched', async (req, res) => {
+  try {
+    res.json(
+      await getCachedReport('saas-protection-clients-unmatched', req.query.force === 'true', buildSaasProtectionClientsUnmatchedReport),
+    );
+  } catch (err) {
+    console.error('Data Matching: SaaS Protection Clients Not Matching Autotask report failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/match-tpp-client', async (req, res) => {
   try {
     const result = await matchTppClient(req.body || {});
@@ -501,6 +784,76 @@ router.post('/match-tpp-client', async (req, res) => {
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
     console.error('Data Matching: match-tpp-client failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/match-ingram-client', async (req, res) => {
+  try {
+    const result = await matchIngramClient(req.body || {});
+    const actor = req.session?.user?.email;
+    console.log(
+      `Data Matching: wrote Name:Ingram Micro="${result.clientName}" on "${result.companyName}" (company #${result.companyId})${actor ? ` -- by ${actor}` : ''}.`,
+    );
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
+    console.error('Data Matching: match-ingram-client failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/match-datto-site', async (req, res) => {
+  try {
+    const result = await matchDattoSite(req.body || {});
+    const actor = req.session?.user?.email;
+    console.log(
+      `Data Matching: wrote Name:Datto RMM="${result.siteName}" on "${result.companyName}" (company #${result.companyId})${actor ? ` -- by ${actor}` : ''}.`,
+    );
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
+    console.error('Data Matching: match-datto-site failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/match-saas-protection-client', async (req, res) => {
+  try {
+    const result = await matchSaasProtectionClient(req.body || {});
+    const actor = req.session?.user?.email;
+    console.log(
+      `Data Matching: wrote Name:SaaS Backups="${result.clientName}" on "${result.companyName}" (company #${result.companyId})${actor ? ` -- by ${actor}` : ''}.`,
+    );
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
+    console.error('Data Matching: match-saas-protection-client failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/udf-matches', async (req, res) => {
+  const udfName = (req.query.udfName || '').trim();
+  if (!udfName) return res.status(400).json({ error: 'A udfName is required.' });
+  try {
+    const matches = await getUdfMatches(udfName, req.query.force === 'true');
+    res.json({ udfName, matches });
+  } catch (err) {
+    console.error('Data Matching: udf-matches failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/clear-udf-match', async (req, res) => {
+  try {
+    const result = await clearUdfMatch(req.body || {});
+    const actor = req.session?.user?.email;
+    console.log(`Data Matching: cleared ${result.udfName} on "${result.companyName}" (company #${result.companyId})${actor ? ` -- by ${actor}` : ''}.`);
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('Data Matching: clear-udf-match failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

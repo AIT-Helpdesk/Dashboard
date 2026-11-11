@@ -7,30 +7,31 @@ export const label = "Check Client";
 // alive for the session, so a module-level variable survives across
 // re-mounts and lets the last search restore instantly instead of coming
 // back blank. Same convention every other page on this dashboard uses.
-// Two separate client fields, by request -- Autotask and Ingram sometimes
-// carry a different name for the same real client, so one wildcard search
-// can't reliably match both systems at once. Ingram Client defaults to
-// whatever's typed into Autotask Client (see the 'input' wiring in mount()
-// below) until the user directly edits Ingram Client themselves, at which
-// point the auto-fill stops for the rest of this page visit --
-// lastIngramClientManuallyEdited persists that across a same-session
-// remount too, so navigating away and back doesn't silently re-link a
-// value the user deliberately diverged.
+// Autotask and Ingram/Datto sometimes carry a different name for the same
+// real client, so one wildcard search can't reliably match all three
+// systems at once -- by request, Ingram Client/Datto Site now default to
+// the resolved Autotask company's own "Name:Ingram Micro"/"Name:Datto RMM"
+// UDF (see GET /resolve-client in server.js, and Data Matching's own write
+// path for how those UDFs get set), falling back to mirroring Autotask
+// Client's own typed text when a company has no UDF of its own ("assume
+// matches"). A manual pencil-edit overrides that for the rest of this page
+// visit, same "persists across a same-session remount" convention the old
+// one-way-mirror-until-edited design used -- but by request, ALWAYS resets
+// the moment Autotask Client itself changes (see its own 'input' listener
+// in mount()), rather than surviving a now-stale company resolution.
 let lastAutotaskClient = '';
 let lastExactClient = false; // off by default -- the normal wildcard/contains search
-let lastIngramClient = '';
-let lastIngramClientManuallyEdited = false;
-// Same one-way-mirror-until-edited pattern as Ingram Client -- Datto's own
-// siteName is a third naming system, but in practice tends to track
-// Autotask's own client naming more closely than Ingram's catalog-style
-// names do (both are this MSP's own internal naming, not a distributor's),
-// so Autotask Client is the more useful default to mirror here. Not a
-// `required` field, unlike Autotask/Ingram Client -- the Datto RMM section
-// is additive, and a client with no matching Datto site shouldn't block
-// the rest of the search.
-let lastDattoSite = '';
-let lastDattoSiteManuallyEdited = false;
 let lastExactDattoSite = false; // off by default -- the normal wildcard/contains search
+// `null` means "no manual override -- derive from the UDF/fallback below";
+// an empty string IS a valid override (a deliberate blank), so this can't
+// just be falsy-checked.
+let lastIngramClientOverride = null;
+let lastDattoSiteOverride = null;
+// The last GET /resolve-client result -- every matched company (one
+// Autotask Client search can resolve to several) plus its own
+// ingramClient/dattoSite UDF values, re-used to redraw the resolved-field
+// UI on a same-session remount without a fresh fetch.
+let lastResolveMatches = [];
 let lastSince = null;
 let lastMonth = null;
 let lastOrdersData = null;
@@ -106,7 +107,7 @@ export function mount(container) {
     <header class="page-header">
       <div class="chk-title-block">
         <h1>Check Client</h1>
-        <p id="client-label" class="chk-client-label" hidden></p>
+        <div id="client-label" class="chk-client-label" hidden></div>
       </div>
       <form id="filter-form" class="date-form date-form--stacked">
         <div class="date-form-row chk-date-row">
@@ -129,15 +130,22 @@ export function mount(container) {
           <label class="inline-checkbox-label chk-exact-client-label" title="Force an exact match on the Autotask Client name (instead of the usual wildcard/contains search)">
             <input type="checkbox" id="exact-client-input" />
           </label>
-          <label for="ingram-client-input">Ingram Client</label>
-          <input type="text" id="ingram-client-input" name="ingramClient" placeholder="e.g. Acme* (wildcards with *)" required />
           <button type="submit" id="search-button">Search</button>
         </div>
+        <!-- Ingram Client/Datto Site's own resolved-field editors, by
+             request -- stacked directly under Autotask Client (one
+             .date-form-row each, same as every other field in this form),
+             so all three line up on the same left edge instead of sitting
+             in a separate side-by-side block below the form. The Datto
+             exact-match checkbox lives on Datto Site's own row, right next
+             to the field it actually affects. -->
         <div class="date-form-row">
-          <label for="datto-site-input">Datto Site</label>
-          <input type="text" id="datto-site-input" name="dattoSite" placeholder="e.g. Acme* (wildcards with *, optional)" />
+          <div id="ingram-client-field" class="chk-resolved-field" hidden></div>
+        </div>
+        <div class="date-form-row">
+          <div id="datto-site-field" class="chk-resolved-field" hidden></div>
           <label class="inline-checkbox-label chk-exact-client-label" title="Force an exact match on the Datto Site name (instead of the usual wildcard/contains search)">
-            <input type="checkbox" id="exact-datto-site-input" />
+            Exact Datto Site Match <input type="checkbox" id="exact-datto-site-input" />
           </label>
         </div>
       </form>
@@ -186,12 +194,12 @@ export function mount(container) {
   const clientLabelEl = container.querySelector('#client-label');
   const autotaskClientInput = container.querySelector('#autotask-client-input');
   const exactClientInput = container.querySelector('#exact-client-input');
-  const ingramClientInput = container.querySelector('#ingram-client-input');
-  const dattoSiteInput = container.querySelector('#datto-site-input');
   const exactDattoSiteInput = container.querySelector('#exact-datto-site-input');
   const sinceInput = container.querySelector('#since-input');
   const monthInput = container.querySelector('#month-input');
   const searchButton = container.querySelector('#search-button');
+  const ingramClientFieldEl = container.querySelector('#ingram-client-field');
+  const dattoSiteFieldEl = container.querySelector('#datto-site-field');
 
   const summaryStatusEl = container.querySelector('#summary-status');
   const summaryResultsEl = container.querySelector('#summary-results');
@@ -254,27 +262,56 @@ export function mount(container) {
 
   autotaskClientInput.value = lastAutotaskClient;
   exactClientInput.checked = lastExactClient;
-  ingramClientInput.value = lastIngramClient;
-  dattoSiteInput.value = lastDattoSite;
   exactDattoSiteInput.checked = lastExactDattoSite;
   sinceInput.value = lastSince || defaultSinceISO();
   monthInput.value = lastMonth || currentMonthISO();
 
-  // "Client: <name>" under the page title, by request -- the REAL resolved
-  // client name(s) each system actually matched, not the raw search text
-  // typed into the boxes (a wildcard like "Acme*" resolves to whatever
-  // real name(s) it matched). Widens to "Client: <Autotask names> /
-  // <Ingram names>" the moment the two systems resolve to a different set
-  // of names, so a real cross-system name mismatch is obvious at a glance
-  // -- the whole reason these two fields were split apart in the first
-  // place. Can only be computed from fetched data (not from the input
-  // boxes), so this is called from each render*() function below as its
-  // own section's data arrives/changes, not live as the fields are typed.
-  // Autotask's resolved name(s) come from Contract Services' own
-  // byCompany; Ingram's come from Orders' and Subscriptions' own byClient,
-  // merged -- either one alone can be empty for a client with no matching
-  // rows in that particular section (e.g. a brand new client with active
-  // subscriptions but no order history yet), so neither is trusted alone.
+  // See the module-scope comment on lastIngramClientOverride/
+  // lastDattoSiteOverride/lastResolveMatches above for the full model.
+  let ingramClientOverride = lastIngramClientOverride;
+  let dattoSiteOverride = lastDattoSiteOverride;
+  let resolveMatches = lastResolveMatches;
+  // The actual value last used to drive Orders/Subscriptions (Ingram
+  // Client) and Datto RMM (Datto Site) -- kept in sync by
+  // renderIngramClientField()/renderDattoSiteField() below (and by
+  // search() before the first render), so the Tech Cover "Refresh" button
+  // further down reuses the exact same effective value rather than
+  // re-deriving or guessing at it.
+  let effectiveIngramClientValue = '';
+  let effectiveDattoSiteValue = '';
+
+  // Whether each section has actually FINISHED its own fetch attempt this
+  // search cycle (success, error, or a synchronous "nothing confirmed to
+  // search for" skip all count) -- by request, the Client label below
+  // shows a blank line while still waiting rather than "(no X match)",
+  // which otherwise looked identical to a genuine "checked, found
+  // nothing" result while the real answer just hadn't arrived yet. Reset
+  // false at the top of every search(); Ingram Micro's own line needs
+  // BOTH Orders and Subscriptions settled (its names are merged from
+  // both), not just one.
+  let servicesSettled = false;
+  let ordersSettled = false;
+  let subsSettled = false;
+  let microsoftSettled = false;
+  let dattoSettled = false;
+
+  // A vertical "Autotask: X / Ingram Micro: X / Microsoft: X / Datto RMM: X"
+  // list under the page title, by request -- the REAL resolved name each
+  // system actually matched, not the raw search text typed into the boxes
+  // (a wildcard like "Acme*" resolves to whatever real name(s) it
+  // matched), one line per system so a real cross-system name mismatch is
+  // obvious at a glance -- the whole reason Ingram Client/Datto Site exist
+  // as their own fields in the first place. Can only be computed from
+  // fetched data (not from the input boxes), so this is called from each
+  // render*() function below as its own section's data arrives/changes,
+  // not live as the fields are typed. Autotask's own resolved name comes
+  // from Contract Services' own byCompany; Ingram's from Orders' and
+  // Subscriptions' own byClient, merged -- either one alone can be empty
+  // for a client with no matching rows in that particular section (e.g. a
+  // brand new client with active subscriptions but no order history yet),
+  // so neither is trusted alone; Microsoft's own "Tenancy Name" is Rewst's
+  // own rewstClientName for the matched tenant; Datto RMM's is every
+  // distinct site name its own device list actually returned.
   function uniqueNonEmpty(arr) {
     return [...new Set(arr.filter(Boolean))];
   }
@@ -284,48 +321,76 @@ export function mount(container) {
       ...(lastOrdersData ? lastOrdersData.byClient.map((c) => c.clientName) : []),
       ...(lastSubscriptionsData ? lastSubscriptionsData.byClient.map((c) => c.clientName) : []),
     ]);
-    if (autotaskNames.length === 0 && ingramNames.length === 0) {
+    const microsoftNames = uniqueNonEmpty(lastM365Data?.rewstClientName ? [lastM365Data.rewstClientName] : []);
+    const dattoNames = uniqueNonEmpty(lastDattoData?.connected ? (lastDattoData.bySite || []).map((s) => s.site) : []);
+    const ingramSettled = ordersSettled && subsSettled;
+
+    // Nothing has even STARTED yet (a genuinely fresh page, no search ever
+    // run) -- hidden entirely, same as before. Once a search has started,
+    // the label stays visible and fills in line by line as each section
+    // settles (see nameFor()'s own `settled` param below), rather than
+    // disappearing/reappearing as sections resolve at different times.
+    const anyStarted = servicesSettled || ordersSettled || subsSettled || microsoftSettled || dattoSettled;
+    if (!anyStarted && autotaskNames.length === 0 && ingramNames.length === 0 && microsoftNames.length === 0 && dattoNames.length === 0) {
       clientLabelEl.hidden = true;
       return;
     }
-    // More than one real match, by request, is flagged as "Multiple
-    // Matches (<the search text that caused it>)" rather than listing every
-    // name -- a wide wildcard matching several real clients isn't the same
-    // situation as a genuine single-client name mismatch across systems,
-    // and spelling out every match here got noisy fast.
-    function nameFor(names, searchInput, notFoundText) {
+    // Blank while that section's own fetch hasn't settled yet, by request
+    // -- "(no X match)" otherwise read identically whether it was a real,
+    // checked, confirmed non-match or just hadn't come back yet. More than
+    // one real match, by request, is flagged as "Multiple Matches (<the
+    // search text that caused it>)" rather than listing every name -- a
+    // wide wildcard matching several real clients isn't the same situation
+    // as a genuine single-client name mismatch across systems, and
+    // spelling out every match here got noisy fast.
+    function nameFor(names, searchText, notFoundText, settled) {
+      if (!settled) return '';
       if (names.length === 0) return notFoundText;
-      if (names.length > 1) return `Multiple Matches (${searchInput.value.trim()})`;
+      if (names.length > 1) return `Multiple Matches (${searchText})`;
       return names[0];
     }
-    const autotaskText = nameFor(autotaskNames, autotaskClientInput, '(no Autotask match)');
-    const ingramText = nameFor(ingramNames, ingramClientInput, '(no Ingram match)');
-    const sameSet = autotaskNames.length === ingramNames.length && autotaskNames.every((n) => ingramNames.includes(n));
+    const autotaskText = nameFor(autotaskNames, autotaskClientInput.value.trim(), '(no Autotask match)', servicesSettled);
+    const ingramText = nameFor(ingramNames, effectiveIngramClientValue || '', '(no Ingram match)', ingramSettled);
+    const microsoftText = nameFor(microsoftNames, effectiveIngramClientValue || '', '(no Microsoft match)', microsoftSettled);
+    const dattoText = nameFor(dattoNames, effectiveDattoSiteValue || '', '(no Datto RMM match)', dattoSettled);
+
     clientLabelEl.hidden = false;
-    clientLabelEl.textContent = sameSet ? `Client: ${autotaskText}` : `Client: ${autotaskText} / ${ingramText}`;
+    // A 2-column grid (see .chk-client-label-grid in styles.css) rather
+    // than plain text, by request -- "Autotask:"/"Ingram Micro:"/
+    // "Microsoft:"/"Datto RMM:" are different lengths, so the values after
+    // each colon used to start at a different x position per line.
+    clientLabelEl.innerHTML = `
+      <div class="chk-client-label-grid">
+        <span>Autotask:</span><span>${escapeHtml(autotaskText)}</span>
+        <span>Ingram Micro:</span><span>${escapeHtml(ingramText)}</span>
+        <span>Microsoft:</span><span>${escapeHtml(microsoftText)}</span>
+        <span>Datto RMM:</span><span>${escapeHtml(dattoText)}</span>
+      </div>
+    `;
     // Red/bold "tab" box, by request -- same shape as a tab page's own
     // active-tab pill (.tab-button.active's border/background-tint/
     // border-radius recipe), just red instead of blue -- a wide wildcard
     // matching several real clients is worth flagging more loudly than
     // the plain muted-text label this normally is.
-    clientLabelEl.classList.toggle('chk-client-label--multiple-matches', autotaskNames.length > 1 || ingramNames.length > 1);
+    const anyMultiple = autotaskNames.length > 1 || ingramNames.length > 1 || microsoftNames.length > 1 || dattoNames.length > 1;
+    clientLabelEl.classList.toggle('chk-client-label--multiple-matches', anyMultiple);
   }
 
-  // Ingram Client mirrors Autotask Client live as it's typed, UNTIL Ingram
-  // Client itself receives a real user edit -- programmatic value changes
-  // (the mirror below) never fire 'input', only genuine typing does, so
-  // this is a clean one-way "linked until diverged" switch, by request.
-  let ingramClientManuallyEdited = lastIngramClientManuallyEdited;
-  let dattoSiteManuallyEdited = lastDattoSiteManuallyEdited;
+  // "Always reset any entered or UDF values when the Autotask Client field
+  // changes", by request -- a resolved company's UDF (or a manual
+  // override of it) only means anything for the company that resolution
+  // was actually run against; the moment the search term itself changes,
+  // both are stale. The next Search click re-resolves and re-derives from
+  // scratch (see search() below) -- this just clears what's currently
+  // shown/stored in the meantime, so nothing stale lingers on screen.
   autotaskClientInput.addEventListener('input', () => {
-    if (!ingramClientManuallyEdited) ingramClientInput.value = autotaskClientInput.value;
-    if (!dattoSiteManuallyEdited) dattoSiteInput.value = autotaskClientInput.value;
-  });
-  ingramClientInput.addEventListener('input', () => {
-    ingramClientManuallyEdited = true;
-  });
-  dattoSiteInput.addEventListener('input', () => {
-    dattoSiteManuallyEdited = true;
+    ingramClientOverride = null;
+    dattoSiteOverride = null;
+    resolveMatches = [];
+    ingramClientFieldEl.hidden = true;
+    ingramClientFieldEl.innerHTML = '';
+    dattoSiteFieldEl.hidden = true;
+    dattoSiteFieldEl.innerHTML = '';
   });
 
   form.addEventListener('submit', (e) => {
@@ -333,20 +398,196 @@ export function mount(container) {
     search();
   });
 
-  // Fires all three sections' fetches in parallel -- Section 1 (Orders) and
-  // Section 2 (Subscriptions) both key off Ingram Client (their own
-  // client_name data is Ingram-sourced, same as Ingram Subscriptions' own
-  // page); Section 3 (Contract Services) keys off Autotask Client (Autotask
-  // companyName). One of these being slow or down must not block the other
-  // two -- each load*() function below catches its own errors and renders
-  // its own section's status independently, so Promise.allSettled here is
-  // only about running them concurrently and knowing when ALL are done (to
-  // re-enable the Search button) -- not about propagating failures.
+  // Ingram Client/Datto Site's own "resolved field" UI -- by request,
+  // defaults to the resolved Autotask company's own "Name:Ingram
+  // Micro"/"Name:Datto RMM" UDF when present, shown as plain text with a
+  // pencil to edit it (pre-filled with that UDF value); when a company has
+  // NO UDF of its own, nothing is shown at all ("assume matches" -- the
+  // effective value computed below just falls back to Autotask Client's
+  // own text, silently, same as the old one-way mirror used to). Shared by
+  // both fields -- `udfKey` picks which of `matches[].ingramClient`/
+  // `.dattoSite` this one reads.
+  function renderResolvedField(containerEl, label, matches, udfKey, override, onOverrideChange) {
+    containerEl.innerHTML = '';
+    containerEl.hidden = true;
+
+    if (override !== null) {
+      containerEl.hidden = false;
+      renderResolvedDisplay(containerEl, label, override, onOverrideChange);
+      return;
+    }
+    if (matches.length === 0) return; // nothing resolved yet -- no UI, caller falls back to Autotask Client's own text
+    if (matches.length === 1) {
+      const udfVal = matches[0][udfKey];
+      if (!udfVal) return; // no UDF on this company -- assume matches, don't show
+      containerEl.hidden = false;
+      renderResolvedDisplay(containerEl, label, udfVal, onOverrideChange);
+      return;
+    }
+    // More than one Autotask company matched -- no single UDF to default
+    // to, so a picker instead, listing only the candidates that actually
+    // HAVE a UDF value, by request (confirmed live: with a wide wildcard
+    // like "Sleepy's", most of the ~43 matched companies have no UDF of
+    // their own at all, and a blank one is never a useful pick -- it would
+    // just fall back to that company's own name anyway, which Autotask
+    // Client's own search text already assumes by default).
+    const candidatesWithUdf = matches.filter((m) => m[udfKey]);
+    if (candidatesWithUdf.length === 0) return; // none of them have one -- nothing useful to show, assume matches
+    containerEl.hidden = false;
+    renderResolvedPicker(containerEl, label, candidatesWithUdf, udfKey, onOverrideChange);
+  }
+
+  function renderResolvedDisplay(containerEl, label, value, onOverrideChange) {
+    containerEl.innerHTML = `
+      <span class="chk-resolved-label">${escapeHtml(label)}:</span>
+      <span class="chk-resolved-value">${escapeHtml(value)}</span>
+      <button type="button" class="chk-resolved-edit-btn" title="Edit ${escapeHtml(label)}">&#9998;</button>
+    `;
+    containerEl.querySelector('.chk-resolved-edit-btn').addEventListener('click', () => {
+      containerEl.innerHTML = `
+        <span class="chk-resolved-label">${escapeHtml(label)}:</span>
+        <input type="text" class="chk-resolved-input" value="${escapeHtml(value)}" />
+      `;
+      const input = containerEl.querySelector('.chk-resolved-input');
+      input.focus();
+      input.select();
+      // Committed on blur, by request ("wait for next Search click" to
+      // actually use it) -- just needs to be captured before this field
+      // goes back to plain-display mode, not applied live.
+      input.addEventListener('blur', () => {
+        const newValue = input.value.trim();
+        onOverrideChange(newValue);
+        renderResolvedDisplay(containerEl, label, newValue, onOverrideChange);
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          input.blur();
+        }
+      });
+    });
+  }
+
+  // `matches` here is already filtered down to just the candidates that
+  // HAVE a UDF value (see renderResolvedField above) -- every option can
+  // just show it directly, no "no UDF" case to account for.
+  function renderResolvedPicker(containerEl, label, matches, udfKey, onOverrideChange) {
+    containerEl.innerHTML = `
+      <span class="chk-resolved-label">${escapeHtml(label)}:</span>
+      <select class="chk-resolved-select">
+        <option value="">${matches.length} Autotask ${matches.length === 1 ? 'company has' : 'companies have'} a ${escapeHtml(label)} UDF -- pick one&hellip;</option>
+        ${matches.map((m, i) => `<option value="${i}">${escapeHtml(m.companyName)} &mdash; "${escapeHtml(m[udfKey])}" (UDF)</option>`).join('')}
+      </select>
+    `;
+    containerEl.querySelector('.chk-resolved-select').addEventListener('change', (e) => {
+      if (e.target.value === '') return;
+      const m = matches[Number(e.target.value)];
+      onOverrideChange(m[udfKey]);
+      renderResolvedDisplay(containerEl, label, m[udfKey], onOverrideChange);
+    });
+  }
+
+  function renderIngramClientField() {
+    renderResolvedField(ingramClientFieldEl, 'Ingram Client', resolveMatches, 'ingramClient', ingramClientOverride, (v) => {
+      ingramClientOverride = v;
+    });
+  }
+  function renderDattoSiteField() {
+    renderResolvedField(dattoSiteFieldEl, 'Datto Site', resolveMatches, 'dattoSite', dattoSiteOverride, (v) => {
+      dattoSiteOverride = v;
+    });
+  }
+
+  // A manual override always wins; otherwise, when Autotask Client resolved
+  // to EXACTLY ONE real company, that company's own UDF value ("confirmed
+  // match") or, failing that, its own real companyName ("assume matches" --
+  // but the real resolved name, never the raw search text typed into
+  // Autotask Client). `null` otherwise (nothing resolved, or several
+  // companies did) -- by request, this page is moving away from finding
+  // Ingram/Datto data on fuzzy matches: confirmed live, searching "Sleepy"
+  // (ambiguous -- 43 real companies matched) still found real Ingram orders
+  // for "Sleepys", purely because BOTH that raw typed text and Ingram's own
+  // real customer name happen to contain "Sleepy" -- not because anything
+  // ever confirmed these are the same client. A `null` here means the
+  // caller skips the Ingram/Datto fetch entirely rather than guessing.
+  function effectiveValue(matches, udfKey, override) {
+    if (override !== null) return override;
+    if (matches.length !== 1) return null;
+    return matches[0][udfKey] || matches[0].companyName;
+  }
+
+  // Blocks every other section (nothing confirmed to search for yet) and
+  // asks which of the ambiguously-matched real companies is actually
+  // meant -- see search()'s own comment above for why. Picking one re-runs
+  // a normal search, forced to an EXACT match on that company's own real
+  // name (never that name's own plain text re-submitted, which could
+  // itself still be ambiguous -- e.g. "Sleepy's" alone matches 43 of its
+  // own franchise locations by "contains").
+  function renderClientPicker(matches) {
+    lastOrdersData = null;
+    lastServicesData = null;
+    lastDattoData = null;
+    lastSubscriptionsData = null;
+    lastM365Data = null;
+    ordersStatusEl.hidden = true;
+    ordersSummaryEl.hidden = true;
+    ordersResultsEl.innerHTML = '';
+    subsStatusEl.hidden = true;
+    subsSummaryEl.hidden = true;
+    subsResultsEl.innerHTML = '';
+    servicesStatusEl.hidden = true;
+    servicesSummaryEl.hidden = true;
+    servicesResultsEl.innerHTML = '';
+    dattoStatusEl.hidden = true;
+    dattoSummaryEl.hidden = true;
+    dattoResultsEl.innerHTML = '';
+    m365StatusEl.hidden = true;
+    m365SummaryEl.hidden = true;
+    m365ResultsEl.innerHTML = '';
+    ingramClientFieldEl.hidden = true;
+    ingramClientFieldEl.innerHTML = '';
+    dattoSiteFieldEl.hidden = true;
+    dattoSiteFieldEl.innerHTML = '';
+    syncSummaryM365Pending();
+    activeRenderers.renderClientCheckSummary();
+
+    clientLabelEl.hidden = false;
+    clientLabelEl.classList.remove('chk-client-label--multiple-matches');
+    clientLabelEl.innerHTML = `
+      <span>${matches.length} Autotask companies matched -- choose one:</span>
+      <select class="chk-client-picker-select">
+        <option value="">Pick a client&hellip;</option>
+        ${matches.map((m, i) => `<option value="${i}">${escapeHtml(m.companyName)}</option>`).join('')}
+      </select>
+    `;
+    clientLabelEl.querySelector('.chk-client-picker-select').addEventListener('change', (e) => {
+      if (e.target.value === '') return;
+      const m = matches[Number(e.target.value)];
+      autotaskClientInput.value = m.companyName;
+      exactClientInput.checked = true;
+      search();
+    });
+  }
+
+  // Fires Orders/Subscriptions/Contract Services/Datto RMM in parallel --
+  // Section 1 (Orders) and Section 2 (Subscriptions) both key off Ingram
+  // Client (their own client_name data is Ingram-sourced, same as Ingram
+  // Subscriptions' own page); Section 3 (Contract Services) keys off
+  // Autotask Client (Autotask companyName); Section 5 (Datto RMM) keys off
+  // Datto Site. One of these being slow or down must not block the
+  // others -- each load*() function below catches its own errors and
+  // renders its own section's status independently, so Promise.allSettled
+  // here is only about running them concurrently and knowing when ALL are
+  // done (to re-enable the Search button) -- not about propagating
+  // failures. GET /resolve-client runs FIRST and is awaited on its own,
+  // ahead of all four -- it's what Ingram Client/Datto Site actually
+  // derive from (see effectiveValue() above), so it has to finish before
+  // those two can be computed; it's also a single lightweight Autotask
+  // query (no Ingram/Datto/contract data of its own), so this doesn't
+  // meaningfully add to the overall search time.
   async function search() {
     const autotaskClient = autotaskClientInput.value.trim();
     const exactClient = exactClientInput.checked;
-    const ingramClient = ingramClientInput.value.trim();
-    const dattoSite = dattoSiteInput.value.trim();
     const exactDattoSite = exactDattoSiteInput.checked;
     const since = sinceInput.value;
     const month = monthInput.value;
@@ -363,7 +604,52 @@ export function mount(container) {
     lastM365UsersData = null;
     lastOtherContractsData = null;
     activeRenderers.renderClientCheckSummary();
+    // Blanks out the Client label's own lines immediately (see
+    // updateClientLabel()'s own `settled` handling) rather than leaving
+    // the PREVIOUS client's resolved names showing while this search is
+    // still in flight.
+    servicesSettled = false;
+    ordersSettled = false;
+    subsSettled = false;
+    microsoftSettled = false;
+    dattoSettled = false;
+    updateClientLabel();
     try {
+      try {
+        const params = new URLSearchParams({ client: autotaskClient, exactClient: exactClient ? 'true' : 'false' });
+        const res = await fetch(`/api/check-client/resolve-client?${params.toString()}`);
+        const data = await res.json();
+        resolveMatches = res.ok ? data.matches || [] : [];
+      } catch {
+        // Best-effort only -- a failure here just means Ingram Client/Datto
+        // Site have nothing resolved to work from, same as a genuinely
+        // ambiguous/no-match Autotask Client search (see effectiveValue()
+        // above) -- their own sections just won't fetch anything this time.
+        resolveMatches = [];
+      }
+      // By request -- a plain (no explicit "*") Autotask Client search that
+      // resolves to more than one real company blocks the rest of this
+      // page entirely until ONE is chosen, rather than quietly fetching
+      // Ingram/Datto/Contracts/M365 data across all of them (confirmed
+      // live: searching "sleep" pulled in real Ingram orders/subscriptions/
+      // Datto RMM devices/contracts for an entire 45-company franchise
+      // group, none of it actually confirmed to be the one real client
+      // being checked). An explicit "*" is this dashboard's own existing
+      // wildcard convention elsewhere -- typing one here is read as "I
+      // know this matches many, show me all of them", same as today.
+      const hasExplicitWildcard = !exactClient && autotaskClient.includes('*');
+      if (resolveMatches.length > 1 && !hasExplicitWildcard) {
+        renderClientPicker(resolveMatches);
+        return;
+      }
+
+      renderIngramClientField();
+      renderDattoSiteField();
+      const ingramClient = effectiveValue(resolveMatches, 'ingramClient', ingramClientOverride);
+      const dattoSite = effectiveValue(resolveMatches, 'dattoSite', dattoSiteOverride);
+      effectiveIngramClientValue = ingramClient;
+      effectiveDattoSiteValue = dattoSite;
+
       // Datto RMM has no dependency on the other sections' own results
       // (unlike Microsoft 365 Tenancy below), so it runs alongside the
       // first three rather than waiting on them.
@@ -381,11 +667,10 @@ export function mount(container) {
     } finally {
       lastAutotaskClient = autotaskClient;
       lastExactClient = exactClient;
-      lastIngramClient = ingramClient;
-      lastIngramClientManuallyEdited = ingramClientManuallyEdited;
-      lastDattoSite = dattoSite;
-      lastDattoSiteManuallyEdited = dattoSiteManuallyEdited;
       lastExactDattoSite = exactDattoSite;
+      lastIngramClientOverride = ingramClientOverride;
+      lastDattoSiteOverride = dattoSiteOverride;
+      lastResolveMatches = resolveMatches;
       lastSince = since;
       lastMonth = month;
       searchButton.disabled = false;
@@ -774,11 +1059,14 @@ export function mount(container) {
               return `${currentHtml}${bracketHtml}`;
             })
             .join(' / ')}</span>`;
-    // M365 Licenses vs Consumed stays its own separate check, unaffected
-    // by the three-way one above -- only drives M365 Licenses' own red
-    // state (OR'd with threeWayMismatch), never IM Licenses/Contract (AT).
-    const consumedVsM365Mismatch = sku && sku.enabled !== null && sku.consumed !== null && sku.enabled !== sku.consumed;
-    const m365Mismatch = threeWayMismatch || consumedVsM365Mismatch;
+    // Enabled vs Consumed used to also flag a mismatch here (OR'd into
+    // m365Mismatch below) -- removed, by request: this client's own real
+    // M365 data always reports Consumed as 0, so that comparison was never
+    // a real signal, just permanent noise shading every row red. The
+    // Microsoft 365 Tenancy section's own table further down the page
+    // keeps its own separate Enabled-vs-Consumed check unchanged -- this
+    // only concerns Client Check Summary's own row shading/cell above.
+    const m365Mismatch = threeWayMismatch;
     // Suspended deliberately NOT part of this -- "If any of the 3 (ignore
     // suspended) don't match... shade the row red", same --row-warn-bg
     // paler-red row shading this page's own M365 table already uses
@@ -820,7 +1108,7 @@ export function mount(container) {
         <td class="ticket-number${imRed ? ' cell-flag-red' : ''}">${licenseTotal ?? ''}</td>
         <td class="ticket-number${contractRed ? ' cell-flag-red' : ''}">${contractCell}</td>
         <td class="ticket-number${m365Red ? ' cell-flag-red' : ''}">${sku ? (sku.enabled ?? '') : ''}</td>
-        <td class="ticket-number${consumedVsM365Mismatch ? ' cell-flag-red' : ''}">${sku ? (sku.consumed ?? '') : ''}</td>
+        <td class="ticket-number">${sku ? (sku.consumed ?? '') : ''}</td>
         <td class="ticket-number${sku && sku.suspended ? ' cell-flag-red' : ''}">${sku ? (sku.suspended ?? '') : ''}</td>
         <td class="ticket-number">${primarySub ? `${formatPeriod(primarySub.term)} / ${formatPeriod(primarySub.billingPeriod)}` : ''}</td>
         <td class="${primarySub ? (primarySub.autoRenews ? 'cell-flag-green' : 'cell-flag-red') : ''}">${primarySub ? (primarySub.autoRenews ? 'Yes' : 'No') : ''}</td>
@@ -1464,7 +1752,7 @@ export function mount(container) {
         btn.disabled = true;
         btn.textContent = 'Refreshing...';
         loadServices(autotaskClientInput.value.trim(), exactClientInput.checked, monthInput.value);
-        loadDattoRmm(dattoSiteInput.value.trim(), true, exactDattoSiteInput.checked);
+        loadDattoRmm(effectiveDattoSiteValue, true, exactDattoSiteInput.checked);
       });
     });
   }
@@ -1566,10 +1854,22 @@ export function mount(container) {
 
   async function loadOrders(client, since) {
     ordersStatusEl.hidden = false;
-    ordersStatusEl.className = 'status loading';
-    ordersStatusEl.textContent = `Loading orders for "${client}"...`;
     ordersSummaryEl.hidden = true;
     ordersResultsEl.innerHTML = '';
+    lastOrdersData = null;
+    // No confirmed Ingram Client (see effectiveValue() above) -- by
+    // request, this page no longer falls back to a fuzzy search here;
+    // skips the fetch entirely rather than guessing.
+    if (!client) {
+      ordersStatusEl.className = 'status';
+      ordersStatusEl.textContent = 'No confirmed Ingram Client match for this company -- enter one above to see orders.';
+      activeRenderers.renderClientCheckSummary();
+      ordersSettled = true;
+      updateClientLabel();
+      return;
+    }
+    ordersStatusEl.className = 'status loading';
+    ordersStatusEl.textContent = `Loading orders for "${client}"...`;
     try {
       const params = new URLSearchParams({ client, since });
       const data = await fetchJson(`/api/check-client/orders?${params.toString()}`, 'GET');
@@ -1578,6 +1878,9 @@ export function mount(container) {
     } catch (err) {
       ordersStatusEl.className = 'status error';
       ordersStatusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      ordersSettled = true;
+      updateClientLabel();
     }
   }
 
@@ -2078,11 +2381,10 @@ export function mount(container) {
 
   async function loadSubscriptions(client) {
     subsStatusEl.hidden = false;
-    subsStatusEl.className = 'status loading';
-    subsStatusEl.textContent = `Loading subscriptions for "${client}"...`;
     subsSummaryEl.hidden = true;
     subsCurrentDataNoteEl.hidden = true;
     subsResultsEl.innerHTML = '';
+    lastSubscriptionsData = null;
     // Stale the moment a new search starts -- Microsoft 365 Tenancy is
     // derived from this section's (and Contract Services') own results (see
     // loadM365Tenancy() below), so the previous search's answer shouldn't
@@ -2094,6 +2396,19 @@ export function mount(container) {
     m365CurrentDataNoteEl.hidden = true;
     m365ResultsEl.innerHTML = '';
     syncSummaryM365Pending();
+    // No confirmed Ingram Client (see effectiveValue() above) -- by
+    // request, this page no longer falls back to a fuzzy search here;
+    // skips the fetch entirely rather than guessing.
+    if (!client) {
+      subsStatusEl.className = 'status';
+      subsStatusEl.textContent = 'No confirmed Ingram Client match for this company -- enter one above to see subscriptions.';
+      activeRenderers.renderClientCheckSummary();
+      subsSettled = true;
+      updateClientLabel();
+      return;
+    }
+    subsStatusEl.className = 'status loading';
+    subsStatusEl.textContent = `Loading subscriptions for "${client}"...`;
     try {
       const params = new URLSearchParams({ client });
       const data = await fetchJson(`/api/check-client/subscriptions?${params.toString()}`, 'GET');
@@ -2103,6 +2418,9 @@ export function mount(container) {
     } catch (err) {
       subsStatusEl.className = 'status error';
       subsStatusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      subsSettled = true;
+      updateClientLabel();
     }
   }
 
@@ -2152,6 +2470,8 @@ export function mount(container) {
       m365StatusEl.textContent = 'No single client resolved above -- narrow the search to look up Microsoft 365 Tenancy.';
       syncSummaryM365Pending();
       activeRenderers.renderClientCheckSummary();
+      microsoftSettled = true;
+      updateClientLabel();
       return;
     }
 
@@ -2171,6 +2491,9 @@ export function mount(container) {
       m365StatusEl.textContent = `Error: ${err.message}`;
       syncSummaryM365Pending();
       activeRenderers.renderClientCheckSummary();
+    } finally {
+      microsoftSettled = true;
+      updateClientLabel();
     }
   }
 
@@ -2194,6 +2517,7 @@ export function mount(container) {
   });
 
   function renderM365Tenancy(data) {
+    updateClientLabel();
     if (!data.matched) {
       m365StatusEl.hidden = false;
       m365StatusEl.className = 'status';
@@ -2689,6 +3013,9 @@ export function mount(container) {
       servicesStatusEl.className = 'status error';
       servicesStatusEl.textContent = `Error: ${err.message}`;
       activeRenderers.renderClientCheckSummary();
+    } finally {
+      servicesSettled = true;
+      updateClientLabel();
     }
   }
 
@@ -3167,9 +3494,14 @@ export function mount(container) {
     dattoSummaryEl.hidden = true;
     dattoCurrentDataNoteEl.hidden = true;
     dattoResultsEl.innerHTML = '';
+    // No confirmed Datto Site (see effectiveValue() above) -- by request,
+    // this page no longer falls back to a fuzzy search here; skips the
+    // fetch entirely rather than guessing.
     if (!site) {
-      dattoStatusEl.textContent = 'Type a Datto Site above (defaults to Autotask Client) to look up devices.';
+      dattoStatusEl.textContent = 'No confirmed Datto Site match for this company -- enter one above to see devices.';
       activeRenderers.renderClientCheckSummary();
+      dattoSettled = true;
+      updateClientLabel();
       return;
     }
     dattoStatusEl.className = 'status loading';
@@ -3186,10 +3518,14 @@ export function mount(container) {
       dattoStatusEl.className = 'status error';
       dattoStatusEl.textContent = `Error: ${err.message}`;
       activeRenderers.renderClientCheckSummary();
+    } finally {
+      dattoSettled = true;
+      updateClientLabel();
     }
   }
 
   function renderDattoRmm(data) {
+    updateClientLabel();
     if (!data.connected) {
       dattoStatusEl.hidden = false;
       dattoStatusEl.className = 'status';
@@ -3329,12 +3665,34 @@ export function mount(container) {
   // callable from the top of mount()).
   activeRenderers = { renderOrders, renderSubscriptions, renderM365Tenancy, renderServices, renderDattoRmm, renderClientCheckSummary };
 
+  // Restores the resolved-field UI (and the effective values it implies)
+  // on a same-session remount, same as every lastXxxData restore below --
+  // computed fresh from the restored resolveMatches/overrides rather than
+  // persisted as their own separate values, so there's only one place
+  // (effectiveValue()) that ever decides what "effective" means.
+  renderIngramClientField();
+  renderDattoSiteField();
+  effectiveIngramClientValue = effectiveValue(resolveMatches, 'ingramClient', ingramClientOverride);
+  effectiveDattoSiteValue = effectiveValue(resolveMatches, 'dattoSite', dattoSiteOverride);
+
+  // Each section's own settled flag (see its declaration above) is a
+  // per-mount local, not module-scope -- restored here from whether its
+  // own lastXxxData survived the remount, so the Client label doesn't
+  // wrongly show blank lines for a search that actually already completed
+  // last time this page was open.
+  ordersSettled = lastOrdersData !== null;
+  subsSettled = lastSubscriptionsData !== null;
+  microsoftSettled = lastM365Data !== null;
+  servicesSettled = lastServicesData !== null;
+  dattoSettled = lastDattoData !== null;
+
   if (lastOrdersData) renderOrders(lastOrdersData);
   if (lastSubscriptionsData) renderSubscriptions(lastSubscriptionsData);
   if (lastM365Data) renderM365Tenancy(lastM365Data);
   if (lastServicesData) renderServices(lastServicesData);
   if (lastDattoData) renderDattoRmm(lastDattoData);
   renderClientCheckSummary();
+  updateClientLabel();
 
   async function fetchJson(url, method, body) {
     const res = await fetch(url, {

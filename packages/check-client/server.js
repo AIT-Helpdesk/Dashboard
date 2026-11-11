@@ -8,7 +8,7 @@
 // caching behavior are always identical to visiting that page directly.
 const express = require('express');
 const axios = require('axios');
-const { aestDayBoundsIso, matchesWildcard } = require('@dashboard/autotask-client');
+const { aestDayBoundsIso, matchesWildcard, getClient, listAll, parseWildcard } = require('@dashboard/autotask-client');
 const { getToken: getIngramToken, getSubscriptionDetail } = require('@dashboard/ingram-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 
@@ -443,6 +443,53 @@ router.get('/m365-users', async (req, res) => {
     console.error(err);
     const detail = err.response ? `Request failed: HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}` : err.message;
     res.status(500).json({ error: detail });
+  }
+});
+
+// Resolves the Autotask Client search term to its matching company/
+// companies and, for each one, its "Name:Ingram Micro"/"Name:Datto RMM" UDF
+// values -- by request, so the Ingram Client/Datto Site fields can default
+// to a company's own recorded match (see Data Matching's own write path for
+// how those UDFs get set) instead of just mirroring whatever's typed into
+// Autotask Client, while still falling back to that same mirror when a
+// company has no UDF value of its own ("assume matches"). Same
+// wildcard/exactClient convention as Contract Services' own buildReport()
+// (`exactClient && clientSearch ? eq : parseWildcard`), so this always
+// agrees with whichever companies that section's own search would resolve
+// to. Deliberately NOT reusing @dashboard/autotask-client's own
+// resolveSingleCompany() -- its own trimmed 'ambiguous' shape doesn't carry
+// userDefinedFields through, and every match (not just a single resolved
+// one) is needed here, not just the ambiguous-list case.
+router.get('/resolve-client', async (req, res) => {
+  const clientSearch = (req.query.client || '').trim();
+  const exactClient = req.query.exactClient === 'true';
+  if (!clientSearch) return res.json({ matches: [] });
+  try {
+    const client = await getClient();
+    const clientWildcard = exactClient ? { op: 'eq', value: clientSearch } : parseWildcard(clientSearch);
+    const matchFilter = clientWildcard
+      ? [{ op: clientWildcard.op, field: 'companyName', value: clientWildcard.value }]
+      : [{ op: 'eq', field: 'companyName', value: clientSearch }];
+    const matches = await listAll(client.companies, matchFilter);
+
+    const udfValue = (company, udfName) => {
+      const udf = (company.userDefinedFields || []).find((u) => u.name === udfName);
+      return udf?.value?.trim() || null;
+    };
+
+    res.json({
+      matches: matches
+        .map((c) => ({
+          id: c.id,
+          companyName: c.companyName,
+          ingramClient: udfValue(c, 'Name:Ingram Micro'),
+          dattoSite: udfValue(c, 'Name:Datto RMM'),
+        }))
+        .sort((a, b) => a.companyName.localeCompare(b.companyName)),
+    });
+  } catch (err) {
+    console.error('Check Client: resolve-client failed:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

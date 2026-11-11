@@ -6,31 +6,45 @@ export const label = "Data Matching";
 // @dashboard/subscriptions-expiring/client.js's own comment for the full
 // reasoning).
 let lastConcept = 'tpp-domains-unmatched';
-let lastDataByConcept = { 'tpp-domains-unmatched': null, 'ingram-clients-unmatched': null, 'datto-sites-unmatched': null };
+let lastDataByConcept = {
+  'tpp-domains-unmatched': null,
+  'ingram-clients-unmatched': null,
+  'datto-sites-unmatched': null,
+  'saas-protection-clients-unmatched': null,
+};
 
 // One entry per "concept" this page checks -- by request, a page for
 // "various data matching concepts" generally, not just this first one.
 // Adding a second concept later means adding one more entry here, one more
 // route in server.js, and one more render function below.
+// `udfName` here is only for "Show UDF Matches" (see loadUdfMatches below)
+// -- each report already carries its own `data.udfName` once loaded, this
+// is just so the button works even before a Load (reading straight off
+// whichever concept is currently selected in the dropdown).
 const CONCEPT_OPTIONS = [
-  { value: 'tpp-domains-unmatched', label: 'TPP Domains Without an Autotask Match' },
-  { value: 'ingram-clients-unmatched', label: 'Ingram Client Names Not Matching Autotask' },
-  { value: 'datto-sites-unmatched', label: 'Datto RMM Sites Not Matching Autotask' },
+  { value: 'tpp-domains-unmatched', label: 'TPP Domains (No Autotask Match)', udfName: 'Name:TPP' },
+  { value: 'ingram-clients-unmatched', label: 'Ingram Client Names (No Autotask Match)', udfName: 'Name:Ingram Micro' },
+  { value: 'datto-sites-unmatched', label: 'Datto RMM Sites (No Autotask Match)', udfName: 'Name:Datto RMM' },
+  { value: 'saas-protection-clients-unmatched', label: 'SaaS Protection Clients (No Autotask Match)', udfName: 'Name:SaaS Backups' },
 ];
 
 export function mount(container) {
+  // Scopes this page's own .summary strong override below without
+  // touching the shared dashboard-wide rule every other page relies on.
+  container.classList.add('data-matching-page');
   container.innerHTML = `
     <header class="page-header">
-      <h1>Data Matching</h1>
       <form id="filter-form" class="date-form">
-        <label for="concept-input">Check</label>
+        <label for="concept-input">Data Match Checker</label>
         <select id="concept-input" name="concept">
           ${CONCEPT_OPTIONS.map((o) => `<option value="${o.value}">${o.label}</option>`).join('')}
         </select>
-        <button type="submit" id="load-button">Load</button>
+        <button type="submit" id="load-button">Show Unmatched</button>
+        <button type="button" id="show-udf-matches-button" class="button-link button-link--small">Show UDF Matches</button>
       </form>
+      <h1>Data Matching</h1>
     </header>
-    <p id="status" class="status">Pick a check, then click Load.</p>
+    <p id="status" class="status">Pick a check, then click Show Unmatched.</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
   `;
@@ -38,6 +52,7 @@ export function mount(container) {
   const form = container.querySelector('#filter-form');
   const conceptInput = container.querySelector('#concept-input');
   const loadButton = container.querySelector('#load-button');
+  const showUdfMatchesButton = container.querySelector('#show-udf-matches-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
@@ -48,6 +63,8 @@ export function mount(container) {
     e.preventDefault();
     load(conceptInput.value);
   });
+
+  showUdfMatchesButton.addEventListener('click', () => loadUdfMatches(conceptInput.value));
 
   async function load(concept) {
     loadButton.disabled = true;
@@ -75,6 +92,104 @@ export function mount(container) {
     }
   }
 
+  // "Show UDF Matches" -- by request, the reverse of this page's own
+  // unmatched reports: every Autotask company that ALREADY has a value in
+  // the currently-selected concept's own UDF, so an existing match can be
+  // reviewed (and cleared, if wrong) rather than only ever seeing the gaps
+  // still needing one. Reads straight off the dropdown's current selection
+  // -- works even before a Load.
+  async function loadUdfMatches(concept) {
+    const option = CONCEPT_OPTIONS.find((o) => o.value === concept);
+    if (!option) return;
+    showUdfMatchesButton.disabled = true;
+    statusEl.hidden = false;
+    statusEl.className = 'status';
+    statusEl.textContent = 'Loading...';
+    summaryEl.hidden = true;
+    resultsEl.innerHTML = '';
+
+    try {
+      const res = await fetch(`/api/data-matching/udf-matches?udfName=${encodeURIComponent(option.udfName)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      renderUdfMatches(data.udfName, data.matches);
+    } catch (err) {
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      showUdfMatchesButton.disabled = false;
+    }
+  }
+
+  // Clear only, never an edit, by request -- a wrong value is corrected by
+  // clearing it here and re-matching it through the normal Update/
+  // Possible-Match flow (which re-checks the UDF is blank first anyway),
+  // not by typing over it directly here.
+  function renderUdfMatches(udfName, matches) {
+    statusEl.hidden = true;
+    summaryEl.hidden = false;
+    summaryEl.innerHTML = `${udfFieldLineHtml(udfName)}<div><strong>${matches.length}</strong> Autotask client${matches.length === 1 ? '' : 's'} currently matched</div>`;
+    resultsEl.innerHTML = '';
+
+    if (matches.length === 0) {
+      resultsEl.innerHTML = `<p class="status">No Autotask companies currently have a value in ${escapeHtml(udfName)}.</p>`;
+      return;
+    }
+
+    const groupEl = document.createElement('div');
+    // Compact (shrink-to-content), by request -- same convention
+    // @dashboard/dns-check's own .dns-check-compact-table uses, since this
+    // table is just 3 narrow columns and no reason to stretch full width.
+    groupEl.className = 'resource-group dm-compact-table';
+    const table = document.createElement('table');
+    // "UDF:TPP"/"UDF:Ingram Micro"/etc. for the column header, by request
+    // -- display only, never sent anywhere; every real request (the Clear
+    // button below, the confirm() prompt) still uses the real UDF name.
+    const udfColumnLabel = udfName.replace(/^Name:/i, 'UDF:');
+    table.innerHTML = `<thead><tr><th>Autotask Client</th><th>${escapeHtml(udfColumnLabel)}</th><th></th></tr></thead><tbody></tbody>`;
+    const tbody = table.querySelector('tbody');
+
+    for (const m of matches) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${escapeHtml(m.companyName)}</td><td>${escapeHtml(m.value)}</td>`;
+      const actionTd = document.createElement('td');
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'button-link button-link--small dm-udf-clear-btn';
+      clearBtn.textContent = 'Clear';
+      clearBtn.addEventListener('click', async () => {
+        if (!confirm(`Clear ${udfName} on Autotask company "${m.companyName}" (currently "${m.value}")?`)) return;
+        clearBtn.disabled = true;
+        try {
+          const res = await fetch('/api/data-matching/clear-udf-match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ udfName, companyId: m.id }),
+          });
+          const result = await res.json();
+          if (!res.ok) throw new Error(result.error || `Request failed (${res.status})`);
+          tr.remove();
+          const index = matches.indexOf(m);
+          if (index !== -1) matches.splice(index, 1);
+          summaryEl.querySelector('strong').textContent = matches.length;
+          if (matches.length === 0) {
+            resultsEl.innerHTML = `<p class="status">No Autotask companies currently have a value in ${escapeHtml(udfName)}.</p>`;
+          }
+        } catch (err) {
+          alert(`Clear failed: ${err.message}`);
+          clearBtn.disabled = false;
+        }
+      });
+      actionTd.appendChild(clearBtn);
+      tr.appendChild(actionTd);
+      tbody.appendChild(tr);
+    }
+
+    groupEl.appendChild(table);
+    resultsEl.appendChild(groupEl);
+  }
+
   function render(data) {
     statusEl.hidden = true;
     resultsEl.innerHTML = '';
@@ -90,18 +205,21 @@ export function mount(container) {
     }
 
     if (data.concept === 'ingram-clients-unmatched') {
-      summaryEl.hidden = false;
-      summaryEl.innerHTML = `<strong>${data.totalCount}</strong> Ingram client${data.totalCount === 1 ? '' : 's'} not matching an Autotask company exactly<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
-      if (data.totalCount === 0) {
-        resultsEl.innerHTML = `<p class="status">Nothing unmatched -- every active Ingram Micro subscription's client name exactly matches an Autotask company.</p>`;
-        return;
-      }
-      resultsEl.appendChild(
-        nameMismatchTable(data.rows, [
+      renderNameMismatchSection(
+        data,
+        'Ingram client',
+        `every active Ingram Micro subscription's client name exactly matches an Autotask company`,
+        [
           { label: 'Ingram Client', cell: (r) => escapeHtml(r.clientName) },
           { label: 'Active Subscriptions', className: 'ticket-number', cell: (r) => r.activeSubscriptionCount },
-          { label: 'Possible Matches', cell: (r) => suggestionsHtml(r.suggestions) },
-        ])
+        ],
+        {
+          endpoint: '/api/data-matching/match-ingram-client',
+          udfName: data.udfName,
+          extraBodyFor: (r) => ({ clientName: r.clientName }),
+          writeValueLabelFor: (r) => r.clientName,
+          rowKeyFor: (r) => r.clientName,
+        }
       );
       return;
     }
@@ -112,55 +230,282 @@ export function mount(container) {
         resultsEl.innerHTML = `<p class="status">Datto RMM isn't configured on this dashboard.</p>`;
         return;
       }
-      summaryEl.hidden = false;
-      summaryEl.innerHTML = `<strong>${data.totalCount}</strong> Datto RMM site${data.totalCount === 1 ? '' : 's'} not matching an Autotask company exactly<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
-      if (data.totalCount === 0) {
-        resultsEl.innerHTML = `<p class="status">Nothing unmatched -- every Datto RMM site's name exactly matches an Autotask company.</p>`;
-        return;
-      }
-      resultsEl.appendChild(
-        nameMismatchTable(data.rows, [
+      renderNameMismatchSection(
+        data,
+        'Datto RMM site',
+        `every Datto RMM site's name exactly matches an Autotask company`,
+        [
           { label: 'Datto Site', cell: (r) => escapeHtml(r.siteName) },
           { label: 'Devices', className: 'ticket-number', cell: (r) => r.deviceCount },
-          { label: 'Possible Matches', cell: (r) => suggestionsHtml(r.suggestions) },
-        ])
+        ],
+        {
+          endpoint: '/api/data-matching/match-datto-site',
+          udfName: data.udfName,
+          extraBodyFor: (r) => ({ siteName: r.siteName }),
+          writeValueLabelFor: (r) => r.siteName,
+          rowKeyFor: (r) => r.siteName,
+        }
+      );
+      return;
+    }
+
+    if (data.concept === 'saas-protection-clients-unmatched') {
+      renderNameMismatchSection(
+        data,
+        'SaaS Protection client',
+        `every Datto SaaS Protection client's name exactly matches an Autotask company`,
+        [
+          { label: 'SaaS Protection Client', cell: (r) => escapeHtml(r.clientName) },
+          { label: 'Seats Used', className: 'ticket-number', cell: (r) => (r.seatsUsed === null ? '' : r.seatsUsed) },
+        ],
+        {
+          endpoint: '/api/data-matching/match-saas-protection-client',
+          udfName: data.udfName,
+          extraBodyFor: (r) => ({ clientName: r.clientName }),
+          writeValueLabelFor: (r) => r.clientName,
+          rowKeyFor: (r) => r.clientName,
+        }
       );
     }
   }
 
-  function renderSummary(data) {
-    summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> unmatched domain${data.totalCount === 1 ? '' : 's'} across ${data.byClient.length} TPP client${data.byClient.length === 1 ? '' : 's'}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
+  // "UDF Field Name:X", shown above the item-count line, by request -- so
+  // it's always obvious which Autotask UDF a concept is checking/writing
+  // before reading the count underneath it. Omitted entirely when a concept
+  // has no UDF of its own (Datto RMM, until "Name:Datto RMM" exists).
+  function udfFieldLineHtml(udfName) {
+    if (!udfName) return '';
+    return `<div class="dm-udf-label">UDF Field ${escapeHtml(udfName)}</div>`;
   }
 
-  // Shared plain-list rendering for Ingram Client Names / Datto RMM Sites
-  // -- unlike TPP's own clientGroupTable() above, these two concepts are
-  // read-only (no Update control, by request -- just "provide a list" for
-  // both), so one simple `<table>` per concept is enough; `columns` picks
-  // what each one actually shows.
-  function nameMismatchTable(rows, columns) {
+  function renderSummary(data) {
+    summaryEl.hidden = false;
+    summaryEl.innerHTML = `${udfFieldLineHtml(data.udfName)}<div><strong>${data.totalCount}</strong> unmatched domain${data.totalCount === 1 ? '' : 's'} across ${data.byClient.length} TPP client${data.byClient.length === 1 ? '' : 's'}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span></div>`;
+  }
+
+  // Shared summary + "Show Ignored Lines" toggle + table for Ingram Client
+  // Names / Datto RMM Sites. A row's own `ignored` flag (see server.js --
+  // Ingram's "Ambient iT - W365 (...)" internal naming convention, Datto's
+  // own " - On Demand" suffix) means it's never actually a real unmatched
+  // gap worth chasing, so it's hidden by default -- but still shown on
+  // request (unticked by default, by request: "on pages/searches where we
+  // ignore lines have a tick box ... default to unticked") rather than
+  // dropped outright, so nothing's silently invisible. `data.totalCount`
+  // (the headline number) only ever counts non-ignored rows; the checkbox's
+  // own label carries the ignored count separately.
+  function renderNameMismatchSection(data, itemLabel, nothingUnmatchedText, columns, matchConfig) {
+    summaryEl.hidden = false;
+    summaryEl.innerHTML = `${udfFieldLineHtml(data.udfName)}<div><strong>${data.totalCount}</strong> ${itemLabel}${data.totalCount === 1 ? '' : 's'} not matching an Autotask company exactly<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span></div>`;
+
+    const ignoredCount = data.ignoredCount || 0;
+    if (data.totalCount === 0 && ignoredCount === 0) {
+      resultsEl.innerHTML = `<p class="status">Nothing unmatched -- ${nothingUnmatchedText}.</p>`;
+      return;
+    }
+
+    resultsEl.innerHTML = '';
+    let showIgnored = false;
+
+    if (ignoredCount > 0) {
+      const toggleLabel = document.createElement('label');
+      toggleLabel.className = 'inline-checkbox-label dm-show-ignored-label';
+      toggleLabel.innerHTML = `<input type="checkbox" class="dm-show-ignored-input" /> Show Ignored Lines (${ignoredCount})`;
+      resultsEl.appendChild(toggleLabel);
+      toggleLabel.querySelector('.dm-show-ignored-input').addEventListener('change', (e) => {
+        showIgnored = e.target.checked;
+        renderTable();
+      });
+    }
+
+    const tableContainer = document.createElement('div');
+    resultsEl.appendChild(tableContainer);
+
+    function renderTable() {
+      tableContainer.innerHTML = '';
+      const visibleRows = showIgnored ? data.rows : data.rows.filter((r) => !r.ignored);
+      if (visibleRows.length === 0) {
+        tableContainer.innerHTML = `<p class="status">Nothing unmatched -- ${nothingUnmatchedText}.</p>`;
+        return;
+      }
+      tableContainer.appendChild(nameMismatchTable(data, visibleRows, columns, matchConfig));
+    }
+    renderTable();
+  }
+
+  // `rows` is whatever subset renderNameMismatchSection above decided to
+  // show (ignored rows included or not) -- `columns` picks what each one
+  // shows about itself; `matchConfig` (present for both concepts now that
+  // each has a real UDF -- see server.js) adds one more column with a full
+  // match widget (possible-match buttons + a free-text fallback), same
+  // write-with-confirm interaction as TPP's own group header, just once per
+  // ROW instead of once per group. An ignored row gets no widget at all --
+  // there's nothing real to match it against.
+  function nameMismatchTable(data, rows, columns, matchConfig) {
     const groupEl = document.createElement('div');
     groupEl.className = 'resource-group';
     const table = document.createElement('table');
-    table.innerHTML = `
-      <thead><tr>${columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('')}</tr></thead>
-      <tbody>
-        ${rows
-          .map((r) => `<tr>${columns.map((c) => `<td${c.className ? ` class="${c.className}"` : ''}>${c.cell(r)}</td>`).join('')}</tr>`)
-          .join('')}
-      </tbody>
-    `;
+    const headerCells = columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('') + (matchConfig ? '<th>Possible Autotask Matches</th>' : '');
+    table.innerHTML = `<thead><tr>${headerCells}</tr></thead><tbody></tbody>`;
+    const tbody = table.querySelector('tbody');
+
+    function buildRow(row) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = columns.map((c) => `<td${c.className ? ` class="${c.className}"` : ''}>${c.cell(row)}</td>`).join('');
+      if (matchConfig) {
+        const matchCell = document.createElement('td');
+        if (row.ignored) {
+          matchCell.innerHTML = '<span class="inline-subtext">Ignored</span>';
+        } else {
+          const widget = buildMatchWidget({
+            endpoint: matchConfig.endpoint,
+            extraBody: matchConfig.extraBodyFor(row),
+            udfName: matchConfig.udfName,
+            writeValueLabel: matchConfig.writeValueLabelFor(row),
+            suggestions: row.suggestions,
+            onSuccess: () => {
+              tr.remove();
+              removeMatchedRow(data, matchConfig.rowKeyFor(row));
+            },
+          });
+          // Suggestions + the free-text input/Update button on one flowing
+          // row, by request -- the input used to always drop to its own
+          // line below the suggestion chips, even when there was plenty of
+          // room beside them.
+          const matchRow = document.createElement('div');
+          matchRow.className = 'dm-match-row';
+          matchRow.appendChild(widget.suggestionsEl);
+          matchRow.appendChild(widget.controlEl);
+          matchCell.appendChild(matchRow);
+          matchCell.appendChild(widget.statusEl);
+        }
+        tr.appendChild(matchCell);
+      }
+      tbody.appendChild(tr);
+    }
+
+    rows.forEach(buildRow);
     groupEl.appendChild(table);
     return groupEl;
   }
 
-  // Plain muted text, not clickable chips -- unlike TPP's own
-  // renderSuggestions() in clientGroupTable(), there's no input field here
-  // to fill (no write action for these two concepts), so a suggestion is
-  // just a hint for a human to go act on, not an interactive control.
-  function suggestionsHtml(suggestions) {
-    if (!suggestions || suggestions.length === 0) return '<span class="inline-subtext">No close match found</span>';
-    return suggestions.map((s) => escapeHtml(s.companyName)).join(', ');
+  // A row just got matched (its write succeeded) -- drops it out of the
+  // in-memory `data.rows` (so revisiting this concept without a fresh Load
+  // doesn't show it again) and refreshes the count line in place (the row
+  // itself was already removed from the DOM by the caller).
+  function removeMatchedRow(data, rowKey) {
+    const keyField = data.concept === 'datto-sites-unmatched' ? 'siteName' : 'clientName';
+    const index = data.rows.findIndex((r) => r[keyField] === rowKey);
+    if (index === -1) return;
+    data.rows.splice(index, 1);
+    data.totalCount -= 1;
+    summaryEl.querySelector('strong').textContent = data.totalCount;
+  }
+
+  // Shared "write this match into Autotask" widget -- one free-text input +
+  // Update button, plus (when there's upfront fuzzy-match data -- Ingram and
+  // Datto rows always have it; TPP's own group has none, there's no real
+  // name to fuzzy-match its short account-reference code against) a set of
+  // "Possible Match" buttons, one per suggestion, that write directly on
+  // click. By request: EVERY write -- whichever button triggers it --
+  // confirms with the person first, naming exactly what's about to be
+  // written and where. The server's own already-set-UDF guard (see
+  // writeNameMatchUdf in server.js) is what actually prevents overwriting a
+  // real value; this widget just surfaces whatever it says.
+  function buildMatchWidget({ endpoint, extraBody, udfName, writeValueLabel, suggestions, onSuccess }) {
+    const controlEl = document.createElement('span');
+    controlEl.className = 'dm-match-control';
+    controlEl.innerHTML = `
+      <input type="text" class="dm-match-input" placeholder="Exact Autotask client name" autocomplete="off" title="Must exactly match the Autotask company name -- no partial match." />
+      <button type="button" class="button-link button-link--small dm-match-button">Update</button>
+    `;
+    const input = controlEl.querySelector('.dm-match-input');
+    const matchButton = controlEl.querySelector('.dm-match-button');
+
+    const suggestionsEl = document.createElement('div');
+    suggestionsEl.className = 'dm-match-suggestions';
+
+    const statusEl = document.createElement('p');
+    statusEl.className = 'status dm-match-status';
+    statusEl.hidden = true;
+
+    function setBusy(busy) {
+      matchButton.disabled = busy;
+      input.disabled = busy;
+      suggestionsEl.querySelectorAll('button').forEach((b) => (b.disabled = busy));
+    }
+
+    // `undefined`/`null` (TPP's own group -- nothing fuzzy-matched yet,
+    // since nothing's been tried) renders nothing at all; a real (possibly
+    // empty) array (every row on Ingram/Datto, or TPP after a failed
+    // attempt) renders either the suggestion buttons or an explicit "no
+    // close match" note, so it's clear a check actually ran.
+    function renderSuggestions(list) {
+      if (list === undefined || list === null) {
+        suggestionsEl.hidden = true;
+        suggestionsEl.innerHTML = '';
+        return;
+      }
+      suggestionsEl.hidden = false;
+      if (list.length === 0) {
+        suggestionsEl.innerHTML = '<span class="inline-subtext">No close match found</span>';
+        return;
+      }
+      suggestionsEl.innerHTML = `
+        <span class="inline-subtext">Possible matches:</span>
+        ${list.map((s, i) => `<button type="button" class="button-link button-link--small dm-suggestion-chip" data-i="${i}">${escapeHtml(s.companyName)}</button>`).join('')}
+      `;
+      suggestionsEl.querySelectorAll('.dm-suggestion-chip').forEach((btn, i) => {
+        btn.addEventListener('click', () => doWrite(list[i].companyName));
+      });
+    }
+    renderSuggestions(suggestions);
+
+    async function doWrite(companyName) {
+      const trimmed = (companyName || '').trim();
+      if (!trimmed) {
+        statusEl.hidden = false;
+        statusEl.className = 'status error dm-match-status';
+        statusEl.textContent = 'Enter an Autotask client name first.';
+        return;
+      }
+      if (!confirm(`Write "${writeValueLabel}" into ${udfName} on Autotask company "${trimmed}"?`)) return;
+
+      setBusy(true);
+      statusEl.hidden = false;
+      statusEl.className = 'status loading dm-match-status';
+      statusEl.textContent = 'Updating...';
+
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...extraBody, companyName: trimmed }),
+        });
+        const result = await res.json();
+        if (!res.ok) {
+          statusEl.className = 'status error dm-match-status';
+          statusEl.textContent = result.error || `Request failed (${res.status})`;
+          renderSuggestions(result.suggestions);
+          setBusy(false);
+          return;
+        }
+        onSuccess(result);
+      } catch (err) {
+        statusEl.className = 'status error dm-match-status';
+        statusEl.textContent = err.message;
+        setBusy(false);
+      }
+    }
+
+    matchButton.addEventListener('click', () => doWrite(input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        doWrite(input.value);
+      }
+    });
+
+    return { controlEl, suggestionsEl, statusEl };
   }
 
   // A group just got matched (its "Update" button succeeded) -- drops it
@@ -197,57 +542,36 @@ export function mount(container) {
     const groupEl = document.createElement('div');
     groupEl.className = 'resource-group';
 
+    // No upfront `suggestions` -- unlike Ingram/Datto rows, there's no real
+    // name to fuzzy-match a TPP account-reference CODE ("SHE-696") against;
+    // suggestions only show up reactively, once a typed company name
+    // actually fails to resolve (see buildMatchWidget's own renderSuggestions).
+    const widget = buildMatchWidget({
+      endpoint: '/api/data-matching/match-tpp-client',
+      extraBody: { accountReference: clientGroup.accountReference },
+      udfName: data.udfName,
+      writeValueLabel: clientGroup.accountReference,
+      suggestions: undefined,
+      onSuccess: () => {
+        groupEl.remove();
+        removeMatchedGroup(data, clientGroup.accountReference);
+      },
+    });
+
     const header = document.createElement('div');
     header.className = 'resource-group-header';
-    header.innerHTML = `
-      <span class="resource-group-header-title">
-        <span>${escapeHtml(clientGroup.accountReference)}</span>
-        <span class="count">${clientGroup.count} domain${clientGroup.count === 1 ? '' : 's'}</span>
-      </span>
-      <span class="dm-match-control">
-        <input type="text" class="dm-match-input" placeholder="Exact Autotask client name" autocomplete="off" title="Must exactly match the Autotask company name -- no partial match." />
-        <button type="button" class="button-link button-link--small dm-match-button">Update</button>
-      </span>
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'resource-group-header-title';
+    titleSpan.innerHTML = `
+      <span>${escapeHtml(clientGroup.accountReference)}</span>
+      <span class="count">${clientGroup.count} domain${clientGroup.count === 1 ? '' : 's'}</span>
     `;
+    header.appendChild(titleSpan);
+    header.appendChild(widget.controlEl);
     groupEl.appendChild(header);
 
-    const statusLine = document.createElement('p');
-    statusLine.className = 'status dm-match-status';
-    statusLine.hidden = true;
-    groupEl.appendChild(statusLine);
-
-    // Fuzzy suggestions for a failed exact match -- by request, when the
-    // typed name doesn't exactly match any real Autotask company (e.g.
-    // "Cloudking" for the real "Cloud King Hosting"), the server's own
-    // close-match guesses (see server.js's own findFuzzySuggestions) show
-    // up here as clickable chips. Clicking one just fills the EXACT real
-    // name into the input -- it does not auto-submit -- so the strict
-    // exact-match write path is never bypassed; Update still has to be
-    // clicked again to confirm.
-    const suggestionsEl = document.createElement('div');
-    suggestionsEl.className = 'dm-match-suggestions';
-    suggestionsEl.hidden = true;
-    groupEl.appendChild(suggestionsEl);
-
-    function renderSuggestions(suggestions) {
-      if (!suggestions || suggestions.length === 0) {
-        suggestionsEl.hidden = true;
-        suggestionsEl.innerHTML = '';
-        return;
-      }
-      suggestionsEl.hidden = false;
-      suggestionsEl.innerHTML = `
-        <span class="inline-subtext">Did you mean:</span>
-        ${suggestions.map((s) => `<button type="button" class="button-link button-link--small dm-suggestion-chip">${escapeHtml(s.companyName)}</button>`).join('')}
-      `;
-      suggestionsEl.querySelectorAll('.dm-suggestion-chip').forEach((btn, i) => {
-        btn.addEventListener('click', () => {
-          input.value = suggestions[i].companyName;
-          input.focus();
-          renderSuggestions(null);
-        });
-      });
-    }
+    groupEl.appendChild(widget.suggestionsEl);
+    groupEl.appendChild(widget.statusEl);
 
     const table = document.createElement('table');
     table.innerHTML = `
@@ -270,56 +594,6 @@ export function mount(container) {
       </tbody>
     `;
     groupEl.appendChild(table);
-
-    const input = header.querySelector('.dm-match-input');
-    const matchButton = header.querySelector('.dm-match-button');
-
-    async function submitMatch() {
-      const companyName = input.value.trim();
-      if (!companyName) {
-        statusLine.hidden = false;
-        statusLine.className = 'status error dm-match-status';
-        statusLine.textContent = 'Enter an Autotask client name first.';
-        return;
-      }
-      matchButton.disabled = true;
-      input.disabled = true;
-      statusLine.hidden = false;
-      statusLine.className = 'status loading dm-match-status';
-      statusLine.textContent = 'Updating...';
-      renderSuggestions(null);
-      try {
-        const res = await fetch('/api/data-matching/match-tpp-client', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accountReference: clientGroup.accountReference, companyName }),
-        });
-        const result = await res.json();
-        if (!res.ok) {
-          statusLine.className = 'status error dm-match-status';
-          statusLine.textContent = result.error || `Request failed (${res.status})`;
-          renderSuggestions(result.suggestions);
-          matchButton.disabled = false;
-          input.disabled = false;
-          return;
-        }
-        groupEl.remove();
-        removeMatchedGroup(data, clientGroup.accountReference);
-      } catch (err) {
-        matchButton.disabled = false;
-        input.disabled = false;
-        statusLine.className = 'status error dm-match-status';
-        statusLine.textContent = err.message;
-      }
-    }
-
-    matchButton.addEventListener('click', submitMatch);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        submitMatch();
-      }
-    });
 
     return groupEl;
   }

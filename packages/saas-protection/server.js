@@ -704,5 +704,6 @@ router.getApplicationsHistory = getApplicationsHistory;
 router.findDomainMatch = findDomainMatch;
 router.getBillableSeatCount = getBillableSeatCount;
 router.getSeats = getSeats;
+router.getDomains = getDomains;
 
 module.exports = router;
