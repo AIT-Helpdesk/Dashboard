@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@dashboard/autotask-client": "*",
+    "@dashboard/datto-rmm": "*",
+    "@dashboard/ingram-client": "*",
     "@dashboard/tpp-client": "*",
     "express": "^4.19.2"
   }

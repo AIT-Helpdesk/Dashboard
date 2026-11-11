@@ -108,6 +108,13 @@ export function mount(container) {
     load(domainInput.value, ctToggleInput.checked);
   });
 
+  resultsEl.addEventListener('click', (e) => {
+    const lookupBtn = e.target.closest('.dns-check-lookup-btn');
+    if (lookupBtn) { handleLookupClick(lookupBtn); return; }
+    const propagationBtn = e.target.closest('.dns-check-propagation-btn');
+    if (propagationBtn) handlePropagationClick(propagationBtn);
+  });
+
   async function load(domain, ctEnabled) {
     searchButton.disabled = true;
     statusEl.hidden = false;
@@ -156,12 +163,12 @@ export function mount(container) {
         ? `
       <div class="resource-group">
         <div class="resource-group-header"><span>DNS Records</span><span class="count">${data.entries.length}</span></div>
-        <table>
+        <table class="dns-check-entries-table">
           <thead>
-            <tr><th>Type</th><th>Name</th><th>Value</th></tr>
+            <tr><th></th><th>Type</th><th>Name</th><th>Value</th></tr>
           </thead>
           <tbody>
-            ${data.entries.map((e) => entryRowHtml(e, data.domain)).join('')}
+            ${data.entries.map((e, i) => entryRowHtml(e, data.domain, i)).join('')}
           </tbody>
         </table>
       </div>`
@@ -171,7 +178,7 @@ export function mount(container) {
       topNoteHtml(data.source) +
       certTransparencyNoteHtml(data.certTransparency) +
       registrationHtml(data.registration) +
-      nsHtml(data.ns, data.hoster) +
+      nsHtml(data.ns, data.hoster, data.domain) +
       tableHtml +
       notFoundHtml(data.notFound) +
       soaHtml(data.soa);
@@ -185,7 +192,17 @@ export function mount(container) {
   // shown with blank fields when neither TPP nor a public WHOIS lookup
   // turned up anything at all.
   function registrationHtml(registration) {
-    if (!registration || (!registration.registrar && !registration.expiryDate)) return '';
+    if (!registration) return '';
+    const hasNameServers = registration.nameServers && registration.nameServers.length > 0;
+    if (!registration.registrar && !registration.expiryDate && !hasNameServers) return '';
+    // No lookup/propagation icons here, by request -- those live once, in
+    // the Name Servers section below, rather than repeated before every
+    // nameserver (both sections would otherwise be checking the exact same
+    // thing -- this domain's own NS records -- which only needs asking
+    // once per page, not once per row).
+    const nameServersCell = hasNameServers
+      ? registration.nameServers.map((ns) => boldEasyDmarc(escapeHtml(ns))).join('<br>')
+      : '<span class="inline-subtext">Unknown</span>';
     return `
       <div class="resource-group dns-check-compact-table">
         <div class="resource-group-header"><span>Domain Registration</span></div>
@@ -193,6 +210,7 @@ export function mount(container) {
           <tbody>
             <tr><th>Registrar</th><td>${registration.registrar ? boldEasyDmarc(escapeHtml(registration.registrar)) : '<span class="inline-subtext">Unknown</span>'}</td></tr>
             <tr><th>Expiry Date</th><td>${registration.expiryDate ? escapeHtml(registration.expiryDate) : '<span class="inline-subtext">Unknown</span>'}</td></tr>
+            <tr><th>Registered Name Servers</th><td>${nameServersCell}</td></tr>
           </tbody>
         </table>
       </div>`;
@@ -239,28 +257,160 @@ export function mount(container) {
     return `<p class="inline-subtext dns-check-section-note">Certificate Transparency (crt.sh): ${ct.totalDiscovered} additional hostname${ct.totalDiscovered === 1 ? '' : 's'} discovered${truncatedPart} -- ${ct.foundCount} DNS record${ct.foundCount === 1 ? '' : 's'} across ${ct.totalDiscovered === 1 ? 'it' : 'them'} still resolving today.</p>`;
   }
 
-  function entryRowHtml(entry, domain) {
+  // The live-lookup (per-row DNS check) and propagation-check (several
+  // public resolvers, see server.js) icon pair -- shared by the main
+  // entries table below, the Name Servers section, and Domain
+  // Registration's own Registered Name Servers row, since all three show
+  // real DNS record values that can come from Cloudflare/TPP's own stored
+  // config rather than a live query, equally worth double-checking anywhere
+  // they appear. `rowId` just has to be unique within its own immediate
+  // <tbody> (see handleLookupClick's toggle below), not page-wide.
+  function lookupIconsHtml(type, name, rowId) {
+    const lookupBtn = `<button type="button" class="dns-check-lookup-btn" data-row-id="${rowId}" data-type="${escapeHtml(type)}" data-name="${escapeHtml(name)}" title="Check this record against live DNS">&#128269;</button>`;
+    const propagationBtn = `<button type="button" class="dns-check-propagation-btn" data-type="${escapeHtml(type)}" data-name="${escapeHtml(name)}" title="Check DNS propagation across public resolvers">&#127760;</button>`;
+    return `${lookupBtn}${propagationBtn}`;
+  }
+
+  function entryRowHtml(entry, domain, rowIndex) {
     const infoPart = entry.info ? `<br><span class="dns-check-info-inline">[${boldEasyDmarc(escapeHtml(entry.info))}]</span>` : '';
     const nameHtml = boldEasyDmarc(escapeHtml(entry.name));
     const nameCell = shouldHighlightGreen(entry, domain) ? `<span class="dns-check-highlight-name">${nameHtml}</span>` : nameHtml;
     return `
-      <tr>
+      <tr data-row-id="${rowIndex}">
+        <td>${lookupIconsHtml(entry.type, entry.name, rowIndex)}</td>
         <td>${escapeHtml(entry.type)}</td>
         <td>${nameCell}</td>
         <td>${entryValueHtml(entry)}${infoPart}</td>
       </tr>`;
   }
 
+  // Click handler for the lookup icon above -- event-delegated on resultsEl
+  // (attached once in mount(), see below) since the table itself gets torn
+  // down and rebuilt on every render(). Clicking a second time collapses
+  // the result row back out, same toggle convention as most expandable rows
+  // elsewhere on this dashboard.
+  async function handleLookupClick(btn) {
+    const tr = btn.closest('tr');
+    const rowId = tr.dataset.rowId;
+    const existing = tr.parentElement.querySelector(`tr.dns-check-lookup-result[data-row-id="${rowId}"]`);
+    if (existing) {
+      existing.remove();
+      return;
+    }
+
+    const type = btn.dataset.type;
+    const name = btn.dataset.name;
+    btn.disabled = true;
+    const resultTr = document.createElement('tr');
+    resultTr.className = 'dns-check-lookup-result';
+    resultTr.dataset.rowId = rowId;
+    const colCount = tr.children.length;
+    resultTr.innerHTML = `<td colspan="${colCount}"><span class="inline-subtext">Checking live DNS&hellip;</span></td>`;
+    tr.insertAdjacentElement('afterend', resultTr);
+
+    try {
+      const params = new URLSearchParams({ type, name });
+      const res = await fetch(`/api/dns-check/live-lookup?${params.toString()}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      const liveHtml =
+        data.records.length > 0
+          ? data.records.map((r) => boldEasyDmarc(escapeHtml(r))).join('<br>')
+          : '<span class="inline-subtext">No live record found.</span>';
+      resultTr.innerHTML = `<td colspan="${colCount}"><span class="inline-subtext">Live DNS result for <strong>${escapeHtml(name)}</strong> (${escapeHtml(type)}):</span><br>${liveHtml}</td>`;
+    } catch (err) {
+      resultTr.innerHTML = `<td colspan="${colCount}"><span class="status error">Live lookup failed: ${escapeHtml(err.message)}</span></td>`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Propagation-check popup -- a plain new window (by request) rather than
+  // an in-page modal, so it can sit next to the main page while comparing.
+  // Self-contained inline styles since window.open() gives a blank document
+  // with none of this dashboard's own stylesheet -- small text and tight
+  // row heights, by request, since this is a dense comparison table, not a
+  // page someone reads line by line.
+  function propagationPopupHtml(type, name, results) {
+    const rows = results
+      .map((r) => {
+        let resultHtml;
+        if (!r.ok) {
+          resultHtml = `<span class="pc-error">${escapeHtml(r.error)}</span>`;
+        } else if (r.records.length === 0) {
+          resultHtml = '<span class="pc-empty">No record</span>';
+        } else {
+          resultHtml = r.records.map((v) => escapeHtml(v)).join('<br>');
+        }
+        return `<tr><td>${escapeHtml(r.label)}</td><td>${escapeHtml(r.ip)}</td><td>${resultHtml}</td></tr>`;
+      })
+      .join('');
+    return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>DNS Propagation -- ${escapeHtml(name)}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; margin: 12px; font-size: 0.72rem; color: #222; }
+  h1 { font-size: 0.85rem; margin: 0 0 8px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 2px 8px; border-bottom: 1px solid #e2e2e2; vertical-align: top; line-height: 1.15; }
+  th { font-size: 0.68rem; color: #666; font-weight: 600; }
+  .pc-empty { color: #999; font-style: italic; }
+  .pc-error { color: #b00020; }
+</style>
+</head>
+<body>
+  <h1>${escapeHtml(name)} &ndash; ${escapeHtml(type)}</h1>
+  <table>
+    <thead><tr><th>Resolver</th><th>IP</th><th>Result</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</body>
+</html>`;
+  }
+
+  async function handlePropagationClick(btn) {
+    const type = btn.dataset.type;
+    const name = btn.dataset.name;
+    btn.disabled = true;
+    try {
+      const params = new URLSearchParams({ type, name });
+      const res = await fetch(`/api/dns-check/propagation-check?${params.toString()}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      const popup = window.open('', '_blank', 'width=480,height=420');
+      if (!popup) {
+        alert('Please allow popups for this site to see the propagation check results.');
+        return;
+      }
+      popup.document.write(propagationPopupHtml(type, name, data.results));
+      popup.document.close();
+    } catch (err) {
+      alert(`Propagation check failed: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   // NS records get their own section at the very top, by request, with the
   // hoster guess (if any) right next to this heading rather than in the
   // page-level summary line.
-  function nsHtml(result, hoster) {
-    const hosterPart = hoster ? ` &ndash; hosted via ${escapeHtml(hoster)}` : '';
+  function nsHtml(result, hoster, domain) {
+    const hosterPart = hoster ? ` &ndash; ${escapeHtml(hoster)}` : '';
     let body;
     if (result.ok && result.records.length > 0) {
+      // One icon pair for the whole section, by request -- not one per
+      // nameserver, since every row would be checking the exact same thing
+      // (this domain's own NS records). Its own row at the top of the
+      // table, rather than the section header, so it can reuse the plain
+      // tr-based result-insertion handleLookupClick already does for the
+      // main entries table, unchanged.
+      const checkRow = `<tr data-row-id="ns-check"><td>${lookupIconsHtml('NS', domain, 'ns-check')} <span class="inline-subtext">Check this domain's NS records</span></td></tr>`;
       body = `
         <table>
           <tbody>
+            ${checkRow}
             ${result.records.map((host) => `<tr><td>${boldEasyDmarc(escapeHtml(host))}</td></tr>`).join('')}
           </tbody>
         </table>`;
@@ -271,7 +421,7 @@ export function mount(container) {
     }
     return `
       <div class="resource-group dns-check-compact-table">
-        <div class="resource-group-header"><span>Name Servers (NS Records)${hosterPart}</span></div>
+        <div class="resource-group-header"><span>Name Servers (NS)${hosterPart}</span></div>
         ${body}
       </div>`;
   }

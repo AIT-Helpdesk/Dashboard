@@ -6,13 +6,17 @@ export const label = "Data Matching";
 // @dashboard/subscriptions-expiring/client.js's own comment for the full
 // reasoning).
 let lastConcept = 'tpp-domains-unmatched';
-let lastDataByConcept = { 'tpp-domains-unmatched': null };
+let lastDataByConcept = { 'tpp-domains-unmatched': null, 'ingram-clients-unmatched': null, 'datto-sites-unmatched': null };
 
 // One entry per "concept" this page checks -- by request, a page for
 // "various data matching concepts" generally, not just this first one.
 // Adding a second concept later means adding one more entry here, one more
 // route in server.js, and one more render function below.
-const CONCEPT_OPTIONS = [{ value: 'tpp-domains-unmatched', label: 'TPP Domains Without an Autotask Match' }];
+const CONCEPT_OPTIONS = [
+  { value: 'tpp-domains-unmatched', label: 'TPP Domains Without an Autotask Match' },
+  { value: 'ingram-clients-unmatched', label: 'Ingram Client Names Not Matching Autotask' },
+  { value: 'datto-sites-unmatched', label: 'Datto RMM Sites Not Matching Autotask' },
+];
 
 export function mount(container) {
   container.innerHTML = `
@@ -73,19 +77,90 @@ export function mount(container) {
 
   function render(data) {
     statusEl.hidden = true;
-    renderSummary(data);
-
     resultsEl.innerHTML = '';
-    if (data.byClient.length === 0) {
-      resultsEl.innerHTML = `<p class="status">Nothing unmatched -- every active TPP domain's account reference has a Name:TPP match.</p>`;
+
+    if (data.concept === 'tpp-domains-unmatched') {
+      renderSummary(data);
+      if (data.byClient.length === 0) {
+        resultsEl.innerHTML = `<p class="status">Nothing unmatched -- every active TPP domain's account reference has a Name:TPP match.</p>`;
+        return;
+      }
+      for (const clientGroup of data.byClient) resultsEl.appendChild(clientGroupTable(data, clientGroup));
       return;
     }
-    for (const clientGroup of data.byClient) resultsEl.appendChild(clientGroupTable(data, clientGroup));
+
+    if (data.concept === 'ingram-clients-unmatched') {
+      summaryEl.hidden = false;
+      summaryEl.innerHTML = `<strong>${data.totalCount}</strong> Ingram client${data.totalCount === 1 ? '' : 's'} not matching an Autotask company exactly<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
+      if (data.totalCount === 0) {
+        resultsEl.innerHTML = `<p class="status">Nothing unmatched -- every active Ingram Micro subscription's client name exactly matches an Autotask company.</p>`;
+        return;
+      }
+      resultsEl.appendChild(
+        nameMismatchTable(data.rows, [
+          { label: 'Ingram Client', cell: (r) => escapeHtml(r.clientName) },
+          { label: 'Active Subscriptions', className: 'ticket-number', cell: (r) => r.activeSubscriptionCount },
+          { label: 'Possible Matches', cell: (r) => suggestionsHtml(r.suggestions) },
+        ])
+      );
+      return;
+    }
+
+    if (data.concept === 'datto-sites-unmatched') {
+      if (data.configured === false) {
+        summaryEl.hidden = true;
+        resultsEl.innerHTML = `<p class="status">Datto RMM isn't configured on this dashboard.</p>`;
+        return;
+      }
+      summaryEl.hidden = false;
+      summaryEl.innerHTML = `<strong>${data.totalCount}</strong> Datto RMM site${data.totalCount === 1 ? '' : 's'} not matching an Autotask company exactly<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
+      if (data.totalCount === 0) {
+        resultsEl.innerHTML = `<p class="status">Nothing unmatched -- every Datto RMM site's name exactly matches an Autotask company.</p>`;
+        return;
+      }
+      resultsEl.appendChild(
+        nameMismatchTable(data.rows, [
+          { label: 'Datto Site', cell: (r) => escapeHtml(r.siteName) },
+          { label: 'Devices', className: 'ticket-number', cell: (r) => r.deviceCount },
+          { label: 'Possible Matches', cell: (r) => suggestionsHtml(r.suggestions) },
+        ])
+      );
+    }
   }
 
   function renderSummary(data) {
     summaryEl.hidden = false;
     summaryEl.innerHTML = `<strong>${data.totalCount}</strong> unmatched domain${data.totalCount === 1 ? '' : 's'} across ${data.byClient.length} TPP client${data.byClient.length === 1 ? '' : 's'}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
+  }
+
+  // Shared plain-list rendering for Ingram Client Names / Datto RMM Sites
+  // -- unlike TPP's own clientGroupTable() above, these two concepts are
+  // read-only (no Update control, by request -- just "provide a list" for
+  // both), so one simple `<table>` per concept is enough; `columns` picks
+  // what each one actually shows.
+  function nameMismatchTable(rows, columns) {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'resource-group';
+    const table = document.createElement('table');
+    table.innerHTML = `
+      <thead><tr>${columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${rows
+          .map((r) => `<tr>${columns.map((c) => `<td${c.className ? ` class="${c.className}"` : ''}>${c.cell(r)}</td>`).join('')}</tr>`)
+          .join('')}
+      </tbody>
+    `;
+    groupEl.appendChild(table);
+    return groupEl;
+  }
+
+  // Plain muted text, not clickable chips -- unlike TPP's own
+  // renderSuggestions() in clientGroupTable(), there's no input field here
+  // to fill (no write action for these two concepts), so a suggestion is
+  // just a hint for a human to go act on, not an interactive control.
+  function suggestionsHtml(suggestions) {
+    if (!suggestions || suggestions.length === 0) return '<span class="inline-subtext">No close match found</span>';
+    return suggestions.map((s) => escapeHtml(s.companyName)).join(', ');
   }
 
   // A group just got matched (its "Update" button succeeded) -- drops it
@@ -141,6 +216,39 @@ export function mount(container) {
     statusLine.hidden = true;
     groupEl.appendChild(statusLine);
 
+    // Fuzzy suggestions for a failed exact match -- by request, when the
+    // typed name doesn't exactly match any real Autotask company (e.g.
+    // "Cloudking" for the real "Cloud King Hosting"), the server's own
+    // close-match guesses (see server.js's own findFuzzySuggestions) show
+    // up here as clickable chips. Clicking one just fills the EXACT real
+    // name into the input -- it does not auto-submit -- so the strict
+    // exact-match write path is never bypassed; Update still has to be
+    // clicked again to confirm.
+    const suggestionsEl = document.createElement('div');
+    suggestionsEl.className = 'dm-match-suggestions';
+    suggestionsEl.hidden = true;
+    groupEl.appendChild(suggestionsEl);
+
+    function renderSuggestions(suggestions) {
+      if (!suggestions || suggestions.length === 0) {
+        suggestionsEl.hidden = true;
+        suggestionsEl.innerHTML = '';
+        return;
+      }
+      suggestionsEl.hidden = false;
+      suggestionsEl.innerHTML = `
+        <span class="inline-subtext">Did you mean:</span>
+        ${suggestions.map((s) => `<button type="button" class="button-link button-link--small dm-suggestion-chip">${escapeHtml(s.companyName)}</button>`).join('')}
+      `;
+      suggestionsEl.querySelectorAll('.dm-suggestion-chip').forEach((btn, i) => {
+        btn.addEventListener('click', () => {
+          input.value = suggestions[i].companyName;
+          input.focus();
+          renderSuggestions(null);
+        });
+      });
+    }
+
     const table = document.createElement('table');
     table.innerHTML = `
       <thead>
@@ -179,6 +287,7 @@ export function mount(container) {
       statusLine.hidden = false;
       statusLine.className = 'status loading dm-match-status';
       statusLine.textContent = 'Updating...';
+      renderSuggestions(null);
       try {
         const res = await fetch('/api/data-matching/match-tpp-client', {
           method: 'POST',
@@ -186,7 +295,14 @@ export function mount(container) {
           body: JSON.stringify({ accountReference: clientGroup.accountReference, companyName }),
         });
         const result = await res.json();
-        if (!res.ok) throw new Error(result.error || `Request failed (${res.status})`);
+        if (!res.ok) {
+          statusLine.className = 'status error dm-match-status';
+          statusLine.textContent = result.error || `Request failed (${res.status})`;
+          renderSuggestions(result.suggestions);
+          matchButton.disabled = false;
+          input.disabled = false;
+          return;
+        }
         groupEl.remove();
         removeMatchedGroup(data, clientGroup.accountReference);
       } catch (err) {

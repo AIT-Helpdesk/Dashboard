@@ -48,6 +48,25 @@ async function lookup(fn, name) {
   }
 }
 
+// A Cloudflare zone or TPP DNS-hosting record set is only trustworthy as
+// "the complete, live record set" when the domain is actually STILL
+// delegated to that source's own nameservers -- a domain can stay
+// configured in our Cloudflare account, or keep old DNS records in our TPP
+// Wholesale reseller account, long after its real NS delegation moved
+// elsewhere (confirmed as a real, live false-positive case, by request).
+// Checked against a genuine live NS lookup (the same nslookup-equivalent
+// the guess-based path already does) before either source is trusted;
+// `liveNsPromise` is resolved once per request and shared by both checks
+// rather than re-resolved for each.
+async function nsMatchesLiveDelegation(reportedNs, liveNsPromise) {
+  const liveNs = await liveNsPromise;
+  if (!liveNs.ok || liveNs.records.length === 0) return false;
+  const normalizeNsHost = (h) => h.toLowerCase().replace(/\.$/, '');
+  const reportedSet = new Set(reportedNs.map(normalizeNsHost));
+  const liveSet = new Set(liveNs.records.map(normalizeNsHost));
+  return reportedSet.size === liveSet.size && [...reportedSet].every((h) => liveSet.has(h));
+}
+
 // TXT records come back as string[][] -- each record can be split into
 // multiple chunks by the resolver -- joined back into the one string it
 // actually represents (e.g. a real SPF/DMARC/DKIM value reads as the single
@@ -527,7 +546,22 @@ function parseWhoisField(text, labels) {
   return null;
 }
 
+// Unlike every other WHOIS field here, "Name Server" repeats -- one line per
+// nameserver, same label each time (confirmed live against both a thin
+// registry, Verisign's .com, and a thick one, auDA's own .au) -- so this
+// collects every match for a label instead of stopping at the first.
+function parseWhoisFieldAll(text, labels) {
+  for (const label of labels) {
+    const matches = [...text.matchAll(new RegExp(`^\\s*${label}\\s*:\\s*(.+)$`, 'gim'))]
+      .map((m) => m[1].trim())
+      .filter(Boolean);
+    if (matches.length > 0) return matches;
+  }
+  return [];
+}
+
 const REGISTRAR_FIELD_LABELS = ['Registrar', 'Sponsoring Registrar', 'Registrar Name'];
+const NAME_SERVER_FIELD_LABELS = ['Name Server', 'Nserver'];
 const EXPIRY_FIELD_LABELS = [
   'Registry Expiry Date',
   'Registrar Registration Expiration Date',
@@ -555,18 +589,20 @@ async function publicWhoisLookup(domain) {
   const text = await whoisQuery(server, domain);
   let registrar = parseWhoisField(text, REGISTRAR_FIELD_LABELS);
   let expiryDate = parseWhoisField(text, EXPIRY_FIELD_LABELS);
+  let nameServers = parseWhoisFieldAll(text, NAME_SERVER_FIELD_LABELS);
 
   // Thin registries (Verisign's .com/.net chief among them) hand back the
   // sponsoring registrar's name plus a referral to THAT registrar's own
   // WHOIS server for anything else -- followed once, best-effort, to fill
   // in whichever field didn't come through the registry's own answer.
-  if (!expiryDate || !registrar) {
+  if (!expiryDate || !registrar || nameServers.length === 0) {
     const referral = parseWhoisField(text, ['Registrar WHOIS Server']);
     if (referral && referral.toLowerCase() !== server.toLowerCase()) {
       try {
         const referredText = await whoisQuery(referral, domain);
         registrar = registrar || parseWhoisField(referredText, REGISTRAR_FIELD_LABELS);
         expiryDate = expiryDate || parseWhoisField(referredText, EXPIRY_FIELD_LABELS);
+        if (nameServers.length === 0) nameServers = parseWhoisFieldAll(referredText, NAME_SERVER_FIELD_LABELS);
       } catch {
         // Best-effort only -- the registry's own answer (if any) still stands.
       }
@@ -579,8 +615,14 @@ async function publicWhoisLookup(domain) {
   // same way on the client regardless of which one answered.
   if (expiryDate) expiryDate = expiryDate.slice(0, 10);
 
-  if (!registrar && !expiryDate) return null;
-  return { registrar, expiryDate };
+  // Lowercased -- public WHOIS hands these back upper-case
+  // ("NS1.GOOGLE.COM", confirmed live), unlike every other nameserver list
+  // on this page (Cloudflare/TPP DNS records, live dns.resolveNs), which are
+  // already lower-case -- matched here so this reads consistently with them.
+  nameServers = nameServers.map((ns) => ns.toLowerCase());
+
+  if (!registrar && !expiryDate && nameServers.length === 0) return null;
+  return { registrar, expiryDate, nameServers };
 }
 
 // Both lookups run every time, by request -- TPP Wholesale is a RESELLER,
@@ -613,8 +655,15 @@ async function getRegistrationInfo(domain) {
   let registrar = whois?.registrar || null;
   if (registrar && registrar.trim().toLowerCase() === 'domain directors pty ltd trading as instra') registrar = `${registrar} (TPP)`;
   const expiryDate = tppWhois ? tppWhois.expiryDate || null : whois?.expiryDate || null;
-  if (!registrar && !expiryDate) return null;
-  return { registrar, expiryDate, source: tppWhois ? 'tpp' : 'whois' };
+  // Registered nameservers -- same TPP-preferred precedence as expiry above
+  // (confirmed live: TPP's own `nameServer` array and public WHOIS's
+  // repeated "Name Server:" lines agree for a domain in our own reseller
+  // account), lower-cased to match TPP's own upper-case convention
+  // ("VIOLET.NS.CLOUDFLARE.COM", confirmed live) to the rest of this page.
+  const nameServersRaw = tppWhois?.nameServer?.length ? tppWhois.nameServer : whois?.nameServers || [];
+  const nameServers = nameServersRaw.map((ns) => ns.toLowerCase());
+  if (!registrar && !expiryDate && nameServers.length === 0) return null;
+  return { registrar, expiryDate, nameServers, source: tppWhois ? 'tpp' : 'whois' };
 }
 
 router.get('/', async (req, res) => {
@@ -629,6 +678,11 @@ router.get('/', async (req, res) => {
   // below -- "who's the registrar" is a wholly separate question from "who
   // serves the DNS", so there's no reason to make it wait in line.
   const registrationPromise = getRegistrationInfo(domain);
+  // The real, live NS delegation (the same nslookup-equivalent the
+  // guess-based path always did) -- resolved once and shared by the
+  // Cloudflare and TPP checks below (see nsMatchesLiveDelegation) plus the
+  // guess-based path itself, rather than re-resolved for each.
+  const liveNsPromise = lookup(dns.resolveNs, domain);
 
   try {
     const cfMatch = await cloudflareFindZone(domain).catch((err) => {
@@ -640,18 +694,28 @@ router.get('/', async (req, res) => {
       try {
         const records = await cloudflareFetchAllRecords(cfMatch.zone.id, cfMatch.account.token);
         const { entries, soa } = cloudflareRecordsToEntriesAndSoa(records);
-        return res.json({
-          domain,
-          asOf: new Date().toISOString(),
-          source: 'cloudflare',
-          hoster: `Cloudflare ("${cfMatch.account.displayName}")`,
-          ns: { ok: true, records: cfMatch.zone.name_servers || [] },
-          entries,
-          notFound: { dkim: [], m365: [], security: [], legacyMail: [], website: [] },
-          soa,
-          certTransparency: null,
-          registration: await registrationPromise,
-        });
+        const cfNs = cfMatch.zone.name_servers || [];
+        // A domain can stay configured as a zone in our Cloudflare account
+        // long after its real NS delegation moved elsewhere -- same stale-
+        // source risk as TPP below, so checked the same way before trusting
+        // it as "the complete, live record set".
+        if (await nsMatchesLiveDelegation(cfNs, liveNsPromise)) {
+          return res.json({
+            domain,
+            asOf: new Date().toISOString(),
+            source: 'cloudflare',
+            hoster: `Cloudflare ("${cfMatch.account.displayName}")`,
+            ns: { ok: true, records: cfNs },
+            entries,
+            notFound: { dkim: [], m365: [], security: [], legacyMail: [], website: [] },
+            soa,
+            certTransparency: null,
+            registration: await registrationPromise,
+          });
+        }
+        console.error(
+          `DNS Check: Cloudflare has a zone for "${domain}" but its real NS delegation doesn't match (stale Cloudflare zone) -- falling back to TPP/guess-based lookups.`,
+        );
       } catch (err) {
         // Zone was found but pulling its records failed (rate limit, token
         // permission gap, network hiccup) -- falls through to the normal
@@ -668,22 +732,35 @@ router.get('/', async (req, res) => {
 
     if (tppRecords) {
       const { ns, entries } = tppRecordsToNsAndEntries(tppRecords, domain);
-      return res.json({
-        domain,
-        asOf: new Date().toISOString(),
-        source: 'tpp',
-        hoster: 'TPP Wholesale (managed in our reseller account)',
-        ns: { ok: true, records: ns },
-        entries,
-        notFound: { dkim: [], m365: [], security: [], legacyMail: [], website: [] },
-        soa: { ok: false, code: 'ENODATA', message: 'No SOA record' },
-        certTransparency: null,
-        registration: await registrationPromise,
-      });
+
+      // TPP's own DNS-hosting record set is only trustworthy as "the
+      // complete, live record set" when the domain is actually STILL
+      // delegated there -- a domain can stay in our TPP reseller account
+      // (so TPP happily keeps returning a full, old record set) long after
+      // its real NS delegation moved elsewhere -- confirmed as a real, live
+      // false-positive case, by request. A mismatch falls through to the
+      // guess-based path instead, same as "TPP lookup failed" just above.
+      if (await nsMatchesLiveDelegation(ns, liveNsPromise)) {
+        return res.json({
+          domain,
+          asOf: new Date().toISOString(),
+          source: 'tpp',
+          hoster: 'TPP Wholesale (managed in our reseller account)',
+          ns: { ok: true, records: ns },
+          entries,
+          notFound: { dkim: [], m365: [], security: [], legacyMail: [], website: [] },
+          soa: { ok: false, code: 'ENODATA', message: 'No SOA record' },
+          certTransparency: null,
+          registration: await registrationPromise,
+        });
+      }
+      console.error(
+        `DNS Check: TPP Wholesale has DNS records for "${domain}" but its real NS delegation doesn't match (stale TPP DNS hosting) -- falling back to guess-based lookups.`,
+      );
     }
 
     const [ns, soa, a, mx, txt, dmarcTxt, cname, caa] = await Promise.all([
-      lookup(dns.resolveNs, domain),
+      liveNsPromise,
       lookup(dns.resolveSoa, domain),
       lookup(dns.resolve4, domain),
       lookup(dns.resolveMx, domain),
@@ -838,6 +915,139 @@ router.get('/', async (req, res) => {
     console.error('DNS Check: lookup failed for', domain, '--', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Per-record "verify this against live DNS" lookup -- by request, now that
+// a whole page's worth of entries can come from Cloudflare/TPP's own stored
+// config rather than a live query (see the stale-delegation checks above),
+// so any single row might still be worth double-checking against the real
+// thing on demand. One generic resolver map rather than reusing the big
+// Promise.all above, since this only ever needs ONE record at a time.
+const LIVE_LOOKUP_RESOLVERS = {
+  A: dns.resolve4,
+  AAAA: dns.resolve6,
+  CNAME: dns.resolveCname,
+  NS: dns.resolveNs,
+  PTR: dns.resolvePtr,
+  MX: dns.resolveMx,
+  TXT: dns.resolveTxt,
+  SRV: dns.resolveSrv,
+  CAA: dns.resolveCaa,
+};
+
+// Mirrors the same per-type display shaping the main entries list above
+// already does (MX's priority, TXT's multi-chunk join, SRV's
+// priority/weight/port, CAA's tag=value) so a live result reads the same
+// way as the stored one it's being compared against.
+function formatLiveLookupRecords(type, records) {
+  switch (type) {
+    case 'MX':
+      return records.map((r) => `${r.exchange} (priority ${r.priority})`);
+    case 'TXT':
+      return joinTxt(records);
+    case 'SRV':
+      return records.map((r) => `${r.name} (priority ${r.priority}, weight ${r.weight}, port ${r.port})`);
+    case 'CAA':
+      return records.map((r) => {
+        const tag = r.issue !== undefined ? 'issue' : r.issuewild !== undefined ? 'issuewild' : 'iodef';
+        return `${tag}=${r[tag]}${r.critical ? ' (critical)' : ''}`;
+      });
+    default:
+      return records;
+  }
+}
+
+router.get('/live-lookup', async (req, res) => {
+  const type = (req.query.type || '').toUpperCase();
+  const name = normalizeDomain(req.query.name);
+  if (!name) return res.status(400).json({ error: 'A record name is required.' });
+
+  const resolver = LIVE_LOOKUP_RESOLVERS[type];
+  if (!resolver) return res.status(400).json({ error: `Live lookup not supported for record type "${type}".` });
+
+  const result = await lookup(resolver, name);
+  if (!result.ok) {
+    // ENOTFOUND/ENODATA just means nothing's there live right now -- a real,
+    // useful answer for this feature (e.g. a stored CNAME that's since been
+    // removed), not a failure.
+    if (result.code === 'ENOTFOUND' || result.code === 'ENODATA') return res.json({ ok: true, records: [] });
+    return res.status(502).json({ error: `Live lookup failed: ${result.message || result.code}` });
+  }
+  res.json({ ok: true, records: formatLiveLookupRecords(type, result.records) });
+});
+
+// Propagation check (whatsmydns.net-style), by request -- same question as
+// the live lookup above, but asked of several different PUBLIC resolvers
+// directly (via dns.Resolver + setServers, bypassing this server's own
+// configured resolver) instead of just one, so a cache that's gone stale on
+// one resolver but not another actually shows up as a difference. By
+// request, a curated handful of well-known global resolvers rather than
+// whatsmydns.net's long list of regional ones -- that service's own
+// "locations" are really just public resolver IPs too, just many more of
+// them; this is the same technique, smaller list.
+const PROPAGATION_RESOLVERS = [
+  { label: 'Google', ip: '8.8.8.8' },
+  { label: 'Cloudflare', ip: '1.1.1.1' },
+  { label: 'Quad9', ip: '9.9.9.9' },
+  { label: 'OpenDNS', ip: '208.67.222.222' },
+  { label: 'Comodo Secure DNS', ip: '8.26.56.26' },
+  { label: 'CleanBrowsing', ip: '185.228.168.9' },
+  { label: 'Yandex DNS', ip: '77.88.8.8' },
+  { label: 'AdGuard DNS', ip: '94.140.14.14' },
+];
+
+// Same type coverage as LIVE_LOOKUP_RESOLVERS above, but as method NAMES
+// rather than bound functions -- each resolver below is a fresh
+// dns.Resolver instance, so the method has to be looked up on that
+// instance, not on the default resolver.
+const PROPAGATION_METHOD_BY_TYPE = {
+  A: 'resolve4',
+  AAAA: 'resolve6',
+  CNAME: 'resolveCname',
+  NS: 'resolveNs',
+  PTR: 'resolvePtr',
+  MX: 'resolveMx',
+  TXT: 'resolveTxt',
+  SRV: 'resolveSrv',
+  CAA: 'resolveCaa',
+};
+
+const PROPAGATION_TIMEOUT_MS = 5000;
+
+// A public resolver that's slow/unreachable shouldn't hold up every other
+// one's answer -- raced against a plain timeout rather than left to Node's
+// own (much longer, and not configurable per-call) socket timeout.
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      setTimeout(() => resolve({ ok: false, code: 'ETIMEDOUT', message: `No response within ${ms / 1000}s` }), ms);
+    }),
+  ]);
+}
+
+router.get('/propagation-check', async (req, res) => {
+  const type = (req.query.type || '').toUpperCase();
+  const name = normalizeDomain(req.query.name);
+  if (!name) return res.status(400).json({ error: 'A record name is required.' });
+
+  const methodName = PROPAGATION_METHOD_BY_TYPE[type];
+  if (!methodName) return res.status(400).json({ error: `Propagation check not supported for record type "${type}".` });
+
+  const results = await Promise.all(
+    PROPAGATION_RESOLVERS.map(async ({ label, ip }) => {
+      const resolver = new dns.Resolver();
+      resolver.setServers([ip]);
+      const result = await withTimeout(lookup(resolver[methodName].bind(resolver), name), PROPAGATION_TIMEOUT_MS);
+      if (!result.ok) {
+        if (result.code === 'ENOTFOUND' || result.code === 'ENODATA') return { label, ip, ok: true, records: [] };
+        return { label, ip, ok: false, error: result.message || result.code };
+      }
+      return { label, ip, ok: true, records: formatLiveLookupRecords(type, result.records) };
+    }),
+  );
+
+  res.json({ type, name, results });
 });
 
 module.exports = router;

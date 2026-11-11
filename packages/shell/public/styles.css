@@ -1482,6 +1482,16 @@ h1 {
   padding: 0.4rem 1rem 0;
   font-size: 0.85rem;
 }
+/* Clickable fuzzy-match suggestions under a failed exact-match attempt --
+   plain .button-link--small pills, same look every other small action
+   button on this dashboard already uses, not a new one-off chip style. */
+.dm-match-suggestions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.3rem 1rem 0.6rem;
+}
 
 /* A .section-heading (green/red/etc.) that also shows a right-aligned
    count/totals span, same left-label/right-figures layout
@@ -3246,6 +3256,49 @@ table {
   font-style: italic;
 }
 
+/* The live-lookup icon column (client.js's entryRowHtml) added a leading
+   cell to just the main DNS Records table, shifting ITS OWN Type/Name/Value
+   from nth-child(1/2/3) to (2/3/4) -- overridden here, scoped to just that
+   table via .dns-check-entries-table (higher specificity wins), rather than
+   touching the plain nth-child rules two blocks up, which NS's own
+   single-column table and SOA's label/value table still need unchanged. */
+.dns-check-page table.dns-check-entries-table td:nth-child(1) {
+  width: 1%;
+  white-space: nowrap;
+}
+.dns-check-page table.dns-check-entries-table td:nth-child(2),
+.dns-check-page table.dns-check-entries-table td:nth-child(3) {
+  white-space: nowrap;
+}
+.dns-check-page table.dns-check-entries-table td:nth-child(4) {
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+.dns-check-lookup-btn,
+.dns-check-propagation-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.dns-check-propagation-btn {
+  margin-left: 0.4rem;
+}
+.dns-check-lookup-btn:hover,
+.dns-check-propagation-btn:hover {
+  opacity: 0.7;
+}
+.dns-check-lookup-btn:disabled,
+.dns-check-propagation-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.dns-check-lookup-result td {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
 /* The mail security records someone checking a domain's setup actually
    cares about at a glance -- DKIM, DMARC, SPF -- by request. Was a
    row-background shade; swapped for bold/green text on just the Name cell
@@ -3273,6 +3326,11 @@ table {
 .dns-check-compact-table {
   display: inline-block;
   width: auto;
+  /* Inline-block's default vertical-align is baseline, which lines up two
+     side-by-side boxes (Domain Registration + Name Servers, by request) by
+     their last line of text rather than their top edge -- looks bottom-
+     aligned whenever one box is taller than the other, confirmed live. */
+  vertical-align: top;
 }
 .dns-check-compact-table table {
   width: auto;
