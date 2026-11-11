@@ -112,6 +112,8 @@ export function mount(container) {
 
     resultsEl.appendChild(renderHeader(data));
     resultsEl.appendChild(renderInstalledServiceBadges(data.installedServices, data.activeContracts));
+    const nameMatchingSection = renderClientNameMatching(data.nameMatchingUdfs);
+    if (nameMatchingSection) resultsEl.appendChild(nameMatchingSection);
     resultsEl.appendChild(renderActiveContracts(data.activeContracts));
     resultsEl.appendChild(renderFinancialSnapshot(data.financialSnapshot));
     resultsEl.appendChild(renderRecentTickets(data.recentTickets));
@@ -221,6 +223,31 @@ export function mount(container) {
         ${monthValues.map((v) => `<td class="ticket-number">${formatPrice(v)}</td>`).join('')}
         <td class="ticket-number">${formatPrice(total)}</td>
       </tr>`;
+  }
+
+  // --- Client Name Matching ----------------------------------------------
+  // Any "Name:*" Companies UDF that actually has a value -- e.g.
+  // "Name:TPP", "Name:Ingram Client" -- written via @dashboard/data-
+  // matching's own "Update" button. By request, the whole section is
+  // omitted entirely (not shown empty) when there's nothing to list.
+  function renderClientNameMatching(nameMatchingUdfs) {
+    if (!nameMatchingUdfs || nameMatchingUdfs.length === 0) return null;
+
+    const section = document.createElement('div');
+    section.innerHTML = `<h2 class="client-summary-section-heading">Client Name Matching</h2>`;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'resource-group client-summary-compact-table';
+    wrap.innerHTML = `
+      <table>
+        <thead><tr class="shaded-row"><th>UDF</th><th>Value</th></tr></thead>
+        <tbody>
+          ${nameMatchingUdfs.map((u) => `<tr><td>${escapeHtml(u.name)}</td><td>${escapeHtml(u.value)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    `;
+    section.appendChild(wrap);
+    return section;
   }
 
   // --- Active contracts ------------------------------------------------

@@ -491,6 +491,59 @@ function resolveChargeableValue(entry, billingItemByTimeEntryId, roleRatesById, 
   return { state: 'awaiting', value: rate !== null ? rate * hours : null };
 }
 
+// ---------------------------------------------------------------------------
+// Company UDF value -> company name maps -- shared by any page needing to
+// resolve an external system's own client reference (TPP's account code,
+// Ingram's customer name, etc.) back to the real Autotask company it was
+// matched to by hand via a Companies UDF (e.g. "Name:TPP" -- see
+// @dashboard/coming-soon's README for how that UDF came to exist and how
+// it's populated). A full company scan, cached per UDF name with a TTL,
+// same "build the whole map once rather than look up per row" convention
+// @dashboard/m365-environment's own getOrgMap() already uses. Confirmed
+// live: the bulk list/query endpoint DOES return `userDefinedFields` by
+// default, no special include-param needed.
+//
+// Started life as a Coming-Soon-local helper; pulled up here once Data
+// Matching needed the exact same "Name:TPP" map for a second, independent
+// purpose (finding domains that AREN'T in it) -- one real implementation
+// for both, rather than two copies quietly drifting apart. Still short of
+// the full @dashboard/client-name-map package discussed-but-not-built (that
+// one would add a human "fix the match" UI and persisted review state,
+// which neither consumer needs yet) -- this is just the read side.
+// ---------------------------------------------------------------------------
+const COMPANY_UDF_MAP_TTL_MS = 20 * 60 * 1000;
+const companyUdfMapCache = new Map(); // udfName -> { data: Map<value, companyName>, expiresAt }
+const companyUdfMapInFlight = new Map();
+
+// Drops a UDF's cached map -- called right after a write to that UDF
+// (Data Matching's own "Update" button) so the NEXT read (Coming Soon's
+// Domains table, or this same page's own report cache, independently
+// invalidated by its caller) picks up the fresh value instead of serving
+// a stale map for up to the remaining TTL.
+function invalidateCompanyUdfMap(udfName) {
+  companyUdfMapCache.delete(udfName);
+}
+
+async function getCompanyUdfValueToNameMap(client, udfName) {
+  const cached = companyUdfMapCache.get(udfName);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+  if (!companyUdfMapInFlight.has(udfName)) {
+    const promise = (async () => {
+      const companies = await listAll(client.companies, [{ op: 'gte', field: 'id', value: 0 }]);
+      const map = new Map();
+      for (const c of companies) {
+        const udf = (c.userDefinedFields || []).find((u) => u.name === udfName);
+        const value = udf?.value?.trim();
+        if (value) map.set(value, c.companyName);
+      }
+      companyUdfMapCache.set(udfName, { data: map, expiresAt: Date.now() + COMPANY_UDF_MAP_TTL_MS });
+      return map;
+    })().finally(() => companyUdfMapInFlight.delete(udfName));
+    companyUdfMapInFlight.set(udfName, promise);
+  }
+  return companyUdfMapInFlight.get(udfName);
+}
+
 const companyNameCache = new Map();
 async function resolveCompanyName(client, id) {
   if (id === null || id === undefined) return 'Unknown';
@@ -868,6 +921,8 @@ module.exports = {
   resolveResourceName,
   resolveCompanyName,
   resolveResourceIdByEmail,
+  getCompanyUdfValueToNameMap,
+  invalidateCompanyUdfMap,
   fetchServiceDeskAndProfessionalServicesMembership,
   resolveLeaveBillingCodeIds,
   fetchLeaveTimeOffRequests,

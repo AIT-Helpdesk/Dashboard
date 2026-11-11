@@ -34,6 +34,23 @@ function getCompanyUdf(company, udfName) {
   return udf ? udf.value : null;
 }
 
+// --- Client Name Matching -------------------------------------------------
+// Any Companies UDF whose name starts with "Name:" (e.g. "Name:TPP",
+// "Name:Ingram Client") AND actually has a value -- these are the by-hand
+// cross-system client-name matches written via @dashboard/data-matching's
+// own "Update" button (see that package's README for the full backstory
+// on why these UDFs exist). Not a fixed allowlist like CONTACT_UDF_NAMES
+// above -- the whole point, by request, is to catch whatever "Name:*" UDFs
+// exist now or get added later with no code change here. Case-insensitive
+// prefix match ("NAME:" as the request spelled it) since Autotask UDF
+// names are free-text and there's no guarantee every one was typed with
+// the exact same casing.
+function buildNameMatchingUdfs(company) {
+  return (company.userDefinedFields || [])
+    .filter((f) => f.name && f.name.toLowerCase().startsWith('name:') && f.value && f.value.trim())
+    .map((f) => ({ name: f.name, value: f.value.trim() }));
+}
+
 // --- Financial snapshot -----------------------------------------------
 // Same billingItemType bucketing Client Financials uses (see that page's
 // README for the full rationale on the picklist mapping and the "Tech
@@ -432,6 +449,7 @@ router.get('/', async (req, res) => {
         ? { id: billingContact.id, name: [billingContact.firstName, billingContact.lastName].filter(Boolean).join(' '), email: billingContact.emailAddress || null, phone: billingContact.phone || billingContact.mobilePhone || null }
         : null,
       contactUdfs: CONTACT_UDF_NAMES.map((name) => ({ name, value: getCompanyUdf(company, name) })),
+      nameMatchingUdfs: buildNameMatchingUdfs(company),
       financialSnapshot,
       activeContracts,
       installedServices,

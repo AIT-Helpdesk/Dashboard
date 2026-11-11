@@ -1446,6 +1446,43 @@ h1 {
   font-size: 0.9rem;
 }
 
+/* @dashboard/data-matching's own per-group "resolve this TPP Client"
+   control -- a plain text input + Update button pinned to the right of a
+   .resource-group-header. The name+count pair is wrapped in its own
+   .resource-group-header-title span so .resource-group-header's own
+   justify-content: space-between still only ever sees two children
+   (title group, match control) rather than spacing three items apart. */
+.resource-group-header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.dm-match-control {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 400;
+}
+.dm-match-control input[type='text'] {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  width: 14rem;
+}
+/* Sits directly under the header row, full-width of the card -- not
+   another .resource-group-header child -- so a long error message (e.g.
+   several ambiguous company name matches listed out) wraps normally
+   instead of being squeezed into the header's own fixed-height row. */
+.dm-match-status {
+  margin: 0;
+  padding: 0.4rem 1rem 0;
+  font-size: 0.85rem;
+}
+
 /* A .section-heading (green/red/etc.) that also shows a right-aligned
    count/totals span, same left-label/right-figures layout
    .resource-group-header already uses -- by request, Ticket Times' own
@@ -3396,6 +3433,21 @@ table {
   width: auto;
 }
 .m365-table-compact table {
+  width: auto;
+}
+
+/* Client Summary's own Client Name Matching table -- short, narrow
+   content (a UDF name + a client reference code), sized to its own
+   content instead of stretching full width like every table does by
+   default, by request. Same convention as .dns-check-compact-table/
+   .m365-table-compact above: shrinks both the card and the table itself,
+   not just the table alone, so there's no empty space left inside a
+   still-full-width card. */
+.client-summary-compact-table {
+  display: inline-block;
+  width: auto;
+}
+.client-summary-compact-table table {
   width: auto;
 }
 
