@@ -135,18 +135,27 @@ export function mount(container) {
               // simple "differs from the row right above it" check is
               // enough to mark exactly the boundaries between contracts,
               // never the top of the very first row (i === 0, nothing
-              // above it to differ from).
-              (r, i) => `
-            <tr${rowClass(r, i > 0 && r.contractName !== group.rows[i - 1].contractName)}>
+              // above it to differ from). Contract name/link only shown on
+              // the FIRST row of each contract group (i === 0 counts as one
+              // too), by request -- same convention as Check Client's own
+              // Services table, "easier to read" when a contract has several
+              // service lines, each one no longer repeats the same name/
+              // link down the whole column.
+              (r, i) => {
+                const isContractBoundary = i > 0 && r.contractName !== group.rows[i - 1].contractName;
+                const showContract = i === 0 || isContractBoundary;
+                return `
+            <tr${rowClass(r, isContractBoundary)}>
               <td><div class="col-service" title="${escapeHtml(r.serviceName)}"><span class="col-service-name">${formatServiceName(r.serviceItemName)}</span>${r.internalDescription ? `<span class="cell-subtext">${escapeHtml(r.internalDescription)}</span>` : ''}</div></td>
-              <td class="col-contract">${contractLink(r)}</td>
+              <td class="col-contract">${showContract ? contractLink(r) : ''}</td>
               <td class="ticket-number">${unitsCell(r)}</td>
               <td class="ticket-number">${formatPrice(perItem(r.cost, r.units))}</td>
               <td class="ticket-number">${formatPrice(perItem(r.price, r.units))}</td>
               <td class="ticket-number">${formatPrice(r.price)}</td>
               <td class="ticket-number">${formatDate(r.startDate)} - ${formatDate(r.endDate)}</td>
               <td class="ticket-number${isRecentChange(r.contractLastModified) ? ' cell-flag-red' : ''}" title="Contract's last-modified date -- the service unit itself has no modification timestamp">${formatDate(r.contractLastModified)}</td>
-            </tr>`
+            </tr>`;
+              }
             )
             .join('')}
         </tbody>

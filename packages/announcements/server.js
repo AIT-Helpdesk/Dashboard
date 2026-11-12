@@ -25,16 +25,56 @@ router.use(express.json());
 const KNOWN_TEAM_VALUES = new Set(['serviceDesk', 'professionalServices', 'leadership']);
 const VALID_SEVERITIES = new Set(['info', 'warning', 'critical']);
 
-function requireAdmin(req, res, next) {
-  if (!isDashboardAdmin(req)) return res.status(403).json({ error: 'Only the dashboard admin can do that.' });
-  next();
-}
-
 function actorFrom(req) {
   return { email: req.session.user.email, name: req.session.user.name };
 }
 
-function toApiAnnouncement(row) {
+// By request: anyone signed in may ADD an announcement, but managing one
+// (edit/archive/restore/delete, and viewing who's acknowledged it) is
+// restricted to the dashboard admin OR the original creator of that
+// specific announcement -- never every signed-in user, and never gated on
+// isDashboardAdmin() alone the way the rest of this route file used to be.
+function isOwnerOrAdmin(req, announcement) {
+  return isDashboardAdmin(req) || announcement.created_by_email === req.session.user.email;
+}
+
+// Looks the announcement up once, 404s if it doesn't exist, 403s if the
+// caller is neither its creator nor the admin -- shared by every
+// management route below so the same rule can't drift between them.
+// Stashes the row on req so handlers that also need it (none currently do,
+// since db.js re-fetches internally) don't have to query twice.
+function requireOwnerOrAdmin(req, res, next) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
+  const announcement = getAnnouncement(id);
+  if (!announcement) return res.status(404).json({ error: 'Announcement not found.' });
+  if (!isOwnerOrAdmin(req, announcement)) {
+    return res.status(403).json({ error: 'Only the person who created this announcement, or the dashboard admin, can do that.' });
+  }
+  req.announcement = announcement;
+  next();
+}
+
+// Admin-only, same 404-then-403 shape as requireOwnerOrAdmin above -- by
+// request: the creator can archive/restore/edit their own announcement,
+// but NOT delete it outright; only the dashboard admin can. Scoped to just
+// DELETE below, not the other management routes.
+function requireAdmin(req, res, next) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
+  const announcement = getAnnouncement(id);
+  if (!announcement) return res.status(404).json({ error: 'Announcement not found.' });
+  if (!isDashboardAdmin(req)) {
+    return res.status(403).json({ error: 'Only the dashboard admin can delete an announcement.' });
+  }
+  req.announcement = announcement;
+  next();
+}
+
+// `req` is used to compute canManage (creator or admin) for this specific
+// viewer -- every call site below has a req in scope, so it's just passed
+// through rather than defaulting/guarding it as optional.
+function toApiAnnouncement(row, req) {
   return {
     id: row.id,
     title: row.title,
@@ -49,6 +89,10 @@ function toApiAnnouncement(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     updatedByName: row.updated_by_name,
+    // canManage: edit/archive/restore (creator or admin). canDelete:
+    // delete outright -- admin only, deliberately narrower, by request.
+    canManage: isOwnerOrAdmin(req, row),
+    canDelete: isDashboardAdmin(req),
   };
 }
 
@@ -113,7 +157,7 @@ router.get('/active', async (req, res) => {
       resourceId,
       membership,
       byEmail: req.session.user.email,
-    }).map(toApiAnnouncement);
+    }).map((row) => toApiAnnouncement(row, req));
     res.json({ announcements });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -128,77 +172,67 @@ router.post('/:id/acknowledge', (req, res) => {
   res.json({ ok: true });
 });
 
-// Admin list -- reads open to anyone who can reach this page, writes
-// gated below; `editable` tells client.js whether to show the Add/Edit/
-// Retire/Delete controls at all (server re-checks on every write
-// regardless of what the client shows/hides, same product-mappings
-// convention).
+// List -- open to anyone who can reach this page (adding is open to
+// everyone too, by request). Each row's own `canManage` (creator or admin)
+// tells client.js whether to show that row's Edit/Archive/Ack's controls;
+// `canDelete` (admin only) separately gates just Delete -- two per-row
+// flags now, not a single page-wide `editable` -- the server re-checks on
+// every write regardless of what the client shows/hides, same
+// product-mappings convention.
 router.get('/', (req, res) => {
   const includeRetired = req.query.includeRetired === '1' || req.query.includeRetired === 'true';
-  res.json({ announcements: listAnnouncements({ includeRetired }).map(toApiAnnouncement), editable: isDashboardAdmin(req) });
+  res.json({ announcements: listAnnouncements({ includeRetired }).map((row) => toApiAnnouncement(row, req)) });
 });
 
-router.post('/', requireAdmin, (req, res) => {
+// By request: any signed-in user may add an announcement, not just the
+// dashboard admin -- no requireOwnerOrAdmin gate here (there's no existing
+// row to own yet; the creator becomes its owner via actorFrom() below).
+router.post('/', (req, res) => {
   try {
     const announcement = createAnnouncement(parseFields(req.body), actorFrom(req));
-    res.status(201).json({ announcement: toApiAnnouncement(announcement) });
+    res.status(201).json({ announcement: toApiAnnouncement(announcement, req) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-router.put('/:id', requireAdmin, (req, res) => {
+router.put('/:id', requireOwnerOrAdmin, (req, res) => {
   const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
   try {
     const announcement = updateAnnouncement(id, parseFields(req.body), actorFrom(req));
     if (!announcement) return res.status(404).json({ error: 'Announcement not found.' });
-    res.json({ announcement: toApiAnnouncement(announcement) });
+    res.json({ announcement: toApiAnnouncement(announcement, req) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// Who's acknowledged a given announcement -- admin-only, same gate as the
-// other write/management routes here (the acknowledger list is who-saw-it
-// data about everyone, not something every signed-in user should see).
-router.get('/:id/acknowledgements', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
-  if (!getAnnouncement(id)) return res.status(404).json({ error: 'Announcement not found.' });
-  res.json({ acknowledgements: listAcknowledgements(id) });
+// Who's acknowledged a given announcement -- same creator-or-admin gate as
+// the other management routes here now, so a creator who can manage their
+// own announcement can also see who's seen it; everyone else still can't.
+router.get('/:id/acknowledgements', requireOwnerOrAdmin, (req, res) => {
+  res.json({ acknowledgements: listAcknowledgements(req.announcement.id) });
 });
 
-router.post('/:id/retire', requireAdmin, (req, res) => {
+router.post('/:id/retire', requireOwnerOrAdmin, (req, res) => {
   const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
   const announcement = retireAnnouncement(id, actorFrom(req));
   if (!announcement) return res.status(404).json({ error: 'Announcement not found.' });
-  res.json({ announcement: toApiAnnouncement(announcement) });
+  res.json({ announcement: toApiAnnouncement(announcement, req) });
 });
 
-router.post('/:id/unretire', requireAdmin, (req, res) => {
+router.post('/:id/unretire', requireOwnerOrAdmin, (req, res) => {
   const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
   const announcement = unretireAnnouncement(id);
   if (!announcement) return res.status(404).json({ error: 'Announcement not found.' });
-  res.json({ announcement: toApiAnnouncement(announcement) });
+  res.json({ announcement: toApiAnnouncement(announcement, req) });
 });
 
-// Delete is narrower than the other admin routes above: the creator may
-// delete their own announcement even if they're not the dashboard admin,
-// and the admin may delete anyone's -- everyone else gets a clear message
-// instead of the button just silently not working.
-router.delete('/:id', (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
-  const announcement = getAnnouncement(id);
-  if (!announcement) return res.status(404).json({ error: 'Announcement not found.' });
-  const actor = actorFrom(req);
-  if (!isDashboardAdmin(req) && announcement.created_by_email !== actor.email) {
-    return res.status(403).json({ error: 'Only the person who created this announcement, or the dashboard admin, can delete it.' });
-  }
-  deleteAnnouncement(id);
+// Admin-only -- by request, narrower than Edit/Archive above (creator-or-
+// admin): "the creator can Archive but not delete, only the admin can
+// delete."
+router.delete('/:id', requireAdmin, (req, res) => {
+  deleteAnnouncement(req.announcement.id);
   res.status(204).end();
 });
 

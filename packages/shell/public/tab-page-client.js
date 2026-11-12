@@ -335,10 +335,15 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
           const tabId = btn.dataset.tabId;
           btn.classList.toggle('active', tabId === lastActiveTabId);
           btn.addEventListener('click', () => selectTab(tabId));
-          // Admin-only right-click: remove this tab (a built-in one, or
-          // one the admin added -- see showTabContextMenu() below) --
-          // never on Help, which is always fixed.
-          if (isTabAdmin && tabId !== HELP_TAB.id) {
+          // Right-click -- wired for EVERY viewer now, not just the tab
+          // admin (by request: "add that page to the current user's
+          // favourites" needs to work for anyone, same as the sidebar's own
+          // right-click Add/Remove Favourites). Never on Help, which is
+          // always fixed and isn't a real favouritable page anyway.
+          // showTabContextMenu() below is the one place that decides which
+          // actions actually show -- Remove This Tab stays admin-only
+          // there, Favourites doesn't.
+          if (tabId !== HELP_TAB.id) {
             btn.addEventListener('contextmenu', (e) => {
               e.preventDefault();
               showTabContextMenu(e.clientX, e.clientY, tabId);
@@ -681,17 +686,42 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
       menu.style.left = `${x}px`;
       menu.style.top = `${y}px`;
 
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'nav-context-menu-item';
-      btn.textContent = 'Remove This Tab';
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        closeTabContextMenu();
-        if (isDefault) removeDefaultTab(pageId);
-        else removePermanent(pageId);
-      });
-      menu.appendChild(btn);
+      // Admin-only, same as before this menu opened up to every viewer --
+      // removing/reordering tabs stays a shared, admin-managed thing.
+      if (isTabAdmin) {
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'nav-context-menu-item';
+        removeBtn.textContent = 'Remove This Tab';
+        removeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          closeTabContextMenu();
+          if (isDefault) removeDefaultTab(pageId);
+          else removePermanent(pageId);
+        });
+        menu.appendChild(removeBtn);
+      }
+
+      // Available to EVERY viewer, by request -- "add that page to the
+      // current user's favourites menu category", the same personal,
+      // server-side list the sidebar's own right-click Add/Remove
+      // Favourites manages (app.js, exposed on window since this is a
+      // separate module -- see app.js's own comment on toggleFavorite/
+      // isPageFavorited for why). Both are only ever defined once app.js
+      // itself has finished loading, which it always has by the time any
+      // tabbed page mounts (app.js is the shell).
+      if (window.toggleFavorite && window.isPageFavorited) {
+        const favBtn = document.createElement('button');
+        favBtn.type = 'button';
+        favBtn.className = 'nav-context-menu-item';
+        favBtn.textContent = window.isPageFavorited(pageId) ? 'Remove from Favourites' : 'Add to Favourites';
+        favBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          closeTabContextMenu();
+          window.toggleFavorite(pageId);
+        });
+        menu.appendChild(favBtn);
+      }
 
       document.body.appendChild(menu);
       openTabMenu = menu;
@@ -746,8 +776,23 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         tabContentEl.innerHTML = '';
         mod.mount(tabContentEl);
       } catch (err) {
-        tabContentEl.innerHTML = `<p class="status error">Error loading this tab: ${escapeHtml(err.message)}</p>`;
+        tabContentEl.innerHTML = `<p class="status error">${escapeHtml(friendlyTabLoadError(err))}</p>`;
       }
+    }
+
+    // Same friendly substitution app.js's own loadPage() makes for a
+    // dynamic-import failure (a copy, not a shared import -- see that
+    // function's own comment for the full "why", including why this
+    // deliberately doesn't try to tell a real permission block apart from
+    // a session lost to a server restart -- both produce this exact same
+    // opaque browser text, and a second probe fetch to distinguish them
+    // isn't reliable). Any OTHER error (a real bug inside mount() itself)
+    // still shows its own real message, unchanged.
+    function friendlyTabLoadError(err) {
+      if (/dynamically imported module/i.test(err.message)) {
+        return 'This may be due to a recent update -- try refreshing the page. If it keeps happening, there may be a permission issue -- contact the administrator.';
+      }
+      return `Error loading this tab: ${err.message}`;
     }
 
     // True once stripped of tags/whitespace -- customHelpText is HTML

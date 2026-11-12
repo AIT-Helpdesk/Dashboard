@@ -819,6 +819,64 @@ function orderedRotatePageIds() {
   return [...rotateIds].filter((id) => pagesById.has(id));
 }
 
+// "My Favourites" -- same right-click-anywhere-to-add idea as Rotate
+// above, but SERVER-side (packages/shell/favorites-db.js), keyed by the
+// signed-in user's own email, by request: persists across sessions,
+// devices, and browsers for the same person, unlike Rotate's deliberately
+// per-browser localStorage. Kept as its own separate list/category rather
+// than merged into Rotate -- a cycling kiosk list and a personal bookmark
+// shelf serve different purposes, and nothing requires they overlap.
+const FAVORITES_CATEGORY_ID = '__favorites__';
+let favoritePageIds = []; // ordered, as the server returns them -- loaded once in init(), refreshed after every toggle
+async function loadFavorites() {
+  try {
+    const res = await fetch('/api/favorites');
+    const data = await res.json();
+    favoritePageIds = Array.isArray(data.pageIds) ? data.pageIds : [];
+  } catch {
+    // Best-effort, same as Announcements' own popup fetch -- a failed load
+    // just means the Favourites category doesn't show this session, not a
+    // broken dashboard.
+  }
+}
+async function toggleFavorite(pageId) {
+  const isFavorite = favoritePageIds.includes(pageId);
+  try {
+    const res = await fetch(`/api/favorites/${encodeURIComponent(pageId)}`, { method: isFavorite ? 'DELETE' : 'POST' });
+    // Only update local state once the server confirms it -- otherwise a
+    // failed request (e.g. the 400 the server returns for an unknown page
+    // id) would still show the page as favourited/un-favourited here even
+    // though nothing was actually persisted.
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error((data && data.error) || `Request failed (${res.status})`);
+    }
+    favoritePageIds = isFavorite ? favoritePageIds.filter((id) => id !== pageId) : [...favoritePageIds, pageId];
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+    return;
+  }
+  renderNav(currentPageId());
+}
+// Same "only ever real, currently-visible pages" filter orderedRotatePageIds()
+// above applies -- a favourited page whose package got removed, or that's
+// since become invisible to this user (pagesById only ever contains pages
+// pageVisibleTo() currently allows -- see server.js's /pages-registry.js),
+// simply drops out of the rendered list rather than erroring.
+function orderedFavoritePageIds() {
+  return favoritePageIds.filter((id) => pagesById.has(id));
+}
+
+// Exposed on window so a TABBED page's own right-click-a-tab menu (a
+// separate ES module, tab-page-client.js -- loaded after app.js, same as
+// window.openAnnouncementsPopup's own reasoning above) can offer "Add to
+// Favourites"/"Remove from Favourites" for the real page a tab represents,
+// by request -- same "teach it once here, expose via window" convention
+// this file's own top-of-file fetch-wrap comment documents, rather than
+// duplicating the fetch/state logic over there.
+window.toggleFavorite = toggleFavorite;
+window.isPageFavorited = (pageId) => favoritePageIds.includes(pageId);
+
 // ---- Rotation timing -- default 20s, right-click override per page, by
 // request. Per-browser (localStorage), same reasoning as rotateIds itself.
 // A plain {pageId: seconds} object holding ONLY actual overrides (a page
@@ -1377,6 +1435,47 @@ function findTreeNodeForPage(pageId) {
   return { type: 'page', id: pageId };
 }
 
+// Rendered just before "Daily Dashboards" in the real tree, by request --
+// see renderNav() below for exactly where that insertion happens. Blue
+// instead of every other category's usual green (.nav-category-header--
+// favorites, styles.css). Returns null (renders nothing) when empty, same
+// "don't show an empty category" reasoning renderRotateCategory() below
+// uses, and the same reason this is its own function rather than a branch
+// inside renderCategory(): Favourites entries never participate in the
+// admin's own drag-to-reorder tree or right-click Hide/Rename (see
+// renderPageItem()'s own isFavoriteLoc guards), so reusing that function
+// would mean threading a handful of conditionals through code that
+// otherwise has nothing to do with Favourites at all -- same reasoning
+// renderRotateCategory() below already documents for itself.
+function renderFavoritesCategory(activeId, admin) {
+  const ids = orderedFavoritePageIds();
+  if (ids.length === 0) return null;
+
+  const li = document.createElement('li');
+  li.className = 'nav-category';
+  const isExpanded = expandedCategories.has(FAVORITES_CATEGORY_ID);
+  const header = document.createElement('div');
+  header.className = 'nav-category-header nav-category-header--favorites';
+  header.innerHTML = `<span class="nav-category-toggle">${isExpanded ? '▾' : '▸'}</span>My Favourites`;
+  header.addEventListener('click', () => {
+    if (expandedCategories.has(FAVORITES_CATEGORY_ID)) expandedCategories.delete(FAVORITES_CATEGORY_ID);
+    else expandedCategories.add(FAVORITES_CATEGORY_ID);
+    saveExpanded();
+    renderNav(activeId);
+  });
+  li.appendChild(header);
+
+  const childList = document.createElement('ul');
+  childList.className = 'nav-category-children';
+  childList.hidden = !isExpanded;
+  ids.forEach((pageId, index) => {
+    childList.appendChild(renderPageItem(findTreeNodeForPage(pageId), { kind: 'favorite', index }, activeId, admin));
+  });
+  li.appendChild(childList);
+
+  return li;
+}
+
 // Rendered last in the sidebar (see renderNav()), by request. Returns null
 // (renders nothing) when empty, same "don't show an empty category"
 // reasoning renderNav() already applies to a real one with zero visible
@@ -1671,7 +1770,20 @@ function renderNav(activeId) {
   // switched off.
   const admin = isAdminView();
   const renderTree = admin ? tree : stripHiddenForPreview(tree);
+  // "My Favourites" is inserted just before the real "daily-dashboards"
+  // category node, by request -- computed once up front so the forEach
+  // below can splice it in at the right spot the moment it reaches that
+  // node, rather than rendering the whole tree first and trying to insert
+  // after the fact. Falls back to appending it after the loop (still
+  // somewhere, not silently dropped) on the unlikely chance that category
+  // id isn't present in this tree at all.
+  const favoritesEl = renderFavoritesCategory(activeId, admin);
+  let favoritesInserted = !favoritesEl;
   renderTree.forEach((node, index) => {
+    if (favoritesEl && !favoritesInserted && node.id === 'daily-dashboards') {
+      navList.appendChild(favoritesEl);
+      favoritesInserted = true;
+    }
     if (node.type === 'category') {
       // A category with zero children isn't necessarily really empty -- it
       // can be a category whose every page is restrictedTo someone else
@@ -1686,6 +1798,7 @@ function renderNav(activeId) {
       navList.appendChild(renderPageItem(node, { kind: 'root', index }, activeId, admin));
     }
   });
+  if (favoritesEl && !favoritesInserted) navList.appendChild(favoritesEl);
   // Rotate last, by request (originally rendered first) -- see
   // renderRotateCategory()'s own comment for why this is a dedicated
   // function rather than a branch inside renderCategory() above. Personal
@@ -1709,6 +1822,9 @@ function renderPageItem(node, loc, activeId, admin) {
   // same node, borrowed for display only, or a bare fallback -- see
   // findTreeNodeForPage() -- never something safe to hide/rename through).
   const isRotateLoc = loc.kind === 'rotate';
+  // Same reasoning as isRotateLoc above, for Favourites entries -- see
+  // renderFavoritesCategory()'s own comment.
+  const isFavoriteLoc = loc.kind === 'favorite';
   // node.label, when present, is an admin-set rename override (see
   // renamePage() above) -- takes precedence over the page's own default
   // package.json label. Shared (rides along in the same tree everyone's
@@ -1717,10 +1833,11 @@ function renderPageItem(node, loc, activeId, admin) {
   const li = document.createElement('li');
   li.className =
     'nav-item' +
-    // Rotate entries get the same nested/indented look as a real
+    // Rotate/Favourites entries get the same nested/indented look as a real
     // category's own children -- they're rendered inside their own
-    // <ul class="nav-category-children"> too (see renderRotateCategory()).
-    (loc.kind === 'category' || isRotateLoc ? ' nav-item--nested' : '') +
+    // <ul class="nav-category-children"> too (see renderRotateCategory()/
+    // renderFavoritesCategory()).
+    (loc.kind === 'category' || isRotateLoc || isFavoriteLoc ? ' nav-item--nested' : '') +
     (admin ? '' : ' nav-item--readonly') +
     // node.hidden only ever appears in an admin's own tree -- see
     // server.js's stripHidden(), which removes it before a non-admin's
@@ -1826,15 +1943,16 @@ function renderPageItem(node, loc, activeId, admin) {
     // drop zone could never accept a drag from an admin's own account.
     e.dataTransfer.effectAllowed = 'copyMove';
     li.classList.add('dragging');
-    // Never set from a Rotate entry -- loc is {kind:'rotate', index} there,
-    // which moveTo()/listForLocation() below have no notion of at all (only
-    // 'root'/'category'); setting it anyway would crash the NEXT
-    // successful sidebar-internal drop, wherever that lands, not this one.
-    if (admin && !isRotateLoc) dragSrc = loc;
+    // Never set from a Rotate or Favourites entry -- loc is {kind:'rotate'|
+    // 'favorite', index} there, which moveTo()/listForLocation() below have
+    // no notion of at all (only 'root'/'category'); setting it anyway
+    // would crash the NEXT successful sidebar-internal drop, wherever that
+    // lands, not this one.
+    if (admin && !isRotateLoc && !isFavoriteLoc) dragSrc = loc;
   });
   li.addEventListener('dragend', () => li.classList.remove('dragging'));
 
-  if (admin && !isRotateLoc) {
+  if (admin && !isRotateLoc && !isFavoriteLoc) {
     li.addEventListener('dragover', (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
@@ -1852,16 +1970,18 @@ function renderPageItem(node, loc, activeId, admin) {
 
   // Right-click menu -- ALWAYS wired (not just admin), by request: any
   // signed-in user can right-click any page anywhere in the sidebar to add
-  // it to their own Rotate shortcuts, and remove it the same way from
-  // inside Rotate. Hide/Rename stay admin-only AND excluded for a Rotate
-  // entry (isRotateLoc) -- see this function's own comment on that flag --
-  // so the menu differs by context: admin sees Hide (+Rename for a tabbed
-  // page) here at the page's real location, everyone sees Add/Remove
-  // Rotate everywhere, and a Rotate entry itself only ever offers Remove.
+  // it to their own Rotate shortcuts or Favourites, and remove it the same
+  // way from inside either one. Hide/Rename stay admin-only AND excluded
+  // for a Rotate/Favourites entry (isRotateLoc/isFavoriteLoc) -- see this
+  // function's own comment on those flags -- so the menu differs by
+  // context: admin sees Hide (+Rename for a tabbed page) here at the
+  // page's real location, everyone sees Add/Remove Rotate and Add/Remove
+  // Favourites everywhere, and a Rotate/Favourites entry itself only ever
+  // offers its own Remove.
   li.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const actions = [];
-    if (admin && !isRotateLoc) {
+    if (admin && !isRotateLoc && !isFavoriteLoc) {
       actions.push({ label: node.hidden ? 'Unhide' : 'Hide', onClick: () => toggleHidden(node) });
       // Rename/Delete are offered only for a tabbed page (page.tabbed) --
       // by request, neither was asked for on any other kind of page, so
@@ -1882,12 +2002,16 @@ function renderPageItem(node, loc, activeId, admin) {
       // changed time different for each page").
       actions.push({ label: 'Set Rotation Time', onClick: () => setRotateTime(node.id) });
       actions.push({ label: 'Remove from Rotate', onClick: () => toggleRotate(node.id) });
+    } else if (isFavoriteLoc) {
+      actions.push({ label: 'Remove from Favourites', onClick: () => toggleFavorite(node.id) });
     } else {
       // The SAME toggle either way -- whether right-clicked at the page's
-      // real location or (in principle) from inside Rotate itself, the
-      // label just reflects whichever state is currently true.
+      // real location or (in principle) from inside Rotate/Favourites
+      // itself, the label just reflects whichever state is currently true.
       const inRotate = rotateIds.has(node.id);
       actions.push({ label: inRotate ? 'Remove from Rotate' : 'Add to Rotate', onClick: () => toggleRotate(node.id) });
+      const inFavorites = favoritePageIds.includes(node.id);
+      actions.push({ label: inFavorites ? 'Remove from Favourites' : 'Add to Favourites', onClick: () => toggleFavorite(node.id) });
     }
     showNavContextMenu(e.clientX, e.clientY, actions);
   });
@@ -2214,8 +2338,37 @@ async function loadPage(id) {
     mod.mount(content);
     applyAutoMobileView();
   } catch (err) {
-    content.innerHTML = `<p class="status error">Failed to load page: ${err.message}</p>`;
+    content.innerHTML = `<p class="status error">${escapeHtml(friendlyPageLoadError(err))}</p>`;
   }
+}
+
+// The browser's own generic dynamic-import failure text ("Failed to fetch
+// dynamically imported module...", Chrome/Edge; "error loading dynamically
+// imported module...", Firefox -- both always mention "dynamically
+// imported module") covers at least two genuinely different causes that
+// look identical from here: a real permission block (pageVisibleTo() false
+// -- see registry.js's own categoryAccessFor comment, and the real
+// incident this was built from: DNS Check working for the admin but not
+// everyone else), OR a session lost to a server restart (express-session's
+// default in-memory store, wiped on every restart -- requireAuth then
+// redirects this non-/api/ route to /auth/login, which dynamic import()
+// can't follow the way app.js's own patched window.fetch normally would,
+// since import() bypasses that wrapper entirely). A second probe fetch
+// to tell them apart isn't reliable either -- /auth/login immediately
+// redirects on to Microsoft's own cross-origin login page, which a fetch()
+// probe would likely just fail to reach at all (CORS). So rather than
+// guess, this leads with the cheap fix (refresh -- fixes the restart
+// case outright) and only mentions the admin as a fallback. Shared with
+// tab-page-client.js's own analogous catch block (a copy, not an import --
+// that module has no reference to this one, same per-module-independence
+// convention this dashboard already follows elsewhere). Any OTHER error (a
+// real bug inside mount() itself) still shows its own real message,
+// unchanged.
+function friendlyPageLoadError(err) {
+  if (/dynamically imported module/i.test(err.message)) {
+    return 'This may be due to a recent update -- try refreshing the page. If it keeps happening, there may be a permission issue -- contact the administrator.';
+  }
+  return `Failed to load page: ${err.message}`;
 }
 
 // Lets a browser's own startup/home page URL boot straight into a
@@ -2377,6 +2530,11 @@ window.openAnnouncementsPopup = async function () {
 
 async function init() {
   tree = await loadTree();
+  // Needs to be loaded before the first renderNav() (inside loadPage()
+  // below) -- otherwise My Favourites would render empty on first paint
+  // and only pop in on some LATER re-render, instead of showing correctly
+  // from the start.
+  await loadFavorites();
   // Only actually reveal the preview-user button once loadTree() has come
   // back and confirmed this session is the real dashboard admin --
   // `editable` is exactly that confirmation (see its own comment).

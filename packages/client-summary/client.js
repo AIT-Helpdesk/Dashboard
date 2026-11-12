@@ -115,7 +115,6 @@ export function mount(container) {
     const nameMatchingSection = renderClientNameMatching(data.nameMatchingUdfs);
     if (nameMatchingSection) resultsEl.appendChild(nameMatchingSection);
     resultsEl.appendChild(renderActiveContracts(data.activeContracts));
-    resultsEl.appendChild(renderFinancialSnapshot(data.financialSnapshot));
     resultsEl.appendChild(renderRecentTickets(data.recentTickets));
     resultsEl.appendChild(renderSecurityAlerts(data.securityAlerts));
   }
@@ -176,55 +175,6 @@ export function mount(container) {
     return parts.join(' ');
   }
 
-  // --- Financial snapshot --------------------------------------------------
-  function renderFinancialSnapshot(snap) {
-    const section = document.createElement('div');
-    section.innerHTML = `<h2 class="client-summary-section-heading">Financial Snapshot <span class="inline-subtext">-- last 4 months, plus 12-month total</span></h2>`;
-
-    const wrap = document.createElement('div');
-    wrap.className = 'resource-group';
-    wrap.style.overflowX = 'auto'; // recent months + total column is wider than a normal table -- scrolls within its own container rather than the page, same as Client Financials' full grid
-    const t = snap.twelveMonthTotals;
-    const months = snap.recentMonths;
-    wrap.innerHTML = `
-      <table>
-        <thead>
-          <tr class="shaded-row">
-            <th>Category</th>
-            ${months.map((m) => `<th class="ticket-number">${escapeHtml(m.label)}</th>`).join('')}
-            <th class="ticket-number">12-Month Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${financialRow('Labour', months.map((m) => m.labour), t.labour)}
-          ${financialRow('Labour in Charges', months.map((m) => m.chargesLabour), t.chargesLabour)}
-          ${financialRow('Other Charges', months.map((m) => m.chargesOther), t.chargesOther)}
-          ${financialRow('Recurring Services', months.map((m) => m.recurringOther), t.recurringOther)}
-          ${financialRow('Tech Cover', months.map((m) => m.recurringTechCover), t.recurringTechCover)}
-          ${financialRow('Total', months.map((m) => m.total), t.total, true)}
-        </tbody>
-      </table>
-      <p class="inline-subtext" style="margin: 0.5rem 0 0;">
-        ${snap.mostRecentInvoice
-          ? `Most recent invoice: ${invoiceLink(snap.mostRecentInvoice)} on ${formatDate(snap.mostRecentInvoice.invoiceDate)} (${formatPrice(snap.mostRecentInvoice.total)})`
-          : 'No invoices in the last 12 months.'}
-      </p>
-    `;
-    section.appendChild(wrap);
-    return section;
-  }
-
-  function financialRow(label, monthValues, total, isTotalRow) {
-    const rowClass = isTotalRow ? ' class="shaded-row"' : '';
-    const rowStyle = isTotalRow ? ' style="font-weight: 600; border-top: 2px solid var(--border);"' : '';
-    return `
-      <tr${rowClass}${rowStyle}>
-        <td>${escapeHtml(label)}</td>
-        ${monthValues.map((v) => `<td class="ticket-number">${formatPrice(v)}</td>`).join('')}
-        <td class="ticket-number">${formatPrice(total)}</td>
-      </tr>`;
-  }
-
   // --- Client Name Matching ----------------------------------------------
   // Any "Name:*" Companies UDF that actually has a value -- e.g.
   // "Name:TPP", "Name:Ingram Client" -- written via @dashboard/data-
@@ -240,9 +190,9 @@ export function mount(container) {
     wrap.className = 'resource-group client-summary-compact-table';
     wrap.innerHTML = `
       <table>
-        <thead><tr class="shaded-row"><th>UDF</th><th>Value</th></tr></thead>
+        <thead><tr class="shaded-row"><th>UDF Name:</th><th>Value</th></tr></thead>
         <tbody>
-          ${nameMatchingUdfs.map((u) => `<tr><td>${escapeHtml(u.name)}</td><td>${escapeHtml(u.value)}</td></tr>`).join('')}
+          ${nameMatchingUdfs.map((u) => `<tr><td>${escapeHtml(u.name.replace(/^name:\s*/i, ''))}</td><td>${escapeHtml(u.value)}</td></tr>`).join('')}
         </tbody>
       </table>
     `;
@@ -390,13 +340,13 @@ export function mount(container) {
     return wrap;
   }
 
-  // --- Recent ticket activity ------------------------------------------
+  // --- Recent Tickets ------------------------------------------
   function renderRecentTickets(tickets) {
     const section = document.createElement('div');
-    section.innerHTML = `<h2 class="client-summary-section-heading">Recent Ticket Activity <span class="inline-subtext">(${tickets.openCount} open)</span></h2>`;
+    section.innerHTML = `<h2 class="client-summary-section-heading">Recent Tickets <span class="inline-subtext">(${tickets.openCount} open, ${tickets.closedCount} closed in the last 7 days)</span></h2>`;
 
     if (tickets.recent.length === 0) {
-      section.insertAdjacentHTML('beforeend', '<p class="status">No open tickets.</p>');
+      section.insertAdjacentHTML('beforeend', '<p class="status">No tickets to show.</p>');
       return section;
     }
 
@@ -404,7 +354,7 @@ export function mount(container) {
     wrap.className = 'resource-group';
     wrap.innerHTML = `
       <table>
-        <thead><tr><th>Ticket #</th><th>Title</th><th>Status</th><th>Last Activity</th></tr></thead>
+        <thead><tr><th>Ticket #</th><th>Title</th><th>Status</th><th>Allocated</th><th>Last Activity</th></tr></thead>
         <tbody>
           ${tickets.recent
             .map(
@@ -412,17 +362,33 @@ export function mount(container) {
             <tr>
               <td class="ticket-number">${ticketLink(t)}</td>
               <td>${escapeHtml(t.title)}</td>
-              <td>${escapeHtml(t.status)}</td>
+              <td>${statusCell(t)}</td>
+              <td>${allocatedCell(t)}</td>
               <td class="ticket-number">${formatDateTime(t.lastActivityDate)}</td>
             </tr>`
             )
             .join('')}
         </tbody>
       </table>
-      ${tickets.openCount > tickets.recent.length ? `<p class="inline-subtext" style="margin: 0.5rem 0 0;">Showing the ${tickets.recent.length} most recently active of ${tickets.openCount} open tickets.</p>` : ''}
     `;
     section.appendChild(wrap);
     return section;
+  }
+
+  // Status 5 (Complete) green, status 20 (Billing - Contract) blue -- same
+  // #16a34a/var(--accent) convention as .cell-flag-green/.cell-flag-blue
+  // elsewhere on this dashboard; every open status stays plain text.
+  function statusCell(t) {
+    const flagClass = t.statusId === 5 ? ' class="cell-flag-green"' : t.statusId === 20 ? ' class="cell-flag-blue"' : '';
+    return `<span${flagClass}>${escapeHtml(t.status)}</span>`;
+  }
+
+  function allocatedCell(t) {
+    const primary = t.primaryResource ? escapeHtml(t.primaryResource) : '<span class="muted">--</span>';
+    const secondary = t.secondaryResources && t.secondaryResources.length > 0
+      ? `<span class="cell-subtext">${escapeHtml(t.secondaryResources.join(', '))}</span>`
+      : '';
+    return `${primary}${secondary}`;
   }
 
   // --- Security Alerts (1 month) ------------------------------------------
@@ -487,14 +453,6 @@ export function mount(container) {
     return `<a class="client-summary-service-badge ${cls}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${safeTitle}" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${safeText}</a>`;
   }
 
-  function invoiceLink(inv) {
-    const label = escapeHtml(inv.invoiceNumber || `#${inv.id}`);
-    if (!inv.invoiceUrl) return label;
-    // A real popup window, not just a new tab -- same pattern as Client
-    // Financials' invoice links.
-    return `<a href="${escapeHtml(inv.invoiceUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1000,height=800'); return false;">${label}</a>`;
-  }
-
   function ticketLink(t) {
     const label = escapeHtml(t.ticketNumber);
     if (!t.ticketUrl) return label;
@@ -522,11 +480,6 @@ export function mount(container) {
   function formatDateTime(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleString();
-  }
-
-  function formatPrice(value) {
-    if (value === null || value === undefined) return '';
-    return '$' + Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   function escapeHtml(str) {

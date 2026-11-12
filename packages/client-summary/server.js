@@ -5,16 +5,10 @@ const {
   fetchByFieldIn,
   resolveSingleCompany,
   getPicklistLabels,
-  getBillingCodeIdByName,
   getContractUrl,
   getCompanyUrl,
-  getInvoiceUrl,
   getTicketUrl,
-  matchesWildcard,
-  last12MonthKeys,
-  monthKeyOf,
-  monthLabel,
-  monthKeysWindow,
+  resolveResourceName,
   todayAestKey,
   aestToUtcIso,
   excludeMonitoringAlerts,
@@ -49,114 +43,6 @@ function buildNameMatchingUdfs(company) {
   return (company.userDefinedFields || [])
     .filter((f) => f.name && f.name.toLowerCase().startsWith('name:') && f.value && f.value.trim())
     .map((f) => ({ name: f.name, value: f.value.trim() }));
-}
-
-// --- Financial snapshot -----------------------------------------------
-// Same billingItemType bucketing Client Financials uses (see that page's
-// README for the full rationale on the picklist mapping and the "Tech
-// Cover"/"Labour in Charges" splits). Condensed relative to that page's full
-// 13-column (12 months + total) grid -- this shows just the last 4 months
-// individually, plus the 12-month total as its own last column, by request
-// -- a glance at recent trend without repeating the full year Client
-// Financials already covers in detail.
-const RECENT_MONTHS = 4;
-const LABOUR_TYPES = new Set([1, 2]);
-const RECURRING_TYPES = new Set([6]);
-function bucketOf(item, labourInChargesCodeId, contractNameById) {
-  if (LABOUR_TYPES.has(item.billingItemType)) return 'labour';
-  if (RECURRING_TYPES.has(item.billingItemType)) {
-    const contractName = contractNameById.get(item.contractID) || '';
-    return matchesWildcard(contractName, 'Tech Cover*') ? 'recurringTechCover' : 'recurringOther';
-  }
-  if (labourInChargesCodeId && item.billingCodeID === labourInChargesCodeId) return 'chargesLabour';
-  return 'chargesOther';
-}
-
-async function buildFinancialSnapshot(client, company) {
-  const monthKeys = last12MonthKeys();
-  const { windowStart, windowEnd } = monthKeysWindow(monthKeys);
-
-  const invoices = await listAll(client.invoices, [
-    { op: 'eq', field: 'companyID', value: company.id },
-    { op: 'gte', field: 'invoiceDateTime', value: windowStart },
-    { op: 'lt', field: 'invoiceDateTime', value: windowEnd },
-    { op: 'eq', field: 'isVoided', value: false },
-  ]);
-  const invoicesById = new Map(invoices.map((inv) => [inv.id, inv]));
-  const invoiceIds = [...invoicesById.keys()];
-
-  const [billingItems, labourInChargesCodeId] = await Promise.all([
-    invoiceIds.length > 0 ? fetchByFieldIn(client.billingItems, 'invoiceID', invoiceIds) : [],
-    getBillingCodeIdByName(client, 'Labour in Charges'),
-  ]);
-
-  const recurringContractIds = [
-    ...new Set(billingItems.filter((i) => RECURRING_TYPES.has(i.billingItemType) && i.contractID).map((i) => i.contractID)),
-  ];
-  const contracts = recurringContractIds.length > 0 ? await fetchByFieldIn(client.contracts, 'id', recurringContractIds) : [];
-  const contractNameById = new Map(contracts.map((c) => [c.id, c.contractName]));
-
-  // Bucketed per MONTH (same shape Client Financials uses), not just a flat
-  // 12-month total -- the recent-months table below is a slice of this, and
-  // the 12-Month Total column is this same map's grand sum, so the two
-  // always agree with each other by construction rather than being computed
-  // two different ways.
-  const monthTotals = new Map(
-    monthKeys.map((key) => [key, { labour: 0, recurringTechCover: 0, recurringOther: 0, chargesLabour: 0, chargesOther: 0 }])
-  );
-  for (const item of billingItems) {
-    const invoice = invoicesById.get(item.invoiceID);
-    if (!invoice) continue; // scoped to invoiceIds above, so this shouldn't happen
-    const bucket = monthTotals.get(monthKeyOf(invoice.invoiceDateTime));
-    if (!bucket) continue; // shouldn't happen given the invoice date filter, but safe
-    bucket[bucketOf(item, labourInChargesCodeId, contractNameById)] += item.totalAmount || 0;
-  }
-
-  const months = monthKeys.map((key) => {
-    const t = monthTotals.get(key);
-    return {
-      key,
-      label: monthLabel(key),
-      labour: t.labour,
-      recurringTechCover: t.recurringTechCover,
-      recurringOther: t.recurringOther,
-      chargesLabour: t.chargesLabour,
-      chargesOther: t.chargesOther,
-      total: t.labour + t.recurringTechCover + t.recurringOther + t.chargesLabour + t.chargesOther,
-    };
-  });
-  const recentMonths = months.slice(-RECENT_MONTHS);
-
-  const totals = months.reduce(
-    (acc, m) => ({
-      labour: acc.labour + m.labour,
-      recurringTechCover: acc.recurringTechCover + m.recurringTechCover,
-      recurringOther: acc.recurringOther + m.recurringOther,
-      chargesLabour: acc.chargesLabour + m.chargesLabour,
-      chargesOther: acc.chargesOther + m.chargesOther,
-    }),
-    { labour: 0, recurringTechCover: 0, recurringOther: 0, chargesLabour: 0, chargesOther: 0 }
-  );
-  const total = totals.labour + totals.recurringTechCover + totals.recurringOther + totals.chargesLabour + totals.chargesOther;
-
-  let mostRecentInvoice = null;
-  if (invoices.length > 0) {
-    const latest = [...invoices].sort((a, b) => new Date(b.invoiceDateTime) - new Date(a.invoiceDateTime))[0];
-    mostRecentInvoice = {
-      id: latest.id,
-      invoiceNumber: latest.invoiceNumber,
-      invoiceUrl: await getInvoiceUrl(latest.id),
-      invoiceDate: latest.invoiceDateTime,
-      total: latest.invoiceTotal,
-    };
-  }
-
-  return {
-    recentMonths,
-    twelveMonthTotals: { ...totals, total },
-    invoiceCount: invoices.length,
-    mostRecentInvoice,
-  };
 }
 
 // --- Active contracts ----------------------------------------------------
@@ -284,7 +170,7 @@ async function buildActiveContracts(client, company, classification) {
 // check across every TC Elite client at once, by request. See that file's
 // own comment for the full methodology.
 
-// --- Recent ticket activity ------------------------------------------
+// --- Recent Tickets ------------------------------------------
 // "Open" here is the same definition Completed Tickets uses for "done" --
 // status 5 (Complete) and 20 (Billing - Contract) -- inverted: anything
 // NOT one of those two counts as open, rather than inventing a separate
@@ -293,36 +179,80 @@ async function buildActiveContracts(client, company, classification) {
 // excludeMonitoringAlerts(), not an Autotask query filter (see that
 // function's own comment for why: a `noteq` filter silently drops every
 // not-yet-triaged ticket too, confirmed a real production bug).
-const CLOSED_STATUSES = [5, 20];
-const RECENT_TICKET_LIMIT = 8;
+const CLOSED_STATUS_COMPLETE = 5;
+const CLOSED_STATUS_BILLING_CONTRACT = 20;
+const CLOSED_STATUSES = [CLOSED_STATUS_COMPLETE, CLOSED_STATUS_BILLING_CONTRACT];
+// By request: no longer capped to the 8 most recent -- shows every open
+// ticket, plus anything closed in this trailing window.
+const CLOSED_LOOKBACK_DAYS = 7;
 
 async function buildRecentTickets(client, company) {
-  const [rawOpenTickets, statusLabels] = await Promise.all([
+  const todayKey = todayAestKey();
+  const [ty, tm, td] = todayKey.split('-').map(Number);
+  const windowStartISO = aestToUtcIso(ty, tm, td - CLOSED_LOOKBACK_DAYS);
+  const windowEndISO = aestToUtcIso(ty, tm, td + 1); // exclusive, through the end of today
+
+  const [rawOpenTickets, rawCompletedTickets, rawBillingTickets, statusLabels] = await Promise.all([
     listAll(client.tickets, [
       { op: 'eq', field: 'companyID', value: company.id },
       { op: 'notIn', field: 'status', value: CLOSED_STATUSES },
     ]),
+    // Status 5 ("Complete") is filtered on completedDate -- same convention
+    // Completed Tickets' own server.js uses.
+    listAll(client.tickets, [
+      { op: 'eq', field: 'companyID', value: company.id },
+      { op: 'eq', field: 'status', value: CLOSED_STATUS_COMPLETE },
+      { op: 'gte', field: 'completedDate', value: windowStartISO },
+      { op: 'lt', field: 'completedDate', value: windowEndISO },
+    ]),
+    // Status 20 ("Billing - Contract") never gets completedDate set (Autotask
+    // only populates that on the transition to status 5) -- resolvedDateTime
+    // is the closest equivalent, same real-data quirk Completed Tickets'
+    // own server.js already documents.
+    listAll(client.tickets, [
+      { op: 'eq', field: 'companyID', value: company.id },
+      { op: 'eq', field: 'status', value: CLOSED_STATUS_BILLING_CONTRACT },
+      { op: 'gte', field: 'resolvedDateTime', value: windowStartISO },
+      { op: 'lt', field: 'resolvedDateTime', value: windowEndISO },
+    ]),
     getPicklistLabels(client.tickets, 'status'),
   ]);
   const openTickets = excludeMonitoringAlerts(rawOpenTickets);
+  const closedTickets = excludeMonitoringAlerts([...rawCompletedTickets, ...rawBillingTickets]);
 
-  const recent = [...openTickets]
-    .sort((a, b) => new Date(b.lastActivityDate || 0) - new Date(a.lastActivityDate || 0))
-    .slice(0, RECENT_TICKET_LIMIT);
+  const recent = [...openTickets, ...closedTickets].sort(
+    (a, b) => new Date(b.lastActivityDate || 0) - new Date(a.lastActivityDate || 0)
+  );
+
+  // Secondary resources live on their own child entity (TicketSecondaryResources
+  // -- {ticketID, resourceID, roleID}), not a field on Tickets itself. Fetched
+  // just for this page's own rows, not every open ticket, since it's only
+  // ever displayed for these rows.
+  const recentIds = recent.map((t) => t.id);
+  const secondaryRows = recentIds.length > 0 ? await fetchByFieldIn(client.ticketSecondaryResources, 'ticketID', recentIds) : [];
+  const secondaryByTicket = new Map();
+  for (const row of secondaryRows) {
+    if (!secondaryByTicket.has(row.ticketID)) secondaryByTicket.set(row.ticketID, []);
+    secondaryByTicket.get(row.ticketID).push(row.resourceID);
+  }
 
   const rows = [];
   for (const t of recent) {
+    const secondaryResourceIds = secondaryByTicket.get(t.id) || [];
     rows.push({
       id: t.id,
       ticketNumber: t.ticketNumber,
       ticketUrl: await getTicketUrl(t.id),
       title: t.title,
       status: statusLabels.get(t.status) || `#${t.status}`,
+      statusId: t.status,
       lastActivityDate: t.lastActivityDate,
+      primaryResource: t.assignedResourceID ? await resolveResourceName(client, t.assignedResourceID) : null,
+      secondaryResources: await Promise.all(secondaryResourceIds.map((id) => resolveResourceName(client, id))),
     });
   }
 
-  return { openCount: openTickets.length, recent: rows };
+  return { openCount: openTickets.length, closedCount: closedTickets.length, recent: rows };
 }
 
 // --- Security Alerts (1-month) summary --------------------------------
@@ -418,8 +348,7 @@ router.get('/', async (req, res) => {
     const billingContact = contacts.find((c) => c.billingContact === true) || null;
     const classification = classificationLabels.get(company.classification) || null;
 
-    const [financialSnapshot, activeContracts, installedServices, recentTickets, securityAlerts] = await Promise.all([
-      buildFinancialSnapshot(client, company),
+    const [activeContracts, installedServices, recentTickets, securityAlerts] = await Promise.all([
       buildActiveContracts(client, company, classification),
       buildInstalledServices(company),
       buildRecentTickets(client, company),
@@ -450,7 +379,6 @@ router.get('/', async (req, res) => {
         : null,
       contactUdfs: CONTACT_UDF_NAMES.map((name) => ({ name, value: getCompanyUdf(company, name) })),
       nameMatchingUdfs: buildNameMatchingUdfs(company),
-      financialSnapshot,
       activeContracts,
       installedServices,
       recentTickets,

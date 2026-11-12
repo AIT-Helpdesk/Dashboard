@@ -15,6 +15,7 @@ const { exchangeCodeForTokens, BASE_URL: STRETY_BASE_URL, getPersonalClient } = 
 const stretyAutomationClient = require('@dashboard/strety-autotask-sync/client.js');
 const { registerAuthRoutes, requireAuth } = require('./auth');
 const { canShowReadmeInHelp } = require('./show-readme-permissions.js');
+const { listFavoritePageIds, addFavorite, removeFavorite } = require('./favorites-db.js');
 
 const PORT = process.env.PORT || 3000;
 
@@ -562,6 +563,31 @@ app.put('/api/nav-layout', express.json(), (req, res) => {
   // not something to strip back out.
   writeNavLayout(req.body.tree);
   res.json({ ok: true });
+});
+
+// "My Favourites" -- a per-user (not per-browser, not the shared nav tree)
+// list of sidebar page ids, by request: persists across sessions, devices,
+// and browsers for the same signed-in person, unlike Rotate (app.js's own
+// localStorage-only rotateIds). Keyed by the session's own lowercased
+// email (auth.js), same per-identity key announcements/db.js's own
+// acknowledgements table already uses. Open to every signed-in user, not
+// admin-gated -- anyone can keep their own favourites list, same as
+// anyone can already use Rotate.
+app.get('/api/favorites', (req, res) => {
+  res.json({ pageIds: listFavoritePageIds(req.session.user.email) });
+});
+
+app.post('/api/favorites/:pageId', (req, res) => {
+  if (!pages.some((p) => p.id === req.params.pageId)) {
+    return res.status(400).json({ error: 'Unknown page id.' });
+  }
+  addFavorite(req.session.user.email, req.params.pageId);
+  res.json({ ok: true });
+});
+
+app.delete('/api/favorites/:pageId', (req, res) => {
+  removeFavorite(req.session.user.email, req.params.pageId);
+  res.status(204).end();
 });
 
 // Dashboard-wide Help button (bottom-right "?", every page --

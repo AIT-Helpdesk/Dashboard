@@ -7,7 +7,6 @@ export const label = 'Announcements';
 // whichever mount() is CURRENTLY on screen registers its own render
 // function in activeRender.
 let lastAnnouncements = null;
-let lastEditable = false;
 let hasLoadedOnce = false;
 let activeRender = null;
 let includeRetired = false;
@@ -53,12 +52,12 @@ export function mount(container) {
     <header class="page-header">
       <h1>Announcements</h1>
       <div class="date-form">
-        <button type="button" id="ann-add-button" class="button-link button-link--small" hidden>Add Announcement</button>
+        <button type="button" id="ann-add-button" class="button-link button-link--small">Add Announcement</button>
         <button type="button" id="ann-refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh</button>
       </div>
     </header>
-    <p class="status">Shown as a pop-up to everyone on dashboard open/refresh, filtered to whatever currently applies to them -- add, edit, or retire announcements here.</p>
-    <label class="inline-checkbox-label"><input type="checkbox" id="ann-show-retired-input" /> Show retired</label>
+    <p class="status">Shown as a pop-up to everyone on dashboard open/refresh, filtered to whatever currently applies to them -- anyone can add one; editing, archiving, or deleting is limited to its creator or the dashboard admin.</p>
+    <label class="inline-checkbox-label"><input type="checkbox" id="ann-show-retired-input" /> Show archived</label>
     <p id="ann-status" class="status">Loading...</p>
     <div id="ann-table-wrap"></div>
   `;
@@ -85,10 +84,9 @@ export function mount(container) {
     try {
       const data = await fetchJson(`/api/announcements?includeRetired=${includeRetired ? '1' : '0'}`, 'GET');
       lastAnnouncements = data.announcements;
-      lastEditable = !!data.editable;
       hasLoadedOnce = true;
       statusEl.hidden = true;
-      activeRender(lastAnnouncements, lastEditable);
+      activeRender(lastAnnouncements);
     } catch (err) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
@@ -97,12 +95,21 @@ export function mount(container) {
     }
   }
 
-  function render(announcements, editable) {
-    addButton.hidden = !editable;
+  // `canManage` (creator or dashboard admin) now comes per-row from the
+  // server, not a single page-wide `editable` flag -- anyone can add an
+  // announcement, but only its creator or the admin sees that row's own
+  // Edit/Archive/Ack's controls. `canDelete` is separate and narrower (admin
+  // only, by request: "the creator can Archive but not delete") -- a row's
+  // creator can see Edit/Archive without Delete. The actions column itself
+  // only appears when at least one visible row has EITHER permission; a row
+  // with neither still gets a blank filler cell so every row keeps the same
+  // column count as its header.
+  function render(announcements) {
     if (!announcements || announcements.length === 0) {
       tableWrapEl.innerHTML = `<p class="status">No${includeRetired ? '' : ' active'} announcements yet.</p>`;
       return;
     }
+    const anyActionable = announcements.some((a) => a.canManage || a.canDelete);
     const table = document.createElement('table');
     table.className = 'ann-table';
     table.innerHTML = `
@@ -113,7 +120,7 @@ export function mount(container) {
           <th>Window</th>
           <th>Targets</th>
           <th>Status</th>
-          ${editable ? '<th></th>' : ''}
+          ${anyActionable ? '<th></th>' : ''}
         </tr>
       </thead>
       <tbody></tbody>
@@ -122,13 +129,15 @@ export function mount(container) {
     tbody.innerHTML = announcements
       .map((a) => {
         const retired = !!a.retiredAt;
-        const actionsCell = editable
+        const actionsCell = a.canManage || a.canDelete
           ? `<td class="ann-actions-cell">
-               <button type="button" class="button-link button-link--small ann-edit-button" data-id="${a.id}">Edit</button>
-               <button type="button" class="button-link button-link--small ann-retire-button" data-id="${a.id}">${retired ? 'Restore' : 'Retire'}</button>
-               <button type="button" class="button-link button-link--small ann-delete-button" data-id="${a.id}">Delete</button>
-               ${a.ackRequired ? `<button type="button" class="button-link button-link--small ann-ack-view-button" data-id="${a.id}">Ack's</button>` : ''}
+               ${a.canManage ? `<button type="button" class="button-link button-link--small ann-edit-button" data-id="${a.id}">Edit</button>` : ''}
+               ${a.canManage ? `<button type="button" class="button-link button-link--small ann-retire-button" data-id="${a.id}">${retired ? 'Restore' : 'Archive'}</button>` : ''}
+               ${a.canDelete ? `<button type="button" class="button-link button-link--small ann-delete-button" data-id="${a.id}">Delete</button>` : ''}
+               ${a.canManage && a.ackRequired ? `<button type="button" class="button-link button-link--small ann-ack-view-button" data-id="${a.id}">Ack's</button>` : ''}
              </td>`
+          : anyActionable
+          ? '<td></td>'
           : '';
         return `
           <tr>
@@ -136,32 +145,33 @@ export function mount(container) {
             <td><span class="ann-badge ann-severity-${a.severity}">${SEVERITY_LABELS[a.severity] || a.severity}</span></td>
             <td>${escapeHtml(windowLabel(a))}</td>
             <td>${escapeHtml(targetsLabel(a.targets))}</td>
-            <td>${retired ? 'Retired' : 'Active'}</td>
+            <td>${retired ? 'Archived' : 'Active'}</td>
             ${actionsCell}
           </tr>
         `;
       })
       .join('');
-    if (editable) {
-      tbody.querySelectorAll('.ann-edit-button').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const a = lastAnnouncements.find((x) => x.id === Number(btn.dataset.id));
-          if (a) openAnnouncementModal(a);
-        });
+    // Buttons only ever exist inside an actionable row's own .ann-actions-cell
+    // (never the blank filler <td> above), so wiring these up unconditionally
+    // is safe -- querySelectorAll on an empty set is just a no-op.
+    tbody.querySelectorAll('.ann-edit-button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const a = lastAnnouncements.find((x) => x.id === Number(btn.dataset.id));
+        if (a) openAnnouncementModal(a);
       });
-      tbody.querySelectorAll('.ann-ack-view-button').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const a = lastAnnouncements.find((x) => x.id === Number(btn.dataset.id));
-          if (a) openAcknowledgementsModal(a);
-        });
+    });
+    tbody.querySelectorAll('.ann-ack-view-button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const a = lastAnnouncements.find((x) => x.id === Number(btn.dataset.id));
+        if (a) openAcknowledgementsModal(a);
       });
-      tbody.querySelectorAll('.ann-retire-button').forEach((btn) => {
-        btn.addEventListener('click', () => toggleRetire(Number(btn.dataset.id)));
-      });
-      tbody.querySelectorAll('.ann-delete-button').forEach((btn) => {
-        btn.addEventListener('click', () => deleteAnnouncement(Number(btn.dataset.id)));
-      });
-    }
+    });
+    tbody.querySelectorAll('.ann-retire-button').forEach((btn) => {
+      btn.addEventListener('click', () => toggleRetire(Number(btn.dataset.id)));
+    });
+    tbody.querySelectorAll('.ann-delete-button').forEach((btn) => {
+      btn.addEventListener('click', () => deleteAnnouncement(Number(btn.dataset.id)));
+    });
     tableWrapEl.innerHTML = '';
     tableWrapEl.appendChild(table);
   }
@@ -367,7 +377,7 @@ export function mount(container) {
   activeRender = render;
   if (hasLoadedOnce) {
     statusEl.hidden = true;
-    render(lastAnnouncements, lastEditable);
+    render(lastAnnouncements);
     load();
   } else {
     load();
