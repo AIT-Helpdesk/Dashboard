@@ -6280,6 +6280,17 @@ tbody tr[draggable="true"] {
   color: white;
 }
 
+/* "Show"/"Hide" in a Show/Hide [X] Detail button, by request -- picked out
+   in red while the rest of the label (the compound column/row's own
+   name + "Detail") stays the button's usual blue/white -- same #dc2626
+   red already used dashboard-wide (e.g. Check Client's own "Multiple
+   Matches" flag). A direct color on this span wins over the button's own
+   `color` either way (default tinted-blue text, or solid-blue/white once
+   .rt-detail-toggle--active applies), so no !important needed here. */
+.rt-detail-toggle-verb {
+  color: #dc2626;
+}
+
 .rt-add-stage {
   margin-bottom: 0.75rem;
   display: flex;

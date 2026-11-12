@@ -1193,11 +1193,11 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       }
       const columnButtonsHtml = compoundColumns.map(
         (c) =>
-          `<button type="button" class="button-link button-link--small rt-detail-toggle${openDetailColumnId === c.id ? ' rt-detail-toggle--active' : ''}" data-kind="column" data-id="${c.id}">${openDetailColumnId === c.id ? 'Hide' : 'Show'} ${escapeHtml(c.label)} Detail</button>`
+          `<button type="button" class="button-link button-link--small rt-detail-toggle${openDetailColumnId === c.id ? ' rt-detail-toggle--active' : ''}" data-kind="column" data-id="${c.id}"><span class="rt-detail-toggle-verb">${openDetailColumnId === c.id ? 'Hide' : 'Show'}</span> ${escapeHtml(c.label)} Detail</button>`
       );
       const rowButtonsHtml = compoundRows.map(
         (r) =>
-          `<button type="button" class="button-link button-link--small rt-detail-toggle${openDetailRowId === r.id ? ' rt-detail-toggle--active' : ''}" data-kind="row" data-id="${r.id}">${openDetailRowId === r.id ? 'Hide' : 'Show'} ${escapeHtml(r.name)} Detail</button>`
+          `<button type="button" class="button-link button-link--small rt-detail-toggle${openDetailRowId === r.id ? ' rt-detail-toggle--active' : ''}" data-kind="row" data-id="${r.id}"><span class="rt-detail-toggle-verb">${openDetailRowId === r.id ? 'Hide' : 'Show'}</span> ${escapeHtml(r.name)} Detail</button>`
       );
       detailButtonsContainer.innerHTML = [...columnButtonsHtml, ...rowButtonsHtml].join(' ');
       detailButtonsContainer.querySelectorAll('.rt-detail-toggle').forEach((btn) => {
