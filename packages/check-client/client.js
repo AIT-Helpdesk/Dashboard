@@ -315,6 +315,20 @@ export function mount(container) {
   function uniqueNonEmpty(arr) {
     return [...new Set(arr.filter(Boolean))];
   }
+  // Datto creates a second "<Site> - On Demand" site alongside a client's
+  // main site -- by request, that's not a genuine second client match, so
+  // it's folded into the main site's own name here before this label counts
+  // "Multiple Matches", as long as the part before " - On Demand" exactly
+  // matches another real site name already in the list. The underlying
+  // device data for both sites still renders separately further down (see
+  // renderDattoRmm()'s own loop over data.bySite) -- this only affects the
+  // Client label's own match-count logic.
+  function collapseOnDemandSites(names) {
+    return names.filter((name) => {
+      const match = /^(.*) - On Demand$/.exec(name);
+      return !(match && names.includes(match[1]));
+    });
+  }
   function updateClientLabel() {
     const autotaskNames = uniqueNonEmpty(lastServicesData ? lastServicesData.byCompany.map((c) => c.companyName) : []);
     const ingramNames = uniqueNonEmpty([
@@ -322,7 +336,7 @@ export function mount(container) {
       ...(lastSubscriptionsData ? lastSubscriptionsData.byClient.map((c) => c.clientName) : []),
     ]);
     const microsoftNames = uniqueNonEmpty(lastM365Data?.rewstClientName ? [lastM365Data.rewstClientName] : []);
-    const dattoNames = uniqueNonEmpty(lastDattoData?.connected ? (lastDattoData.bySite || []).map((s) => s.site) : []);
+    const dattoNames = collapseOnDemandSites(uniqueNonEmpty(lastDattoData?.connected ? (lastDattoData.bySite || []).map((s) => s.site) : []));
     const ingramSettled = ordersSettled && subsSettled;
 
     // Nothing has even STARTED yet (a genuinely fresh page, no search ever
