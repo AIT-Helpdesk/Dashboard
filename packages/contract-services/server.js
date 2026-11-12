@@ -474,6 +474,7 @@ async function buildOtherContracts(companyIds, excludePrefixes = []) {
     filtered.map(async (c) => ({
       contractName: c.contractName,
       contractUrl: await getContractUrl(c.id),
+      purchaseOrderNumber: c.purchaseOrderNumber || null,
       status: statusLabels.get(c.status) || `#${c.status}`,
       statusCode: c.status,
       endDate: c.endDate,

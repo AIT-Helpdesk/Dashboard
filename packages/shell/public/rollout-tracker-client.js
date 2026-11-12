@@ -1270,7 +1270,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
         <thead>
           <tr class="shaded-row">
             <th>${escapeHtml(rowNoun)} (${rows.length}/${totalRows})</th>
-            ${stages.map((s) => `<th class="rt-col-header" draggable="${isManager ? 'true' : 'false'}" data-stage-id="${s.id}"><button type="button" class="rt-bulk-col-btn" data-stage-id="${s.id}" data-cell-type="${s.type}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ${escapeHtml(s.label)}</th>`).join('')}
+            ${stages.map((s) => `<th class="rt-col-header" draggable="${isManager ? 'true' : 'false'}" data-stage-id="${s.id}"><button type="button" class="rt-bulk-col-btn" data-stage-id="${s.id}" data-cell-type="${s.type}" title="Set every currently visible ${rowNoun.toLowerCase()} in this column to the same value">⚙</button> ${escapeHtml(s.label)}${canDelete ? ` <button type="button" class="rt-rename-btn rt-delete-stage-btn" data-stage-id="${s.id}" data-stage-label="${escapeHtml(s.label)}" title="Delete stage">${DELETE_ICON_SVG}</button>` : ''}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -1289,6 +1289,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       wireCellInteractions(table);
       wireBulkRowButtons(table, 'detail', column.id);
       wireBulkColumnButtons(table, 'detail');
+      wireDeleteStageButtons(table, column.id);
       wireHeaderDragReorder(table, stages.map((s) => s.id), 'stageId', `${apiBase}/columns/${column.id}/stages/order`, () => loadDetail(column.id));
     }
 
@@ -1450,7 +1451,7 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
                   `<th class="rt-col-header" draggable="false" data-column-id="${c.id}"><button type="button" class="rt-bulk-col-btn" data-column-id="${c.id}" title="Set every currently visible sub-row in this column to the same value">⚙</button> ${escapeHtml(c.label)}</th>`
               )
               .join('')}
-            ${subRowColumns.map((c) => `<th class="rt-col-header" draggable="false">${escapeHtml(c.label)}</th>`).join('')}
+            ${subRowColumns.map((c) => `<th class="rt-col-header" draggable="false">${escapeHtml(c.label)}${canDelete ? ` <button type="button" class="rt-rename-btn rt-delete-subrowcol-btn" data-sub-row-column-id="${c.id}" data-sub-row-column-label="${escapeHtml(c.label)}" title="Delete column">${DELETE_ICON_SVG}</button>` : ''}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -1458,7 +1459,12 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
             .map(
               (subRow) => `
             <tr>
-              <td><button type="button" class="rt-bulk-row-btn" data-sub-row-id="${subRow.id}" title="Set every column in this sub-row to the same value">⚙</button> ${escapeHtml(subRow.label)}</td>
+              <td>
+                <button type="button" class="rt-bulk-row-btn" data-sub-row-id="${subRow.id}" title="Set every column in this sub-row to the same value">⚙</button>
+                <button type="button" class="rt-rename-btn rt-rename-subrow-btn" data-sub-row-id="${subRow.id}" data-sub-row-label="${escapeHtml(subRow.label)}" title="Rename">${RENAME_ICON_SVG}</button>
+                ${canDelete ? `<button type="button" class="rt-rename-btn rt-delete-subrow-btn" data-sub-row-id="${subRow.id}" data-sub-row-label="${escapeHtml(subRow.label)}" title="Delete sub-row">${DELETE_ICON_SVG}</button>` : ''}
+                ${escapeHtml(subRow.label)}
+              </td>
               ${columns.map((col) => subRowCellHtml(subRow, col)).join('')}
               ${subRowColumns.map((src) => subRowColumnCellHtml(subRow, src)).join('')}
             </tr>`
@@ -1470,6 +1476,9 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
       wireCellInteractions(table);
       wireSubRowBulkButtons(table, row.id);
       wireColumnAcrossSubRowsBulkButtons(table, row.id);
+      wireRenameSubRowButtons(table, row.id);
+      wireDeleteSubRowButtons(table, row.id);
+      wireDeleteSubRowColumnButtons(table, row.id);
     }
 
     // Add Sub-Row -- Tracker Manager-only, same reasoning as Add Stage.
@@ -2434,6 +2443,137 @@ export function createRolloutTrackerMount({ id, label, apiBase, rowNoun = 'Item'
               throw new Error(data.error || `Request failed (${res.status})`);
             }
             await loadGrid();
+          } catch (err) {
+            alert(`Error: ${err.message}`);
+          }
+        });
+      });
+    }
+
+    // The sub-sheet mirror of wireDeleteColumnButtons above, for a compound
+    // column's own detail sheet -- deletes one STAGE. Same
+    // TRACKER_DELETE_ROW_COLUMN gate (the button itself only renders when
+    // `canDelete` is true -- see renderDetail's own stage-header template),
+    // same irreversible-hard-delete confirm. Wired once per renderDetail()
+    // call, same as wireBulkRowButtons/wireBulkColumnButtons just above.
+    function wireDeleteStageButtons(table, columnId) {
+      table.querySelectorAll('.rt-delete-stage-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const stageId = btn.dataset.stageId;
+          const stageLabel = btn.dataset.stageLabel || 'this stage';
+          if (!confirm(`Permanently delete the "${stageLabel}" stage? This deletes every ${rowNoun.toLowerCase()}'s status in it and its audit history -- it cannot be undone.`)) return;
+          try {
+            const res = await fetch(`${apiBase}/stages/${stageId}`, { method: 'DELETE' });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.error || `Request failed (${res.status})`);
+            }
+            await loadDetail(columnId);
+          } catch (err) {
+            alert(`Error: ${err.message}`);
+          }
+        });
+      });
+    }
+
+    // The sub-sheet mirror of wireRenameButtons above, for a compound
+    // row's own detail sheet -- renames one SUB-ROW. Open to every
+    // signed-in user, same ungated rule the button itself reflects (see
+    // renderRowDetail's own sub-row template -- unlike the delete/stage
+    // buttons here, this one isn't gated on `canDelete` at all).
+    function wireRenameSubRowButtons(table, rowId) {
+      table.querySelectorAll('.rt-rename-subrow-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const existing = btn.parentElement.querySelector('.rt-rename-editor');
+          if (existing) {
+            existing.remove();
+            return;
+          }
+          const subRowId = btn.dataset.subRowId;
+          const editor = document.createElement('div');
+          editor.className = 'rt-bulk-row-editor rt-rename-editor';
+          editor.innerHTML = `
+            <input type="text" class="rt-inline-input rt-rename-input" value="${escapeHtml(btn.dataset.subRowLabel)}" />
+            <div class="rt-form-actions">
+              <button type="button" class="button-link button-link--small rt-save">Save</button>
+              <button type="button" class="rt-cancel">Cancel</button>
+            </div>
+          `;
+          btn.insertAdjacentElement('afterend', editor);
+          const input = editor.querySelector('.rt-rename-input');
+          input.focus();
+          input.select();
+
+          async function save() {
+            const newName = input.value.trim();
+            if (!newName) {
+              alert('Name cannot be blank.');
+              return;
+            }
+            try {
+              const res = await fetch(`${apiBase}/rows/${rowId}/sub-rows/${subRowId}/name`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: newName }),
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+              editor.remove();
+              await loadRowDetail(rowId);
+            } catch (err) {
+              alert(`Error: ${err.message}`);
+            }
+          }
+
+          editor.querySelector('.rt-cancel').addEventListener('click', () => editor.remove());
+          editor.querySelector('.rt-save').addEventListener('click', save);
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') editor.remove();
+          });
+        });
+      });
+    }
+
+    // The sub-sheet mirror of wireDeleteRowButtons above, for a compound
+    // row's own detail sheet -- deletes one SUB-ROW. Same
+    // TRACKER_DELETE_ROW_COLUMN gate, same irreversible-hard-delete confirm.
+    function wireDeleteSubRowButtons(table, rowId) {
+      table.querySelectorAll('.rt-delete-subrow-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const subRowId = btn.dataset.subRowId;
+          const subRowLabel = btn.dataset.subRowLabel || 'this sub-row';
+          if (!confirm(`Permanently delete "${subRowLabel}"? This deletes every one of its column statuses and its audit history -- it cannot be undone.`)) return;
+          try {
+            const res = await fetch(`${apiBase}/rows/${rowId}/sub-rows/${subRowId}`, { method: 'DELETE' });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.error || `Request failed (${res.status})`);
+            }
+            await loadRowDetail(rowId);
+          } catch (err) {
+            alert(`Error: ${err.message}`);
+          }
+        });
+      });
+    }
+
+    // The sub-sheet mirror of wireDeleteColumnButtons above, for a compound
+    // row's own extra text fields -- deletes one SUB-ROW-COLUMN. Same
+    // TRACKER_DELETE_ROW_COLUMN gate, same irreversible-hard-delete confirm.
+    function wireDeleteSubRowColumnButtons(table, rowId) {
+      table.querySelectorAll('.rt-delete-subrowcol-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const subRowColumnId = btn.dataset.subRowColumnId;
+          const label = btn.dataset.subRowColumnLabel || 'this column';
+          if (!confirm(`Permanently delete the "${label}" column? This deletes every sub-row's value in it and its audit history -- it cannot be undone.`)) return;
+          try {
+            const res = await fetch(`${apiBase}/rows/${rowId}/sub-columns/${subRowColumnId}`, { method: 'DELETE' });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.error || `Request failed (${res.status})`);
+            }
+            await loadRowDetail(rowId);
           } catch (err) {
             alert(`Error: ${err.message}`);
           }

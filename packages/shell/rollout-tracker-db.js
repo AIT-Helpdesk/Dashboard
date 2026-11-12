@@ -1296,6 +1296,23 @@ function createRolloutTrackerDb(dbPath) {
     return newLabel;
   }
 
+  // The sub-sheet mirror of renameRow() above -- renames one SUB-ROW
+  // within a compound row's own detail sheet (by request: name-edit
+  // capability on rows, not columns -- a sub-row plays the "row" role on
+  // that sheet, same as a master-grid row, so it gets the same ungated
+  // rename; stages and sub_row_columns play the "column" role there and,
+  // matching the main table (tc-elite-rollout, which has no rename for
+  // either), get no rename at all). No duplicate-label check -- same as
+  // renameColumn above, sub_rows.key (not label) is the only thing
+  // addSubRow() already de-dupes.
+  function renameSubRow(subRowId, newName, actor) {
+    const subRow = db.prepare('SELECT label FROM sub_rows WHERE id = ?').get(subRowId);
+    if (!subRow) return null;
+    db.prepare('UPDATE sub_rows SET label = $label WHERE id = $id').run({ $label: newName, $id: subRowId });
+    recordAudit({ subRowId, oldStatus: subRow.label, newStatus: newName, actor });
+    return newName;
+  }
+
   // Hard delete -- same reasoning as tc-elite-rollout's own deleteClient():
   // for removing a mistaken/test row, not recording a real one's removal.
   // Purges stage_status rows (a row with any compound-column stages would
@@ -1345,6 +1362,79 @@ function createRolloutTrackerDb(dbPath) {
       db.prepare('DELETE FROM audit_log WHERE column_id = ?').run(columnId);
       db.prepare('DELETE FROM cell_status WHERE column_id = ?').run(columnId);
       db.prepare('DELETE FROM columns WHERE id = ?').run(columnId);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  // The sub-sheet mirror of deleteColumn() above, scoped one level down --
+  // deletes one STAGE from a compound column's own detail sheet (by
+  // request, same TRACKER_DELETE_ROW_COLUMN gate everywhere a delete
+  // button appears, see rollout-tracker-server.js/
+  // rollout-tracker-permissions.js -- previously a stage could only ever
+  // be added, never removed). Purges its own stage_status + audit entries
+  // first (same orphan reasoning deleteColumn already applies to a
+  // column's own stages), then recomputes every row's rollup for the
+  // parent column if it was a status-type stage -- a text-type stage never
+  // fed a rollup, so removing one can never change one, same exemption
+  // tc-elite-rollout's own deleteStage() documents.
+  function deleteStage(stageId, actor) {
+    const stage = db.prepare('SELECT * FROM stages WHERE id = ?').get(stageId);
+    if (!stage) return;
+    db.exec('BEGIN');
+    try {
+      db.prepare('DELETE FROM audit_log WHERE stage_id = ?').run(stageId);
+      db.prepare('DELETE FROM stage_status WHERE stage_id = ?').run(stageId);
+      db.prepare('DELETE FROM stages WHERE id = ?').run(stageId);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    if (stage.type === 'status') {
+      const rows = db.prepare('SELECT id FROM rows').all();
+      for (const r of rows) recomputeRollup(r.id, stage.column_id, actor);
+    }
+  }
+
+  // The sub-sheet mirror of deleteRow() above, scoped one level down --
+  // deletes one SUB-ROW from a compound row's own detail sheet. Purges its
+  // own sub_row_status + sub_row_column_value + audit entries first (same
+  // orphan reasoning), then recomputes the parent row's rollup for every
+  // status-type-simple column (the full set a sub-row can carry a value
+  // in -- same set getRowDetail() itself reads).
+  function deleteSubRow(subRowId, actor) {
+    const subRow = db.prepare('SELECT * FROM sub_rows WHERE id = ?').get(subRowId);
+    if (!subRow) return;
+    db.exec('BEGIN');
+    try {
+      db.prepare('DELETE FROM audit_log WHERE sub_row_id = ?').run(subRowId);
+      db.prepare('DELETE FROM sub_row_status WHERE sub_row_id = ?').run(subRowId);
+      db.prepare('DELETE FROM sub_row_column_value WHERE sub_row_id = ?').run(subRowId);
+      db.prepare('DELETE FROM sub_rows WHERE id = ?').run(subRowId);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    const columns = db.prepare(`SELECT id FROM columns WHERE kind = 'simple' AND cell_type = 'status'`).all();
+    for (const c of columns) recomputeRowRollup(subRow.parent_row_id, c.id, actor);
+  }
+
+  // The text-only mirror of deleteSubRow() above -- deletes one
+  // SUB-ROW-COLUMN (a compound row's own extra text field, see
+  // addSubRowColumn's own comment). No rollup to recompute afterward -- a
+  // sub_row_column never feeds one, same as a text-type stage.
+  function deleteSubRowColumn(subRowColumnId) {
+    const subRowColumn = db.prepare('SELECT id FROM sub_row_columns WHERE id = ?').get(subRowColumnId);
+    if (!subRowColumn) return;
+    db.exec('BEGIN');
+    try {
+      db.prepare('DELETE FROM audit_log WHERE sub_row_column_id = ?').run(subRowColumnId);
+      db.prepare('DELETE FROM sub_row_column_value WHERE sub_row_column_id = ?').run(subRowColumnId);
+      db.prepare('DELETE FROM sub_row_columns WHERE id = ?').run(subRowColumnId);
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
@@ -1515,8 +1605,12 @@ function createRolloutTrackerDb(dbPath) {
     bulkSetColumnAcrossSubRows,
     renameRow,
     renameColumn,
+    renameSubRow,
     deleteRow,
     deleteColumn,
+    deleteStage,
+    deleteSubRow,
+    deleteSubRowColumn,
     getGrid,
     getColumnDetail,
     getRowDetail,

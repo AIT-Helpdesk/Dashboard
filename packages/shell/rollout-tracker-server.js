@@ -258,8 +258,12 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     bulkSetColumnAcrossSubRows,
     renameRow,
     renameColumn,
+    renameSubRow,
     deleteRow,
     deleteColumn,
+    deleteStage,
+    deleteSubRow,
+    deleteSubRowColumn,
     getGrid,
     getColumnDetail,
     getRowDetail,
@@ -557,6 +561,30 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     }
   });
 
+  // The sub-sheet mirror of DELETE /columns/:columnId above, scoped one
+  // level down -- deletes one STAGE from a compound column's own detail
+  // sheet. Same TRACKER_DELETE_ROW_COLUMN gate as every other delete
+  // action on this router, by request ("nobody should be able to delete
+  // rows or columns unless they are in the DELETE permission -- this
+  // applies to all tables"): a stage plays the "column" role on this
+  // sheet, so it's gated exactly like a master-grid column, not left open
+  // the way tc-elite-rollout's own (ungated) stage delete still is.
+  router.delete('/stages/:stageId', (req, res) => {
+    try {
+      if (!isTrackerDeleteAllowed(req)) {
+        return res.status(403).json({ error: 'Only an authorised user can delete a stage.' });
+      }
+      const stageId = Number(req.params.stageId);
+      const stage = db.prepare('SELECT id FROM stages WHERE id = ?').get(stageId);
+      if (!stage) return res.status(404).json({ error: 'Stage not found.' });
+      deleteStage(stageId, actorFrom(req));
+      res.status(204).end();
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Drag-to-reorder columns, by request -- Tracker Manager-only, same
   // reasoning as POST /columns above ("changing what's tracked affects
   // everyone looking at this tracker"). The client sends the new order
@@ -756,6 +784,48 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
     }
   });
 
+  // Renames one sub-row -- open to every signed-in user, same ungated rule
+  // as PATCH /rows/:rowId/name above (a sub-row plays the master grid's
+  // "row" role on this detail sheet, so it gets the same name-edit
+  // capability; stages/sub-row-columns play the "column" role and, by
+  // request, get none -- matching the main table, which has no rename for
+  // either). No duplicate-label check, same reasoning renameColumn's own
+  // comment in rollout-tracker-db.js gives for columns.
+  router.patch('/rows/:rowId/sub-rows/:subRowId/name', (req, res) => {
+    try {
+      const subRowId = Number(req.params.subRowId);
+      const name = (req.body?.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'Sub-row label is required.' });
+      const newName = renameSubRow(subRowId, name, actorFrom(req));
+      if (newName === null) return res.status(404).json({ error: 'Sub-row not found.' });
+      res.json({ label: newName });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The sub-sheet mirror of DELETE /rows/:rowId above, scoped one level
+  // down -- deletes one SUB-ROW from a compound row's own detail sheet.
+  // Same TRACKER_DELETE_ROW_COLUMN gate as every other delete action on
+  // this router (see DELETE /stages/:stageId's own comment for the full
+  // "applies to all tables" reasoning).
+  router.delete('/rows/:rowId/sub-rows/:subRowId', (req, res) => {
+    try {
+      if (!isTrackerDeleteAllowed(req)) {
+        return res.status(403).json({ error: 'Only an authorised user can delete a sub-row.' });
+      }
+      const subRowId = Number(req.params.subRowId);
+      const subRow = db.prepare('SELECT id FROM sub_rows WHERE id = ?').get(subRowId);
+      if (!subRow) return res.status(404).json({ error: 'Sub-row not found.' });
+      deleteSubRow(subRowId, actorFrom(req));
+      res.status(204).end();
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Add a text-only "sub-row column" to an already-existing compound
   // row's own detail sheet -- Tracker Manager-only, same reasoning as
   // POST /rows/:rowId/sub-rows above. By request ("allow independent
@@ -777,6 +847,28 @@ function createRolloutTrackerRouter(storageDir, { rowNoun = 'Item' } = {}) {
       if (!label) return res.status(400).json({ error: 'Column label is required.' });
       const subRowColumn = addSubRowColumn(rowId, label, actorFrom(req));
       res.status(201).json({ id: subRowColumn.id, key: subRowColumn.key, label });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The sub-sheet mirror of DELETE /columns/:columnId above, scoped to one
+  // row's own extra text field -- deletes one SUB-ROW-COLUMN. Same
+  // TRACKER_DELETE_ROW_COLUMN gate as every other delete action on this
+  // router (see DELETE /stages/:stageId's own comment) -- a sub-row-column
+  // plays the "column" role on this sheet, same as a stage does on a
+  // compound column's own sheet.
+  router.delete('/rows/:rowId/sub-columns/:subRowColumnId', (req, res) => {
+    try {
+      if (!isTrackerDeleteAllowed(req)) {
+        return res.status(403).json({ error: 'Only an authorised user can delete a column.' });
+      }
+      const subRowColumnId = Number(req.params.subRowColumnId);
+      const subRowColumn = db.prepare('SELECT id FROM sub_row_columns WHERE id = ?').get(subRowColumnId);
+      if (!subRowColumn) return res.status(404).json({ error: 'Column not found.' });
+      deleteSubRowColumn(subRowColumnId);
+      res.status(204).end();
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });

@@ -452,10 +452,17 @@ export function mount(container) {
   }
 
   function renderResolvedDisplay(containerEl, label, value, onOverrideChange) {
+    // Same real pencil-outline SVG + .wsp-icon-btn shell as the Units
+    // pencil above/contract-checks' own ticket-number edit button, not the
+    // "&#9998;" text glyph this replaced -- by request, that glyph was
+    // effectively invisible at rest on at least one real browser/OS combo
+    // (only visible once the mouse was already over it), the same
+    // currentColor-vs-fixed-glyph-rendering issue documented wherever this
+    // dashboard already moved off a pencil emoji/glyph for its edit icons.
     containerEl.innerHTML = `
       <span class="chk-resolved-label">${escapeHtml(label)}:</span>
       <span class="chk-resolved-value">${escapeHtml(value)}</span>
-      <button type="button" class="chk-resolved-edit-btn" title="Edit ${escapeHtml(label)}">&#9998;</button>
+      <button type="button" class="wsp-icon-btn chk-resolved-edit-btn" title="Edit ${escapeHtml(label)}"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>
     `;
     containerEl.querySelector('.chk-resolved-edit-btn').addEventListener('click', () => {
       containerEl.innerHTML = `
@@ -1647,10 +1654,11 @@ export function mount(container) {
   // Check Summary section(s) above, listing every OTHER real contract on
   // this client (contract-services/server.js's own buildOtherContracts()
   // has already dropped the Tech Cover ones, loaded via
-  // loadOtherContracts() the moment Services resolves a company). Just
-  // Contract Name and Status, by request -- legend-sized text
-  // (.chk-other-contracts-box), same "supporting context, not the main
-  // table" treatment as the Calculations box.
+  // loadOtherContracts() the moment Services resolves a company). Contract
+  // Name, Comment (PO) (the contract's own real Autotask
+  // purchaseOrderNumber field, by request), Status, and End Date --
+  // legend-sized text (.chk-other-contracts-box), same "supporting
+  // context, not the main table" treatment as the Calculations box.
   function otherContractsSectionHtml() {
     if (!lastServicesData) return '';
     if (!lastOtherContractsData) {
@@ -1666,17 +1674,18 @@ export function mount(container) {
             (c) => `
       <tr>
         <td>${otherContractNameHtml(c)}</td>
+        <td>${escapeHtml(c.purchaseOrderNumber || '')}</td>
         <td${c.statusCode !== 1 ? ' class="cell-flag-red"' : ''}>${escapeHtml(c.status)}</td>
         <td>${formatServiceDate(c.endDate)}</td>
       </tr>`
           )
           .join('')
-      : '<tr><td colspan="3">No other contracts found.</td></tr>';
+      : '<tr><td colspan="4">No other contracts found.</td></tr>';
     return `
       <h2 class="chk-section-heading">Other Contracts</h2>
       <div class="chk-other-contracts-box">
         <table class="chk-other-contracts-table">
-          <thead><tr class="shaded-row"><th>Contract Name</th><th>Status</th><th>End Date</th></tr></thead>
+          <thead><tr class="shaded-row"><th>Contract Name</th><th>Comment (PO)</th><th>Status</th><th>End Date</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
