@@ -493,6 +493,58 @@ function vendorWidgetsHtml(vendors) {
       </div>`);
   }
 
+  // Inky (email security) -- messagesProcessed/cautionCount/dangerCount are
+  // INKY's own last-30-days statistics totals (server.js's own
+  // buildInkySummary(): neutral/caution/danger daily counts, summed), same
+  // "Last 30 Days" window every other date-ranged card in this section
+  // already uses. Top Threat Reasons mirrors SaaS Alerts' own tiles-then-
+  // list layout (.live-reports-inky-layout/-kpis/-reasons, styles.css), by
+  // request.
+  if (vendors.inky.status === 'ok' && vendors.inky.installed) {
+    const ik = vendors.inky;
+    const reasonsListHtml =
+      ik.topReasons.length > 0
+        ? `<ul class="live-reports-inky-reasons">${ik.topReasons.map((r) => `<li>${escapeHtml(r.label)} <span class="muted">(${r.count})</span></li>`).join('')}</ul>`
+        : '<p class="inline-subtext">No threats flagged in this window.</p>';
+    widgets.push(`
+      <div class="mtg-widget live-reports-cyber-card">
+        ${cyberCardToggleHtml('inky')}
+        <p class="mtg-widget-title">Email Security <span class="muted">(30 days)</span></p>
+        <div class="live-reports-inky-layout">
+          <div class="live-reports-inky-top-kpis">
+            ${kpiTileRow([
+              { label: 'Protected Mailboxes', value: ik.protectedMailboxCount ?? '--', tier: 'good' },
+              { label: 'Messages Processed', value: ik.messagesProcessed },
+            ])}
+          </div>
+          <div class="live-reports-inky-bottom-row">
+            <div class="live-reports-inky-severity-kpis">
+              ${kpiTileRow([
+                { label: 'Caution', value: ik.cautionCount, tier: ik.cautionCount > 0 ? 'warn' : 'good' },
+                { label: 'Danger', value: ik.dangerCount, tier: ik.dangerCount > 0 ? 'bad' : 'good' },
+              ])}
+            </div>
+            ${reasonsListHtml}
+          </div>
+        </div>
+      </div>`);
+  } else if (vendors.inky.status === 'error') {
+    // By request: unlike every other vendor card here (which just vanishes
+    // on a catchVendorError() failure, same as "not installed"), Inky's own
+    // card STAYS, with a plain-English note instead of the real figures --
+    // nothing here claims to know WHY it failed (could be anything from a
+    // network blip to INKY's own API genuinely changing shape), so the
+    // wording stays deliberately generic/reassuring rather than echoing the
+    // real underlying error.message, which would be too technical to put
+    // in front of a client reading this report.
+    widgets.push(`
+      <div class="mtg-widget live-reports-cyber-card">
+        ${cyberCardToggleHtml('inky')}
+        <p class="mtg-widget-title">Email Security <span class="muted">(30 days)</span></p>
+        <p class="status warn">Email security platform is currently updating how it connects to this report, so live threat data couldn't be pulled in this time. This usually resolves on its own -- no action needed, and the figures will be back next time this report runs.</p>
+      </div>`);
+  }
+
   // Datto EDR -- agentCount/activeAgentCount/alertCount/alertCount30d are
   // summed/filtered across every matched Location (a client can have
   // several, see server.js's own comment), not just one. Locations tile
@@ -758,7 +810,14 @@ function vendorSummariesHtml(vendors, mdpState, isTcElite) {
   // themselves), so the shared box is a visual flag for that, not a PDF
   // concept (pdf-template.js's own drawCybersecurityLayers() just packs
   // them as 2 plain cards like everything else there).
-  return `<h2 class="client-summary-section-heading">Cybersecurity Systems ${sectionToggleHtml('cybersecurity', 'Cybersecurity Systems')}</h2><div class="mtg-widget-grid live-reports-other-systems">${vendorWidgetsHtml(vendors)}<div class="live-reports-domain-protection-alert"><div id="edp-card-slot">${emailDomainProtectionCardHtml({ status: 'loading' })}</div>${mdpCardHtml(mdpState, isTcElite)}</div></div>`;
+  // id/class repeated here (not just on the loading placeholder in the main
+  // template) because loadVendorSummaries() below replaces that placeholder
+  // WHOLESALE (vendorEl.outerHTML = ...), so this returned string is the
+  // only thing that actually ends up in the DOM once real data loads --
+  // without its own id="vendor-summaries" class="lr-section-box" here, the
+  // border box (and the ability to find this element again) would vanish
+  // the moment this replaces the loading placeholder.
+  return `<div class="lr-section-box" id="vendor-summaries"><h2 class="client-summary-section-heading">Cybersecurity Systems ${sectionToggleHtml('cybersecurity', 'Cybersecurity Systems')}</h2><div class="mtg-widget-grid live-reports-other-systems">${vendorWidgetsHtml(vendors)}<div class="live-reports-domain-protection-alert"><div id="edp-card-slot">${emailDomainProtectionCardHtml({ status: 'loading' })}</div>${mdpCardHtml(mdpState, isTcElite)}</div></div></div>`;
 }
 
 // Generate Summary / edit-before-PDF, by request -- see server.js's own
@@ -1661,32 +1720,38 @@ export function mount(container) {
 
     resultsEl.innerHTML = `
       <p class="inline-subtext">${escapeHtml(data.siteName)} -- as of ${new Date(data.asOf).toLocaleString()}</p>
-      ${namedSectionToggleHtml('overallHealthView', 'Overall Health View')}
-      <div class="mtg-widget-grid">${gauge}${kpiGrid}${alertsWidget}</div>
-      ${openAlertsListHtml(data.openAlerts)}
-      ${typeWidget || freshnessWidget ? namedSectionToggleHtml('deviceOverview', 'Devices by Type / Check-in Freshness') : ''}
-      <div class="live-reports-overview-grid">
-        ${typeWidget}
-        ${freshnessWidget}
-        <div class="live-reports-scorecard-span">${scorecardHtml(data, null)}</div>
+      <div class="lr-section-box">
+        ${namedSectionToggleHtml('overallHealthView', 'Overall Health View')}
+        <div class="mtg-widget-grid">${gauge}${kpiGrid}${alertsWidget}</div>
+        ${openAlertsListHtml(data.openAlerts)}
       </div>
-      ${namedSectionToggleHtml('deviceHealth', 'Device Health')}
-      <div class="mtg-widget-grid">
-        <div>${assetManagementTableHtml(data.assetManagementDetail)}</div>
-        <div>${monitoringTableHtml(data.monitoringDetail)}</div>
+      <div class="lr-section-box">
+        ${typeWidget || freshnessWidget ? namedSectionToggleHtml('deviceOverview', 'Devices by Type / Check-in Freshness') : ''}
+        <div class="live-reports-overview-grid">
+          ${typeWidget}
+          ${freshnessWidget}
+          <div class="live-reports-scorecard-span">${scorecardHtml(data, null)}</div>
+        </div>
       </div>
-      ${groupWidgets('Workstations', data.workstation, undefined, { patch: 'workstationPatch', software: 'workstationSoftware', antivirus: 'workstationAntivirus' })}
-      ${groupWidgets(
-        'Servers',
-        data.server,
-        'Patch Management and Software Management are not handled through this platform for servers, so they will always show as No Policy / Unmanaged below -- not counted in the Servers Health Score.'
-      )}
-      ${hardwareLifecycleWidgets}
-      <div id="vendor-summaries"><p class="inline-subtext live-reports-loading-text">Loading Other Systems...</p></div>
-      <div id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
+      <div class="lr-section-box">
+        ${namedSectionToggleHtml('deviceHealth', 'Device Health')}
+        <div class="mtg-widget-grid">
+          <div>${assetManagementTableHtml(data.assetManagementDetail)}</div>
+          <div>${monitoringTableHtml(data.monitoringDetail)}</div>
+        </div>
+        ${groupWidgets('Workstations', data.workstation, undefined, { patch: 'workstationPatch', software: 'workstationSoftware', antivirus: 'workstationAntivirus' })}
+        ${groupWidgets(
+          'Servers',
+          data.server,
+          'Patch Management and Software Management are not handled through this platform for servers, so they will always show as No Policy / Unmanaged below -- not counted in the Servers Health Score.'
+        )}
+        ${hardwareLifecycleWidgets}
+      </div>
+      <div class="lr-section-box" id="vendor-summaries"><p class="inline-subtext live-reports-loading-text">Loading Other Systems...</p></div>
+      <div class="lr-section-box" id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
       ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
-      <div class="live-reports-device-list">${deviceList}</div>
-      <div id="report-explanations-slot"><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
+      <div class="lr-section-box live-reports-device-list">${deviceList}</div>
+      <div class="lr-section-box" id="report-explanations-slot"><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
     `;
     wireDeviceFilters(resultsEl);
     loadVendorSummaries(data.siteName, force, data.isTcElite);

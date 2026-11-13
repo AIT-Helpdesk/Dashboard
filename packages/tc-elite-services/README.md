@@ -13,7 +13,7 @@ Every current "Tech Cover Elite" client (`Companies.classification` label, activ
 
 1. **Default** (blue) -- the client's active contract with `Contracts.isDefaultContract` set. Labeled with the matched contract's own name ("Default: None" if none is set), still blue either way, not a warning colour.
 2. **Tech Cover Elite** (blue) -- the client's active contract whose name starts with "Tech Cover Elite" (case-insensitive prefix match, same rule Client Summary's own Active Contracts warning uses). Unlike the Default pill, this one keeps a fixed, short label ("Tech Cover Elite") -- the matched contract's own full name (or "None" if not found) is hover-only, by request, since a real contract name here ("Tech Cover Elite - Managed Support Plan") is long enough to otherwise widen every pill in the row.
-3. **SaaS Alerts / SaaS Backups / Datto EDR / AutoElevate / Huntress / Rewst** (green = installed, red = not, grey = not yet configured/connected) -- built by `@dashboard/client-summary/installed-services.js`'s own `buildInstalledServices()`, the SAME function Client Summary calls for one client at a time. See that file's own comments for the full per-vendor methodology (SaaS Alerts' exact PSA-id match, SaaS Protection/Datto EDR/AutoElevate/Huntress/Rewst's own name-matching, and why Dark Web ID/INKY aren't included yet).
+3. **SaaS Alerts / SaaS Backups / Inky / Datto EDR / AutoElevate / Huntress / Rewst** (green = installed, red = not, grey = not yet configured/connected) -- built by `@dashboard/client-summary/installed-services.js`'s own `buildInstalledServices()`, the SAME function Client Summary calls for one client at a time. See that file's own comments for the full per-vendor methodology (SaaS Alerts' exact PSA-id match, SaaS Protection/Inky/Datto EDR/AutoElevate/Huntress/Rewst's own name-matching, and why Dark Web ID isn't included yet).
 
 Hover any pill for its detail (the matched contract/vendor name, seat/agent/location counts, etc.) -- a native `title=` tooltip, same convention Client Summary's own badges use.
 
@@ -21,7 +21,7 @@ Hover any pill for its detail (the matched contract/vendor name, seat/agent/loca
 
 1. Resolve the `classification` picklist code for the label "Tech Cover Elite", then fetch every active (`isActive: true`) company with that code.
 2. One BATCHED `fetchByFieldIn()` across every one of those companies' active (`status` 1) contracts -- not one contracts query per company -- to build the 2 contract pills.
-3. One bounded fan-out (concurrency 5) across every company's own `buildInstalledServices()` call -- each vendor's own underlying list fetch is still cached on its own TTL (see `@dashboard/client-summary`'s `datto-edr.js`/`autoelevate.js`/`huntress.js`/`rewst.js`/`installed-services.js`), so this mostly just bounds how many run concurrently, not how often the underlying vendor data itself is actually fetched.
+3. One bounded fan-out (concurrency 5) across every company's own `buildInstalledServices()` call -- each vendor's own underlying list fetch is still cached on its own TTL (see `@dashboard/client-summary`'s `datto-edr.js`/`autoelevate.js`/`huntress.js`/`rewst.js`/`inky.js`/`installed-services.js`), so this mostly just bounds how many run concurrently, not how often the underlying vendor data itself is actually fetched.
 
 ## Caching
 

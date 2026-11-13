@@ -9945,6 +9945,18 @@ tr.accrued-time-yellow-row th {
    the server-side crop generation and the /images route are untouched in
    case a future PDF/PPTX export wants pixel-exact source images again,
    they're just not rendered on this page any more. */
+/* Live Reports' own main-section grouping box, by request ("a box (border
+   only)... to distinguish them better on screen") -- border only, no fill,
+   so it doesn't read as another nested card on top of the real .mtg-widget
+   cards already inside each section. On screen only (nothing in
+   pdf-template.js reads this class -- the PDF already separates its own
+   sections with real page layout, not borders). */
+.lr-section-box {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
 .mtg-widget-grid {
   /* Back to flex (grid's auto-fit + 1fr was still stretching columns to
      fill the row, same complaint as before just via a different
@@ -10444,6 +10456,64 @@ tr.accrued-time-yellow-row th {
    bold, the remaining visual distinction for a critical event). */
 .live-reports-event-critical {
   font-weight: 600;
+}
+
+/* Inky's own layout, by request -- Protected Mailboxes/Messages Processed
+   on their own row on top; Caution/Danger stacked vertically on the left
+   underneath that, with Top Threat Reasons beside THOSE two specifically
+   (not the full-width row above), same "a specific pair of tiles, not the
+   whole row" shape SaaS Backups' own row2 (App Types Healthy + its
+   breakdown) already uses below. */
+.live-reports-inky-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+.live-reports-inky-top-kpis .mtg-kpi-row {
+  gap: 0.5rem;
+  margin-top: 0;
+}
+.live-reports-inky-top-kpis .mtg-kpi-tile {
+  flex: 0 1 140px;
+  padding: 0.5rem 0.6rem;
+}
+.live-reports-inky-bottom-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 1rem;
+}
+.live-reports-inky-severity-kpis {
+  flex: 0 0 140px;
+}
+.live-reports-inky-severity-kpis .mtg-kpi-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0;
+}
+.live-reports-inky-severity-kpis .mtg-kpi-tile {
+  flex: initial;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+}
+.live-reports-inky-top-kpis .mtg-kpi-value,
+.live-reports-inky-severity-kpis .mtg-kpi-value {
+  font-size: 1.15rem;
+}
+.live-reports-inky-top-kpis .mtg-kpi-label,
+.live-reports-inky-severity-kpis .mtg-kpi-label {
+  font-size: 0.65rem;
+}
+.live-reports-inky-reasons {
+  flex: 1 1 auto;
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+.live-reports-inky-reasons li {
+  margin-bottom: 0.3rem;
 }
 
 /* SaaS Backups' own 2-row KPI layout, by request -- Backup %/Seats on row

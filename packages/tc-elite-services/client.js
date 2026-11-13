@@ -186,6 +186,9 @@ export function mount(container) {
               .join(', ')
           : null,
       },
+      services.inky.status === 'not-configured'
+        ? { label: 'Inky', installed: null }
+        : { label: 'Inky', installed: services.inky.installed, detail: services.inky.inkyTeamLabel ? `Inky: ${services.inky.inkyTeamLabel}` : null },
       services.dattoEdr.status === 'not-configured'
         ? { label: 'Datto EDR', installed: null }
         : {

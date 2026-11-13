@@ -22,6 +22,7 @@ const saasProtection = require('@dashboard/saas-protection/server.js');
 const dattoEdr = require('@dashboard/client-summary/datto-edr.js');
 const autoElevate = require('@dashboard/client-summary/autoelevate.js');
 const huntress = require('@dashboard/client-summary/huntress.js');
+const inky = require('@dashboard/client-summary/inky.js');
 // Branded PDF export, by request ("add a button to create a pdf in
 // Ambient iT colours and logo with all the info we have... add some AI
 // recommendations and commentary") -- drawn directly with pdfkit (see
@@ -881,6 +882,79 @@ async function buildHuntressSummary(siteName, force) {
   };
 }
 
+// --- INKY (email security) -------------------------------------------------
+// By request, "Last 30 Days" -- same window every other date-ranged vendor
+// card in this section already uses (SaaS Alerts/Datto EDR's alertCount30d/
+// AutoElevate). inky.getTeamStatistics()/getTeamStatisticsReasons() already
+// default to exactly that window (see their own comments), so no date
+// params are passed here -- just summed across the days each one returns.
+// cautionCount/dangerCount are INKY's own severity buckets (a third,
+// "neutral", exists too but isn't a threat -- not surfaced here, same as
+// how SaaS Alerts' own Low tile is shown but never treated as a warning
+// state). topReasons mirrors SaaS Alerts' own "Top Events" list, by
+// request ("what other info can we get... it's not very pretty").
+// protectedMailboxCount comes from inky.getUsage()'s own Stable-tier
+// billable-mailbox figure -- a different, genuinely billing-relevant
+// number from Datto SaaS Protection's own billableSeatCount tile
+// elsewhere on this page (a wholly separate vendor/product).
+const INKY_TOP_REASONS_LIMIT = 5;
+
+// Relabel specific INKY reason codes to clearer, client-facing wording, by
+// request -- keyed on INKY's own stable `reason` code (confirmed live:
+// "internal_name_match"), not its display label, since a label is more
+// likely to be reworded by INKY itself than the underlying code. Anything
+// not listed here keeps INKY's own label as-is.
+const INKY_REASON_LABEL_OVERRIDES = {
+  // INKY's own label is "Internal Name Match" -- this flags an incoming
+  // email whose DISPLAY NAME matches someone in the org's own directory
+  // while the real sending address is external, i.e. real display-name
+  // impersonation/spoofing, just not phrased that way in INKY's own UI.
+  internal_name_match: 'Impersonation Attempt',
+};
+
+function topInkyReasons(reasonRows) {
+  const totals = new Map(); // reason code -> { label, count }
+  for (const r of reasonRows || []) {
+    const existing = totals.get(r.reason);
+    if (existing) existing.count += r.count || 0;
+    else totals.set(r.reason, { label: INKY_REASON_LABEL_OVERRIDES[r.reason] || r.label || r.reason, count: r.count || 0 });
+  }
+  return [...totals.values()]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, INKY_TOP_REASONS_LIMIT);
+}
+
+async function buildInkySummary(siteName, force) {
+  if (!inky.hasInkyCredentials()) return { status: 'not-configured' };
+  const match = await inky.findTeamMatch(siteName, force);
+  if (!match) return { status: 'ok', installed: false };
+  const [stats, reasons, usage] = await Promise.all([
+    inky.getTeamStatistics(match.team_id, force),
+    inky.getTeamStatisticsReasons(match.team_id, force),
+    inky.getUsage(force),
+  ]);
+  const totals = (stats.days || []).reduce(
+    (acc, d) => ({
+      neutral: acc.neutral + (d.neutral || 0),
+      caution: acc.caution + (d.caution || 0),
+      danger: acc.danger + (d.danger || 0),
+    }),
+    { neutral: 0, caution: 0, danger: 0 }
+  );
+  const usageRow = usage.find((u) => u.team_id === match.team_id);
+  return {
+    status: 'ok',
+    installed: true,
+    teamLabel: match.team_label,
+    windowDays: 30,
+    messagesProcessed: totals.neutral + totals.caution + totals.danger,
+    cautionCount: totals.caution,
+    dangerCount: totals.danger,
+    topReasons: topInkyReasons(reasons.reasons),
+    protectedMailboxCount: usageRow ? usageRow.billable_mailbox_count : null,
+  };
+}
+
 // Proactive Maintenance list, by request -- a standard, account-wide list
 // of regularly scheduled automated activities (NOT pulled from Datto RMM
 // itself: confirmed against its own real API surface this session -- its
@@ -1093,15 +1167,24 @@ function catchVendorError(promise, label) {
 }
 
 async function buildVendorSummaries(siteName, force) {
-  const [saasAlerts, saasProtectionSummary, dattoEdrSummary, autoElevateSummary, huntressSummary, m365Licenses] = await Promise.all([
+  const [saasAlerts, saasProtectionSummary, dattoEdrSummary, autoElevateSummary, huntressSummary, inkySummary, m365Licenses] = await Promise.all([
     catchVendorError(buildSaasAlertsSummary(siteName, force), 'SaaS Alerts'),
     catchVendorError(buildSaasProtectionSummary(siteName, force), 'SaaS Protection'),
     catchVendorError(buildDattoEdrSummary(siteName, force), 'Datto EDR'),
     catchVendorError(buildAutoElevateSummary(siteName, force), 'AutoElevate'),
     catchVendorError(buildHuntressSummary(siteName, force), 'Huntress'),
+    catchVendorError(buildInkySummary(siteName, force), 'Inky'),
     getCachedM365LicenseCounts(siteName, force),
   ]);
-  return { saasAlerts, saasProtection: saasProtectionSummary, dattoEdr: dattoEdrSummary, autoElevate: autoElevateSummary, huntress: huntressSummary, m365Licenses };
+  return {
+    saasAlerts,
+    saasProtection: saasProtectionSummary,
+    dattoEdr: dattoEdrSummary,
+    autoElevate: autoElevateSummary,
+    huntress: huntressSummary,
+    inky: inkySummary,
+    m365Licenses,
+  };
 }
 
 router.get('/', async (req, res) => {
@@ -1448,10 +1531,11 @@ function parseSections(input) {
 // (this list). Matched by keyword against each row's own service name
 // (not a fixed column index/exact string), since the live table's
 // wording is edited on the intranet page, outside this file's control. A
-// row with neither signal available (Email Security, Dark Web
-// Monitoring, Security Awareness Training -- no vendor integration here
-// yet, and presumably not Y on this client's own tier column either) is
-// left unticked rather than guessed. Antivirus/Anti-Malware/Anti-
+// row with neither signal available (Dark Web Monitoring, Security
+// Awareness Training -- no vendor integration here yet, and presumably
+// not Y on this client's own tier column either) is left unticked rather
+// than guessed. Email Security now HAS a live signal (Inky, below) --
+// moved out of that "no integration yet" group. Antivirus/Anti-Malware/Anti-
 // Ransomware is covered by Datto EDR's own install flag, by request
 // ("Antivirus is covered by EDR") -- this dashboard has no separate AV
 // vendor integration of its own.
@@ -1461,6 +1545,7 @@ const CYBER_SERVICE_IMPLEMENTED_CHECKS = [
   { match: /antivirus|anti-malware|anti-ransomware/i, implemented: (vendors) => vendors?.dattoEdr?.status === 'ok' && !!vendors.dattoEdr.installed },
   { match: /endpoint detection/i, implemented: (vendors) => vendors?.dattoEdr?.status === 'ok' && !!vendors.dattoEdr.installed },
   { match: /huntress/i, implemented: (vendors) => vendors?.huntress?.status === 'ok' && !!vendors.huntress.installed },
+  { match: /email security/i, implemented: (vendors) => vendors?.inky?.status === 'ok' && !!vendors.inky.installed },
   { match: /autoelevate/i, implemented: (vendors) => vendors?.autoElevate?.status === 'ok' && !!vendors.autoElevate.installed && !!vendors.autoElevate.deployedSince },
   // Mail Domain Protection Monitoring ticks specifically off the live SPF
   // DNS check finding the EasyDMARC-managed include, by request ("can be

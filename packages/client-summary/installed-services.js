@@ -4,6 +4,7 @@ const { hasDattoEdrCredentials, findLocationMatches } = require('./datto-edr.js'
 const { hasAutoElevateCredentials, findCompanyMatch: findAutoElevateMatch } = require('./autoelevate.js');
 const { hasHuntressCredentials, findOrganizationMatch: findHuntressMatch } = require('./huntress.js');
 const { hasRewstCredentials, findCustomerMatch: findRewstMatch } = require('./rewst.js');
+const { hasInkyCredentials, findTeamMatch: findInkyMatch } = require('./inky.js');
 
 // Pulled out of Client Summary's own server.js (where this originally
 // lived) so TC Elite Services -- which needs the SAME "which services are
@@ -62,10 +63,13 @@ async function findSaasAlertsCustomerId(companyId, force) {
 //     that side) -- "installed: false" below can mean either genuinely not
 //     a SaaS Protection client, or a name that didn't line up well enough to
 //     match confidently; this can't currently tell those two apart.
-// Dark Web ID and INKY (Email Security) are left out for now -- by
-// request -- neither has a live subscription API, only sparse manually-
-// parsed report files for a handful of clients (see @dashboard/meeting-prep),
-// which isn't a reliable "installed or not" signal for the whole client base.
+// Dark Web ID is left out for now -- by request -- it has no live
+// subscription API, only sparse manually-parsed report files for a handful
+// of clients (see @dashboard/meeting-prep), which isn't a reliable
+// "installed or not" signal for the whole client base. INKY (Email
+// Security) DOES now have a live API (confirmed working this session) --
+// see ./inky.js's own findTeamMatch(), a NAME match against INKY's own
+// Teams list, same reasoning/convention as every other vendor below.
 //   - Datto EDR: ./datto-edr.js's own findLocationMatches() -- a NAME match
 //     against Datto EDR's own Locations (its per-site/branch unit, synced
 //     from Datto RMM), same reasoning as SaaS Protection's match. Shows
@@ -80,9 +84,10 @@ async function findSaasAlertsCustomerId(companyId, force) {
 // verified against a real source, by explicit request -- reusing it here
 // would be circular).
 async function buildInstalledServices(company) {
-  const [saasAlertsCustomerId, saasProtectionMatch, dattoEdrMatches, autoElevateMatch, huntressMatch, rewstMatch] = await Promise.all([
+  const [saasAlertsCustomerId, saasProtectionMatch, inkyMatch, dattoEdrMatches, autoElevateMatch, huntressMatch, rewstMatch] = await Promise.all([
     findSaasAlertsCustomerId(company.id),
     saasProtectionRouter.findDomainMatch(company.companyName),
+    hasInkyCredentials() ? findInkyMatch(company.companyName) : Promise.resolve(undefined),
     hasDattoEdrCredentials() ? findLocationMatches(company.companyName) : Promise.resolve(null),
     hasAutoElevateCredentials() ? findAutoElevateMatch(company.companyName) : Promise.resolve(undefined),
     hasHuntressCredentials() ? findHuntressMatch(company.companyName) : Promise.resolve(undefined),
@@ -101,6 +106,10 @@ async function buildInstalledServices(company) {
     saasProtection: saasProtectionMatch
       ? { installed: true, billableSeatCount, backupPercentage: saasProtectionMatch.backupPercentage }
       : { installed: false },
+    // "installed" here only means "has a matching INKY Team" -- inkyMatch's
+    // own team_label is the best available detail, same reasoning Rewst's
+    // own rewstCompanyName detail uses below.
+    inky: inkyMatch === undefined ? { status: 'not-configured' } : { status: 'ok', installed: inkyMatch !== null, inkyTeamLabel: inkyMatch ? inkyMatch.team_label : null },
     dattoEdr:
       dattoEdrMatches === null
         ? { status: 'not-configured' }

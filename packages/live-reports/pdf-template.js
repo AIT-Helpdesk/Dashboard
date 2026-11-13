@@ -1280,6 +1280,57 @@ function vendorCardSpecs(vendors) {
     specs.push({ key: 'huntress', title: 'Huntress Threat Watch', kpis, lines: [{ text: 'Lifetime total incidents.', color: MUTED, italic: true }] });
   }
 
+  // INKY (email security) -- own bespoke inkyLayout (measureInkyLayoutHeight/
+  // drawInkyLayout below), by request ("formatted like the on screen one"):
+  // Protected Mailboxes/Messages Processed on their own row on top; Caution/
+  // Danger stacked vertically on the left underneath that, Top Threat
+  // Reasons beside THOSE two specifically -- the plain kpis/lines fields a
+  // generic card normally uses (a uniform grid, then a full-width line list
+  // below it) can't produce that shape, same reason AutoElevate's own donut
+  // needed its own special-cased spec.donut handling rather than forcing it
+  // through kpis/lines too. On a live API failure, the card still shows (by
+  // request, same as the on-screen page) with a plain-English note instead
+  // of real figures rather than vanishing outright -- this PDF is the
+  // actual client-facing deliverable, so the friendly fallback matters here
+  // if anything more than on screen. The error-state card has no KPI data
+  // to lay out specially, so it just uses the plain lines-only path, same
+  // as every other vendor's own "nothing to show" case.
+  if (vendors.inky.status === 'ok' && vendors.inky.installed) {
+    const ik = vendors.inky;
+    specs.push({
+      key: 'inky',
+      title: 'Email Security',
+      titleSuffix: '(30 days)',
+      kpis: [],
+      lines: [],
+      inkyLayout: {
+        topKpis: [
+          { label: 'Protected Mailboxes', value: ik.protectedMailboxCount ?? '--', tier: 'good' },
+          { label: 'Messages Processed', value: ik.messagesProcessed },
+        ],
+        severityKpis: [
+          { label: 'Caution', value: ik.cautionCount, tier: ik.cautionCount > 0 ? 'warn' : 'good' },
+          { label: 'Danger', value: ik.dangerCount, tier: ik.dangerCount > 0 ? 'bad' : 'good' },
+        ],
+        reasons: ik.topReasons.map((r) => ({ text: `${r.label} (${r.count})`, color: INK })),
+      },
+    });
+  } else if (vendors.inky.status === 'error') {
+    specs.push({
+      key: 'inky',
+      title: 'Email Security',
+      titleSuffix: '(30 days)',
+      kpis: [],
+      lines: [
+        {
+          text: "Email security platform is currently updating how it connects to this report, so live threat data couldn't be pulled in this time. This usually resolves on its own -- no action needed, and the figures will be back next time this report runs.",
+          color: MUTED,
+          italic: true,
+        },
+      ],
+    });
+  }
+
   // AutoElevate -- elevation requests/events widgets, by request ("Add
   // widgets for the AutoElevate section"). Donut is the headline widget
   // (Approved (Auto)/Approved (Manual)/Denied/Pending -- "Manual" is
@@ -1317,10 +1368,58 @@ function vendorCardSpecs(vendors) {
   return specs;
 }
 
+// INKY's own bespoke layout -- top row (full width, 2 KPI tiles), then a
+// bottom row with Caution/Danger stacked in a narrow left column (cols: 1,
+// same drawKpiTileRow() already supports for any tile count) and Top
+// Threat Reasons as plain text beside that column specifically, sized to
+// whichever of the two (the severity column, or the reasons text) is
+// taller -- same "measure and draw as a matched pair" convention every
+// other measure/draw function in this file follows. severityColW (110pt)
+// is a fixed width, same "a KPI tile reads fine at a fixed width" reasoning
+// drawTile()'s own callers elsewhere already rely on.
+const INKY_SEVERITY_COL_W = 110;
+const INKY_COL_GAP = 10;
+
+function measureInkyLayoutHeight(doc, w, layout) {
+  const topRows = kpiTileGridRows(layout.topKpis.length, 2);
+  const topH = topRows * 38 + (topRows - 1) * 6;
+  const severityRows = kpiTileGridRows(layout.severityKpis.length, 1);
+  const severityH = severityRows * 38 + (severityRows - 1) * 6;
+  const reasonsW = w - INKY_SEVERITY_COL_W - INKY_COL_GAP;
+  doc.font('Helvetica').fontSize(8);
+  const reasonLines = layout.reasons.length > 0 ? layout.reasons : [{ text: 'No threats flagged in this window.' }];
+  let reasonsH = 0;
+  reasonLines.forEach((line) => {
+    reasonsH += doc.heightOfString(line.text, { width: reasonsW }) + 2;
+  });
+  return topH + 8 + Math.max(severityH, reasonsH);
+}
+
+function drawInkyLayout(doc, x, y, w, layout) {
+  const reasonsW = w - INKY_SEVERITY_COL_W - INKY_COL_GAP;
+  const cy = drawKpiTileRow(doc, x, y, w, layout.topKpis, 2) + 8;
+  const severityBottom = drawKpiTileRow(doc, x, cy, INKY_SEVERITY_COL_W, layout.severityKpis, 1);
+  const reasonLines = layout.reasons.length > 0 ? layout.reasons : [{ text: 'No threats flagged in this window.', color: MUTED, italic: true }];
+  let ty = cy;
+  reasonLines.forEach((line) => {
+    doc
+      .font(line.italic ? 'Helvetica-Oblique' : 'Helvetica')
+      .fontSize(8)
+      .fillColor(line.color || INK)
+      .text(line.text, x + INKY_SEVERITY_COL_W + INKY_COL_GAP, ty, { width: reasonsW });
+    ty = doc.y + 2;
+  });
+  doc.fillColor(INK);
+  return Math.max(severityBottom, ty);
+}
+
 function measureCyberCardHeight(doc, w, spec) {
   let h = 8 + 16; // top padding + title line
   if (spec.donut) {
     h += measureDonutHeight(doc, w - 20, spec.donut.legend) + 8;
+  }
+  if (spec.inkyLayout) {
+    h += measureInkyLayoutHeight(doc, w - 20, spec.inkyLayout) + 8;
   }
   if (spec.kpis.length > 0) {
     const cols = spec.kpiCols || spec.kpis.length;
@@ -1361,6 +1460,9 @@ function drawCyberCard(doc, x, y, w, spec) {
     // own comment gives, or this card's own KPI tiles/border drawn right
     // after would inherit it and render with an absurdly thick outline.
     doc.lineWidth(1);
+  }
+  if (spec.inkyLayout) {
+    cy = drawInkyLayout(doc, x + 10, cy, w - 20, spec.inkyLayout) + 8;
   }
   if (spec.kpis.length > 0) {
     cy = drawKpiTileRow(doc, x + 10, cy, w - 20, spec.kpis, spec.kpiCols || spec.kpis.length) + 8;
