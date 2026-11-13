@@ -179,9 +179,54 @@ export function mount(container) {
       certTransparencyNoteHtml(data.certTransparency) +
       registrationHtml(data.registration) +
       nsHtml(data.ns, data.hoster, data.domain) +
+      nsButtonsHtml(data) +
       tableHtml +
       notFoundHtml(data.notFound) +
       soaHtml(data.soa);
+  }
+
+  // TPP Wholesale / Cloudflare quick-link buttons, by request -- placed
+  // right after the Name Servers box in the HTML above, which (like
+  // Domain Registration/Name Servers themselves) lands beside it rather
+  // than below, since all three share the same inline-block/vertical-
+  // align:top treatment (.dns-check-compact-table / .dns-check-ns-buttons).
+  // Same button markup/classes as What's On's own external-system quick
+  // links (externalLinkHtml() in whats-on/client.js) -- a plain, not
+  // per-domain/per-account, portal login URL for each, since neither TPP
+  // nor Cloudflare has a way to deep-link straight to one specific
+  // domain's own management screen.
+  //
+  // TPP Wholesale: shown when this domain's real registrar (Domain
+  // Registration's own Registrar field, from getRegistrationInfo() in
+  // server.js) is tagged "(TPP)" -- our own accredited-registrar tag,
+  // not just "DNS happens to be hosted at tppwholesale.com.au" (that's
+  // the separate Cloudflare-style source/hoster check TPP's own
+  // nsHtml() hoster guess already covers).
+  //
+  // Cloudflare: shown when data.source === 'cloudflare' -- this request
+  // already came back as a complete record set pulled live from one of
+  // OUR discovered Cloudflare accounts (cloudflareFindZone() in
+  // server.js tries every one of them), exactly "any one of our
+  // Cloudflare accounts". Independent of the TPP check above -- a domain
+  // can be registered through our TPP account while its DNS is hosted on
+  // our Cloudflare, so both buttons can show together.
+  function nsButtonsHtml(data) {
+    const isTppRegistrar = !!(data.registration && data.registration.registrar && /\(TPP\)/.test(data.registration.registrar));
+    const isOurCloudflare = data.source === 'cloudflare';
+    if (!isTppRegistrar && !isOurCloudflare) return '';
+    const buttons = [];
+    if (isTppRegistrar) buttons.push(externalLinkHtml({ label: 'TPP Wholesale', icon: '🌐', url: 'https://www.tppwholesale.com.au/sign-in/' }));
+    if (isOurCloudflare) buttons.push(externalLinkHtml({ label: 'CloudFlare', icon: '☁️', url: 'https://dash.cloudflare.com/' }));
+    return `<div class="dns-check-ns-buttons"><div class="start-here-buttons">${buttons.join('')}</div></div>`;
+  }
+
+  // Same markup as whats-on/client.js's own externalLinkHtml() -- kept as
+  // a second copy rather than a shared import, matching how every other
+  // small rendering helper on this dashboard stays local to its own
+  // page's client.js.
+  function externalLinkHtml(link) {
+    const iconHtml = link.icon ? `<span class="button-link-icon" aria-hidden="true">${link.icon}</span>` : '';
+    return `<a class="button-link" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${iconHtml}${escapeHtml(link.label)}</a>`;
   }
 
   // Registrar + expiry date, by request -- shown above the Name Servers

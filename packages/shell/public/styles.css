@@ -3478,6 +3478,16 @@ table {
 .dns-check-compact-table table {
   width: auto;
 }
+/* TPP Wholesale/Cloudflare quick-link buttons (nsButtonsHtml() in
+   client.js) -- same inline-block/vertical-align:top treatment as
+   .dns-check-compact-table above so this sits beside the Name Servers
+   box rather than below it, without inheriting that class's own
+   table-specific width rule (there's no table in here, just a stacked
+   .start-here-buttons column). */
+.dns-check-ns-buttons {
+  display: inline-block;
+  vertical-align: top;
+}
 
 .dns-check-notfound-wrap {
   margin-bottom: 1.5rem;
