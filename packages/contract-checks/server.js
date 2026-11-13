@@ -352,6 +352,11 @@ function shapeItem(row) {
     ticketLinks: JSON.parse(row.ticket_autotask_ids_json || '[]'),
     products: JSON.parse(row.products_json || '[]'),
     currentTotal: row.current_total,
+    // {type: 'year'|'month', duration} -- a renewal order's own underlying
+    // subscription.subscriptionPeriod (sync.js), null for every other
+    // order_type. Lets the client reuse its own termType() helper, same
+    // as Subscriptions Expiring already does.
+    term: row.term_json ? JSON.parse(row.term_json) : null,
     checkedContractAt: row.checked_contract_at,
     checkedContractByName: row.checked_contract_by_name,
     infoQuestion: row.info_question,

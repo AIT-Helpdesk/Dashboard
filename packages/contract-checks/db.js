@@ -65,6 +65,12 @@ db.exec(`
     ticket_autotask_id INTEGER,
     products_json TEXT,                   -- JSON [{name, quantity}], same shape Ingram Orders already uses
     current_total INTEGER,                -- change orders' subscription-level current seat total
+    -- A renewal order's own underlying subscription.subscriptionPeriod
+    -- ({type: 'year'|'month', duration}), by request -- for Mark Renewals
+    -- as Done's green-shade-if-Annual list. JSON, same shape/field
+    -- Ingram Subscriptions' own server.js already reads for its Term
+    -- column; null for every other order_type, which has no such concept.
+    term_json TEXT,
 
     -- "Checked Contract"
     checked_contract_at TEXT, checked_contract_by_email TEXT, checked_contract_by_name TEXT,
@@ -316,6 +322,20 @@ function migrateAddTicketAutotaskIdsJson() {
   }
 }
 migrateAddTicketAutotaskIdsJson();
+
+// Migration: term_json -- see its own column comment above. Same
+// pragma_table_info column-existence check every migration in this file
+// already uses (unlike a plain string .includes() check against
+// sqlite_master's stored SQL text, which can false-positive against an
+// existing column whose name is a substring of the new one -- bit this
+// package once already, see access4-sms/db.js's own migrateAddMessageStatus()
+// comment for the real incident).
+function migrateAddTermJson() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('items')`).all();
+  if (columns.some((c) => c.name === 'term_json')) return;
+  db.exec(`ALTER TABLE items ADD COLUMN term_json TEXT`);
+}
+migrateAddTermJson();
 
 // One-time correction: terminations first synced into their own
 // 'ingram_termination' process_type, before being merged into the main
@@ -878,6 +898,7 @@ function upsertOrder(order) {
     $ticketAutotaskIdsJson: JSON.stringify(ticketLinks),
     $productsJson: JSON.stringify(order.products || []),
     $currentTotal: order.currentTotal ?? null,
+    $termJson: order.term ? JSON.stringify(order.term) : null,
   };
 
   if (existing) {
@@ -887,7 +908,7 @@ function upsertOrder(order) {
          client_name = $clientName, status = $status, creation_date = $creationDate,
          provisioning_date = $provisioningDate, pending_date = $pendingDate, po_number = $poNumber,
          ticket_autotask_id = $ticketAutotaskId, ticket_autotask_ids_json = $ticketAutotaskIdsJson,
-         products_json = $productsJson, current_total = $currentTotal,
+         products_json = $productsJson, current_total = $currentTotal, term_json = $termJson,
          updated_at = $updatedAt
        WHERE id = $id`
     ).run({ ...shared, $updatedAt: now, $id: existing.id });
@@ -899,11 +920,11 @@ function upsertOrder(order) {
       `INSERT INTO items (
          process_type, source_order_id, order_number, order_type, customer_id, client_name, status,
          creation_date, provisioning_date, pending_date, po_number, ticket_autotask_id, ticket_autotask_ids_json,
-         products_json, current_total, created_at, updated_at
+         products_json, current_total, term_json, created_at, updated_at
        ) VALUES (
          $processType, $sourceOrderId, $orderNumber, $orderType, $customerId, $clientName, $status,
          $creationDate, $provisioningDate, $pendingDate, $poNumber, $ticketAutotaskId, $ticketAutotaskIdsJson,
-         $productsJson, $currentTotal, $createdAt, $updatedAt
+         $productsJson, $currentTotal, $termJson, $createdAt, $updatedAt
        )`
     )
     .run({ ...shared, $processType: order.processType, $sourceOrderId: order.sourceOrderId, $createdAt: now, $updatedAt: now });

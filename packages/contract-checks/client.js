@@ -1859,21 +1859,30 @@ export function mount(container) {
               <th>Client</th>
               <th>Order #</th>
               <th>Product</th>
+              <th>Term</th>
               <th>Created</th>
             </tr>
           </thead>
           <tbody>
             ${eligibleItems
-              .map(
-                (o) => `
-              <tr>
+              .map((o) => {
+                // Real structured term (sync.js's own subscriptionPeriod
+                // capture, server.js's shapeItem()), same termType()
+                // helper Subscriptions Expiring already uses elsewhere on
+                // this page -- not a product-name text guess (tried that
+                // first, by request; it wasn't reliable). Annual shades
+                // the row green, by request.
+                const term = termType(o.term);
+                return `
+              <tr${term === 'Annual' ? ' class="cc-mark-renewals-row--annual"' : ''}>
                 <td><input type="checkbox" class="cc-mark-renewals-row-select" data-id="${o.id}" checked /></td>
                 <td>${escapeHtml(o.clientName)}</td>
                 <td class="ticket-number">${escapeHtml(o.orderNumber)}</td>
                 <td class="cc-product-cell">${escapeHtml((o.products || []).map((p) => p.name).join(', '))}</td>
+                <td class="ticket-number">${term || ''}</td>
                 <td class="ticket-number">${formatDateTime(o.creationDate)}</td>
-              </tr>`
-              )
+              </tr>`;
+              })
               .join('')}
           </tbody>
         </table>

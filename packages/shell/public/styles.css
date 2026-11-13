@@ -2637,12 +2637,26 @@ h1 {
 .check-client-page .chk-resolved-value {
   font-weight: 600;
 }
-/* .chk-resolved-edit-btn is now also a plain .wsp-icon-btn (see
-   renderResolvedDisplay() in client.js) -- this just nudges its line-height
-   to match the surrounding inline text; color/hover come from the shared
-   class, same hover-brightens convention every other .wsp-icon-btn uses. */
-.check-client-page .chk-resolved-edit-btn {
+/* .chk-resolved-edit-btn lives inside this page's own .date-form -- the
+   same recurring specificity bug documented elsewhere in this file
+   (search "specificity bug"): `.date-form button` (class + element)
+   outranks the plain single-class .wsp-icon-btn, so without a
+   page-scoped override of its own, this rendered as that rule's full
+   solid-blue button look (padding/background/color) instead of the
+   plain pencil the code already intends. Re-declared here with enough
+   specificity (two classes + element) to win, same real values
+   .wsp-icon-btn itself already sets, plus the line-height nudge to match
+   the surrounding inline text. */
+.check-client-page .date-form button.chk-resolved-edit-btn {
+  background: none;
+  border: none;
+  padding: 0.1rem 0.2rem;
+  font-size: 0.9rem;
+  color: var(--muted);
   line-height: 1;
+}
+.check-client-page .date-form button.chk-resolved-edit-btn:hover {
+  color: var(--accent);
 }
 .check-client-page .chk-resolved-input,
 .check-client-page .chk-resolved-select {
@@ -5028,6 +5042,14 @@ a.client-summary-service-badge {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 .calendar-entry--completed {
+  background: color-mix(in srgb, #16a34a 12%, transparent);
+}
+/* Mark Renewals as Done modal (openMarkRenewalsModal() in
+   contract-checks/client.js) -- shades a row green when its real term
+   (sync.js's own subscriptionPeriod capture, not a product-name guess --
+   see that function's own comment) is Annual, by request. Same
+   low-opacity color-mix convention as .calendar-entry--completed above. */
+.cc-mark-renewals-row--annual {
   background: color-mix(in srgb, #16a34a 12%, transparent);
 }
 /* Background shading (not a border accent) for the rest of the real

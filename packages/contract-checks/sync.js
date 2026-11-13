@@ -176,6 +176,28 @@ async function fetchOrderDetailWithRetry(id, token, attempt = 1) {
       }
     }
 
+    // License term (Annual vs. Monthly), for Mark Renewals as Done's own
+    // green-shade-if-Annual request -- there's no structured term field on
+    // an ORDER the way there is on a subscription (confirmed live: a
+    // renewal order's own product name carries no reliable signal, e.g.
+    // some annual-term lines have a literal " - ANNUAL" suffix and some
+    // don't). Real source is the underlying subscription's own
+    // `subscriptionPeriod` ({type: 'year'|'month', duration}) -- same
+    // shape/field termType() elsewhere on this page already trusts for
+    // Subscriptions Expiring, confirmed live against real renewal orders
+    // here too (a plain "(NCE COM MTH)" line came back {type:'month'}, a
+    // " - ANNUAL -" line came back {type:'year'}). getSubOnce() below is
+    // memoized, so for a 'renewal' order this costs nothing extra on top
+    // of the products-fallback fetch above (every real renewal order seen
+    // has empty products directly on the order, so that fallback already
+    // runs); scoped to 'renewal' here so no OTHER order type gains a new,
+    // unneeded subscription fetch just for a field it'll never use.
+    let term = null;
+    if (detail.type === 'renewal' && detail.subscriptionId) {
+      const s = await getSubOnce();
+      term = s?.subscriptionPeriod || null;
+    }
+
     return {
       status: detail.status || null,
       type: detail.type || null,
@@ -194,6 +216,7 @@ async function fetchOrderDetailWithRetry(id, token, attempt = 1) {
       products,
       currentTotal,
       pendingDate,
+      term,
     };
   } catch (err) {
     if (err.response?.status === 429 && attempt < MAX_ATTEMPTS) {
@@ -309,6 +332,7 @@ async function syncOneOrder(orderStub, token, customerNameById) {
     ticketLinks,
     products: detail.products,
     currentTotal: detail.currentTotal,
+    term: detail.term,
   });
   return true;
 }
