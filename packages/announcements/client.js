@@ -95,21 +95,20 @@ export function mount(container) {
     }
   }
 
-  // `canManage` (creator or dashboard admin) now comes per-row from the
-  // server, not a single page-wide `editable` flag -- anyone can add an
-  // announcement, but only its creator or the admin sees that row's own
-  // Edit/Archive/Ack's controls. `canDelete` is separate and narrower (admin
-  // only, by request: "the creator can Archive but not delete") -- a row's
-  // creator can see Edit/Archive without Delete. The actions column itself
-  // only appears when at least one visible row has EITHER permission; a row
-  // with neither still gets a blank filler cell so every row keeps the same
-  // column count as its header.
+  // `canManage` (creator or dashboard admin) comes per-row from the server
+  // and gates Edit/Archive; `canDelete` is separate and narrower (admin
+  // only, by request: "the creator can Archive but not delete"). Ack's --
+  // by request -- is open to everyone, gated only on the row actually
+  // requiring acknowledgement, not on canManage/canDelete. The actions
+  // column itself only appears when at least one visible row has ANY of
+  // these; a row with none still gets a blank filler cell so every row
+  // keeps the same column count as its header.
   function render(announcements) {
     if (!announcements || announcements.length === 0) {
       tableWrapEl.innerHTML = `<p class="status">No${includeRetired ? '' : ' active'} announcements yet.</p>`;
       return;
     }
-    const anyActionable = announcements.some((a) => a.canManage || a.canDelete);
+    const anyActionable = announcements.some((a) => a.canManage || a.canDelete || a.ackRequired);
     const table = document.createElement('table');
     table.className = 'ann-table';
     table.innerHTML = `
@@ -129,12 +128,13 @@ export function mount(container) {
     tbody.innerHTML = announcements
       .map((a) => {
         const retired = !!a.retiredAt;
-        const actionsCell = a.canManage || a.canDelete
+        const rowActionable = a.canManage || a.canDelete || a.ackRequired;
+        const actionsCell = rowActionable
           ? `<td class="ann-actions-cell">
                ${a.canManage ? `<button type="button" class="button-link button-link--small ann-edit-button" data-id="${a.id}">Edit</button>` : ''}
                ${a.canManage ? `<button type="button" class="button-link button-link--small ann-retire-button" data-id="${a.id}">${retired ? 'Restore' : 'Archive'}</button>` : ''}
                ${a.canDelete ? `<button type="button" class="button-link button-link--small ann-delete-button" data-id="${a.id}">Delete</button>` : ''}
-               ${a.canManage && a.ackRequired ? `<button type="button" class="button-link button-link--small ann-ack-view-button" data-id="${a.id}">Ack's</button>` : ''}
+               ${a.ackRequired ? `<button type="button" class="button-link button-link--small ann-ack-view-button" data-id="${a.id}">Ack's</button>` : ''}
              </td>`
           : anyActionable
           ? '<td></td>'
@@ -235,12 +235,10 @@ export function mount(container) {
     try {
       const data = await fetchJson(`/api/announcements/${announcement.id}/acknowledgements`, 'GET');
       const acks = data.acknowledgements || [];
-      if (acks.length === 0) {
-        statusEl.textContent = 'No one has acknowledged this yet.';
-        return;
-      }
       statusEl.hidden = true;
-      listWrapEl.innerHTML = `
+      const ackedTableHtml = acks.length === 0
+        ? '<p class="status">No one has acknowledged this yet.</p>'
+        : `
         <table class="ann-table">
           <thead>
             <tr class="shaded-row">
@@ -261,7 +259,43 @@ export function mount(container) {
               )
               .join('')}
           </tbody>
-        </table>
+        </table>`;
+      // notAcknowledged -- who's actually expected to see this announcement
+      // (its real targeted team(s), or everyone if untargeted) but hasn't
+      // acked it yet. null means the server's own Autotask lookup for that
+      // failed -- shown as a plain note rather than hiding the section,
+      // since the acked list above still loaded fine.
+      let notAckedHtml;
+      if (data.notAcknowledged === null) {
+        notAckedHtml = `<p class="status error">Couldn't load who hasn't acknowledged yet: ${escapeHtml(data.notAcknowledgedError || 'unknown error')}</p>`;
+      } else if (!data.notAcknowledged || data.notAcknowledged.length === 0) {
+        notAckedHtml = '<p class="status">Everyone it applies to has acknowledged.</p>';
+      } else {
+        notAckedHtml = `
+        <table class="ann-table">
+          <thead>
+            <tr class="shaded-row">
+              <th>Name</th>
+              <th>Email</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.notAcknowledged
+              .map(
+                (u) => `
+              <tr>
+                <td>${escapeHtml(u.name || '')}</td>
+                <td>${escapeHtml(u.email)}</td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>`;
+      }
+      listWrapEl.innerHTML = `
+        ${ackedTableHtml}
+        <h3 class="ann-ack-subheading">Hasn't acknowledged yet</h3>
+        ${notAckedHtml}
       `;
     } catch (err) {
       statusEl.className = 'status error';

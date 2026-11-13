@@ -11353,6 +11353,12 @@ tr.accrued-time-yellow-row th {
   display: block;
   margin: 0.15rem 0;
 }
+/* Ack's modal's own "Hasn't acknowledged yet" section heading, between the
+   acked table and the not-yet-acked one. */
+.ann-ack-subheading {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.85rem;
+}
 /* Compound selector, not a bare .ann-modal-panel -- same same-specificity
    footgun .pm-modal-panel's own comment documents just above. */
 .history-modal-panel.ann-modal-panel {

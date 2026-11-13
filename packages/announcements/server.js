@@ -1,5 +1,5 @@
 const express = require('express');
-const { getClient, resolveResourceIdByEmail, fetchServiceDeskAndProfessionalServicesMembership } = require('@dashboard/autotask-client');
+const { getClient, listAll, resolveResourceIdByEmail, fetchServiceDeskAndProfessionalServicesMembership } = require('@dashboard/autotask-client');
 // Single source of truth for "only the dashboard admin can change this
 // shared, dashboard-wide setting" -- same gate sidebar layout, Ticket
 // Info's permanent tabs, Contract Checks' note-template editor, What's
@@ -25,15 +25,44 @@ router.use(express.json());
 const KNOWN_TEAM_VALUES = new Set(['serviceDesk', 'professionalServices', 'leadership']);
 const VALID_SEVERITIES = new Set(['info', 'warning', 'critical']);
 
+// Resources.licenseType 7 is "API User" -- same real fact @dashboard/
+// accrued-time's own fetchAccrualResources() already relies on -- excluded
+// here too, since a service account was never going to acknowledge
+// anything.
+const API_USER_LICENSE_TYPE = 7;
+
+// Who's actually eligible to see (and so expected to acknowledge) a given
+// announcement, for the "hasn't acknowledged yet" list below -- an
+// announcement with no team targets is shown to literally everyone, so
+// every active, non-API-user Autotask resource counts as eligible; one
+// targeted at specific team(s) narrows that down via the same real
+// ResourceRoleDepartments membership GET /active already uses.
+async function fetchEligibleUsers(client, targets) {
+  const resources = await listAll(client.resources, [{ op: 'eq', field: 'isActive', value: true }]);
+  const people = resources
+    .filter((r) => r.licenseType !== API_USER_LICENSE_TYPE)
+    .map((r) => ({ id: r.id, email: r.email || null, name: [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || r.email || `Resource #${r.id}` }));
+  if (!targets || targets.length === 0) return people;
+  const membership = await fetchServiceDeskAndProfessionalServicesMembership(client);
+  const eligibleIds = new Set();
+  for (const t of targets) {
+    const set = membership[t.value];
+    if (set) for (const resourceId of set) eligibleIds.add(resourceId);
+  }
+  return people.filter((p) => eligibleIds.has(p.id));
+}
+
 function actorFrom(req) {
   return { email: req.session.user.email, name: req.session.user.name };
 }
 
 // By request: anyone signed in may ADD an announcement, but managing one
-// (edit/archive/restore/delete, and viewing who's acknowledged it) is
-// restricted to the dashboard admin OR the original creator of that
-// specific announcement -- never every signed-in user, and never gated on
-// isDashboardAdmin() alone the way the rest of this route file used to be.
+// (edit/archive/restore/delete) is restricted to the dashboard admin OR the
+// original creator of that specific announcement -- never every signed-in
+// user, and never gated on isDashboardAdmin() alone the way the rest of
+// this route file used to be. Viewing who's acknowledged (GET
+// /:id/acknowledgements, below) is deliberately NOT gated by this -- by
+// request, that one's open to everyone.
 function isOwnerOrAdmin(req, announcement) {
   return isDashboardAdmin(req) || announcement.created_by_email === req.session.user.email;
 }
@@ -207,11 +236,32 @@ router.put('/:id', requireOwnerOrAdmin, (req, res) => {
   }
 });
 
-// Who's acknowledged a given announcement -- same creator-or-admin gate as
-// the other management routes here now, so a creator who can manage their
-// own announcement can also see who's seen it; everyone else still can't.
-router.get('/:id/acknowledgements', requireOwnerOrAdmin, (req, res) => {
-  res.json({ acknowledgements: listAcknowledgements(req.announcement.id) });
+// Who's acknowledged a given announcement -- by request, open to every
+// signed-in user, not just its creator or the admin (unlike Edit/Archive/
+// Delete above, which stay restricted). Also returns notAcknowledged: the
+// real eligible-but-hasn't-acked list, via fetchEligibleUsers() above; a
+// failure fetching that (e.g. an Autotask hiccup) doesn't block the
+// acknowledgements themselves, which come straight out of this page's own
+// SQLite db either way.
+router.get('/:id/acknowledgements', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
+  const announcement = getAnnouncement(id);
+  if (!announcement) return res.status(404).json({ error: 'Announcement not found.' });
+  const acknowledgements = listAcknowledgements(id);
+  try {
+    const targets = JSON.parse(announcement.targets_json || '[]');
+    const client = await getClient();
+    const eligible = await fetchEligibleUsers(client, targets);
+    const ackedEmails = new Set(acknowledgements.map((a) => a.email));
+    const notAcknowledged = eligible
+      .filter((u) => u.email && !ackedEmails.has(u.email))
+      .map((u) => ({ name: u.name, email: u.email }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ acknowledgements, notAcknowledged });
+  } catch (err) {
+    res.json({ acknowledgements, notAcknowledged: null, notAcknowledgedError: err.message });
+  }
 });
 
 router.post('/:id/retire', requireOwnerOrAdmin, (req, res) => {
