@@ -486,8 +486,9 @@ function drawCoverHeader(doc, report) {
   });
   doc.fillColor(MUTED).font('Helvetica').fontSize(12).text('Managed Services Report', boxX + pad, leftStartY + titleH + 6, { width: leftColW });
 
-  // Decorative wave graphic, real file 962x195 (confirmed via
-  // System.Drawing before copying it in), ratio ~4.93:1. Sized to fill the
+  // Decorative wave graphic, real file 1501x283 (confirmed via
+  // System.Drawing before copying it in -- "AIT-Pattern-Graphic-2026.png",
+  // the 2026 refresh of this same graphic), ratio ~5.30:1. Sized to fill the
   // space between the box's own flush top-left corner and the client name
   // above -- height-bound by whatever room is actually left there (varies
   // per client -- a short name leaves more room above it than a 2-line
@@ -500,8 +501,8 @@ function drawCoverHeader(doc, report) {
   // not visually running under the logo).
   const availableImgH = Math.max(0, leftStartY - waveGap - (boxY + flushInset));
   const maxWaveWByLogo = logoX - boxX - 8; // 8pt breathing room before the logo
-  const waveW = Math.min(maxWaveWByLogo, availableImgH * (962 / 195));
-  const waveH = waveW / (962 / 195);
+  const waveW = Math.min(maxWaveWByLogo, availableImgH * (1501 / 283));
+  const waveH = waveW / (1501 / 283);
   // Clipped to the box's own rounded-rect shape, by request ("remove the
   // overlap outside the box border") -- doc.image() draws a plain sharp-
   // cornered rectangle, which otherwise pokes past the rounded corner's
