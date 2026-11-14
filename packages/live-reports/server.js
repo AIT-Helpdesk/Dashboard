@@ -1,5 +1,5 @@
 const express = require('express');
-const { matchesWildcard, mapWithConcurrency, getClient, resolveSingleCompany, fetchByFieldIn, getPicklistLabels } = require('@dashboard/autotask-client');
+const { matchesWildcard, mapWithConcurrency, getClient, resolveSingleCompany, fetchByFieldIn, getPicklistLabels, listAll, parseWildcard } = require('@dashboard/autotask-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 // Datto RMM (Live) section, by request -- reuses Meeting Prep's own
 // buildDattoLiveDevicesComponent() in-process (same "reuse the sibling's
@@ -36,6 +36,12 @@ const { buildReportPdf, CYBERSECURITY_EXPLANATIONS, SCORE_EXPLANATIONS } = requi
 const { hasAnthropicCredentials, buildCommentary } = require('./ai-commentary.js');
 const { getCybersecurityServicesTable, getProactiveMaintenanceJobsTable } = require('./sharepoint-client.js');
 const emailDomainProtection = require('./email-domain-protection.js');
+// The central shell database's own UDF-to-system reference table, by
+// request -- read ONCE here (static, rarely-changing metadata: which real
+// UDF a given system uses), rather than hardcoding "Name:SaaS Backups" as
+// a literal string a second time in this file. See that module's own
+// comment for the full list/reasoning.
+const { getUdfSystemMatchBySystem } = require('@dashboard/shell/udf-system-matches-db.js');
 
 // Generate Summary (AI narrative) gated to a named allow-list, by
 // request -- same comma-separated-names-in-an-env-var convention
@@ -703,8 +709,44 @@ const APP_TYPE_LABELS = {
 };
 const APP_TYPE_ORDER = ['Office365Exchange', 'Office365OneDrive', 'Office365SharePoint', 'Office365Teams'];
 
-async function buildSaasProtectionSummary(siteName, force) {
-  const match = await saasProtection.findDomainMatch(siteName);
+// Resolved ONCE here, at server start, from the central shell reference
+// table -- not hardcoded as a literal string (see the import above).
+const SAAS_PROTECTION_UDF_NAME = getUdfSystemMatchBySystem('Datto SaaS Protection')?.udf_name || null;
+
+// The actual per-CLIENT data (this one company's own classification/UDFs)
+// is the opposite of the reference table above -- fetched fresh, only
+// when actually needed for a specific client, never preloaded for every
+// company on this account. By request ("get the client ones all at once
+// when needing them for a client only"): a short-lived cache keyed by
+// companyId so the 3 real consumers below (Cybersecurity tier in the main
+// report route, the SaaS Protection UDF here, and M365 License Counts)
+// share the SAME single Autotask fetch for one client's report instead of
+// each making their own -- confirmed this was happening (3 real API
+// round-trips for the exact same company record on one report load).
+// Short TTL (a couple of minutes, not this file's usual 20-min caches) --
+// just long enough to cover one report's own couple of closely-spaced
+// requests, not long enough to risk showing a stale classification/UDF
+// value for any real length of time.
+const COMPANY_RESULT_CACHE_TTL_MS = 2 * 60 * 1000;
+const companyResultCache = new Map(); // companyId -> { data, expiresAt }
+async function getCachedCompanyResult(siteName, companyId) {
+  if (!companyId) return resolveSingleCompany(await getClient(), siteName, companyId);
+  const cached = companyResultCache.get(companyId);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+  const client = await getClient();
+  const data = await resolveSingleCompany(client, siteName, companyId);
+  companyResultCache.set(companyId, { data, expiresAt: Date.now() + COMPANY_RESULT_CACHE_TTL_MS });
+  return data;
+}
+
+// udfValue (the resolved Autotask company's own "Name:SaaS Backups" UDF,
+// if it has one -- see buildVendorSummaries() below) is tried FIRST, by
+// request ("ensure a UDF match is used before a direct name match") --
+// a real equals-only match against Data Matching's own confirmed SaaS
+// Protection customer name, ahead of findDomainMatch()'s fuzzy contains-
+// either-way guess, which only runs at all when there's no UDF to go on.
+async function buildSaasProtectionSummary(siteName, force, udfValue) {
+  const match = (udfValue && (await saasProtection.findDomainMatchExact(udfValue))) || (await saasProtection.findDomainMatch(siteName));
   if (!match) return { status: 'ok', installed: false };
   const [billableSeatCount, applications, seats] = await Promise.all([
     saasProtection.getBillableSeatCount(match.customerId, force),
@@ -1090,9 +1132,22 @@ function parseM365Product(desc) {
 }
 const M365_EXCLUDE_PATTERN = /backup|storage/i;
 
-async function getM365LicenseCounts(siteName) {
+// companyId (the Autotask company Live Reports' own Autotask Client
+// lookup already resolved, if known) goes straight to resolveSingleCompany's
+// own id path -- a real id lookup, stronger even than a UDF match (no name
+// text involved at all), by request ("ensure a UDF match is used before a
+// direct name match" -- an id is the strongest form of that). Falls back
+// to the name-based match below only when it's not known (e.g. a direct
+// call that only ever had a siteName to go on).
+// knownCompanyResult (buildVendorSummaries() above already resolved it
+// once for its own SaaS Protection UDF need) is reused as-is when given,
+// so this never makes its own separate, redundant Autotask fetch for a
+// client that's already been resolved this report. Still resolves it
+// itself (via the same shared/cached getCachedCompanyResult, not a raw
+// call) when called directly with no pre-resolved result to reuse.
+async function getM365LicenseCounts(siteName, companyId, knownCompanyResult) {
   const client = await getClient();
-  const companyResult = await resolveSingleCompany(client, siteName);
+  const companyResult = knownCompanyResult || (await getCachedCompanyResult(siteName, companyId));
   if (companyResult.status !== 'ok') return companyResult; // 'not-found' | 'ambiguous' (+ matches), surfaced as-is
 
   const contracts = await fetchByFieldIn(client.contracts, 'companyID', [companyResult.company.id]);
@@ -1137,10 +1192,10 @@ async function getM365LicenseCounts(siteName) {
 // ever has for a client.
 const M365_CACHE_TTL_MS = 20 * 60 * 1000;
 const m365Cache = new Map(); // siteName -> { data, expiresAt }
-async function getCachedM365LicenseCounts(siteName, force) {
+async function getCachedM365LicenseCounts(siteName, force, companyId, knownCompanyResult) {
   const cached = m365Cache.get(siteName);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
-  const data = await getM365LicenseCounts(siteName).catch((err) => {
+  const data = await getM365LicenseCounts(siteName, companyId, knownCompanyResult).catch((err) => {
     console.error(`Live Reports: M365 license count lookup failed for "${siteName}":`, err.message);
     return { status: 'error', error: err.message };
   });
@@ -1166,15 +1221,43 @@ function catchVendorError(promise, label) {
   });
 }
 
-async function buildVendorSummaries(siteName, force) {
+// companyId (the Autotask company the Autotask Client lookup already
+// resolved, if known) is used to fetch that company's OWN UDFs once here
+// -- "Name:SaaS Backups" is the only vendor-matching UDF this Autotask
+// account actually has (confirmed against Data Matching's own write path
+// -- TPP/Ingram Micro/Datto RMM/SaaS Backups are the complete real list;
+// SaaS Alerts, Datto EDR, AutoElevate, Huntress and INKY have no UDF
+// field of their own in this account at all), so SaaS Protection is the
+// only one of these 6 that can actually try a UDF match before its name
+// match, by request. companyId is ALSO passed straight through to M365
+// Licenses below -- a real id lookup there, stronger than any UDF since
+// it's not name/text matching at all.
+async function buildVendorSummaries(siteName, force, companyId) {
+  // ONE fetch (shared/cached, see getCachedCompanyResult above) covers
+  // both this function's own SaaS Protection UDF need AND M365 License
+  // Counts' own company resolution below -- neither makes its own
+  // separate Autotask call any more.
+  let companyResult = null;
+  let saasBackupsUdf = null;
+  if (companyId) {
+    try {
+      companyResult = await getCachedCompanyResult(siteName, companyId);
+      if (companyResult.status === 'ok' && SAAS_PROTECTION_UDF_NAME) {
+        const udf = (companyResult.company.userDefinedFields || []).find((u) => u.name === SAAS_PROTECTION_UDF_NAME);
+        saasBackupsUdf = udf?.value?.trim() || null;
+      }
+    } catch (err) {
+      console.error('Live Reports: could not fetch company UDFs for vendor matching:', err.message);
+    }
+  }
   const [saasAlerts, saasProtectionSummary, dattoEdrSummary, autoElevateSummary, huntressSummary, inkySummary, m365Licenses] = await Promise.all([
     catchVendorError(buildSaasAlertsSummary(siteName, force), 'SaaS Alerts'),
-    catchVendorError(buildSaasProtectionSummary(siteName, force), 'SaaS Protection'),
+    catchVendorError(buildSaasProtectionSummary(siteName, force, saasBackupsUdf), 'SaaS Protection'),
     catchVendorError(buildDattoEdrSummary(siteName, force), 'Datto EDR'),
     catchVendorError(buildAutoElevateSummary(siteName, force), 'AutoElevate'),
     catchVendorError(buildHuntressSummary(siteName, force), 'Huntress'),
     catchVendorError(buildInkySummary(siteName, force), 'Inky'),
-    getCachedM365LicenseCounts(siteName, force),
+    getCachedM365LicenseCounts(siteName, force, companyId, companyResult),
   ]);
   return {
     saasAlerts,
@@ -1191,6 +1274,10 @@ router.get('/', async (req, res) => {
   if (!dattoRmm.hasDattoCredentials()) return res.json({ connected: false });
   const siteTerm = (req.query.site || '').trim();
   if (!siteTerm) return res.status(400).json({ error: 'Query param "site" is required.' });
+  // The Autotask company the client already resolved, if known -- passed
+  // through to resolveCyberServiceTierColumn() below, a real id lookup
+  // rather than a name match, by request.
+  const companyId = req.query.companyId ? Number(req.query.companyId) : null;
   // exactSite, same convention/reasoning Check Client's own Datto RMM
   // section already established -- Datto's siteName is a separate naming
   // system from Autotask's/Ingram's own client names, so a plain wildcard
@@ -1203,7 +1290,16 @@ router.get('/', async (req, res) => {
     const allDevices = await getCachedDevices(force);
     const devices = allDevices.filter((d) => matchesSite(d.site));
     if (devices.length === 0) {
-      return res.json({ connected: true, siteTerm, found: false });
+      // No real Datto RMM match for this client -- by request, the page
+      // still proceeds with whatever else is available (Cybersecurity
+      // Systems/Other Systems, M365 Licenses, Mail Domain Protection),
+      // rather than stopping here entirely. companyId/isTcElite are
+      // still resolved (cheap -- same shared cache every other consumer
+      // uses) so client.js has what it needs to carry on with those,
+      // keyed by the real Autotask company rather than this Datto-site
+      // search term.
+      const tierColumn = await resolveCyberServiceTierColumn(siteTerm, companyId);
+      return res.json({ connected: true, siteTerm, companyId, isTcElite: tierColumn === 'TC Elite', found: false });
     }
 
     // Device audits (disk/memory, one call per device) and the site's
@@ -1302,13 +1398,18 @@ router.get('/', async (req, res) => {
     // in PDF" tick to UNTICKED for anyone who isn't TC Elite, by request --
     // never throws (see this function's own try/catch), degrading to "All
     // Clients" (-> isTcElite: false) rather than losing the report.
-    const tierColumn = await resolveCyberServiceTierColumn(siteName);
+    const tierColumn = await resolveCyberServiceTierColumn(siteName, companyId);
 
     res.json({
       connected: true,
       asOf,
       siteTerm,
       siteName,
+      // Passed straight through from the request -- client.js carries this
+      // forward into its own /vendors and /pdf calls, so a UDF/id match
+      // (where this page has one) is used ahead of a name match throughout
+      // the rest of this report, by request.
+      companyId,
       isTcElite: tierColumn === 'TC Elite',
       found: true,
       dattoLive,
@@ -1344,6 +1445,43 @@ router.get('/', async (req, res) => {
   }
 });
 
+// The lookup itself, by request ("change to using the Autotask Client as
+// the lookup... provide a list to choose from" when more than one real
+// company matches). Same companyName wildcard/exactClient idiom Check
+// Client's own /resolve-client already established, trimmed to just the
+// one field this page actually needs -- the "Name:Datto RMM" UDF, which
+// is the ONLY thing that tells this page which real Datto site a company
+// corresponds to. By request, no "assume matches"/fallback-to-company-
+// name guess here (unlike Check Client's own Ingram Client/Datto Site
+// fields) -- dattoSite comes back null when the UDF is blank, and
+// client.js reports that honestly rather than guessing a Datto site name
+// that might not exist.
+router.get('/resolve-client', async (req, res) => {
+  const clientSearch = (req.query.client || '').trim();
+  const exactClient = req.query.exactClient === 'true';
+  if (!clientSearch) return res.json({ matches: [] });
+  try {
+    const client = await getClient();
+    const clientWildcard = exactClient ? { op: 'eq', value: clientSearch } : parseWildcard(clientSearch);
+    const matchFilter = clientWildcard
+      ? [{ op: clientWildcard.op, field: 'companyName', value: clientWildcard.value }]
+      : [{ op: 'eq', field: 'companyName', value: clientSearch }];
+    const matches = await listAll(client.companies, matchFilter);
+    const dattoSiteUdf = (company) => {
+      const udf = (company.userDefinedFields || []).find((u) => u.name === 'Name:Datto RMM');
+      return udf?.value?.trim() || null;
+    };
+    res.json({
+      matches: matches
+        .map((c) => ({ companyId: c.id, companyName: c.companyName, dattoSite: dattoSiteUdf(c) }))
+        .sort((a, b) => a.companyName.localeCompare(b.companyName)),
+    });
+  } catch (err) {
+    console.error('Live Reports: resolve-client failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // "Other Systems" (SaaS Alerts/SaaS Protection/Datto EDR/AutoElevate/
 // Huntress) -- its OWN route, fetched separately by client.js AFTER the
 // main report above has already rendered, not inline in that route.
@@ -1363,7 +1501,8 @@ router.get('/vendors', async (req, res) => {
   if (!siteName) return res.status(400).json({ error: 'Query param "siteName" is required.' });
   try {
     const force = req.query.force === 'true';
-    const vendors = await buildVendorSummaries(siteName, force);
+    const companyId = req.query.companyId ? Number(req.query.companyId) : null;
+    const vendors = await buildVendorSummaries(siteName, force, companyId);
     res.json({ vendors });
   } catch (err) {
     console.error(err);
@@ -1570,10 +1709,10 @@ function isCyberServiceImplemented(name, vendors, mdp, edp) {
 // ambiguous/missing match" resolveSingleCompany() already follows
 // elsewhere in this file). Never throws -- a classification lookup
 // failure degrades to "All Clients" rather than losing the whole panel.
-async function resolveCyberServiceTierColumn(siteName) {
+async function resolveCyberServiceTierColumn(siteName, companyId) {
   try {
     const client = await getClient();
-    const companyResult = await resolveSingleCompany(client, siteName);
+    const companyResult = await getCachedCompanyResult(siteName, companyId);
     if (companyResult.status !== 'ok') return 'All Clients';
     const code = companyResult.company.classification;
     if (code == null) return 'All Clients';
@@ -1651,7 +1790,7 @@ router.post('/pdf', async (req, res) => {
     // list when cyberServiceItems is undefined/empty.
     let cyberServiceItems;
     try {
-      const [rows, tierColumn] = await Promise.all([getCybersecurityServicesTable(), resolveCyberServiceTierColumn(report.siteName)]);
+      const [rows, tierColumn] = await Promise.all([getCybersecurityServicesTable(), resolveCyberServiceTierColumn(report.siteName, report.companyId)]);
       cyberServiceItems = buildCyberServiceItems(rows, vendors, mailDomainProtection, tierColumn, emailDomainProtectionData);
     } catch (err) {
       console.error('live-reports: Cybersecurity Services table fetch failed, falling back to the static list:', err.message);

@@ -6852,6 +6852,13 @@ tbody tr[draggable="true"] {
   width: 24rem;
   max-width: 90vw;
 }
+/* openAlertMessageModal() in live-reports/client.js -- 100% bigger than
+   the shared .wsp-qa-modal-panel default (24rem), by request -- this one
+   shows a full, sometimes long Datto RMM alert message, not a short form. */
+.wsp-qa-modal-panel.lr-alert-message-modal-panel {
+  width: 48rem;
+  max-width: 90vw;
+}
 /* Sticky-note look for this one modal specifically, by request -- warm
    paper colour, a slight rotation, and a lifted/curled bottom-right
    corner. Own class (not a change to .history-modal-panel/
@@ -9063,6 +9070,35 @@ tr.accrued-time-yellow-row th {
   color: var(--accent);
 }
 
+/* Small glasses-icon link on a truncated Open Alerts message
+   (openAlertsListHtml() in live-reports/client.js), replacing an earlier
+   "View Full" text link by request -- same plain-icon-button shell/
+   hover-brightens convention .wsp-icon-btn uses dashboard-wide (not that
+   class directly, since this needs inline-with-text vertical alignment
+   .wsp-icon-btn doesn't provide). */
+.lr-alert-view-full-btn {
+  display: inline-flex;
+  vertical-align: -0.15rem;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 0.3rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+.lr-alert-view-full-btn:hover {
+  color: var(--accent);
+}
+/* openAlertMessageModal()'s own full-message text -- preformatted so a
+   long run of literal "=" padding (confirmed live, a real Datto RMM
+   alert body) wraps instead of forcing the popup wider than its own
+   fixed width. */
+.lr-alert-full-message {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.9rem;
+}
+
 /* Sized for its own Client/Subscription/Status/Auto-Renews/Term/Expires/
    Days table -- same reasoning as .cc-mark-renewals-modal-panel above. */
 .history-modal-panel.cc-subs-expiring-modal-panel {
@@ -9967,6 +10003,67 @@ tr.accrued-time-yellow-row th {
    the server-side crop generation and the /images route are untouched in
    case a future PDF/PPTX export wants pixel-exact source images again,
    they're just not rendered on this page any more. */
+/* "<Client Name> -- as of <date>" heading (render()/renderNoDattoSite()
+   in live-reports/client.js) -- bold, green, a little bigger than plain
+   body text, by request. Same #16a34a as .text-highlight-green/
+   .cell-flag-green elsewhere on this dashboard, not a fresh one-off
+   shade. */
+.live-reports-client-heading {
+  font-weight: 700;
+  color: #16a34a;
+  font-size: 1.05rem;
+  /* Gap from the search/button row above, by request. */
+  margin: 1rem 0 0.75rem;
+}
+/* The date part of the heading -- normal weight/size and grey, with "as
+   of" dropped entirely (just the plain date/time), by request. Overrides
+   the bold/green/larger styling its parent .live-reports-client-heading
+   sets, which still applies to the client name text itself. */
+.live-reports-client-asof {
+  font-weight: 400;
+  font-size: 1rem;
+  color: var(--muted);
+}
+/* "Systems Not Found" summary (computeSystemsNotFound()/
+   systemsNotFoundHtml() in live-reports/client.js), shown at the top of
+   the page when a client has no real Datto RMM match -- small text, by
+   request. */
+.live-reports-systems-not-found {
+  margin: 0 0 1rem;
+  padding: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+/* resolveClientAndLoad()'s own ambiguous-match picker in live-reports/
+   client.js -- plain clickable list, one real Autotask company per row,
+   same .button-link--small pill look every other small action button on
+   this dashboard uses, just stacked instead of inline (there can be
+   several real matches). */
+.live-reports-client-picker {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-width: 24rem;
+}
+.live-reports-client-picker-btn {
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.live-reports-client-picker-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* Live Reports' own main-section grouping box, by request ("a box (border
    only)... to distinguish them better on screen") -- border only, no fill,
    so it doesn't read as another nested card on top of the real .mtg-widget
@@ -11327,6 +11424,447 @@ tr.accrued-time-yellow-row th {
   color: var(--fg);
   font-size: 0.85rem;
 }
+
+/* SMS page (packages/access4-sms) -- two-pane list/detail layout, by
+   request. Left pane: a scrollable conversation list. Right pane: a
+   self-contained "app embedded in the page" card (.a4s-app below) --
+   identity fields, thread, compose, Simulate Reply, notes, all stacked
+   vertically in one narrow column, by request ("the right side... can be
+   all below each other", "does not need to be 80% of the page").
+   Genuinely new layout for this dashboard -- no existing page has a real
+   side-by-side list+detail split to mirror. */
+.a4s-layout {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-top: 0.75rem;
+}
+.a4s-list-pane {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.a4s-search-input {
+  width: 100%;
+}
+/* A real table, by request ("needs to be like table format") -- same
+   .resource-group/shaded-row conventions every other table on this
+   dashboard already uses. */
+.a4s-conv-table-wrap {
+  max-height: 75vh;
+  overflow-y: auto;
+}
+.a4s-conv-table {
+  width: 100%;
+}
+.a4s-conv-table th,
+.a4s-conv-table td {
+  font-size: 0.8rem;
+  padding: 0.4rem 0.6rem;
+}
+.a4s-conv-row {
+  cursor: pointer;
+}
+.a4s-conv-row:hover {
+  background: var(--section-header-bg);
+}
+.a4s-conv-row--active {
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.a4s-conv-row--unread {
+  font-weight: 700;
+}
+.a4s-conv-who {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.a4s-conv-row--unread .a4s-conv-who {
+  font-weight: 800;
+}
+/* Contact/person name on its own line under the Client name, by request
+   -- grey, and not bold even on an unread row (that row-wide bold rule
+   right above targets the whole .a4s-conv-who cell; this overrides it
+   back down for just this one line, same reasoning the Client name
+   itself SHOULDN'T look identical to the account name it belongs to). */
+.a4s-conv-who-person {
+  display: inline-block;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.85em;
+}
+/* Blue "Sent"/orange "Received" -- its own leading column, by request --
+   same colours as the message bubbles themselves. */
+.a4s-conv-direction {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.a4s-conv-who--out {
+  color: #2563eb;
+}
+.a4s-conv-who--in {
+  color: #ea580c;
+}
+.a4s-conv-who--note {
+  color: #16a34a;
+}
+.a4s-conv-ticket {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.a4s-conv-time {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
+.a4s-conv-phone {
+  color: var(--muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
+.a4s-conv-preview {
+  color: var(--muted);
+  font-weight: 400;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Status -- a real choosable list right on each row, by request ("a
+   small list of choseable items on the left rows"), styled as a proper
+   pill button with its own dropdown caret -- a native <select>, fully
+   restyled (appearance: none + a custom chevron, since the default
+   control looks nothing like a pill). new/escalated lean warm/red
+   (attention needed), awaiting_reply (system-set, never manually chosen
+   -- see SELECTABLE_STATUSES in client.js) amber, the rest green
+   (handled). Browsers won't let individual <option>s keep their own pill
+   colour once the list is open (every option inherits the <select>'s own
+   one colour) -- rather than have the whole open list wrongly tinted one
+   colour, the options below are reset to plain black-on-white, by
+   request ("if the colours... can't be the correct pilled ones for the
+   items, just make them all white until selected"); only the CLOSED pill
+   shows the real status colour. */
+.a4s-conv-status-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 400;
+  padding: 0.3rem 1.8rem 0.3rem 0.8rem;
+  border-radius: 999px;
+  cursor: pointer;
+  /* A <select>'s own default intrinsic width sizes to its WIDEST option
+     (e.g. "No Action Needed"), not the currently selected one -- by
+     request ("make the Status columm values pills fit the text, they are
+     too long"), fit-content sizes to the actual rendered (selected)
+     option's own text instead, so a short status like "New" gets a short
+     pill rather than one sized for the longest option in the list. */
+  width: fit-content;
+  max-width: 11rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000000' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.55rem center;
+  background-size: 0.7rem;
+}
+.a4s-conv-status-select option {
+  color: #111827;
+  background-color: #fff;
+  font-weight: 400;
+}
+.a4s-conv-status-select--new,
+.a4s-conv-status-select--escalated {
+  color: #dc2626;
+  background: color-mix(in srgb, #dc2626 12%, transparent);
+}
+.a4s-conv-status-select--awaiting_reply {
+  color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 12%, transparent);
+}
+.a4s-conv-status-select--replied_sms,
+.a4s-conv-status-select--replied_email,
+.a4s-conv-status-select--replied_phone,
+.a4s-conv-status-select--ticket_logged,
+.a4s-conv-status-select--no_action_needed,
+.a4s-conv-status-select--closed {
+  color: #16a34a;
+  background: color-mix(in srgb, #16a34a 12%, transparent);
+}
+/* Locked Sent/Send Failed indicator (a plain <span>, not a <select>) --
+   shown instead of the real status pick-list while the last message is
+   our own outbound one, by request -- plain coloured text, deliberately
+   NOT a pill (green = sent, red = failed), so it reads as a simple fact
+   rather than another choosable status. The real error on a failure is
+   kept in the `title` attribute (hover tooltip) rather than shown
+   inline, by request. */
+.a4s-conv-status-text {
+  font-weight: 400;
+  font-size: 0.74rem;
+}
+.a4s-conv-status-text--sent {
+  color: #16a34a;
+}
+.a4s-conv-status-text--failed {
+  color: #dc2626;
+  cursor: help;
+}
+.a4s-conv-status-text--simulated {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* The right-hand panel reads as its own self-contained "app" (by
+   request), not a plain content area: a real elevated card, narrower
+   than a usual full-width page section (max-width below), with a tinted
+   title bar. */
+.a4s-detail-pane {
+  flex: 0 1 460px;
+  min-width: 0;
+}
+.a4s-app {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+.a4s-app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1.1rem;
+  background: var(--section-header-bg);
+  border-bottom: 1px solid var(--border);
+}
+.a4s-app-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.a4s-app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.a4s-dnc-label {
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.a4s-app-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+.a4s-app-identity .pm-form-field,
+.a4s-compose .pm-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.a4s-app-identity label,
+.a4s-compose label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+#sms-phone-input[readonly] {
+  background: var(--section-header-bg);
+  color: var(--muted);
+}
+
+/* A fixed height (not viewport-relative) -- by request, "last 4 messages
+   is enough to show and have a scroll bar to get to the rest". ~80px per
+   bubble (text + meta line + padding) x 4, plus the gaps between them. */
+.a4s-thread {
+  max-height: 340px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+.a4s-msg-row {
+  display: flex;
+}
+.a4s-msg-row--out {
+  justify-content: flex-end;
+}
+.a4s-msg-row--in {
+  justify-content: flex-start;
+}
+.a4s-msg-bubble {
+  max-width: 75%;
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+  color: var(--fg);
+}
+/* Sent = faded blue, received = faded orange, notes = grey -- a soft
+   tint, not a solid fill, by request ("the faded shading like the blue
+   was before"). */
+.a4s-msg-bubble--out {
+  background: color-mix(in srgb, #2563eb 16%, var(--card));
+}
+.a4s-msg-bubble--in {
+  background: color-mix(in srgb, #ea580c 16%, var(--card));
+}
+.a4s-msg-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.88rem;
+}
+.a4s-msg-meta {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-top: 0.25rem;
+}
+.a4s-msg-manual-tag {
+  font-style: italic;
+}
+.a4s-msg-tags {
+  margin-top: 0.25rem;
+}
+.a4s-msg-ticket-tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+}
+.a4s-msg-error {
+  color: #dc2626;
+  font-weight: 600;
+  font-size: 0.75rem;
+  margin-top: 0.25rem;
+}
+.a4s-msg-simulated {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.a4s-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+.a4s-tags-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.a4s-tag-chip {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  border: none;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.a4s-compose-input {
+  width: 100%;
+  resize: vertical;
+}
+.a4s-compose-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* A visually distinct, slightly muted box -- a deliberate stand-in for
+   real inbound receiving, by request ("a test box to enter a simulated
+   reply"), so it reads as separate from the real Send flow above it. */
+.a4s-simulate-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 1rem 1.1rem;
+  background: var(--section-header-bg);
+  border-bottom: 1px solid var(--border);
+}
+.a4s-simulate-box label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.a4s-simulate-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Notes = grey, by request -- a plain muted list, deliberately the least
+   visually prominent section in the panel. */
+.a4s-notes-section {
+  padding: 1rem 1.1rem;
+  color: var(--muted);
+}
+.a4s-notes-heading {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin: 0 0 0.4rem;
+  color: var(--muted);
+}
+.a4s-note {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.82rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px dashed var(--border);
+}
+.a4s-note-meta {
+  color: var(--muted);
+  white-space: nowrap;
+  font-size: 0.72rem;
+}
+.a4s-note-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.a4s-note-form .wsp-field {
+  flex: 1 1 auto;
+}
+
+/* Manage Templates modal -- same .history-modal-overlay/-panel shell
+   every other popup on this dashboard uses, just a bit wider for the
+   templates list. */
+.history-modal-panel.a4s-modal-panel {
+  width: 32rem;
+  max-width: 92vw;
+}
+.a4s-template-form-heading {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 800px) {
+  .a4s-layout {
+    flex-direction: column;
+  }
+  .a4s-list-pane,
+  .a4s-detail-pane {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+}
+
 .mtg-device-table-wrap {
   max-height: 26rem;
   overflow-y: auto;

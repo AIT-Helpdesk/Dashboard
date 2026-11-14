@@ -4,6 +4,7 @@ const { getClient, listAll, getCompanyUdfValueToNameMap, invalidateCompanyUdfMap
 const { getToken: getIngramToken, fetchAllPages: fetchIngramPages } = require('@dashboard/ingram-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 const saasProtection = require('@dashboard/saas-protection/server.js');
+const cspCustomers = require('@dashboard/csp-customers/server.js');
 
 // "Data Matching" -- a page for surfacing cross-system matching GAPS (not
 // renewals -- that's @dashboard/coming-soon). Each route here is one
@@ -303,6 +304,55 @@ async function buildSaasProtectionClientsUnmatchedReport() {
     asOf: new Date().toISOString(),
     concept: 'saas-protection-clients-unmatched',
     udfName: 'Name:SaaS Backups',
+    totalCount: rows.length,
+    ignoredCount: 0,
+    rows,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Concept 5: Microsoft 365 (CSP) Customers Not Matching Autotask -- every
+// Microsoft CSP/Partner Center tenant customer (@dashboard/csp-customers,
+// Microsoft Graph's own /contracts) whose own name doesn't case/whitespace-
+// exactly equal a real Autotask company name. Same direct name-to-name
+// comparison as Concepts 2/3/4 above, writing "Name:Microsoft 365"
+// (confirmed live against this account's real Companies UDF list -- it
+// already exists as a defined field, just with no value on any company
+// yet) once a match is confirmed. csp-customers' own getCustomers() is the
+// whole ~374-customer list in one cheap call, same as SaaS Protection's
+// getDomains() above -- no per-row cost, no dedup needed (confirmed live:
+// one row per tenant, no two customers sharing a display name).
+// ---------------------------------------------------------------------------
+async function buildMicrosoft365ClientsUnmatchedReport() {
+  const client = await getClient();
+  const [{ customers }, autotaskCompanies, m365UdfMap] = await Promise.all([
+    cspCustomers.getCustomers(false),
+    getAllCompanyNames(client),
+    getCompanyUdfValueToNameMap(client, 'Name:Microsoft 365'),
+  ]);
+  const autotaskNameSet = new Set(autotaskCompanies.map((c) => normalizeForExactCompare(c.companyName)));
+  const m365UdfValueSet = new Set([...m365UdfMap.keys()].map(normalizeForExactCompare));
+
+  const rows = [];
+  for (const c of customers) {
+    const clientName = c.name;
+    if (!clientName) continue;
+    const normalized = normalizeForExactCompare(clientName);
+    if (autotaskNameSet.has(normalized)) continue; // exact match -- not a gap
+    if (m365UdfValueSet.has(normalized)) continue; // already matched via the UDF write path
+    rows.push({
+      clientName,
+      tenantId: c.tenantId,
+      suggestions: findFuzzySuggestionsFromList(autotaskCompanies, clientName),
+      ignored: false,
+    });
+  }
+  rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
+
+  return {
+    asOf: new Date().toISOString(),
+    concept: 'microsoft365-clients-unmatched',
+    udfName: 'Name:Microsoft 365',
     totalCount: rows.length,
     ignoredCount: 0,
     rows,
@@ -644,6 +694,22 @@ async function matchSaasProtectionClient({ clientName, companyName }) {
   return { companyId: result.companyId, companyName: result.companyName, clientName: trimmedClientName };
 }
 
+async function matchMicrosoft365Client({ clientName, companyName }) {
+  const trimmedClientName = (clientName || '').trim();
+  if (!trimmedClientName) {
+    const err = new Error('Missing Microsoft 365 (CSP) client name.');
+    err.status = 400;
+    throw err;
+  }
+  const result = await writeNameMatchUdf({
+    udfName: 'Name:Microsoft 365',
+    matchValue: trimmedClientName,
+    companyName,
+    reportCacheKeyToInvalidate: 'microsoft365-clients-unmatched',
+  });
+  return { companyId: result.companyId, companyName: result.companyName, clientName: trimmedClientName };
+}
+
 // ---------------------------------------------------------------------------
 // "Show UDF Matches" -- by request, the reverse of every concept's own
 // unmatched report above: every Autotask company that ALREADY has a value
@@ -691,6 +757,7 @@ const REPORT_CACHE_KEY_BY_UDF = {
   'Name:Ingram Micro': 'ingram-clients-unmatched',
   'Name:Datto RMM': 'datto-sites-unmatched',
   'Name:SaaS Backups': 'saas-protection-clients-unmatched',
+  'Name:Microsoft 365': 'microsoft365-clients-unmatched',
 };
 
 // Clear only -- by request, never an edit. A wrong UDF value is corrected
@@ -775,6 +842,17 @@ router.get('/saas-protection-clients-unmatched', async (req, res) => {
   }
 });
 
+router.get('/microsoft365-clients-unmatched', async (req, res) => {
+  try {
+    res.json(
+      await getCachedReport('microsoft365-clients-unmatched', req.query.force === 'true', buildMicrosoft365ClientsUnmatchedReport),
+    );
+  } catch (err) {
+    console.error('Data Matching: Microsoft 365 (CSP) Clients Not Matching Autotask report failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/match-tpp-client', async (req, res) => {
   try {
     const result = await matchTppClient(req.body || {});
@@ -829,6 +907,21 @@ router.post('/match-saas-protection-client', async (req, res) => {
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
     console.error('Data Matching: match-saas-protection-client failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/match-microsoft365-client', async (req, res) => {
+  try {
+    const result = await matchMicrosoft365Client(req.body || {});
+    const actor = req.session?.user?.email;
+    console.log(
+      `Data Matching: wrote Name:Microsoft 365="${result.clientName}" on "${result.companyName}" (company #${result.companyId})${actor ? ` -- by ${actor}` : ''}.`,
+    );
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
+    console.error('Data Matching: match-microsoft365-client failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

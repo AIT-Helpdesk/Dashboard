@@ -11,6 +11,7 @@ let lastDataByConcept = {
   'ingram-clients-unmatched': null,
   'datto-sites-unmatched': null,
   'saas-protection-clients-unmatched': null,
+  'microsoft365-clients-unmatched': null,
 };
 
 // One entry per "concept" this page checks -- by request, a page for
@@ -26,6 +27,7 @@ const CONCEPT_OPTIONS = [
   { value: 'ingram-clients-unmatched', label: 'Ingram Client Names (No Autotask Match)', udfName: 'Name:Ingram Micro' },
   { value: 'datto-sites-unmatched', label: 'Datto RMM Sites (No Autotask Match)', udfName: 'Name:Datto RMM' },
   { value: 'saas-protection-clients-unmatched', label: 'SaaS Protection Clients (No Autotask Match)', udfName: 'Name:SaaS Backups' },
+  { value: 'microsoft365-clients-unmatched', label: 'Microsoft 365 (CSP) Clients (No Autotask Match)', udfName: 'Name:Microsoft 365' },
 ];
 
 export function mount(container) {
@@ -260,6 +262,26 @@ export function mount(container) {
         ],
         {
           endpoint: '/api/data-matching/match-saas-protection-client',
+          udfName: data.udfName,
+          extraBodyFor: (r) => ({ clientName: r.clientName }),
+          writeValueLabelFor: (r) => r.clientName,
+          rowKeyFor: (r) => r.clientName,
+        }
+      );
+      return;
+    }
+
+    if (data.concept === 'microsoft365-clients-unmatched') {
+      renderNameMismatchSection(
+        data,
+        'Microsoft 365 (CSP) client',
+        `every Microsoft CSP tenant's name exactly matches an Autotask company`,
+        [
+          { label: 'CSP Tenant', cell: (r) => escapeHtml(r.clientName) },
+          { label: 'Tenant ID', className: 'ticket-number', cell: (r) => escapeHtml(r.tenantId || '') },
+        ],
+        {
+          endpoint: '/api/data-matching/match-microsoft365-client',
           udfName: data.udfName,
           extraBodyFor: (r) => ({ clientName: r.clientName }),
           writeValueLabelFor: (r) => r.clientName,

@@ -101,4 +101,64 @@ router.get('/', async (req, res) => {
   }
 });
 
+// --- Autotask company matching -- a matching function only for now, by
+// request, no new UI surface wired up anywhere yet. Checked how Check
+// Client's own "Name:Datto RMM"/"Name:Ingram Micro" UDFs work first
+// (check-client/client.js's effectiveValue()/renderResolvedField()): UDF
+// value tried first, falling back only when the company has none on
+// record yet -- same order here. The difference is that Check Client's
+// own fallback just hands plain text downstream to Ingram/Datto's OWN
+// existing search (those packages do their own matching); this page has
+// no downstream search of its own, so the fallback here has to do real
+// matching itself -- same "equals-only UDF match, contains-either-way
+// name-match fallback" pair saas-protection/server.js's own
+// findDomainMatchExact()/findDomainMatch() already established for the
+// exact same kind of problem (an external system's own customer/tenant
+// name not always matching Autotask's company name verbatim, e.g. a
+// dropped legal suffix).
+function normalizeAmpersand(s) {
+  return (s || '')
+    .replace(/\s*&\s*/g, ' and ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+async function findCustomerMatchExact(name) {
+  const { customers } = await getCustomers(false);
+  const normName = normalizeAmpersand(name);
+  return customers.find((c) => normalizeAmpersand(c.name) === normName) || null;
+}
+
+async function findCustomerMatch(companyName) {
+  const { customers } = await getCustomers(false);
+  const normCompany = normalizeAmpersand(companyName);
+  const pool = customers.filter((c) => {
+    const normCustomer = normalizeAmpersand(c.name);
+    if (!normCustomer) return false;
+    return normCustomer === normCompany || normCustomer.includes(normCompany) || normCompany.includes(normCustomer);
+  });
+  return pool.length === 1 ? pool[0] : null;
+}
+
+// The one a caller actually wants -- udfValue is this company's own
+// "Name:Microsoft 365" UDF value, if it has one (the caller resolves
+// that; this function doesn't know about Autotask UDFs at all, same
+// separation of concerns findDomainMatch() keeps from Autotask).
+async function findCustomerMatchWithUdf(companyName, udfValue) {
+  if (udfValue) {
+    const exact = await findCustomerMatchExact(udfValue);
+    if (exact) return exact;
+  }
+  return findCustomerMatch(companyName);
+}
+
+// Attached to the router, same convention saas-protection/server.js's own
+// router.findDomainMatch etc. use -- lets another page call these
+// in-process without a second HTTP round trip.
+router.getCustomers = getCustomers;
+router.findCustomerMatch = findCustomerMatch;
+router.findCustomerMatchExact = findCustomerMatchExact;
+router.findCustomerMatchWithUdf = findCustomerMatchWithUdf;
+
 module.exports = router;

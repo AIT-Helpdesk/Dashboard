@@ -568,6 +568,28 @@ async function findDomainMatch(companyName) {
   };
 }
 
+// Same shape as findDomainMatch() above, but a real EQUALS-only match
+// against Autotask's own "Name:SaaS Backups" UDF value (Data Matching's
+// own write path -- the real SaaS Protection customer name, confirmed
+// against real data), not the fuzzy contains-either-way guess that
+// function uses when there's no UDF to go on. Live Reports' own
+// buildSaasProtectionSummary() tries this FIRST, by request ("ensure a
+// UDF match is used before a direct name match"), falling back to
+// findDomainMatch() only when the company has no UDF on record.
+async function findDomainMatchExact(customerName) {
+  const domains = await getDomains(false);
+  const normName = normalizeAmpersand(customerName);
+  const d = domains.find((dm) => normalizeAmpersand(dm.saasCustomerName) === normName);
+  if (!d) return null;
+  return {
+    customerId: d.saasCustomerId,
+    clientName: d.saasCustomerName,
+    domain: d.domain,
+    seatsUsed: d.seatsUsed ?? null,
+    backupPercentage: d.backupStats?.backupPercentage ?? null,
+  };
+}
+
 const router = express.Router();
 // Only POST /accept-failure sends a body -- Express only parses one when a
 // request actually has one, so this is a no-op for every GET route here,
@@ -702,6 +724,7 @@ router.getWidgetBucket = getWidgetBucket;
 router.getServiceAggregate = getServiceAggregate;
 router.getApplicationsHistory = getApplicationsHistory;
 router.findDomainMatch = findDomainMatch;
+router.findDomainMatchExact = findDomainMatchExact;
 router.getBillableSeatCount = getBillableSeatCount;
 router.getSeats = getSeats;
 router.getDomains = getDomains;

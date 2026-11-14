@@ -363,6 +363,8 @@ const EXTERNAL_LINK_GROUPS = [
       { label: 'TPP Wholesale', icon: '🌐', url: 'https://www.tppwholesale.com.au/sign-in/' },
       { label: 'CloudFlare', icon: '☁️', url: 'https://dash.cloudflare.com/' },
       { label: 'WPEngine', icon: '🔧', url: 'https://my.wpengine.com/' },
+      // Windows pun.
+      { label: 'Microsoft Portals', icon: '🪟', url: 'https://msportals.io/?search=' },
     ],
   },
   {
@@ -385,8 +387,7 @@ const EXTERNAL_LINK_GROUPS = [
       { label: 'Keeper Vault', icon: '🔑', url: 'https://keepersecurity.com/vault/' },
       { label: 'MX Toolbox', icon: '🧰', url: 'https://mxtoolbox.com/' },
       { label: "What's My DNS", icon: '🌍', url: 'https://www.whatsmydns.net/' },
-      // Windows pun.
-      { label: 'Microsoft Portals', icon: '🪟', url: 'https://msportals.io/?search=' },
+      { label: 'DNSViz', icon: '🔍', url: 'https://dnsviz.net/' },
     ],
   },
   {

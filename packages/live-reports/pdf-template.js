@@ -27,6 +27,14 @@ const WAVE_PATH = path.join(__dirname, '..', 'shell', 'public', 'cover-wave.png'
 // documented brand guide found in this repo).
 const BRAND_PURPLE = '#2E2A7C';
 const BRAND_GREEN = '#4DA64D';
+// Sampled directly off logo.png's own green mark (the leaf glyph sitting
+// in the logo's upper-right area, which lands in the header box's own
+// upper-right corner once the logo is right-aligned there) -- used only
+// for the header box border itself, by request ("make the green box
+// match the green of the upper right corner... of the image"), kept
+// separate from BRAND_GREEN above since that one is used dashboard-wide
+// for status colours unrelated to this header box.
+const HEADER_BOX_GREEN = '#50B948';
 const RED = '#dc2626';
 const AMBER = '#d97706';
 const MUTED = '#6b7280';
@@ -521,7 +529,7 @@ function drawCoverHeader(doc, report) {
   doc.restore();
 
   // Border stroke drawn LAST -- see the fill() comment above.
-  doc.roundedRect(boxX, boxY, boxW, boxH, 6).lineWidth(3).stroke(BRAND_GREEN);
+  doc.roundedRect(boxX, boxY, boxW, boxH, 6).lineWidth(3).stroke(HEADER_BOX_GREEN);
 
   doc.fillColor(INK);
   return boxY + boxH + 20;
@@ -2053,8 +2061,18 @@ function drawProactiveMaintenanceNote(doc, y, items) {
   doc.font('Helvetica-Oblique').fontSize(7);
   const captionHeight = doc.heightOfString(captionText, { width: w - pad * 2 });
 
+  // No ensureSpace() here -- the one caller (buildReportPdf, below) already
+  // runs its own ensureSpace() + bottom-anchoring against this exact same
+  // height (measureProactiveMaintenanceHeight()) before calling this
+  // function. A second, independently-recomputed ensureSpace() here was
+  // confirmed live to occasionally push an UNWANTED extra page: the
+  // caller anchors y so that y + height lands exactly on the page's
+  // bottom edge, and re-deriving "height" here from scratch a second time
+  // can differ from the caller's own value by a sub-pixel floating-point
+  // rounding error -- just enough to trip ensureSpace()'s strict `>` check
+  // and bounce the whole box onto a fresh page instead of the bottom of
+  // the current one.
   const boxHeight = 24 + colHeight + 6 + captionHeight + 10;
-  y = ensureSpace(doc, y, boxHeight);
 
   doc.roundedRect(MARGIN, y, w, boxHeight, 4).fill('#f3f1fb');
   doc.fillColor(BRAND_PURPLE).font('Helvetica-Bold').fontSize(10).text('Proactive Maintenance', MARGIN + pad, y + 10);
@@ -2224,6 +2242,27 @@ function buildReportPdf({ report, vendors, commentary, mailDomainProtection, sec
       // page 3" reasoning the old deferred-Watch case already established.
       if (s.deviceHealth !== false) y = drawDeviceHealth(doc, y, report, s.deviceHealthItems);
 
+      // Proactive Maintenance -- aligned at the actual BOTTOM EDGE of the
+      // Device Health page, by request (not just "comes right after the
+      // donuts in reading order", which still left a gap of blank space
+      // below it before the page ended). If Device Health's own content
+      // leaves room below it on this page, `y` is pushed DOWN to
+      // (page bottom - this box's own height) so its own bottom edge
+      // lands flush with the page's bottom margin, same as the page's
+      // footer always does; only pushes to a fresh page (ensureSpace())
+      // when it genuinely wouldn't fit at all, same as every other
+      // section here.
+      if (s.proactiveMaintenance !== false) {
+        const pmH = measureProactiveMaintenanceHeight(doc, report.proactiveMaintenance);
+        if (pmH > 0) {
+          y = ensureSpace(doc, y, pmH);
+          const pageBottom = doc.page.height - doc.page.margins.bottom;
+          if (y + pmH < pageBottom) y = pageBottom - pmH;
+          y = drawProactiveMaintenanceNote(doc, y, report.proactiveMaintenance);
+          y += 14;
+        }
+      }
+
       if (s.cybersecurity !== false) {
         // Cybersecurity Layers now always starts on its own fresh page, by
         // request -- drawCybersecurityLayers() calls doc.addPage() itself,
@@ -2271,43 +2310,18 @@ function buildReportPdf({ report, vendors, commentary, mailDomainProtection, sec
       // Device list and the score-explanations glossary both sit right
       // before Recommendations now, by request -- the device-by-device
       // table used to live directly under Device Health's own donuts;
-      // moved here instead. Proactive Maintenance sits right above the
-      // table, by request (used to sit at the bottom of the Cybersecurity
-      // Layers page). Replacement Recommendation/Operating System used to
-      // sit here too -- moved back into Device Health itself, by request
-      // (drawDeviceHealth() above). Skipped entirely (no blank page) when
-      // there's genuinely no device list to show, same as the old inline
-      // placement did. Proactive Maintenance and All Devices are 2
-      // separate "include in PDF" toggles now, by request, even though
-      // they share one combined measure/ensureSpace() call below.
-      //
-      // Proactive Maintenance no longer forces a fresh page UNconditionally,
-      // by request ("Proactive maintenance doesn't need to go to the next
-      // page if the whole of it and the All Devices section will fit") --
-      // both are measured/estimated up front (measureProactiveMaintenanceHeight()/
-      // estimateDeviceListHeight() above) and ensureSpace()'d as ONE
-      // combined check, so the decision is "does everything below fit
-      // together on THIS page", not just whichever section's own internal
-      // ensureSpace() would have reacted to on its own (which could have
-      // left Proactive Maintenance fitting alone while orphaning the All
-      // Devices heading below it, same class of bug fixed earlier for
-      // Device Health's own heading+box). For a client with enough devices
-      // that the table alone would already need to continue onto further
-      // pages, the combined estimate naturally comes out taller than any
-      // single page, so this still pushes to a fresh page exactly like the
-      // old unconditional behaviour did -- the forced break is only
-      // skipped when everything genuinely fits.
-      const showProactiveMaintenance = s.proactiveMaintenance !== false;
+      // moved here instead. Replacement Recommendation/Operating System
+      // used to sit here too -- moved back into Device Health itself, by
+      // request (drawDeviceHealth() above). Skipped entirely (no blank
+      // page) when there's genuinely no device list to show, same as the
+      // old inline placement did. Proactive Maintenance no longer sits
+      // here at all -- moved to the bottom of the Device Health page
+      // itself (right after drawDeviceHealth() above), by request.
       const showDeviceList = s.deviceList !== false;
-      if (report.dattoLive && report.dattoLive.devices && report.dattoLive.devices.length > 0 && (showProactiveMaintenance || showDeviceList)) {
-        const pmH = showProactiveMaintenance ? measureProactiveMaintenanceHeight(doc, report.proactiveMaintenance) : 0;
-        const dlH = showDeviceList ? estimateDeviceListHeight(report) : 0;
-        y = ensureSpace(doc, y, pmH + (pmH > 0 && showDeviceList ? 10 : 0) + dlH);
-        if (showProactiveMaintenance) {
-          y = drawProactiveMaintenanceNote(doc, y, report.proactiveMaintenance);
-          y += 10;
-        }
-        if (showDeviceList) y = drawDeviceList(doc, y, report);
+      if (report.dattoLive && report.dattoLive.devices && report.dattoLive.devices.length > 0 && showDeviceList) {
+        const dlH = estimateDeviceListHeight(report);
+        y = ensureSpace(doc, y, dlH);
+        y = drawDeviceList(doc, y, report);
       }
 
       // Understanding Your Scores has no "include in PDF" toggle, by

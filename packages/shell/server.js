@@ -16,6 +16,12 @@ const stretyAutomationClient = require('@dashboard/strety-autotask-sync/client.j
 const { registerAuthRoutes, requireAuth } = require('./auth');
 const { canShowReadmeInHelp } = require('./show-readme-permissions.js');
 const { listFavoritePageIds, addFavorite, removeFavorite } = require('./favorites-db.js');
+// Requiring this has the side effect of creating/reseeding the
+// udf_system_matches table (see that file's own comment) -- no routes of
+// its own yet, just makes sure it exists and stays in sync with its own
+// seed list on every server start, same as every other db.js on this
+// dashboard.
+require('./udf-system-matches-db.js');
 
 const PORT = process.env.PORT || 3000;
 

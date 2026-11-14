@@ -244,23 +244,45 @@ function alertSummaryTableHtml(summary) {
     </div>`;
 }
 
+// A Datto RMM alert message can run to hundreds of characters (real
+// example: a disk cleanup alert whose message is mostly a long run of
+// "=" separator padding) -- blows the row out sideways instead of
+// wrapping sensibly. Cut to a sensible on-screen length with a small
+// glasses-icon link to the real full text in a popup
+// (openAlertMessageModal() below), by request. Also addresses "line up
+// the end with the Alerts box above" -- .live-reports-scorecard-table's
+// own base width is `auto` (shrink-wraps to its own content, confirmed
+// in styles.css; nothing here forces it to stretch), so the shorter the
+// Message column's text, the closer this table's own natural width lands
+// to the Alerts summary widget's own (just a tiny 3-column table, so
+// it's already about as narrow as a real widget on this page gets).
+const ALERT_MESSAGE_TRUNCATE_LEN = 50;
+
 // The open Critical/High/Moderate alerts themselves, by request ("also
 // list them") -- lets this be cross-checked directly against Datto RMM's
 // own console instead of just trusting the widget's counts. On-screen
 // only, not sent to the PDF (server.js's own `openAlerts` field carries
 // the same mapAlert() shape datto-rmm/lib.js's getSiteAlertsBreakdown()
-// returns).
+// returns) -- the PDF never shows this list at all, so the truncation
+// here is purely a screen-rendering concern.
 function openAlertsListHtml(alerts) {
   if (!alerts || alerts.length === 0) return '';
   const rows = alerts
-    .map(
-      (a) => `<tr>
+    .map((a, i) => {
+      const full = a.message || '';
+      const isLong = full.length > ALERT_MESSAGE_TRUNCATE_LEN;
+      const shown = isLong ? `${full.slice(0, ALERT_MESSAGE_TRUNCATE_LEN)}…` : full;
+      return `<tr>
         <td><span class="mtg-score-badge mtg-score-badge--${ALERT_PRIORITY_BADGE_TIER[a.priority] || 'warn'}">${escapeHtml(a.priority)}</span></td>
         <td>${escapeHtml(a.deviceName)}</td>
-        <td>${escapeHtml(a.message || '—')}</td>
+        <td>${escapeHtml(shown || '—')}${
+          isLong
+            ? ` <button type="button" class="lr-alert-view-full-btn" data-alert-index="${i}" title="View full message"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="14" r="4"/><circle cx="18" cy="14" r="4"/><path d="M10 14h4"/><path d="M2 13c0-3.5 1-7 4-7"/><path d="M22 13c0-3.5-1-7-4-7"/></svg></button>`
+            : ''
+        }</td>
         <td>${a.timestamp ? new Date(a.timestamp).toLocaleString() : '—'}</td>
-      </tr>`
-    )
+      </tr>`;
+    })
     .join('');
   return `
     <h2 class="client-summary-section-heading">Open Critical/High/Moderate Alerts <span class="inline-subtext">(${alerts.length})</span></h2>
@@ -270,19 +292,68 @@ function openAlertsListHtml(alerts) {
     </table>`;
 }
 
+// `data-alert-index` above is this SAME alerts array's own index -- cheap
+// and safe (just an int in the DOM), rather than trying to carry the
+// full message text through an HTML attribute.
+function wireOpenAlertsLinks(container, alerts) {
+  if (!alerts || alerts.length === 0) return;
+  container.querySelectorAll('.lr-alert-view-full-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const alert = alerts[Number(btn.dataset.alertIndex)];
+      if (alert) openAlertMessageModal(alert);
+    });
+  });
+}
+
+// Same .history-modal-overlay/.history-modal-panel shell + open/close/
+// Escape/click-outside wiring every other popup on this dashboard uses
+// (openInfoModal() in contract-checks/client.js is the direct model).
+function openAlertMessageModal(alert) {
+  const overlay = document.createElement('div');
+  overlay.className = 'history-modal-overlay';
+  overlay.innerHTML = `
+    <div class="history-modal-panel wsp-qa-modal-panel lr-alert-message-modal-panel">
+      <div class="history-modal-panel-header">
+        <span>${escapeHtml(alert.deviceName)} -- ${escapeHtml(alert.priority)} Alert</span>
+        <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="history-modal-body">
+        <p class="inline-subtext">${alert.timestamp ? new Date(alert.timestamp).toLocaleString() : '—'}</p>
+        <p class="lr-alert-full-message">${escapeHtml(alert.message || '—')}</p>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKeydown);
+  };
+  function onKeydown(e) {
+    if (e.key === 'Escape') close();
+  }
+  document.addEventListener('keydown', onKeydown);
+  overlay.querySelector('.history-modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+}
+
 // Proactive Maintenance, by request -- same list the PDF now shows (top of
 // its own Devices page), server.js's own getProactiveMaintenanceItems()
 // (live off the intranet's own Proactive Maintenance Jobs table, same as
 // the Cybersecurity Systems descriptions -- see sharepoint-client.js),
 // sourced once on the server rather than duplicated here, so the two
-// surfaces can't drift apart. Moved above the Replacement Recommendation/
-// Operating System
-// donuts and styled as the same purple card the PDF's own
+// surfaces can't drift apart. Now sits INSIDE the Device Health section
+// box, last (after the Replacement Recommendation/Operating System
+// donuts), by request -- it used to be its own separate top-level section
+// further down the page. Styled as the same purple card the PDF's own
 // drawProactiveMaintenanceNote() draws (2 columns, dash-bulleted, italic
 // caption) -- literal brand-purple hex values, not the --purple/--card
 // theme tokens, by design: this is the dashboard's one fixed brand-colour
 // card treatment (same as the PDF, which is always on a white page), not
-// something that should shift with light/dark mode.
+// something that should shift with light/dark mode. Being a plain inline
+// card (not its own .lr-section-box) is exactly what lets it nest inside
+// Device Health's own box without a double border.
 function proactiveMaintenanceHtml(items) {
   if (!items || items.length === 0) return '';
   const half = Math.ceil(items.length / 2);
@@ -1099,9 +1170,9 @@ export function mount(container) {
     </header>
     <form id="search-form" class="date-form">
       <div class="date-form-row">
-        <label for="site-input">Client (Datto Site)</label>
+        <label for="site-input">Autotask Client</label>
         <input type="text" id="site-input" placeholder="e.g. Acme* (wildcards with *, optional)" />
-        <label class="inline-checkbox-label" title="Force an exact match on the Datto Site name (instead of the usual wildcard/contains search)">
+        <label class="inline-checkbox-label" title="Force an exact match on the Autotask Client name (instead of the usual wildcard/contains search)">
           <input type="checkbox" id="exact-site-input" /> Exact
         </label>
         <button type="submit" id="search-button" class="button-link button-link--small refresh-button--emphasis" title="Pull a report for this client (uses the 20-minute cache if still warm)">Search</button>
@@ -1110,7 +1181,7 @@ export function mount(container) {
         <button type="button" id="pdf-button" class="button-link button-link--small" disabled title="Loads with the report above">Create PDF</button>
       </div>
     </form>
-    <p id="status" class="status">Type a client's Datto Site name above to pull a live report.</p>
+    <p id="status" class="status">Type an Autotask Client name above to pull a live report.</p>
     <p id="pdf-status" class="status" hidden></p>
     <p id="commentary-status" class="status" hidden></p>
     <div id="commentary-editor-container"></div>
@@ -1137,6 +1208,17 @@ export function mount(container) {
   // see before clicking the button.
   let currentReportData = null;
   let currentVendorsData = null;
+  // The real Autotask company resolved by resolveClientAndLoad() below --
+  // load()/the Refresh button both key off resolvedDattoSite (never read
+  // siteInput.value directly any more), so Refresh re-fetches live data
+  // for the SAME already-resolved client rather than re-running the
+  // Autotask lookup. resolvedCompanyId is threaded into the main report
+  // and /vendors fetches below so a real id/UDF match is tried before a
+  // plain name match throughout the rest of the report, by request
+  // ("ensure a UDF match is used before a direct name match").
+  let resolvedCompanyName = null;
+  let resolvedCompanyId = null;
+  let resolvedDattoSite = null;
   // Mail Domain Protection's own tracked state -- kept in sync on every
   // keystroke/select by wireMdpWidget() below, rather than read fresh from
   // the DOM at Create PDF time, because its card lives inside the
@@ -1320,8 +1402,12 @@ export function mount(container) {
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(false);
+    resolveClientAndLoad();
   });
+  // Refresh reuses whatever client was last resolved -- never re-runs the
+  // Autotask lookup (load() below reads resolvedDattoSite, not
+  // siteInput.value, so this stays correct even if the box's text has
+  // since been edited without hitting Search again).
   refreshButton.addEventListener('click', () => load(true));
   pdfButton.addEventListener('click', createPdf);
   generateCommentaryButton.addEventListener('click', generateCommentary);
@@ -1427,8 +1513,91 @@ export function mount(container) {
     }
   }
 
+  // The Autotask Client lookup, by request ("change to using the Autotask
+  // Client as the lookup... provide a list to choose from" when more than
+  // one real company matches). Resolves the typed text to a real Autotask
+  // company (or a picker, if ambiguous), then that company's own
+  // "Name:Datto RMM" UDF if it has one -- see useResolvedClient() below
+  // for the fallback when it doesn't.
+  async function resolveClientAndLoad() {
+    const clientSearch = siteInput.value.trim();
+    if (!clientSearch) {
+      statusEl.hidden = false;
+      statusEl.className = 'status';
+      statusEl.textContent = 'Type an Autotask Client name above to pull a live report.';
+      resultsEl.innerHTML = '';
+      return;
+    }
+    resolvedCompanyName = null;
+    resolvedDattoSite = null;
+    statusEl.hidden = false;
+    statusEl.className = 'status loading';
+    statusEl.textContent = 'Looking up Autotask Client...';
+    resultsEl.innerHTML = '';
+    try {
+      const params = new URLSearchParams({ client: clientSearch });
+      if (exactInput.checked) params.set('exactClient', 'true');
+      const res = await fetch(`/api/live-reports/resolve-client?${params.toString()}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      const matches = data.matches || [];
+      if (matches.length === 0) {
+        statusEl.className = 'status error';
+        statusEl.textContent = `No Autotask Client found matching "${clientSearch}".`;
+        return;
+      }
+      if (matches.length === 1) {
+        useResolvedClient(matches[0]);
+        return;
+      }
+      statusEl.hidden = true;
+      renderClientPicker(matches, clientSearch);
+    } catch (err) {
+      statusEl.className = 'status error';
+      statusEl.textContent = `Error: ${err.message}`;
+    }
+  }
+
+  // More than one real Autotask company matched -- by request, a plain
+  // clickable list rather than a <select> (this is the page's own main
+  // lookup, not a small in-widget picker like Mail Domain Protection's
+  // own org picker further down, so it gets full prominence in the
+  // results area rather than squeezed into a dropdown).
+  function renderClientPicker(matches, clientSearch) {
+    resultsEl.innerHTML = `
+      <p class="inline-subtext">More than one Autotask Client matches "${escapeHtml(clientSearch)}" -- choose one:</p>
+      <ul class="live-reports-client-picker">
+        ${matches
+          .map((m) => `<li><button type="button" class="live-reports-client-picker-btn" data-company-id="${m.companyId}">${escapeHtml(m.companyName)}</button></li>`)
+          .join('')}
+      </ul>
+    `;
+    resultsEl.querySelectorAll('.live-reports-client-picker-btn').forEach((btn, i) => {
+      btn.addEventListener('click', () => useResolvedClient(matches[i]));
+    });
+  }
+
+  function useResolvedClient(match) {
+    resolvedCompanyName = match.companyName;
+    resolvedCompanyId = match.companyId;
+    // Use the "Name:Datto RMM" UDF if the company has one on record; if
+    // it's blank, fall back to a normal lookup using the SAME Autotask
+    // Client name text (by request -- a strict "never guess, report not
+    // found" version of this blocked real, working clients whose UDF
+    // simply hadn't been filled in, e.g. a real "Smart Mortgages" lookup
+    // that should have just worked). load() below still does its own
+    // real Datto RMM match-or-not-found against whichever name this
+    // ends up being -- "No Datto RMM devices matched" still shows
+    // honestly if even the company name itself doesn't match any real
+    // Datto site.
+    resolvedDattoSite = match.dattoSite || match.companyName;
+    statusEl.hidden = false;
+    load(false);
+  }
+
+
   async function load(force) {
-    const site = siteInput.value.trim();
+    const site = resolvedDattoSite;
     // A previous client's (or a previous fetch's) generated/edited
     // narrative is no longer valid once new report data is about to load --
     // cleared unconditionally here, same as currentReportData/
@@ -1451,7 +1620,7 @@ export function mount(container) {
     if (!site) {
       statusEl.hidden = false;
       statusEl.className = 'status';
-      statusEl.textContent = "Type a client's Datto Site name above to pull a live report.";
+      statusEl.textContent = 'Type an Autotask Client name above to pull a live report.';
       resultsEl.innerHTML = '';
       return;
     }
@@ -1471,9 +1640,9 @@ export function mount(container) {
     pdfButton.textContent = 'Loading';
     generateCommentaryButton.disabled = true;
     try {
-      const params = new URLSearchParams({ site });
-      if (exactInput.checked) params.set('exactSite', 'true');
+      const params = new URLSearchParams({ site, exactSite: 'true' });
       if (force) params.set('force', 'true');
+      if (resolvedCompanyId) params.set('companyId', String(resolvedCompanyId));
       // cache: 'no-store' -- defensive, by request (ruling out a stale
       // browser-cached response as a possible cause of "the page doesn't
       // reflect what the server now returns" reports). This route's
@@ -1490,6 +1659,38 @@ export function mount(container) {
     }
   }
 
+  // "Systems Not Found" summary, by request -- when a client has no real
+  // Datto RMM match, the page still proceeds with whatever else is
+  // available (loadVendorSummaries() below), rather than stopping dead;
+  // this reports which of those OTHER systems also came back with no
+  // real match for this client, in one short list at the top. Each
+  // vendor's own "installed/monitored: false" IS its own "no match
+  // found" signal (confirmed in server.js's own buildXSummary()
+  // functions -- there's no separate "matched but not subscribed" state,
+  // !match already means exactly this). 'not-configured' is excluded --
+  // that means THIS DASHBOARD has no credentials for that vendor at all,
+  // a setup gap, not a per-client match failure.
+  const SYSTEM_NOT_FOUND_CHECKS = [
+    { key: 'saasAlerts', label: 'SaaS Alerts', notFound: (v) => v.status === 'ok' && v.monitored === false },
+    { key: 'saasProtection', label: 'SaaS Protection', notFound: (v) => v.status === 'ok' && v.installed === false },
+    { key: 'dattoEdr', label: 'Datto EDR', notFound: (v) => v.status === 'ok' && v.installed === false },
+    { key: 'autoElevate', label: 'AutoElevate', notFound: (v) => v.status === 'ok' && v.installed === false },
+    { key: 'huntress', label: 'Huntress', notFound: (v) => v.status === 'ok' && v.installed === false },
+    { key: 'inky', label: 'Email Security', notFound: (v) => v.status === 'ok' && v.installed === false },
+  ];
+  function computeSystemsNotFound(vendors, includeDattoRmm) {
+    const notFound = includeDattoRmm ? ['Datto RMM'] : [];
+    for (const check of SYSTEM_NOT_FOUND_CHECKS) {
+      const v = vendors[check.key];
+      if (v && check.notFound(v)) notFound.push(check.label);
+    }
+    return notFound;
+  }
+  function systemsNotFoundHtml(notFoundLabels) {
+    if (notFoundLabels.length === 0) return '<div id="systems-not-found-slot" hidden></div>';
+    return `<p id="systems-not-found-slot" class="live-reports-systems-not-found">Client Match not found: ${notFoundLabels.map(escapeHtml).join(', ')}</p>`;
+  }
+
   // "Other Systems" loads AFTER the main report above has already
   // rendered, via its own separate request -- confirmed live this
   // session that folding these 5 vendor calls into the main report made
@@ -1499,18 +1700,27 @@ export function mount(container) {
   // ready. Guarded on isConnected -- if the user searches a different
   // client before this resolves, resultsEl has already been replaced and
   // this placeholder is no longer on the page, so there's nothing to fill in.
-  async function loadVendorSummaries(siteName, force, isTcElite) {
+  async function loadVendorSummaries(siteName, force, isTcElite, companyId, noDattoMatch) {
     const vendorEl = resultsEl.querySelector('#vendor-summaries');
     const m365El = resultsEl.querySelector('#m365-licenses');
     if (!vendorEl) return;
     try {
       const params = new URLSearchParams({ siteName });
       if (force) params.set('force', 'true');
+      if (companyId) params.set('companyId', String(companyId));
       const res = await fetch(`/api/live-reports/vendors?${params.toString()}`, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       if (!vendorEl.isConnected) return;
       currentVendorsData = data.vendors;
+      // "Systems Not Found" summary at the top of the page, by request --
+      // only ever built when there's a no-Datto-match slot waiting for it
+      // (render()'s own degraded-report branch); the normal success path
+      // has no such slot, so this is a no-op there.
+      const notFoundSlot = resultsEl.querySelector('#systems-not-found-slot');
+      if (notFoundSlot && notFoundSlot.isConnected) {
+        notFoundSlot.outerHTML = systemsNotFoundHtml(computeSystemsNotFound(data.vendors, noDattoMatch));
+      }
       // "Other Systems" and "Microsoft License Counts" are now rendered in
       // their OWN try/catch each, by request -- confirmed this session
       // that a bug in ONE of them (either a thrown exception, or one
@@ -1594,15 +1804,30 @@ export function mount(container) {
       return;
     }
     if (!data.found) {
-      statusEl.className = 'status';
-      statusEl.textContent = `No Datto RMM devices matched "${data.siteTerm}".`;
+      // No real Datto RMM match for this client -- by request, still
+      // proceed with whatever else is available (Other Systems/M365
+      // Licenses/Mail Domain Protection, all via loadVendorSummaries()
+      // below, matched on the plain Autotask company name since there's
+      // no real Datto site to key off), rather than stopping dead here.
+      // "Create PDF"/"Generate Summary" stay disabled permanently (not
+      // "Loading") -- the PDF builder needs a full Datto-based report
+      // (gauge, device counts, etc.) that genuinely doesn't exist for
+      // this client, not something loadVendorSummaries() below ever
+      // produces.
+      statusEl.hidden = true;
       currentReportData = null;
       currentVendorsData = null;
-      // Same reasoning as the not-connected branch above -- a dead end
-      // until the user changes the search, not something to wait out.
       pdfButton.disabled = true;
       pdfButton.textContent = 'Create PDF';
       generateCommentaryButton.disabled = true;
+      generateCommentaryButton.hidden = true;
+      resultsEl.innerHTML = `
+        <p class="live-reports-client-heading">${escapeHtml(resolvedCompanyName || data.siteTerm)} <span class="live-reports-client-asof">${new Date().toLocaleString()}</span></p>
+        <p id="systems-not-found-slot" class="live-reports-systems-not-found">Client Match not found: Datto RMM</p>
+        <div class="lr-section-box" id="vendor-summaries"><h2 class="client-summary-section-heading">Cybersecurity Systems</h2><p class="inline-subtext live-reports-loading-text">Loading Other Systems...</p></div>
+        <div class="lr-section-box" id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
+      `;
+      loadVendorSummaries(resolvedCompanyName || data.siteTerm, force, data.isTcElite, data.companyId, true);
       return;
     }
     statusEl.hidden = true;
@@ -1719,7 +1944,9 @@ export function mount(container) {
     const kpiGrid = dattoLiveKpis ? `<div class="live-reports-kpi-grid">${dattoLiveKpis}</div>` : '';
 
     resultsEl.innerHTML = `
-      <p class="inline-subtext">${escapeHtml(data.siteName)} -- as of ${new Date(data.asOf).toLocaleString()}</p>
+      <p class="live-reports-client-heading">${escapeHtml(resolvedCompanyName || data.siteName)} <span class="live-reports-client-asof">${new Date(data.asOf).toLocaleString()}</span></p>
+      <div class="lr-section-box" id="vendor-summaries"><h2 class="client-summary-section-heading">Cybersecurity Systems</h2><p class="inline-subtext live-reports-loading-text">Loading Other Systems...</p></div>
+      <div class="lr-section-box" id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
       <div class="lr-section-box">
         ${namedSectionToggleHtml('overallHealthView', 'Overall Health View')}
         <div class="mtg-widget-grid">${gauge}${kpiGrid}${alertsWidget}</div>
@@ -1746,15 +1973,14 @@ export function mount(container) {
           'Patch Management and Software Management are not handled through this platform for servers, so they will always show as No Policy / Unmanaged below -- not counted in the Servers Health Score.'
         )}
         ${hardwareLifecycleWidgets}
+        ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
       </div>
-      <div class="lr-section-box" id="vendor-summaries"><p class="inline-subtext live-reports-loading-text">Loading Other Systems...</p></div>
-      <div class="lr-section-box" id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
-      ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
       <div class="lr-section-box live-reports-device-list">${deviceList}</div>
       <div class="lr-section-box" id="report-explanations-slot"><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
     `;
     wireDeviceFilters(resultsEl);
-    loadVendorSummaries(data.siteName, force, data.isTcElite);
+    wireOpenAlertsLinks(resultsEl, data.openAlerts);
+    loadVendorSummaries(data.siteName, force, data.isTcElite, data.companyId);
     // "Understanding Your Scores"/"Cybersecurity Module Descriptions", by
     // request, at the very bottom of the page -- isConnected-guarded same
     // as every other async fill-in on this page (loadVendorSummaries() et
