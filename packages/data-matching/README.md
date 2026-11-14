@@ -10,6 +10,12 @@ rather than folding unrelated matching checks into Coming Soon.
 - `client.js` - frontend module. Exports `id`, `label`, and `mount(container)`.
 - `server.js` - Express router mounted by the shell at `/api/data-matching`.
 
+## Other UDF Name:* entries
+
+`GET /other-udf-concepts`. Any Companies UDF named `Name:something` that ISN'T one of the 5 concepts below (`KNOWN_NAME_UDFS` in `server.js`) -- most likely one created by hand directly in Autotask after this dashboard last learned that specific name, discovered live via `getUserDefinedFieldDefinitions()` in `@dashboard/autotask-client` (`GET /Companies/entityInformation/userDefinedFields`, the field-DEFINITION endpoint, not a per-company value read), not a hardcoded list. Appended to the bottom of the "Data Match Check with Autotask" dropdown once this resolves (`client.js`'s own `mount()`).
+
+These have no real Unmatched/Exact Match report -- there's no known external system to compare names against for a UDF this dashboard doesn't otherwise recognize the meaning of -- so both buttons are greyed out (with an explanatory tooltip) whenever one of these is selected. **Show UDF Matches still works** for them, unchanged -- `GET /udf-matches` only ever needed a `udfName`, never a specific concept/report, so it already covered any UDF name generically.
+
 ## Concept 1: TPP Domains Without an Autotask Match
 
 `GET /tpp-domains-unmatched`. Every domain in our TPP Wholesale reseller
@@ -125,13 +131,23 @@ space-stripped substring check fixes this by noticing "cloudking" is a
 literal prefix of "cloudkinghosting").
 
 On the client, each row/group shows the suggestions as clickable buttons
-(Concepts 2-4's own rows have them upfront, from the report itself;
+(Concepts 2-5's own rows have them upfront, from the report itself;
 Concept 1's TPP account-reference code has no real name to fuzzy-match
 against anything, so its own suggestions only appear reactively after a
 failed free-text attempt) plus a free-text input + Update button for a
 manual match, all sharing one `buildMatchWidget()`. Every write --
 whichever button triggers it -- confirms with the person first, naming
 exactly what's about to be written and where.
+
+Each suggestion also carries `udfValue` -- that company's OWN current
+value in the concept's UDF right now, if it has one (`getCompanyUdfValueByCompanyId()`
+in `@dashboard/autotask-client`, a companyId-keyed sibling of the existing
+value-keyed `getCompanyUdfValueToNameMap()`, fetched alongside it for
+every concept's report AND for the reactive free-text suggestions). A
+suggestion whose company already has something there renders red instead
+of the default blue pill, with that value shown on hover (`title`) -- by
+request, so picking an already-taken suggestion is visibly risky BEFORE
+clicking it, not just after hitting the server's own already-set refusal.
 
 ## Exact Match
 

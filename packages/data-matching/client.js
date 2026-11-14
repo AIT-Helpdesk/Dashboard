@@ -30,13 +30,34 @@ let lastActiveView = null;
 // -- each report already carries its own `data.udfName` once loaded, this
 // is just so the button works even before a Load (reading straight off
 // whichever concept is currently selected in the dropdown).
+// `hasReport`/`hasExactMatch` drive updateViewButtonsAvailability() below
+// -- every one of these 5 has a real Unmatched report; only TPP has no
+// "matched without a UDF" case (its own account-reference code never
+// equals a real company name, see server.js's own comment on
+// buildTppDomainsUnmatchedReport). The OTHER-UDF entries appended onto
+// the end of this same array once /other-udf-concepts resolves (see
+// mount() below) have neither -- there's no known external system to
+// compare names against for a UDF this dashboard doesn't otherwise
+// recognize, so only "Show UDF Matches" works for those.
 const CONCEPT_OPTIONS = [
-  { value: 'tpp-domains-unmatched', label: 'TPP Domains (No Autotask Match)', udfName: 'Name:TPP' },
-  { value: 'ingram-clients-unmatched', label: 'Ingram Client Names (No Autotask Match)', udfName: 'Name:Ingram Micro' },
-  { value: 'datto-sites-unmatched', label: 'Datto RMM Sites (No Autotask Match)', udfName: 'Name:Datto RMM' },
-  { value: 'saas-protection-clients-unmatched', label: 'SaaS Protection Clients (No Autotask Match)', udfName: 'Name:SaaS Backups' },
-  { value: 'microsoft365-clients-unmatched', label: 'Microsoft 365 (CSP) Clients (No Autotask Match)', udfName: 'Name:Microsoft 365' },
+  { value: 'tpp-domains-unmatched', label: 'TPP Domains', udfName: 'Name:TPP', hasReport: true, hasExactMatch: false },
+  { value: 'ingram-clients-unmatched', label: 'Ingram Client Names', udfName: 'Name:Ingram Micro', hasReport: true, hasExactMatch: true },
+  { value: 'datto-sites-unmatched', label: 'Datto RMM Sites', udfName: 'Name:Datto RMM', hasReport: true, hasExactMatch: true },
+  { value: 'saas-protection-clients-unmatched', label: 'SaaS Protection Clients', udfName: 'Name:SaaS Backups', hasReport: true, hasExactMatch: true },
+  { value: 'microsoft365-clients-unmatched', label: 'Microsoft 365 (CSP) Clients', udfName: 'Name:Microsoft 365', hasReport: true, hasExactMatch: true },
 ];
+
+// Set true the moment a GET /other-udf-concepts request is kicked off (not
+// when it resolves) -- module-scope, survives a remount, so a quick
+// navigate-away-and-back before the first request finishes can't kick off
+// a second overlapping one that would double-push entries onto
+// CONCEPT_OPTIONS above. Reset back to false on a genuine failure so a
+// later remount gets to retry.
+let extraConceptsFetched = false;
+
+function findConceptMeta(value) {
+  return CONCEPT_OPTIONS.find((o) => o.value === value) || null;
+}
 
 export function mount(container) {
   // Scopes this page's own .summary strong override below without
@@ -45,7 +66,7 @@ export function mount(container) {
   container.innerHTML = `
     <header class="page-header">
       <form id="filter-form" class="date-form">
-        <label for="concept-input">Data Match Checker</label>
+        <label for="concept-input">Data Match Check with Autotask</label>
         <select id="concept-input" name="concept">
           ${CONCEPT_OPTIONS.map((o) => `<option value="${o.value}">${o.label}</option>`).join('')}
         </select>
@@ -87,18 +108,54 @@ export function mount(container) {
     }
   }
 
-  // TPP (Concept 1) matches only via its own UDF -- there's no "matched
-  // without needing a UDF" case for it at all (see server.js's own comment
-  // above buildTppDomainsUnmatchedReport), so this button is disabled
-  // whenever TPP is the selected concept, re-checked on every dropdown
-  // change rather than just once at mount.
-  function updateMatchedNoUdfButtonState() {
-    const isTpp = conceptInput.value === 'tpp-domains-unmatched';
-    showMatchedNoUdfButton.disabled = isTpp;
-    showMatchedNoUdfButton.title = isTpp ? "TPP matches only via its own UDF -- there's no \"matched without a UDF\" case for this concept." : '';
+  // Unmatched/Exact Match both need a real report builder behind them
+  // (see each concept's own hasReport/hasExactMatch above) -- greyed out
+  // with an explanatory tooltip whenever the selected concept has neither,
+  // re-checked on every dropdown change rather than just once at mount.
+  // Show UDF Matches needs neither -- GET /udf-matches works for any
+  // udfName -- so it's never disabled here.
+  function updateViewButtonsAvailability() {
+    const meta = findConceptMeta(conceptInput.value);
+    const hasReport = meta ? !!meta.hasReport : true;
+    const hasExactMatch = meta ? !!meta.hasExactMatch : true;
+    loadButton.disabled = !hasReport;
+    loadButton.title = hasReport ? '' : "This UDF has no Unmatched report of its own -- there's no known external system to compare it against, so only Show UDF Matches works here.";
+    showMatchedNoUdfButton.disabled = !hasExactMatch;
+    showMatchedNoUdfButton.title = hasExactMatch
+      ? ''
+      : !hasReport
+        ? "This UDF has no Exact Match report of its own -- there's no known external system to compare it against, so only Show UDF Matches works here."
+        : "TPP matches only via its own UDF -- there's no \"matched without a UDF\" case for this concept.";
   }
-  updateMatchedNoUdfButtonState();
-  conceptInput.addEventListener('change', updateMatchedNoUdfButtonState);
+  updateViewButtonsAvailability();
+  conceptInput.addEventListener('change', updateViewButtonsAvailability);
+
+  // "Include any UDF Name:{thing} types in the list at the bottom as
+  // well" -- any Companies UDF named "Name:*" that doesn't already have
+  // one of the 5 concepts above (see server.js's own KNOWN_NAME_UDFS),
+  // most likely one created by hand in Autotask after this dashboard was
+  // last updated to know its specific name. Appended as plain <option>s
+  // (not a full re-render of the <select>, which would lose whatever's
+  // currently picked) once this resolves; CONCEPT_OPTIONS itself gets the
+  // same entries pushed on so every other lookup in this file
+  // (findConceptMeta(), loadUdfMatches()'s own CONCEPT_OPTIONS.find())
+  // just works for them with no separate list to keep in sync.
+  if (!extraConceptsFetched) {
+    extraConceptsFetched = true;
+    fetch('/api/data-matching/other-udf-concepts')
+      .then((res) => res.json())
+      .then((data) => {
+        for (const c of data.concepts || []) {
+          const option = { value: c.udfName, label: c.label, udfName: c.udfName, hasReport: false, hasExactMatch: false };
+          CONCEPT_OPTIONS.push(option);
+          conceptInput.appendChild(new Option(option.label, option.value));
+        }
+      })
+      .catch((err) => {
+        console.error('Data Matching: failed to load other UDF concepts:', err);
+        extraConceptsFetched = false;
+      });
+  }
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -109,6 +166,15 @@ export function mount(container) {
   showMatchedNoUdfButton.addEventListener('click', () => loadMatchedWithoutUdf(conceptInput.value));
 
   async function load(concept) {
+    // Defensive only -- the button itself is disabled/greyed out for this
+    // case (updateViewButtonsAvailability() above), but guard here too in
+    // case something else ever calls this directly.
+    if (!findConceptMeta(concept)?.hasReport) {
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.textContent = "This UDF has no Unmatched report of its own -- use Show UDF Matches to see what's already set.";
+      return;
+    }
     loadButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
@@ -145,7 +211,8 @@ export function mount(container) {
   // endpoint "Show Unmatched" already hits, since matchedWithoutUdf now
   // rides along in that one response -- no separate route needed.
   async function loadMatchedWithoutUdf(concept) {
-    if (concept === 'tpp-domains-unmatched') return;
+    // Defensive only -- see the same comment on load() above.
+    if (!findConceptMeta(concept)?.hasExactMatch) return;
     showMatchedNoUdfButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
@@ -164,7 +231,7 @@ export function mount(container) {
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
     } finally {
-      showMatchedNoUdfButton.disabled = conceptInput.value === 'tpp-domains-unmatched';
+      showMatchedNoUdfButton.disabled = !findConceptMeta(conceptInput.value)?.hasExactMatch;
     }
   }
 
@@ -617,9 +684,20 @@ export function mount(container) {
         suggestionsEl.innerHTML = '<span class="inline-subtext">No close match found</span>';
         return;
       }
+      // Red instead of blue, with the current UDF content on hover, when
+      // the suggested company already has a value in this concept's own
+      // UDF -- by request, so picking a suggestion that's already taken
+      // (which the server's own already-set guard above would refuse
+      // anyway) is visible BEFORE clicking it, not just after.
       suggestionsEl.innerHTML = `
         <span class="inline-subtext">Possible matches:</span>
-        ${list.map((s, i) => `<button type="button" class="button-link button-link--small dm-suggestion-chip" data-i="${i}">${escapeHtml(s.companyName)}</button>`).join('')}
+        ${list
+          .map((s, i) => {
+            const taken = !!s.udfValue;
+            const title = taken ? `Already set to "${s.udfValue}"` : '';
+            return `<button type="button" class="button-link button-link--small dm-suggestion-chip${taken ? ' dm-suggestion-chip--taken' : ''}" data-i="${i}" title="${escapeHtml(title)}">${escapeHtml(s.companyName)}</button>`;
+          })
+          .join('')}
       `;
       suggestionsEl.querySelectorAll('.dm-suggestion-chip').forEach((btn, i) => {
         btn.addEventListener('click', () => doWrite(list[i].companyName));

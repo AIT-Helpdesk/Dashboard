@@ -520,8 +520,24 @@ const companyUdfMapInFlight = new Map();
 // Domains table, or this same page's own report cache, independently
 // invalidated by its caller) picks up the fresh value instead of serving
 // a stale map for up to the remaining TTL.
+// Reverse of the map above -- companyId -> that company's own current UDF
+// value, rather than value -> companyName. By request (Data Matching's own
+// fuzzy-match suggestions): a "possible match" chip needs to know whether
+// the SUGGESTED company already has something in this UDF (so the UI can
+// flag it red and show what's already there, rather than the person
+// clicking it and only finding out from the server's own already-set
+// refusal afterward). Its own cache/in-flight map, separate full company
+// scan from the byValue map above -- a second scan per UDF name costs
+// nothing extra in practice (same 20-min TTL, and Data Matching's own
+// report builders already do more than one full company scan per load),
+// and keeping the two maps structurally independent means neither
+// function's return shape has to change for the other's sake.
+const companyUdfByCompanyIdCache = new Map(); // udfName -> { data: Map<companyId, value>, expiresAt }
+const companyUdfByCompanyIdInFlight = new Map();
+
 function invalidateCompanyUdfMap(udfName) {
   companyUdfMapCache.delete(udfName);
+  companyUdfByCompanyIdCache.delete(udfName);
 }
 
 async function getCompanyUdfValueToNameMap(client, udfName) {
@@ -542,6 +558,26 @@ async function getCompanyUdfValueToNameMap(client, udfName) {
     companyUdfMapInFlight.set(udfName, promise);
   }
   return companyUdfMapInFlight.get(udfName);
+}
+
+async function getCompanyUdfValueByCompanyId(client, udfName) {
+  const cached = companyUdfByCompanyIdCache.get(udfName);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+  if (!companyUdfByCompanyIdInFlight.has(udfName)) {
+    const promise = (async () => {
+      const companies = await listAll(client.companies, [{ op: 'gte', field: 'id', value: 0 }]);
+      const map = new Map();
+      for (const c of companies) {
+        const udf = (c.userDefinedFields || []).find((u) => u.name === udfName);
+        const value = udf?.value?.trim();
+        if (value) map.set(c.id, value);
+      }
+      companyUdfByCompanyIdCache.set(udfName, { data: map, expiresAt: Date.now() + COMPANY_UDF_MAP_TTL_MS });
+      return map;
+    })().finally(() => companyUdfByCompanyIdInFlight.delete(udfName));
+    companyUdfByCompanyIdInFlight.set(udfName, promise);
+  }
+  return companyUdfByCompanyIdInFlight.get(udfName);
 }
 
 const companyNameCache = new Map();
@@ -836,6 +872,38 @@ async function getPicklistLabels(entity, fieldName) {
   return labels;
 }
 
+// Every USER DEFINED field actually configured on an entity -- a different
+// endpoint from /entityInformation/fields above (which only covers Autotask's
+// own built-in fields), confirmed live against the real Companies entity:
+// `GET /Companies/entityInformation/userDefinedFields` returns `{ fields:
+// [...] }`, each with its own `name`/`label`/`type`/etc, same shape as a
+// regular field's metadata. By request (Data Matching's own "include any
+// UDF Name:{thing} types" dropdown entries): lets a page discover every
+// "Name:*" UDF that EXISTS on Companies right now, including ones created
+// by hand in Autotask's own UI after this dashboard was last updated to
+// know about them by name, rather than only ever recognizing a fixed,
+// hardcoded list. Cached forever per entity (no TTL) -- same "effectively
+// static configuration, not per-record data" reasoning getPicklistLabels()
+// above already uses for field metadata; a newly-added UDF only needs a
+// dev server restart to be picked up, not a cache expiry.
+const udfDefinitionsCache = new Map(); // entity.endpoint -> [{name, label, ...}]
+const udfDefinitionsInFlight = new Map(); // entity.endpoint -> Promise, cleared on failure so a transient error can be retried
+async function getUserDefinedFieldDefinitions(entity) {
+  if (udfDefinitionsCache.has(entity.endpoint)) return udfDefinitionsCache.get(entity.endpoint);
+  if (!udfDefinitionsInFlight.has(entity.endpoint)) {
+    const promise = entity.axios
+      .get(`${entity.endpoint}/entityInformation/userDefinedFields`)
+      .then((res) => {
+        const fields = res.data?.fields || [];
+        udfDefinitionsCache.set(entity.endpoint, fields);
+        return fields;
+      })
+      .finally(() => udfDefinitionsInFlight.delete(entity.endpoint));
+    udfDefinitionsInFlight.set(entity.endpoint, promise);
+  }
+  return udfDefinitionsInFlight.get(entity.endpoint);
+}
+
 // Resolves a BillingCode's internal ID from its exact `name` (what Autotask's UI
 // labels "Material Code" on a Charge / BillingItem line) -- cached per name since
 // billing codes are effectively static configuration, not per-record data. Returns
@@ -922,6 +990,8 @@ module.exports = {
   resolveCompanyName,
   resolveResourceIdByEmail,
   getCompanyUdfValueToNameMap,
+  getCompanyUdfValueByCompanyId,
+  getUserDefinedFieldDefinitions,
   invalidateCompanyUdfMap,
   fetchServiceDeskAndProfessionalServicesMembership,
   resolveLeaveBillingCodeIds,

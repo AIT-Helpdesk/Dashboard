@@ -1585,6 +1585,23 @@ h1 {
 .dm-match-row .dm-match-suggestions {
   padding: 0.3rem 0 0.3rem;
 }
+/* Red instead of the default blue pill, by request -- flags a "possible
+   match" suggestion whose Autotask company already has a value in this
+   concept's own UDF (server.js's own findFuzzySuggestionsFromList() now
+   tags each suggestion with that, via getCompanyUdfValueByCompanyId()),
+   so clicking it visibly risks the server's own already-set refusal
+   instead of only finding out after. Same #dc2626 red-tint-pill
+   convention this dashboard uses elsewhere (.cc-mark-renewals-btn,
+   .rt-delete-button, etc). Compound selector (.dm-suggestion-chip
+   .dm-suggestion-chip--taken), not a bare single class -- ties the
+   specificity with .button-link--small's own default tint (also 1
+   class) regardless of which comes first in source order, same "a lone
+   class loses/ties this fight" reasoning this stylesheet's other
+   per-button overrides already document. */
+.dm-suggestion-chip.dm-suggestion-chip--taken {
+  background: color-mix(in srgb, #dc2626 15%, transparent);
+  color: #dc2626;
+}
 
 /* A .section-heading (green/red/etc.) that also shows a right-aligned
    count/totals span, same left-label/right-figures layout

@@ -1,6 +1,14 @@
 const express = require('express');
 const { fetchAllDomains } = require('@dashboard/tpp-client');
-const { getClient, listAll, getCompanyUdfValueToNameMap, invalidateCompanyUdfMap, todayAestKey } = require('@dashboard/autotask-client');
+const {
+  getClient,
+  listAll,
+  getCompanyUdfValueToNameMap,
+  getCompanyUdfValueByCompanyId,
+  getUserDefinedFieldDefinitions,
+  invalidateCompanyUdfMap,
+  todayAestKey,
+} = require('@dashboard/autotask-client');
 const { getToken: getIngramToken, fetchAllPages: fetchIngramPages } = require('@dashboard/ingram-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
 const saasProtection = require('@dashboard/saas-protection/server.js');
@@ -22,6 +30,14 @@ const cspCustomers = require('@dashboard/csp-customers/server.js');
 // same convention every one of these concepts shares). More concepts can
 // follow the same shape: one route + one report-builder function here, one
 // render function in client.js.
+
+// The "Name:*" UDFs that already have a real concept/report built above --
+// used by GET /other-udf-concepts below to find any Companies UDF named
+// "Name:something" that DOESN'T have one yet (a new one created by hand in
+// Autotask after this dashboard last learned its specific name), so the
+// client's dropdown can still offer "UDF Matches" for it even with no
+// Unmatched/Exact Match report behind it.
+const KNOWN_NAME_UDFS = new Set(['Name:TPP', 'Name:Ingram Micro', 'Name:Datto RMM', 'Name:SaaS Backups', 'Name:Microsoft 365']);
 
 // Plain calendar-day arithmetic on YYYY-MM-DD strings -- same convention
 // @dashboard/coming-soon and @dashboard/subscriptions-expiring already use,
@@ -119,10 +135,11 @@ async function buildTppDomainsUnmatchedReport() {
 // ---------------------------------------------------------------------------
 async function buildIngramClientsUnmatchedReport() {
   const client = await getClient();
-  const [token, autotaskCompanies, ingramUdfMap] = await Promise.all([
+  const [token, autotaskCompanies, ingramUdfMap, ingramUdfByCompanyId] = await Promise.all([
     getIngramToken(),
     getAllCompanyNames(client),
     getCompanyUdfValueToNameMap(client, 'Name:Ingram Micro'),
+    getCompanyUdfValueByCompanyId(client, 'Name:Ingram Micro'),
   ]);
   const [subscriptions, customers] = await Promise.all([
     fetchIngramPages('/subscriptions', token, { status: 'active' }),
@@ -175,7 +192,7 @@ async function buildIngramClientsUnmatchedReport() {
     rows.push({
       clientName,
       activeSubscriptionCount,
-      suggestions: ignored ? [] : findFuzzySuggestionsFromList(autotaskCompanies, clientName),
+      suggestions: ignored ? [] : findFuzzySuggestionsFromList(autotaskCompanies, clientName, ingramUdfByCompanyId),
       ignored,
     });
   }
@@ -230,10 +247,11 @@ async function buildDattoSitesUnmatchedReport() {
   }
 
   const client = await getClient();
-  const [devices, autotaskCompanies, dattoUdfMap] = await Promise.all([
+  const [devices, autotaskCompanies, dattoUdfMap, dattoUdfByCompanyId] = await Promise.all([
     dattoRmm.getAllDevices(),
     getAllCompanyNames(client),
     getCompanyUdfValueToNameMap(client, 'Name:Datto RMM'),
+    getCompanyUdfValueByCompanyId(client, 'Name:Datto RMM'),
   ]);
   // Map, not a Set -- see Concept 2's own autotaskCompanyByNormalizedName
   // comment above; this needs the MATCHED company's own id/companyName
@@ -276,7 +294,7 @@ async function buildDattoSitesUnmatchedReport() {
     // dropped outright), hidden by default behind "Show Ignored Lines",
     // same convention as Concept 2's own Ambient IT/W365 rows above.
     const ignored = / - On Demand$/i.test(siteName);
-    rows.push({ siteName, deviceCount, suggestions: ignored ? [] : findFuzzySuggestionsFromList(autotaskCompanies, siteName), ignored });
+    rows.push({ siteName, deviceCount, suggestions: ignored ? [] : findFuzzySuggestionsFromList(autotaskCompanies, siteName, dattoUdfByCompanyId), ignored });
   }
   rows.sort((a, b) => a.siteName.localeCompare(b.siteName));
   matchedWithoutUdf.sort((a, b) => a.siteName.localeCompare(b.siteName));
@@ -311,10 +329,11 @@ async function buildDattoSitesUnmatchedReport() {
 // ---------------------------------------------------------------------------
 async function buildSaasProtectionClientsUnmatchedReport() {
   const client = await getClient();
-  const [domains, autotaskCompanies, saasUdfMap] = await Promise.all([
+  const [domains, autotaskCompanies, saasUdfMap, saasUdfByCompanyId] = await Promise.all([
     saasProtection.getDomains(false),
     getAllCompanyNames(client),
     getCompanyUdfValueToNameMap(client, 'Name:SaaS Backups'),
+    getCompanyUdfValueByCompanyId(client, 'Name:SaaS Backups'),
   ]);
   // Map, not a Set -- see Concept 2's own autotaskCompanyByNormalizedName
   // comment above.
@@ -338,7 +357,7 @@ async function buildSaasProtectionClientsUnmatchedReport() {
     rows.push({
       clientName,
       seatsUsed: d.seatsUsed ?? null,
-      suggestions: findFuzzySuggestionsFromList(autotaskCompanies, clientName),
+      suggestions: findFuzzySuggestionsFromList(autotaskCompanies, clientName, saasUdfByCompanyId),
       ignored: false,
     });
   }
@@ -372,10 +391,11 @@ async function buildSaasProtectionClientsUnmatchedReport() {
 // ---------------------------------------------------------------------------
 async function buildMicrosoft365ClientsUnmatchedReport() {
   const client = await getClient();
-  const [{ customers }, autotaskCompanies, m365UdfMap] = await Promise.all([
+  const [{ customers }, autotaskCompanies, m365UdfMap, m365UdfByCompanyId] = await Promise.all([
     cspCustomers.getCustomers(false),
     getAllCompanyNames(client),
     getCompanyUdfValueToNameMap(client, 'Name:Microsoft 365'),
+    getCompanyUdfValueByCompanyId(client, 'Name:Microsoft 365'),
   ]);
   // Map, not a Set -- see Concept 2's own autotaskCompanyByNormalizedName
   // comment above.
@@ -399,7 +419,7 @@ async function buildMicrosoft365ClientsUnmatchedReport() {
     rows.push({
       clientName,
       tenantId: c.tenantId,
-      suggestions: findFuzzySuggestionsFromList(autotaskCompanies, clientName),
+      suggestions: findFuzzySuggestionsFromList(autotaskCompanies, clientName, m365UdfByCompanyId),
       ignored: false,
     });
   }
@@ -601,18 +621,34 @@ const FUZZY_SUGGESTION_MIN_SIMILARITY = 0.5;
 // fetch -- findFuzzySuggestions() itself (used by the write path, which
 // has no reason to have fetched the list already) just fetches then
 // delegates here.
-function findFuzzySuggestionsFromList(companies, companyName) {
+//
+// `udfValueByCompanyId` (optional, Map<companyId, value> from
+// getCompanyUdfValueByCompanyId()) tags each returned suggestion with
+// that company's OWN current value in the relevant "Name:*" UDF, by
+// request -- so the client can flag a suggestion red (and show what it's
+// already matched to on hover) when picking it would just hit the
+// server's own already-set refusal (writeNameMatchUdf's own guard,
+// above). `null` when the map wasn't passed, or the company has nothing
+// in it -- same meaning either way (nothing to warn about), the client
+// doesn't need to tell those two apart.
+function findFuzzySuggestionsFromList(companies, companyName, udfValueByCompanyId) {
   return companies
     .map((c) => ({ ...c, similarity: fuzzySimilarity(companyName, c.companyName) }))
     .filter((c) => c.similarity >= FUZZY_SUGGESTION_MIN_SIMILARITY)
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, FUZZY_SUGGESTION_LIMIT)
-    .map((c) => ({ id: c.id, companyName: c.companyName }));
+    .map((c) => ({ id: c.id, companyName: c.companyName, udfValue: udfValueByCompanyId?.get(c.id) || null }));
 }
 
-async function findFuzzySuggestions(client, companyName) {
-  const all = await getAllCompanyNames(client);
-  return findFuzzySuggestionsFromList(all, companyName);
+// `udfName` optional -- omitted only by callers that have no concept of
+// one to check (none currently; kept optional rather than required so a
+// future caller without a real UDF to check isn't forced to pass one).
+async function findFuzzySuggestions(client, companyName, udfName) {
+  const [all, udfValueByCompanyId] = await Promise.all([
+    getAllCompanyNames(client),
+    udfName ? getCompanyUdfValueByCompanyId(client, udfName) : Promise.resolve(null),
+  ]);
+  return findFuzzySuggestionsFromList(all, companyName, udfValueByCompanyId);
 }
 
 // Trim + lowercase only -- deliberately NOT the punctuation-stripping
@@ -654,7 +690,7 @@ async function writeNameMatchUdf({ udfName, matchValue, companyName, reportCache
   if (result.status === 'not-found') {
     const err = new Error(`No Autotask company matches "${trimmedName}".`);
     err.status = 404;
-    err.suggestions = await findFuzzySuggestions(client, trimmedName);
+    err.suggestions = await findFuzzySuggestions(client, trimmedName, udfName);
     throw err;
   }
   if (result.status === 'ambiguous') {
@@ -981,6 +1017,31 @@ router.post('/match-microsoft365-client', async (req, res) => {
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
     console.error('Data Matching: match-microsoft365-client failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Every "Name:*" UDF that exists on Companies right now but ISN'T one of
+// the 5 with a real concept/report above, by request ("Include any UDF
+// Name:{thing} types in the list at the bottom as well") -- lets the
+// client's dropdown offer a "UDF Matches" view for a UDF this dashboard
+// doesn't otherwise know the meaning of (no external system to compare
+// names against, so no real Unmatched/Exact Match report is possible for
+// it), without needing a code change every time someone adds one by hand
+// in Autotask. `label` is just the UDF's own name with the "Name:" prefix
+// stripped, same convention the "Show UDF Matches" table's own column
+// header already uses (udfColumnLabel in client.js).
+router.get('/other-udf-concepts', async (req, res) => {
+  try {
+    const client = await getClient();
+    const fields = await getUserDefinedFieldDefinitions(client.companies);
+    const extras = fields
+      .filter((f) => /^Name:/i.test(f.name) && !KNOWN_NAME_UDFS.has(f.name))
+      .map((f) => ({ udfName: f.name, label: f.name.replace(/^Name:/i, '').trim() || f.name }))
+      .sort((a, b) => a.udfName.localeCompare(b.udfName));
+    res.json({ concepts: extras });
+  } catch (err) {
+    console.error('Data Matching: other-udf-concepts failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
