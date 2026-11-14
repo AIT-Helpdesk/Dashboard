@@ -1403,15 +1403,27 @@ h1 {
   font-weight: 600;
   margin-bottom: 0.25rem;
 }
-/* "Show Unmatched" (the renamed #load-button), by request -- same small
-   size as "Show UDF Matches" (.button-link--small's own padding/font-size),
-   but keeping its existing darker-blue .date-form button look (background/
-   color), not .button-link--small's own light accent tint. Scoped to this
-   page -- #load-button is a plain, unclassed id reused by several other
-   pages' own Load buttons, which this must not affect. */
-.data-matching-page #load-button {
-  padding: 0.25rem 0.6rem;
-  font-size: 0.75rem;
+/* Superseded -- #load-button ("Unmatched") now carries .button-link
+   .button-link--small directly in client.js, same as its two sibling
+   view buttons, so this rule's own padding/font-size (identical values)
+   is redundant. Kept only as a marker in case a future id-scoped override
+   is needed here again; the real view-highlighting logic is
+   .dm-view-btn--active below. */
+
+/* The three view buttons (Unmatched/UDF Matches/Exact Match) all default
+   to the same light .button-link--small pill now, by request -- whichever
+   one's own results are CURRENTLY on screen gets this dark-blue "active"
+   look instead (client.js's setActiveView() toggles this class), rather
+   than Unmatched always looking selected just because it happens to be a
+   plain <button> (this dashboard's shared solid-blue .date-form button
+   default) while its two siblings use the lighter pill. Compound selector
+   (class+element+class+class) needed to out-specify .date-form button
+   .button-link--small's own light-tint rule above it in this file -- same
+   "a lone/lower-specificity class loses this tie" fix this stylesheet's
+   other per-button overrides already document (e.g. .cc-mark-renewals-btn). */
+.date-form button.button-link--small.dm-view-btn--active {
+  background: var(--accent);
+  color: white;
 }
 /* "Show UDF Matches" table -- shrunk to its own content, by request, same
    convention @dashboard/dns-check's own .dns-check-compact-table uses. */
@@ -11052,9 +11064,17 @@ tr.accrued-time-yellow-row th {
    Cybersecurity section" / "size more like the other Cybersecurity
    items"), so it's .mtg-widget itself plus a min-width (that grid's cards
    otherwise shrink-to-fit, which would cramp the score circle + 3 rows
-   below) rather than a separate bigger panel. */
+   below) rather than a separate bigger panel. Widened again, 300px ->
+   340px, by request -- the VIEW (locked, not-yet-edited) state has fewer
+   visible row controls than the edit state (.live-reports-mdp-edit-only
+   below stays hidden until the cog unlocks it), so it was only ever as
+   wide as this min-width itself, with no extra content to stretch it --
+   at 300px that left the title cramped against the cog sitting at the
+   header's right edge. The edit state already grows past this comfortably
+   on its own once those extra controls appear, so it's unaffected either
+   way. */
 .live-reports-mdp-widget {
-  min-width: 300px;
+  min-width: 340px;
   padding-top: 0.5rem;
   padding-bottom: 0.6rem;
 }
@@ -11170,9 +11190,18 @@ tr.accrued-time-yellow-row th {
   width: 2.8rem;
   flex-shrink: 0;
 }
+/* White background, by request -- with none set, a disabled <select> (the
+   DMARC/SPF/DKIM level dropdowns start disabled until the cog unlocks
+   them) otherwise falls back to the browser's own greyed-out disabled
+   look, which read as inconsistent/washed-out against the rest of this
+   card. Explicit dark ink too, same #1a1a1a .live-reports-mdp-row-name
+   above already uses, so the text stays legible against the white
+   regardless of the dashboard's own light/dark theme. */
 .live-reports-mdp-level-select {
   font-size: 0.72rem;
   padding: 0.1rem 0.2rem;
+  background: #fff;
+  color: #1a1a1a;
 }
 .live-reports-mdp-rate-input {
   width: 3.2rem;
@@ -12161,4 +12190,99 @@ tr.accrued-time-yellow-row th {
 }
 .dbs-row-count-note {
   margin: 0.5rem 0 0.3rem;
+}
+
+/* Client Contacts -- every button on the page (Search, Export CSV,
+   Resolve Duplicates), same color-mix-tint-pill convention Contract
+   Checks' own small pill buttons use dashboard-wide (.cc-mark-renewals-
+   btn, .chk-tce-update-btn, etc), green by request ("same style as the
+   ...Resolve button"). These buttons live inside a .date-form, so a
+   lone single-class selector here would lose the specificity tie to
+   .date-form button.button-link--small's own blue-pill default (class+
+   element+class beats one class) -- same real bug already fixed once for
+   Contract Checks' .cc-mark-renewals-btn and Rollout Tracker's
+   .rt-delete-button in this exact spot, confirmed the hard way both
+   times ("none of those buttons... changed"). Matching that same
+   class+element+class shape is what actually wins here. */
+.date-form button.button-link--small.clc-resolve-dup-btn {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: #16a34a;
+  font-weight: 600;
+}
+/* Bigger than the default .history-modal-panel (30rem/80vh), by request --
+   widened further a second time (60rem -> 75rem) since the no-wrap name/
+   company columns below need real room. Compound selector
+   (.history-modal-panel.clc-dup-modal-panel), not a bare single class --
+   same "a lone class loses the specificity tie to .history-modal-panel's
+   own width/max-width rule" fix this stylesheet's other per-page modal-
+   width overrides already document (e.g.
+   .history-modal-panel.cc-mark-renewals-modal-panel). */
+.history-modal-panel.clc-dup-modal-panel {
+  width: min(75rem, 97vw);
+  max-width: 97vw;
+  max-height: 92vh;
+}
+/* Filter boxes for First Name/Last Name/Company Name/Email, by request --
+   sits outside .clc-dup-list-wrap (below) so the filter row stays visible
+   and usable while the list itself scrolls. */
+.clc-dup-filter-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+.clc-dup-filter-input {
+  flex: 1 1 10rem;
+  min-width: 8rem;
+}
+.clc-dup-list-wrap {
+  margin-top: 0.75rem;
+  max-height: 70vh;
+  overflow-y: auto;
+  /* The table itself can end up wider than the modal once First/Last
+     Name and Company Name stop wrapping (below) -- this wrapper scrolls
+     horizontally rather than the table silently overflowing the modal's
+     own edge or wrapping those cells back on anyway. */
+  overflow-x: auto;
+}
+/* One compact table (not a table per name), by request -- tighter cell
+   padding/font-size than this dashboard's default <table> rows, since
+   this list can run long. */
+.clc-dup-table th,
+.clc-dup-table td {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+}
+/* First Name / Last Name / Company Name never wrap, by request -- these
+   are the columns people actually scan down to spot the real duplicates,
+   and a wrapped name is harder to compare at a glance than a long row. */
+.clc-dup-nowrap {
+  white-space: nowrap;
+}
+/* Visually separates one duplicate-name group from the next within the
+   single compact table, standing in for the separate per-group headings
+   the old multi-table layout used. */
+.clc-dup-row--group-start td {
+  border-top: 2px solid var(--border);
+}
+.clc-dup-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+}
+
+/* Client Contacts' own filter form -- two side-by-side columns (Client +
+   its own Contracts/Classification row underneath; Show + its own Show
+   Inactive Clients row underneath), by request, rather than every field
+   stacking in one single column like this dashboard's other stacked
+   .date-form-row forms (Check Client, Contract Checks, etc). */
+.clc-filter-grid {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+.clc-filter-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }

@@ -133,6 +133,12 @@ manual match, all sharing one `buildMatchWidget()`. Every write --
 whichever button triggers it -- confirms with the person first, naming
 exactly what's about to be written and where.
 
+## Exact Match
+
+A page-level button, by request -- the other half of what every Concept 2-5 report has always silently discarded. Each of those reports' own exact name-to-name comparison already finds items whose external name equals an Autotask company's name outright (`autotaskCompanyByNormalizedName` in `server.js`); previously that just meant `continue` (dropped, not even counted). Now each of those reports also returns a `matchedWithoutUdf` array (plus `matchedWithoutUdfCount`) alongside its usual `rows` -- the SAME cached report `/api/<concept>` already returns for "Show Unmatched", so this button costs nothing extra server-side, it just renders a different part of the same payload. Each row carries the matched `companyId`/`companyName` plus whatever other fields that concept's own unmatched table shows (e.g. Ingram's Active Subscriptions count, Datto's Device count).
+
+Not available for Concept 1 (TPP) -- its account-reference CODE never equals a real Autotask company name, so there's no "matched by name alone, no UDF needed" case for it at all; the button is disabled with an explanatory tooltip whenever TPP is the selected concept.
+
 ## Show UDF Matches
 
 A page-level button, next to Load -- for whichever concept is currently

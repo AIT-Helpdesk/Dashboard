@@ -6,7 +6,7 @@ export const label = "Client Details";
 // module itself is cached by the browser and stays alive for the session, so a
 // module-level variable survives across re-mounts and lets the last result
 // restore instantly instead of coming back blank.
-let lastQuery = null; // { criteria, client }
+let lastQuery = null; // { criteria, client, showInactive }
 let lastData = null;
 
 // Whichever mount() is CURRENTLY on screen registers its own render()
@@ -52,6 +52,9 @@ export function mount(container) {
         <select id="criteria-input" name="criteria">
           ${CRITERIA_OPTIONS.map((o) => `<option value="${o.value}">${o.label}</option>`).join('')}
         </select>
+        <label class="inline-checkbox-label" title="Also include inactive clients for the 'No primary contact' / 'No main billing contact set' / 'No invoice since...' criteria (Active Clients/Inactive clients/Any Client already control this directly, so this has no effect on those).">
+          <input type="checkbox" id="show-inactive-input" /> Show Inactive Clients
+        </label>
         <button type="submit" id="search-button">Search</button>
         <button type="button" id="export-button">Export CSV</button>
       </form>
@@ -64,6 +67,7 @@ export function mount(container) {
   const form = container.querySelector('#filter-form');
   const clientInput = container.querySelector('#client-input');
   const criteriaInput = container.querySelector('#criteria-input');
+  const showInactiveInput = container.querySelector('#show-inactive-input');
   const searchButton = container.querySelector('#search-button');
   const exportButton = container.querySelector('#export-button');
   const statusEl = container.querySelector('#status');
@@ -73,6 +77,7 @@ export function mount(container) {
   if (lastQuery) {
     criteriaInput.value = lastQuery.criteria;
     clientInput.value = lastQuery.client;
+    showInactiveInput.checked = lastQuery.showInactive;
   }
 
   // This mount is now the active one -- see activeRender's own comment
@@ -81,10 +86,10 @@ export function mount(container) {
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(criteriaInput.value, clientInput.value);
+    load(criteriaInput.value, clientInput.value, showInactiveInput.checked);
   });
 
-  async function load(criteria, clientName) {
+  async function load(criteria, clientName, showInactive) {
     searchButton.disabled = true;
     statusEl.hidden = false;
     statusEl.className = 'status';
@@ -95,10 +100,11 @@ export function mount(container) {
     try {
       const params = new URLSearchParams({ criteria });
       if (clientName) params.set('client', clientName);
+      if (showInactive) params.set('showInactive', 'true');
       const res = await fetch(`/api/client-details?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      lastQuery = { criteria, client: clientName };
+      lastQuery = { criteria, client: clientName, showInactive };
       lastData = data;
       activeRender(data);
     } catch (err) {
@@ -156,7 +162,8 @@ export function mount(container) {
     summaryEl.hidden = false;
     const criteriaLabel = CRITERIA_OPTIONS.find((o) => o.value === data.criteria)?.label || data.criteria;
     const clientLabel = data.client ? ` matching client "${escapeHtml(data.client)}"` : '';
-    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> client${data.totalCount === 1 ? '' : 's'} -- ${escapeHtml(criteriaLabel)}${clientLabel}`;
+    const inactiveLabel = data.showInactive && !['active', 'inactive', 'any'].includes(data.criteria) ? ' (including inactive clients)' : '';
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> client${data.totalCount === 1 ? '' : 's'} -- ${escapeHtml(criteriaLabel)}${clientLabel}${inactiveLabel}`;
 
     if (data.totalCount === 0) {
       resultsEl.innerHTML = '<p class="status">No matching clients.</p>';

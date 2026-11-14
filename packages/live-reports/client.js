@@ -788,9 +788,9 @@ function emailDomainProtectionCardHtml(state) {
         status: !state.dmarc.exists
           ? null
           : state.dmarc.policy === 'reject'
-            ? { text: 'Reject', cls: 'good' }
+            ? { text: 'Reject bad emails', cls: 'good' }
             : state.dmarc.policy === 'quarantine'
-              ? { text: 'Quarantine', cls: 'warn' }
+              ? { text: 'Quarantine bad emails', cls: 'warn' }
               : { text: 'Exists', cls: 'muted' },
       },
       { label: `SPF${providerTag(state.spf.provider)}`, present: state.spf.exists, status: null },
@@ -1704,6 +1704,15 @@ export function mount(container) {
     const vendorEl = resultsEl.querySelector('#vendor-summaries');
     const m365El = resultsEl.querySelector('#m365-licenses');
     if (!vendorEl) return;
+    // The ONLY thing shown up near the top of the page while these two
+    // sections are still loading, by request -- the real Cybersecurity
+    // Systems/Microsoft License Counts content itself always renders down
+    // in its usual spot (#vendor-summaries/#m365-licenses above, between
+    // Device Health and the device list), never up here. Removed the
+    // moment each section's own fill-in below finishes, success or
+    // failure alike -- there's nothing left to report "still loading" on
+    // past that point.
+    const removeTopLoading = (id) => resultsEl.querySelector(id)?.remove();
     try {
       const params = new URLSearchParams({ siteName });
       if (force) params.set('force', 'true');
@@ -1742,6 +1751,7 @@ export function mount(container) {
         console.error('Live Reports: failed to render Other Systems:', err);
         if (vendorEl.isConnected) vendorEl.innerHTML = `<p class="inline-subtext">Could not render Other Systems: ${escapeHtml(err.message)}</p>`;
       }
+      removeTopLoading('#vendor-summaries-loading');
       if (m365El && m365El.isConnected) {
         try {
           m365El.innerHTML = m365LicensesHtml(data.vendors.m365Licenses);
@@ -1750,10 +1760,13 @@ export function mount(container) {
           m365El.innerHTML = `<h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext">Could not render license counts: ${escapeHtml(err.message)}</p>`;
         }
       }
+      removeTopLoading('#m365-licenses-loading');
     } catch (err) {
       console.error('Live Reports: /vendors request failed:', err);
       if (vendorEl.isConnected) vendorEl.innerHTML = `<p class="inline-subtext">Could not load Other Systems: ${escapeHtml(err.message)}</p>`;
       if (m365El && m365El.isConnected) m365El.innerHTML = m365LicensesHtml({ status: 'error' });
+      removeTopLoading('#vendor-summaries-loading');
+      removeTopLoading('#m365-licenses-loading');
       // Create PDF still works even when "Other Systems" itself failed to
       // load -- a safe "nothing available" shape for every vendor rather
       // than blocking the whole PDF over one section's own transient
@@ -1945,8 +1958,8 @@ export function mount(container) {
 
     resultsEl.innerHTML = `
       <p class="live-reports-client-heading">${escapeHtml(resolvedCompanyName || data.siteName)} <span class="live-reports-client-asof">${new Date(data.asOf).toLocaleString()}</span></p>
-      <div class="lr-section-box" id="vendor-summaries"><h2 class="client-summary-section-heading">Cybersecurity Systems</h2><p class="inline-subtext live-reports-loading-text">Loading Other Systems...</p></div>
-      <div class="lr-section-box" id="m365-licenses"><h2 class="client-summary-section-heading">Microsoft License Counts</h2><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
+      <p id="vendor-summaries-loading" class="inline-subtext live-reports-loading-text">Loading Cybersecurity Systems...</p>
+      <p id="m365-licenses-loading" class="inline-subtext live-reports-loading-text">Loading Microsoft License Counts...</p>
       <div class="lr-section-box">
         ${namedSectionToggleHtml('overallHealthView', 'Overall Health View')}
         <div class="mtg-widget-grid">${gauge}${kpiGrid}${alertsWidget}</div>
@@ -1975,6 +1988,8 @@ export function mount(container) {
         ${hardwareLifecycleWidgets}
         ${proactiveMaintenanceHtml(data.proactiveMaintenance)}
       </div>
+      <div class="lr-section-box" id="vendor-summaries"></div>
+      <div class="lr-section-box" id="m365-licenses"></div>
       <div class="lr-section-box live-reports-device-list">${deviceList}</div>
       <div class="lr-section-box" id="report-explanations-slot"><p class="inline-subtext live-reports-loading-text">Loading...</p></div>
     `;

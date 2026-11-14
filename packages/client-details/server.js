@@ -36,6 +36,7 @@ router.get('/', async (req, res) => {
     return res.status(400).json({ error: `Query param "criteria" must be one of: ${[...CRITERIA].join(', ')}.` });
   }
   const clientSearch = (req.query.client || '').trim();
+  const showInactive = req.query.showInactive === 'true';
 
   try {
     const client = await getClient();
@@ -48,16 +49,24 @@ router.get('/', async (req, res) => {
     // "any", which deliberately ignores both isActive and companyType and returns
     // every company regardless.
     //
-    // "Inactive" is its own standalone criteria (isActive = false); every other
-    // criteria except "any" means "active clients missing X", so isActive stays
-    // true for those.
+    // "Active"/"Inactive" are their own standalone criteria (isActive forced to
+    // true/false respectively -- the "Show Inactive Clients" checkbox below has
+    // no effect on either, since picking one of those two already says exactly
+    // what active state is wanted). Every other criteria except "any" means
+    // "clients missing X", defaulting to active-only same as before, UNLESS
+    // "Show Inactive Clients" is ticked, in which case the isActive restriction
+    // is dropped for those so inactive clients missing X show up too.
+    const companyTypeFilter = { op: 'in', field: 'companyType', value: CUSTOMER_OR_PROSPECT_TYPES };
     const companyFilter = [];
     if (criteria === 'any') {
       // No isActive / companyType filter at all.
     } else if (criteria === 'inactive') {
-      companyFilter.push({ op: 'eq', field: 'isActive', value: false }, { op: 'in', field: 'companyType', value: CUSTOMER_OR_PROSPECT_TYPES });
+      companyFilter.push({ op: 'eq', field: 'isActive', value: false }, companyTypeFilter);
+    } else if (criteria === 'active') {
+      companyFilter.push({ op: 'eq', field: 'isActive', value: true }, companyTypeFilter);
     } else {
-      companyFilter.push({ op: 'eq', field: 'isActive', value: true }, { op: 'in', field: 'companyType', value: CUSTOMER_OR_PROSPECT_TYPES });
+      if (!showInactive) companyFilter.push({ op: 'eq', field: 'isActive', value: true });
+      companyFilter.push(companyTypeFilter);
     }
     const clientWildcard = parseWildcard(clientSearch);
     if (clientWildcard) companyFilter.push({ op: clientWildcard.op, field: 'companyName', value: clientWildcard.value });
@@ -157,6 +166,7 @@ router.get('/', async (req, res) => {
     res.json({
       criteria,
       client: clientSearch,
+      showInactive,
       totalCount: rows.length,
       companies: rows,
     });

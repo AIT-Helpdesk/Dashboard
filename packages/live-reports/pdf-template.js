@@ -1727,9 +1727,9 @@ function drawEmailDomainCard(doc, x, y, w, data) {
       present: data.dmarc.exists,
       status: data.dmarc.exists
         ? data.dmarc.policy === 'reject'
-          ? { text: 'Reject', color: BRAND_GREEN }
+          ? { text: 'Reject bad emails', color: BRAND_GREEN }
           : data.dmarc.policy === 'quarantine'
-            ? { text: 'Quarantine', color: AMBER }
+            ? { text: 'Quarantine bad emails', color: AMBER }
             : { text: 'Exists', color: MUTED }
         : null,
     },

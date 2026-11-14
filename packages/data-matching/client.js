@@ -14,6 +14,14 @@ let lastDataByConcept = {
   'microsoft365-clients-unmatched': null,
 };
 
+// Which of the three view buttons' own results are CURRENTLY on screen --
+// 'unmatched' | 'udf-matches' | 'exact-match' | null (nothing run yet).
+// By request: the dark-blue "active" look should follow whichever view is
+// actually showing, not always sit on Show Unmatched just because it
+// happens to be a plain <button> (this dashboard's own default solid-blue
+// look) while the other two use the lighter .button-link--small pill.
+let lastActiveView = null;
+
 // One entry per "concept" this page checks -- by request, a page for
 // "various data matching concepts" generally, not just this first one.
 // Adding a second concept later means adding one more entry here, one more
@@ -41,12 +49,13 @@ export function mount(container) {
         <select id="concept-input" name="concept">
           ${CONCEPT_OPTIONS.map((o) => `<option value="${o.value}">${o.label}</option>`).join('')}
         </select>
-        <button type="submit" id="load-button">Show Unmatched</button>
-        <button type="button" id="show-udf-matches-button" class="button-link button-link--small">Show UDF Matches</button>
+        <button type="submit" id="load-button" class="button-link button-link--small dm-view-btn">Unmatched</button>
+        <button type="button" id="show-udf-matches-button" class="button-link button-link--small dm-view-btn">UDF Matches</button>
+        <button type="button" id="show-matched-no-udf-button" class="button-link button-link--small dm-view-btn">Exact Match</button>
       </form>
       <h1>Data Matching</h1>
     </header>
-    <p id="status" class="status">Pick a check, then click Show Unmatched.</p>
+    <p id="status" class="status">Pick a check, then click Unmatched.</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
   `;
@@ -55,11 +64,41 @@ export function mount(container) {
   const conceptInput = container.querySelector('#concept-input');
   const loadButton = container.querySelector('#load-button');
   const showUdfMatchesButton = container.querySelector('#show-udf-matches-button');
+  const showMatchedNoUdfButton = container.querySelector('#show-matched-no-udf-button');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
   conceptInput.value = lastConcept;
+
+  const VIEW_BUTTON_BY_NAME = { 'unmatched': loadButton, 'udf-matches': showUdfMatchesButton, 'exact-match': showMatchedNoUdfButton };
+
+  // Dark-blue "active" look follows whichever view actually succeeded in
+  // loading, not any particular button -- called after every successful
+  // load() / loadUdfMatches() / loadMatchedWithoutUdf() below, and once at
+  // mount to restore it (only ever 'unmatched', see the comment on the
+  // mount-time render() call near the bottom of this function -- UDF
+  // Matches/Exact Match views aren't themselves cached across remounts,
+  // only the plain unmatched report is).
+  function setActiveView(view) {
+    lastActiveView = view;
+    for (const [name, btn] of Object.entries(VIEW_BUTTON_BY_NAME)) {
+      btn.classList.toggle('dm-view-btn--active', name === view);
+    }
+  }
+
+  // TPP (Concept 1) matches only via its own UDF -- there's no "matched
+  // without needing a UDF" case for it at all (see server.js's own comment
+  // above buildTppDomainsUnmatchedReport), so this button is disabled
+  // whenever TPP is the selected concept, re-checked on every dropdown
+  // change rather than just once at mount.
+  function updateMatchedNoUdfButtonState() {
+    const isTpp = conceptInput.value === 'tpp-domains-unmatched';
+    showMatchedNoUdfButton.disabled = isTpp;
+    showMatchedNoUdfButton.title = isTpp ? "TPP matches only via its own UDF -- there's no \"matched without a UDF\" case for this concept." : '';
+  }
+  updateMatchedNoUdfButtonState();
+  conceptInput.addEventListener('change', updateMatchedNoUdfButtonState);
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -67,6 +106,7 @@ export function mount(container) {
   });
 
   showUdfMatchesButton.addEventListener('click', () => loadUdfMatches(conceptInput.value));
+  showMatchedNoUdfButton.addEventListener('click', () => loadMatchedWithoutUdf(conceptInput.value));
 
   async function load(concept) {
     loadButton.disabled = true;
@@ -85,6 +125,7 @@ export function mount(container) {
       lastConcept = concept;
       lastDataByConcept[concept] = data;
       render(data);
+      setActiveView('unmatched');
     } catch (err) {
       statusEl.hidden = false;
       statusEl.className = 'status error';
@@ -92,6 +133,109 @@ export function mount(container) {
     } finally {
       loadButton.disabled = false;
     }
+  }
+
+  // "Exact Match" -- by request, the OTHER thing every
+  // unmatched report has always silently dropped: items whose name already
+  // exactly equals an Autotask company's name outright, so no UDF was ever
+  // needed to identify the match (see server.js's own matchedWithoutUdf on
+  // each report -- the same `continue` branch that used to just discard
+  // these now also records them). Not available for TPP (see
+  // updateMatchedNoUdfButtonState above). Reuses the SAME cached report
+  // endpoint "Show Unmatched" already hits, since matchedWithoutUdf now
+  // rides along in that one response -- no separate route needed.
+  async function loadMatchedWithoutUdf(concept) {
+    if (concept === 'tpp-domains-unmatched') return;
+    showMatchedNoUdfButton.disabled = true;
+    statusEl.hidden = false;
+    statusEl.className = 'status';
+    statusEl.textContent = 'Loading...';
+    summaryEl.hidden = true;
+    resultsEl.innerHTML = '';
+
+    try {
+      const res = await fetch(`/api/data-matching/${concept}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      renderMatchedWithoutUdf(data);
+      setActiveView('exact-match');
+    } catch (err) {
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      showMatchedNoUdfButton.disabled = conceptInput.value === 'tpp-domains-unmatched';
+    }
+  }
+
+  // Per-concept display columns for the matched-without-UDF table --
+  // deliberately the SAME column shape each concept's own unmatched table
+  // already uses (see the inline column arrays inside render() below), just
+  // read directly off each matchedWithoutUdf row instead of an unmatched
+  // row, plus one more "Matched Autotask Company" column every concept
+  // shares since that's the whole point of this list.
+  function matchedWithoutUdfColumns(concept) {
+    if (concept === 'ingram-clients-unmatched') {
+      return [
+        { label: 'Ingram Client', cell: (r) => escapeHtml(r.clientName) },
+        { label: 'Active Subscriptions', className: 'ticket-number', cell: (r) => r.activeSubscriptionCount },
+      ];
+    }
+    if (concept === 'datto-sites-unmatched') {
+      return [
+        { label: 'Datto Site', cell: (r) => escapeHtml(r.siteName) },
+        { label: 'Devices', className: 'ticket-number', cell: (r) => r.deviceCount },
+      ];
+    }
+    if (concept === 'saas-protection-clients-unmatched') {
+      return [
+        { label: 'SaaS Protection Client', cell: (r) => escapeHtml(r.clientName) },
+        { label: 'Seats Used', className: 'ticket-number', cell: (r) => (r.seatsUsed === null ? '' : r.seatsUsed) },
+      ];
+    }
+    if (concept === 'microsoft365-clients-unmatched') {
+      return [
+        { label: 'CSP Tenant', cell: (r) => escapeHtml(r.clientName) },
+        { label: 'Tenant ID', className: 'ticket-number', cell: (r) => escapeHtml(r.tenantId || '') },
+      ];
+    }
+    return null; // TPP -- never reached, loadMatchedWithoutUdf() returns early for it above
+  }
+
+  function renderMatchedWithoutUdf(data) {
+    statusEl.hidden = true;
+    summaryEl.hidden = false;
+    const rows = data.matchedWithoutUdf || [];
+    const count = data.matchedWithoutUdfCount ?? rows.length;
+    summaryEl.innerHTML = `<div><strong>${count}</strong> item${count === 1 ? '' : 's'} already matching an Autotask company by name -- no UDF needed<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span></div>`;
+    resultsEl.innerHTML = '';
+
+    const columns = matchedWithoutUdfColumns(data.concept);
+    if (!columns || rows.length === 0) {
+      resultsEl.innerHTML = `<p class="status">No items currently match an Autotask company by name alone.</p>`;
+      return;
+    }
+
+    const groupEl = document.createElement('div');
+    groupEl.className = 'resource-group';
+    const table = document.createElement('table');
+    const headerCells = columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('') + '<th>Matched Autotask Company</th>';
+    table.innerHTML = `
+      <thead><tr>${headerCells}</tr></thead>
+      <tbody>
+        ${rows
+          .map(
+            (r) => `
+          <tr>
+            ${columns.map((c) => `<td${c.className ? ` class="${c.className}"` : ''}>${c.cell(r)}</td>`).join('')}
+            <td>${escapeHtml(r.companyName)}</td>
+          </tr>`
+          )
+          .join('')}
+      </tbody>
+    `;
+    groupEl.appendChild(table);
+    resultsEl.appendChild(groupEl);
   }
 
   // "Show UDF Matches" -- by request, the reverse of this page's own
@@ -115,6 +259,7 @@ export function mount(container) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       renderUdfMatches(data.udfName, data.matches);
+      setActiveView('udf-matches');
     } catch (err) {
       statusEl.hidden = false;
       statusEl.className = 'status error';
@@ -620,7 +765,21 @@ export function mount(container) {
     return groupEl;
   }
 
-  if (lastDataByConcept[lastConcept]) render(lastDataByConcept[lastConcept]);
+  // Mirrors the restore logic above: a remount only ever re-renders the
+  // plain unmatched report (UDF Matches/Exact Match views have no cache of
+  // their own to restore from), so that's the only view the highlight can
+  // correctly claim here -- 'udf-matches'/'exact-match' would be wrong if
+  // the page was last showing one of those before navigating away. Nothing
+  // cached at all (a genuinely fresh session) leaves `lastActiveView` at
+  // its initial `null`, so setActiveView(null) below just clears every
+  // button back to the plain light-blue look, per request ("if nothing has
+  // run yet leave them all as the light blue").
+  if (lastDataByConcept[lastConcept]) {
+    render(lastDataByConcept[lastConcept]);
+    setActiveView('unmatched');
+  } else {
+    setActiveView(lastActiveView);
+  }
 
   function formatDate(isoDateOnly) {
     if (!isoDateOnly) return '';

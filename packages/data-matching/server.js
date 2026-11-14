@@ -43,6 +43,11 @@ function daysBetween(fromDateStr, toDateStr) {
 // domain's account reference is far less worth chasing down for a matching
 // gap, so those are left out here rather than adding dead-renewal noise to
 // a list meant to drive real review/UDF-writing follow-up.
+//
+// No `matchedWithoutUdf` here, unlike Concepts 2-5 below -- TPP's own
+// account-reference CODE never equals a real Autotask company name, so
+// there's no such thing as "matched without needing the UDF" for this
+// concept; the UDF is the ONLY way a TPP domain ever gets matched at all.
 // ---------------------------------------------------------------------------
 async function buildTppDomainsUnmatchedReport() {
   const client = await getClient();
@@ -124,7 +129,10 @@ async function buildIngramClientsUnmatchedReport() {
     fetchIngramPages('/customers', token),
   ]);
   const customerNameById = new Map(customers.map((c) => [c.id, c.name]));
-  const autotaskNameSet = new Set(autotaskCompanies.map((c) => normalizeForExactCompare(c.companyName)));
+  // Map, not a Set -- by request ("show items that matched without needing
+  // a UDF"), this needs the MATCHED company's own id/companyName back, not
+  // just a yes/no on whether one exists.
+  const autotaskCompanyByNormalizedName = new Map(autotaskCompanies.map((c) => [normalizeForExactCompare(c.companyName), c]));
   // Already matched via the UDF write path -- confirmed live, by request
   // ("AMD Constructions" still showed up as unmatched even though
   // company "AMD Quality Constructions" already has Name:Ingram Micro =
@@ -141,9 +149,18 @@ async function buildIngramClientsUnmatchedReport() {
   }
 
   const rows = [];
+  // Every row whose name exactly matched an Autotask company outright, by
+  // request ("show items that matched without needing a UDF") -- the
+  // matches this report has always silently dropped (see the `continue`
+  // below), now surfaced instead of just discarded.
+  const matchedWithoutUdf = [];
   for (const [clientName, activeSubscriptionCount] of activeCountByClientName.entries()) {
     const normalized = normalizeForExactCompare(clientName);
-    if (autotaskNameSet.has(normalized)) continue; // exact match -- not a gap at all, not even an ignorable one
+    const exactMatch = autotaskCompanyByNormalizedName.get(normalized);
+    if (exactMatch) {
+      matchedWithoutUdf.push({ clientName, activeSubscriptionCount, companyId: exactMatch.id, companyName: exactMatch.companyName });
+      continue; // exact match -- not a gap at all, not even an ignorable one
+    }
     if (ingramUdfValueSet.has(normalized)) continue; // already matched via the UDF write path
     // Ambient IT's own internal naming convention for a Microsoft 365
     // subscription tied to a specific underlying client -- confirmed live
@@ -163,6 +180,7 @@ async function buildIngramClientsUnmatchedReport() {
     });
   }
   rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
+  matchedWithoutUdf.sort((a, b) => a.clientName.localeCompare(b.clientName));
 
   return {
     asOf: new Date().toISOString(),
@@ -171,6 +189,8 @@ async function buildIngramClientsUnmatchedReport() {
     totalCount: rows.filter((r) => !r.ignored).length,
     ignoredCount: rows.filter((r) => r.ignored).length,
     rows,
+    matchedWithoutUdf,
+    matchedWithoutUdfCount: matchedWithoutUdf.length,
   };
 }
 
@@ -204,6 +224,8 @@ async function buildDattoSitesUnmatchedReport() {
       totalCount: 0,
       ignoredCount: 0,
       rows: [],
+      matchedWithoutUdf: [],
+      matchedWithoutUdfCount: 0,
     };
   }
 
@@ -213,7 +235,10 @@ async function buildDattoSitesUnmatchedReport() {
     getAllCompanyNames(client),
     getCompanyUdfValueToNameMap(client, 'Name:Datto RMM'),
   ]);
-  const autotaskNameSet = new Set(autotaskCompanies.map((c) => normalizeForExactCompare(c.companyName)));
+  // Map, not a Set -- see Concept 2's own autotaskCompanyByNormalizedName
+  // comment above; this needs the MATCHED company's own id/companyName
+  // back for the "matched without needing a UDF" list below.
+  const autotaskCompanyByNormalizedName = new Map(autotaskCompanies.map((c) => [normalizeForExactCompare(c.companyName), c]));
   // Already matched via the UDF write path -- same reasoning as Concept 2's
   // own ingramUdfValueSet above (confirmed live: a site whose own real
   // Autotask company name differs from its Datto site name is exactly the
@@ -228,13 +253,20 @@ async function buildDattoSitesUnmatchedReport() {
   }
 
   const rows = [];
+  // Every site whose name exactly matched an Autotask company outright, by
+  // request ("show items that matched without needing a UDF").
+  const matchedWithoutUdf = [];
   for (const { siteName, deviceCount } of siteByUid.values()) {
     // mapDeviceSummary() falls back to the em-dash placeholder "—" when a
     // device genuinely has no site set in Datto itself -- not a real site
     // name to match (or fail to match) against anything.
     if (!siteName || siteName === '—') continue;
     const normalized = normalizeForExactCompare(siteName);
-    if (autotaskNameSet.has(normalized)) continue; // exact match -- not a gap at all, not even an ignorable one
+    const exactMatch = autotaskCompanyByNormalizedName.get(normalized);
+    if (exactMatch) {
+      matchedWithoutUdf.push({ siteName, deviceCount, companyId: exactMatch.id, companyName: exactMatch.companyName });
+      continue; // exact match -- not a gap at all, not even an ignorable one
+    }
     if (dattoUdfValueSet.has(normalized)) continue; // already matched via the UDF write path
     // Datto's own " - On Demand" site-name suffix (e.g. "Griffith
     // Corporation - On Demand" for the real client "Griffith Corporation"),
@@ -247,6 +279,7 @@ async function buildDattoSitesUnmatchedReport() {
     rows.push({ siteName, deviceCount, suggestions: ignored ? [] : findFuzzySuggestionsFromList(autotaskCompanies, siteName), ignored });
   }
   rows.sort((a, b) => a.siteName.localeCompare(b.siteName));
+  matchedWithoutUdf.sort((a, b) => a.siteName.localeCompare(b.siteName));
 
   return {
     asOf: new Date().toISOString(),
@@ -256,6 +289,8 @@ async function buildDattoSitesUnmatchedReport() {
     totalCount: rows.filter((r) => !r.ignored).length,
     ignoredCount: rows.filter((r) => r.ignored).length,
     rows,
+    matchedWithoutUdf,
+    matchedWithoutUdfCount: matchedWithoutUdf.length,
   };
 }
 
@@ -281,15 +316,24 @@ async function buildSaasProtectionClientsUnmatchedReport() {
     getAllCompanyNames(client),
     getCompanyUdfValueToNameMap(client, 'Name:SaaS Backups'),
   ]);
-  const autotaskNameSet = new Set(autotaskCompanies.map((c) => normalizeForExactCompare(c.companyName)));
+  // Map, not a Set -- see Concept 2's own autotaskCompanyByNormalizedName
+  // comment above.
+  const autotaskCompanyByNormalizedName = new Map(autotaskCompanies.map((c) => [normalizeForExactCompare(c.companyName), c]));
   const saasUdfValueSet = new Set([...saasUdfMap.keys()].map(normalizeForExactCompare));
 
   const rows = [];
+  // Every client whose name exactly matched an Autotask company outright,
+  // by request ("show items that matched without needing a UDF").
+  const matchedWithoutUdf = [];
   for (const d of domains) {
     const clientName = d.saasCustomerName;
     if (!clientName) continue;
     const normalized = normalizeForExactCompare(clientName);
-    if (autotaskNameSet.has(normalized)) continue; // exact match -- not a gap
+    const exactMatch = autotaskCompanyByNormalizedName.get(normalized);
+    if (exactMatch) {
+      matchedWithoutUdf.push({ clientName, seatsUsed: d.seatsUsed ?? null, companyId: exactMatch.id, companyName: exactMatch.companyName });
+      continue; // exact match -- not a gap
+    }
     if (saasUdfValueSet.has(normalized)) continue; // already matched via the UDF write path
     rows.push({
       clientName,
@@ -299,6 +343,7 @@ async function buildSaasProtectionClientsUnmatchedReport() {
     });
   }
   rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
+  matchedWithoutUdf.sort((a, b) => a.clientName.localeCompare(b.clientName));
 
   return {
     asOf: new Date().toISOString(),
@@ -307,6 +352,8 @@ async function buildSaasProtectionClientsUnmatchedReport() {
     totalCount: rows.length,
     ignoredCount: 0,
     rows,
+    matchedWithoutUdf,
+    matchedWithoutUdfCount: matchedWithoutUdf.length,
   };
 }
 
@@ -330,15 +377,24 @@ async function buildMicrosoft365ClientsUnmatchedReport() {
     getAllCompanyNames(client),
     getCompanyUdfValueToNameMap(client, 'Name:Microsoft 365'),
   ]);
-  const autotaskNameSet = new Set(autotaskCompanies.map((c) => normalizeForExactCompare(c.companyName)));
+  // Map, not a Set -- see Concept 2's own autotaskCompanyByNormalizedName
+  // comment above.
+  const autotaskCompanyByNormalizedName = new Map(autotaskCompanies.map((c) => [normalizeForExactCompare(c.companyName), c]));
   const m365UdfValueSet = new Set([...m365UdfMap.keys()].map(normalizeForExactCompare));
 
   const rows = [];
+  // Every tenant whose name exactly matched an Autotask company outright,
+  // by request ("show items that matched without needing a UDF").
+  const matchedWithoutUdf = [];
   for (const c of customers) {
     const clientName = c.name;
     if (!clientName) continue;
     const normalized = normalizeForExactCompare(clientName);
-    if (autotaskNameSet.has(normalized)) continue; // exact match -- not a gap
+    const exactMatch = autotaskCompanyByNormalizedName.get(normalized);
+    if (exactMatch) {
+      matchedWithoutUdf.push({ clientName, tenantId: c.tenantId, companyId: exactMatch.id, companyName: exactMatch.companyName });
+      continue; // exact match -- not a gap
+    }
     if (m365UdfValueSet.has(normalized)) continue; // already matched via the UDF write path
     rows.push({
       clientName,
@@ -348,6 +404,7 @@ async function buildMicrosoft365ClientsUnmatchedReport() {
     });
   }
   rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
+  matchedWithoutUdf.sort((a, b) => a.clientName.localeCompare(b.clientName));
 
   return {
     asOf: new Date().toISOString(),
@@ -356,6 +413,8 @@ async function buildMicrosoft365ClientsUnmatchedReport() {
     totalCount: rows.length,
     ignoredCount: 0,
     rows,
+    matchedWithoutUdf,
+    matchedWithoutUdfCount: matchedWithoutUdf.length,
   };
 }
 
