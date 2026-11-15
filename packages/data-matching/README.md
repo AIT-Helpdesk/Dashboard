@@ -149,6 +149,36 @@ of the default blue pill, with that value shown on hover (`title`) -- by
 request, so picking an already-taken suggestion is visibly risky BEFORE
 clicking it, not just after hitting the server's own already-set refusal.
 
+A suggestion also renders **green** when `hasExactMatch` is true -- by
+request ("the green [should] represent when the found Autotask Client name
+has an exact match to any entity in the Exact Match list... not matching
+to the entered criteria"): the SUGGESTED company itself already appears in
+this same concept's own `matchedWithoutUdf` (Exact Match) list, i.e. it's
+independently confirmed to be a real, correctly-named Autotask company --
+not a statement about how closely it happens to resemble whatever was
+typed/searched (a 0.95 prefix/substring fuzzy score, e.g. "arb" ->
+"ARB Jindalee", is NOT by itself green). Red still wins when a suggestion
+is both taken and has an exact match, since taken is a hard refusal
+regardless of how trustworthy the company is. Only computed for each
+concept's own report-driven suggestions (`findFuzzySuggestionsFromList`'s
+own `exactMatchCompanyIds` param, built from that SAME report's
+`matchedWithoutUdf` once it's fully known); the reactive free-text
+suggestions returned after a failed manual write (`findFuzzySuggestions()`)
+don't have a report's own `matchedWithoutUdf` in hand, so those never come
+back green.
+
+**Include Inactive** -- a page-level checkbox, default unticked (by
+request), narrows the candidate pool EVERY concept's "Possible matches"
+suggestions are scored against to active-only Autotask companies unless
+ticked (`includeInactive=true` on `GET /<concept>-unmatched`, read by
+`client.js`'s own `conceptUrl()`). Scoped to suggestions only -- each
+report's own exact name-to-name comparison (`autotaskCompanyByNormalizedName`,
+and so the Exact Match list / `hasExactMatch` above) always checks against
+every company regardless of this flag, so a company already confirmed as
+an exact match doesn't stop counting as one just because it's inactive.
+Each report is cached per Include Inactive state (`<concept>|true`/
+`<concept>|false`) -- a write/clear invalidates both.
+
 ## Exact Match
 
 A page-level button, by request -- the other half of what every Concept 2-5 report has always silently discarded. Each of those reports' own exact name-to-name comparison already finds items whose external name equals an Autotask company's name outright (`autotaskCompanyByNormalizedName` in `server.js`); previously that just meant `continue` (dropped, not even counted). Now each of those reports also returns a `matchedWithoutUdf` array (plus `matchedWithoutUdfCount`) alongside its usual `rows` -- the SAME cached report `/api/<concept>` already returns for "Show Unmatched", so this button costs nothing extra server-side, it just renders a different part of the same payload. Each row carries the matched `companyId`/`companyName` plus whatever other fields that concept's own unmatched table shows (e.g. Ingram's Active Subscriptions count, Datto's Device count).

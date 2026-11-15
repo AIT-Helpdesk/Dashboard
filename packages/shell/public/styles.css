@@ -1441,11 +1441,24 @@ h1 {
   margin-bottom: 0.75rem;
 }
 
+/* `overflow-x: auto` (not `hidden`) is the real fix here -- by request
+   ("Coming soon and many other pages have no horizontal scroll ... can't
+   see the info"). `.resource-group` wraps almost every table on this
+   dashboard, and plain `overflow: hidden` was silently CLIPPING any row
+   wider than its card on a narrow screen with no way to reach the rest of
+   it, rather than letting the card scroll sideways to it -- several pages
+   (Contract Checks, DNS Check, What's On's scorecards) had already found
+   and locally patched this exact problem for themselves with their own
+   scoped `.resource-group { overflow-x: auto }` override; this just makes
+   that the dashboard-wide default instead of something each page has to
+   rediscover. `overflow-y: hidden` is kept so the card's own rounded
+   corners still clip correctly. */
 .resource-group {
   border: 1px solid var(--border);
   border-radius: 10px;
   margin-bottom: 1rem;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .resource-group-header {
@@ -1546,6 +1559,56 @@ h1 {
   padding: 0.4rem 1rem 0;
   font-size: 0.85rem;
 }
+/* On-page confirmation, by request ("have this appear on the page...
+   instead of in this popup") -- replaces every native confirm() on this
+   page's own write/clear actions (client.js's own showInlineConfirm()),
+   reusing .dm-match-status's own slot rather than a whole new element.
+   Plain/neutral by default (the ordinary "Write X into Y" confirmation --
+   "doesn't need to be red"); --danger is the one exception
+   (confirmOverrideExactMatch()'s "already has an exact match" warning),
+   where native confirm() couldn't be colored at all. */
+.dm-match-status.dm-inline-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  margin-top: 0.3rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+/* Forces the message onto its own full-width line, by request ("Put the
+   OK before the cancel on the second line") -- without this, OK (short
+   enough to fit) stayed on the message's own line while Cancel alone
+   wrapped down, splitting the two buttons apart instead of keeping them
+   together on the line underneath. */
+.dm-inline-confirm-message {
+  flex-basis: 100%;
+}
+.dm-match-status.dm-inline-confirm--danger {
+  background: color-mix(in srgb, #dc2626 12%, transparent);
+  border-color: color-mix(in srgb, #dc2626 40%, transparent);
+  color: #dc2626;
+  font-weight: 600;
+}
+.dm-inline-confirm-ok-btn {
+  background: var(--accent);
+  color: white;
+}
+.dm-inline-confirm-ok-btn:hover {
+  background: color-mix(in srgb, var(--accent) 85%, black);
+}
+.dm-inline-confirm--danger .dm-inline-confirm-ok-btn {
+  background: #dc2626;
+}
+.dm-inline-confirm--danger .dm-inline-confirm-ok-btn:hover {
+  background: color-mix(in srgb, #dc2626 85%, black);
+}
+.dm-inline-confirm-cancel-btn {
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
+}
 /* Clickable fuzzy-match suggestions under a failed exact-match attempt --
    plain .button-link--small pills, same look every other small action
    button on this dashboard already uses, not a new one-off chip style. */
@@ -1601,6 +1664,31 @@ h1 {
 .dm-suggestion-chip.dm-suggestion-chip--taken {
   background: color-mix(in srgb, #dc2626 15%, transparent);
   color: #dc2626;
+}
+/* Green, by request -- flags a suggestion that's a genuinely EXACT match
+   (server.js's own fuzzySimilarity() scored it 1: identical once
+   punctuation/case/extra-whitespace is stripped), as distinct from a
+   merely close fuzzy guess. Never applied alongside --taken above (see
+   client.js's own `!taken && ...` check) -- red still wins when both
+   would otherwise apply, since that's a hard refusal regardless of match
+   quality. Same #16a34a green this dashboard uses elsewhere
+   (.cell-flag-green, etc.), same compound-selector specificity reasoning
+   as --taken above. */
+.dm-suggestion-chip.dm-suggestion-chip--exact {
+  background: color-mix(in srgb, #16a34a 15%, transparent);
+  color: #16a34a;
+}
+/* Grey, by request ("make the update buttons grey so they stand out from
+   the others") -- every other pill on this page (the view toggle buttons,
+   the suggestion chips above) stays in the accent blue/red/green family,
+   so a neutral grey is what actually stands apart rather than blending in
+   as "just another blue button". Same muted-tint-pill formula this
+   dashboard already uses elsewhere (.chk-tce-wait-btn,
+   .cc-subs-expiring-btn--pending, etc). Compound selector, same
+   specificity reasoning as --taken above. */
+.button-link--small.dm-match-button {
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
 }
 
 /* A .section-heading (green/red/etc.) that also shows a right-aligned
@@ -1680,6 +1768,15 @@ h1 {
 
 .contract-services-table {
   table-layout: fixed;
+}
+/* Smaller text and shorter rows, by request -- same 0.78rem/0.3rem 0.75rem
+   DNS Check's own tables already use for the same reason (a long
+   per-company service list reading as too chunky at the plain
+   dashboard-wide default). */
+.contract-services-table th,
+.contract-services-table td {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.75rem;
 }
 /* Widened from 10%, by request ("don't wrap the contract name") -- with
    table-layout: fixed a column's own width is a hard cap regardless of
@@ -2616,6 +2713,10 @@ h1 {
   grid-template-columns: max-content 1fr;
   column-gap: 0.5rem;
   row-gap: 0.15rem;
+  /* Smaller than the 0.9rem this inherits from .chk-client-label, by
+     request -- this is a secondary cross-system sanity-check line, not
+     meant to compete with the page's real result tables above it. */
+  font-size: 0.78rem;
 }
 /* The "choose a client" picker (client.js's renderClientPicker), shown in
    place of the normal Client: label when a plain (no "*") Autotask Client
@@ -3875,6 +3976,41 @@ th {
 .lhs-sort-btn--active {
   color: var(--accent);
   font-weight: 700;
+}
+
+/* Contact Search's own sortable column headers -- same pattern as SaaS
+   Alerts Customers'/Live Health Scores' own .sac-sort-btn/.lhs-sort-btn
+   above, scoped under its own class per that same per-page convention. */
+.cs-sort-btn {
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cs-sort-btn:hover {
+  color: var(--accent);
+}
+.cs-sort-btn--active {
+  color: var(--accent);
+}
+/* Per-column filter box, sitting in its own header row directly under
+   the sort-button row -- deliberately plain/small so the header stays
+   compact with 7 of these side by side. */
+.cs-column-filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.2rem 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--fg);
 }
 
 td.ticket-number {
@@ -5349,6 +5485,90 @@ td.ticket-number a:hover {
    reads as de-emphasised at a glance, same grey as .muted elsewhere. */
 .link-button--inactive {
   color: var(--muted);
+}
+
+/* Same 4 pages' "ambiguous match" picker (Client Summary/Activity/
+   Financials, M365 Environment) -- by request, more compact rows, smaller
+   text, and no longer stretched to the full card width (a client name, no
+   matter how short, was sitting in a row that spanned the whole page).
+   `table { width: auto }` overrides the dashboard-wide `table { width:
+   100% }` so the card itself can shrink-wrap via `display: inline-block`
+   instead of filling its container. */
+.client-match-list {
+  display: inline-block;
+  max-width: 100%;
+}
+.client-match-list table {
+  width: auto;
+}
+.client-match-list td {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.82rem;
+}
+/* Client Name / Status / Classification as fixed-width columns, by request
+   ("make them look like columns so they line up nicely"), no header row
+   needed -- same "button laid out as a grid with literal column widths"
+   convention Classification Summary's own .bar-row buttons already use,
+   so every row's columns land in the same place regardless of each row's
+   own content length (CSS Grid has no way to sync column widths ACROSS
+   separate button elements otherwise -- only a shared literal width does
+   that). Name truncates with an ellipsis (full name in its own `title`
+   tooltip) rather than wrapping or pushing the other columns out of line. */
+.client-match-list .link-button {
+  display: grid;
+  grid-template-columns: 15rem 4rem 1fr;
+  column-gap: 0.6rem;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+}
+.client-match-list .cml-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Data Matching -- every table on the page (every concept's own Unmatched
+   report, the UDF Matches view, the Exact Match view), by request, same
+   0.78rem/0.3rem 0.75rem DNS Check's own tables already use for the same
+   reason (narrower, tighter rows than the plain dashboard-wide default). */
+.data-matching-page table th,
+.data-matching-page table td {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.75rem;
+}
+/* Every search/concept's own first column is a name -- "Ingram Client",
+   "Datto Site", "SaaS Protection Client", "CSP Tenant" (renderNameMismatch
+   Section()'s own columns, reused by the Exact Match view), plus "Autotask
+   Client" (the UDF Matches view) -- by request, never wraps onto a second
+   line, which the tighter column widths above made more likely for a
+   longer company/site name. */
+.data-matching-page table th:first-child,
+.data-matching-page table td:first-child {
+  white-space: nowrap;
+}
+
+/* Coming Soon's own tables -- both Domains and Microsoft Licensing's
+   Annual/Monthly sub-tables -- by request, more compact rows/smaller text
+   than the dashboard-wide default, same 0.78rem/0.3rem 0.75rem DNS
+   Check's own tables already use for the same reason (a long list reading
+   as too chunky at the plain default size). */
+.coming-soon-table td,
+.coming-soon-table th {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.75rem;
+}
+/* Invoice column (Microsoft Licensing's Annual table) -- by request, never
+   wraps the invoice number + "[PAID]" tag onto a second line. */
+.coming-soon-table .cs-invoice-cell {
+  white-space: nowrap;
+}
+/* An unpaid invoice number is red (.cell-flag-red) but, by request, not
+   bold like every other dashboard-wide use of that class -- overridden
+   here rather than touching .cell-flag-red itself, which every other page
+   still wants bold. */
+.coming-soon-table .cs-invoice-cell .cell-flag-red {
+  font-weight: 400;
 }
 
 .cell-flag-red {

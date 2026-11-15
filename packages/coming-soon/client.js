@@ -7,7 +7,7 @@ export const label = "Coming Soon";
 // reasoning).
 let lastSection = 'domains';
 let lastWindow = '30';
-let lastDataBySection = { domains: null, licensing: null };
+let lastDataBySection = { domains: null, licensing: null, all: null };
 let activeRender = null;
 
 const WINDOW_OPTIONS = [
@@ -18,7 +18,13 @@ const WINDOW_OPTIONS = [
   { value: 'expired-recently', label: 'Expired Recently' },
 ];
 
+// "Show All" sits first so it reads as the obvious default rather than a
+// bolted-on extra option -- picking it just runs every other choice in this
+// same dropdown (Domains + Microsoft Licensing) and renders both sections
+// stacked on one page, instead of making the reader flip the dropdown back
+// and forth between them.
 const SECTION_OPTIONS = [
+  { value: 'all', label: 'Show All' },
   { value: 'domains', label: 'Domains' },
   { value: 'licensing', label: 'Microsoft Licensing' },
 ];
@@ -76,10 +82,36 @@ export function mount(container) {
       // convention as Subscriptions Expiring, so a repeat Load with the
       // same selection is instant.
       const params = new URLSearchParams({ window: windowKey });
-      if (section === 'licensing' && includeRenewingMonthly) params.set('includeRenewingMonthly', 'true');
-      const res = await fetch(`/api/coming-soon/${section}?${params.toString()}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      if (includeRenewingMonthly) params.set('includeRenewingMonthly', 'true');
+
+      let data;
+      if (section === 'all') {
+        // Both real sub-routes hit in parallel -- each is independently
+        // cached server-side, so this costs nothing extra once either has
+        // been loaded on its own. Domains ignores the unused
+        // includeRenewingMonthly param harmlessly.
+        const [domainsRes, licensingRes] = await Promise.all([
+          fetch(`/api/coming-soon/domains?${params.toString()}`),
+          fetch(`/api/coming-soon/licensing?${params.toString()}`),
+        ]);
+        const [domainsData, licensingData] = await Promise.all([domainsRes.json(), licensingRes.json()]);
+        if (!domainsRes.ok) throw new Error(domainsData.error || `Domains request failed (${domainsRes.status})`);
+        if (!licensingRes.ok) throw new Error(licensingData.error || `Microsoft Licensing request failed (${licensingRes.status})`);
+        data = {
+          asOf: new Date().toISOString(),
+          section: 'all',
+          window: windowKey,
+          windowLabel: domainsData.windowLabel,
+          domains: domainsData,
+          licensing: licensingData,
+          totalCount: domainsData.totalCount + licensingData.totalCount,
+        };
+      } else {
+        const res = await fetch(`/api/coming-soon/${section}?${params.toString()}`);
+        data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      }
+
       lastSection = section;
       lastWindow = windowKey;
       lastDataBySection[section] = data;
@@ -96,6 +128,12 @@ export function mount(container) {
   function render(data) {
     statusEl.hidden = true;
     summaryEl.hidden = false;
+
+    if (data.section === 'all') {
+      renderAll(data);
+      return;
+    }
+
     summaryEl.innerHTML = `<strong>${data.totalCount}</strong> ${data.section === 'domains' ? 'domain' : 'license'}${data.totalCount === 1 ? '' : 's'} -- ${escapeHtml(data.windowLabel)}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
 
     resultsEl.innerHTML = '';
@@ -120,10 +158,78 @@ export function mount(container) {
     }
   }
 
+  // "Show All" -- runs every other choice in the Section dropdown at once
+  // (Domains + Microsoft Licensing) rather than making the reader flip the
+  // dropdown back and forth. Only one number is bolded in the summary line
+  // (the combined total), per this dashboard's own "one emphasis per
+  // summary line" convention -- the per-section counts sit alongside it,
+  // unbolded.
+  function renderAll(data) {
+    summaryEl.innerHTML = `<strong>${data.totalCount}</strong> item${data.totalCount === 1 ? '' : 's'} (${data.domains.totalCount} domain${data.domains.totalCount === 1 ? '' : 's'}, ${data.licensing.totalCount} license${data.licensing.totalCount === 1 ? '' : 's'}) -- ${escapeHtml(data.windowLabel)}<span class="inline-subtext"> -- as of ${formatDateTime(data.asOf)}</span>`;
+
+    resultsEl.innerHTML = '';
+    if (data.totalCount === 0) {
+      resultsEl.innerHTML = `<p class="status">Nothing in this window.</p>`;
+      return;
+    }
+
+    resultsEl.appendChild(sectionHeading('Domains', data.domains.totalCount));
+    if (data.domains.totalCount > 0) {
+      resultsEl.appendChild(domainsTable(data.domains.rows));
+    } else {
+      resultsEl.appendChild(statusParagraph('No domains in this window.'));
+    }
+
+    resultsEl.appendChild(sectionHeading('Microsoft Licensing', data.licensing.totalCount));
+    if (data.licensing.totalCount > 0) {
+      resultsEl.appendChild(licensingTable(data.licensing.rows));
+    } else {
+      resultsEl.appendChild(statusParagraph('No licenses in this window.'));
+    }
+
+    if (!data.licensing.includeRenewingMonthly) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button-link button-link--small';
+      button.textContent = 'Show Monthly Renewing Licenses';
+      button.addEventListener('click', () => load('all', data.window, true));
+      resultsEl.appendChild(button);
+    }
+  }
+
+  // Plain top-level sub-heading, same `.section-heading--split` convention
+  // Ticket Times already uses for a label + right-aligned count -- lighter
+  // weight than `.resource-group-header` (which lives INSIDE a
+  // `.resource-group` card, not standalone above one), appropriate here
+  // since this is just splitting one page into its two existing sections,
+  // not introducing a new card-level grouping.
+  function sectionHeading(title, count) {
+    const el = document.createElement('div');
+    el.className = 'section-heading section-heading--split';
+    el.innerHTML = `<span>${escapeHtml(title)}</span><span class="count">${count}</span>`;
+    return el;
+  }
+
+  function statusParagraph(text) {
+    const p = document.createElement('p');
+    p.className = 'status';
+    p.textContent = text;
+    return p;
+  }
+
   function domainsTable(rows) {
     const groupEl = document.createElement('div');
     groupEl.className = 'resource-group';
+    // Shaded header bar, by request -- same `.resource-group-header` blue
+    // the Microsoft Licensing tables' own Annual/Monthly bars already use,
+    // so this table's card reads the same way rather than starting flush
+    // with a plain, unshaded column-name row.
+    const headerEl = document.createElement('div');
+    headerEl.className = 'resource-group-header';
+    headerEl.innerHTML = `<span>Domains</span><span class="count">${rows.length}</span>`;
+    groupEl.appendChild(headerEl);
     const table = document.createElement('table');
+    table.className = 'coming-soon-table';
     table.innerHTML = `
       <thead>
         <tr><th>Autotask Client</th><th>TPP Client</th><th>Domain</th><th>Category</th><th>Expiry Date</th><th>Days</th><th>Auto-Renews</th></tr>
@@ -190,6 +296,7 @@ export function mount(container) {
 
     const invoiceHeader = isAnnual ? '<th>Invoice</th>' : '';
     const table = document.createElement('table');
+    table.className = 'coming-soon-table';
     table.innerHTML = `
       <thead>
         <tr>
@@ -210,7 +317,7 @@ export function mount(container) {
             <td style="text-align: right; padding-right: 0.2rem;">${r.contractedUnits ?? ''}</td>
             <td style="padding-left: 0; padding-right: 0;">${r.contractedUnits != null ? 'x' : ''}</td>
             <td style="padding-left: 0.2rem;">${r.contractedServiceName ? escapeHtml(r.contractedServiceName) : '<span class="inline-subtext">None contracted</span>'}</td>
-            ${isAnnual ? `<td>${invoiceCellHtml(r)}</td>` : ''}
+            ${isAnnual ? `<td class="cs-invoice-cell">${invoiceCellHtml(r)}</td>` : ''}
           </tr>`
           )
           .join('')}
@@ -222,8 +329,12 @@ export function mount(container) {
 
   function invoiceCellHtml(r) {
     if (!r.invoiceNumber) return '<span class="inline-subtext">No invoice found</span>';
-    const paidPart = r.invoicePaid ? ' <span class="cell-flag-green">[PAID]</span>' : '';
-    return `${escapeHtml(r.invoiceNumber)}${paidPart}`;
+    // Not paid -- by request, the invoice number itself goes red rather
+    // than just dropping the green "[PAID]" tag, so an unpaid renewal
+    // invoice actually stands out at a glance instead of looking identical
+    // to a paid one minus one word.
+    if (!r.invoicePaid) return `<span class="cell-flag-red">${escapeHtml(r.invoiceNumber)}</span>`;
+    return `${escapeHtml(r.invoiceNumber)} <span class="cell-flag-green">[PAID]</span>`;
   }
 
   if (lastDataBySection[lastSection]) render(lastDataBySection[lastSection]);

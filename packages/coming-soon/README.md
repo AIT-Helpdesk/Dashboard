@@ -64,6 +64,20 @@ Two systems joined per client, confirmed live against real data:
    The matched quantity is its own right-justified "#" column, placed
    before "Autotask Contracted" (which shows the matched line's name).
 
+Each Ingram client name is resolved to its real Autotask company via "our
+normal rules" (by request) -- the same exact-match-then-UDF-fallback
+convention `@dashboard/data-matching`'s own "Ingram Client Names" concept
+already established, not a separate matching strategy just for this page:
+an exact (case/whitespace-insensitive) match against a real Autotask
+company name first, then the "Name:Ingram Micro" UDF on Companies
+(hand-populated via Data Matching's own write path for exactly the names
+that don't match outright) as the fallback. Done as one bulk fetch of
+every company + the UDF map, not a per-name API query -- matching itself
+happens locally in `buildLicensingReport()`. A client name that resolves
+neither way still shows up with its Ingram-side data; it just doesn't get
+the Autotask contracted-quantity column (or, for Annual rows, the Invoice
+column -- both need a resolved company).
+
 **Licenses actually in use** (the M365 tenancy itself, via
 `@dashboard/m365-environment`) is deliberately NOT wired in yet, by
 request -- "Don't look up the M365 licenses at the moment, we will bring

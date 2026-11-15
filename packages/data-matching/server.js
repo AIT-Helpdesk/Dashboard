@@ -133,7 +133,7 @@ async function buildTppDomainsUnmatchedReport() {
 // view fetches) -- by request, specifically active subscriptions, not
 // pending ones.
 // ---------------------------------------------------------------------------
-async function buildIngramClientsUnmatchedReport() {
+async function buildIngramClientsUnmatchedReport(includeInactive) {
   const client = await getClient();
   const [token, autotaskCompanies, ingramUdfMap, ingramUdfByCompanyId] = await Promise.all([
     getIngramToken(),
@@ -189,12 +189,17 @@ async function buildIngramClientsUnmatchedReport() {
     // outright), by request -- hidden by default behind "Show Ignored
     // Lines", same convention as Concept 3's own " - On Demand" rows below.
     const ignored = /^ambient\s+it\s*-\s*w365\s*\(.+\)$/i.test(clientName.trim());
-    rows.push({
-      clientName,
-      activeSubscriptionCount,
-      suggestions: ignored ? [] : findFuzzySuggestionsFromList(autotaskCompanies, clientName, ingramUdfByCompanyId),
-      ignored,
-    });
+    rows.push({ clientName, activeSubscriptionCount, ignored });
+  }
+  // Suggestions are scored in a second pass, once matchedWithoutUdf (and so
+  // exactMatchCompanyIds, for the green "already confirmed" flag below) is
+  // fully built -- the loop above only reaches a given client's own exact-
+  // match outcome partway through, so scoring suggestions inline would miss
+  // exact matches found on LATER iterations.
+  const exactMatchCompanyIds = new Set(matchedWithoutUdf.map((m) => m.companyId));
+  const suggestionCompanies = activeOnlyUnlessIncluded(autotaskCompanies, includeInactive);
+  for (const r of rows) {
+    r.suggestions = r.ignored ? [] : findFuzzySuggestionsFromList(suggestionCompanies, r.clientName, ingramUdfByCompanyId, exactMatchCompanyIds);
   }
   rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
   matchedWithoutUdf.sort((a, b) => a.clientName.localeCompare(b.clientName));
@@ -229,7 +234,7 @@ async function buildIngramClientsUnmatchedReport() {
 // by siteUid rather than siteName (two genuinely different real sites
 // could in principle share a display name; siteUid can't collide).
 // ---------------------------------------------------------------------------
-async function buildDattoSitesUnmatchedReport() {
+async function buildDattoSitesUnmatchedReport(includeInactive) {
   if (!dattoRmm.hasDattoCredentials()) {
     // Quietly "not configured", same convention Check Client's own Datto
     // RMM section uses -- not an error, just nothing to report yet.
@@ -294,7 +299,13 @@ async function buildDattoSitesUnmatchedReport() {
     // dropped outright), hidden by default behind "Show Ignored Lines",
     // same convention as Concept 2's own Ambient IT/W365 rows above.
     const ignored = / - On Demand$/i.test(siteName);
-    rows.push({ siteName, deviceCount, suggestions: ignored ? [] : findFuzzySuggestionsFromList(autotaskCompanies, siteName, dattoUdfByCompanyId), ignored });
+    rows.push({ siteName, deviceCount, ignored });
+  }
+  // See Concept 2's own comment on this same two-pass split above.
+  const exactMatchCompanyIds = new Set(matchedWithoutUdf.map((m) => m.companyId));
+  const suggestionCompanies = activeOnlyUnlessIncluded(autotaskCompanies, includeInactive);
+  for (const r of rows) {
+    r.suggestions = r.ignored ? [] : findFuzzySuggestionsFromList(suggestionCompanies, r.siteName, dattoUdfByCompanyId, exactMatchCompanyIds);
   }
   rows.sort((a, b) => a.siteName.localeCompare(b.siteName));
   matchedWithoutUdf.sort((a, b) => a.siteName.localeCompare(b.siteName));
@@ -327,7 +338,7 @@ async function buildDattoSitesUnmatchedReport() {
 // customers sharing a display name), so no dedup/grouping is needed here
 // the way Datto RMM's own device-level data (above) needs.
 // ---------------------------------------------------------------------------
-async function buildSaasProtectionClientsUnmatchedReport() {
+async function buildSaasProtectionClientsUnmatchedReport(includeInactive) {
   const client = await getClient();
   const [domains, autotaskCompanies, saasUdfMap, saasUdfByCompanyId] = await Promise.all([
     saasProtection.getDomains(false),
@@ -354,12 +365,13 @@ async function buildSaasProtectionClientsUnmatchedReport() {
       continue; // exact match -- not a gap
     }
     if (saasUdfValueSet.has(normalized)) continue; // already matched via the UDF write path
-    rows.push({
-      clientName,
-      seatsUsed: d.seatsUsed ?? null,
-      suggestions: findFuzzySuggestionsFromList(autotaskCompanies, clientName, saasUdfByCompanyId),
-      ignored: false,
-    });
+    rows.push({ clientName, seatsUsed: d.seatsUsed ?? null, ignored: false });
+  }
+  // See Concept 2's own comment on this same two-pass split above.
+  const exactMatchCompanyIds = new Set(matchedWithoutUdf.map((m) => m.companyId));
+  const suggestionCompanies = activeOnlyUnlessIncluded(autotaskCompanies, includeInactive);
+  for (const r of rows) {
+    r.suggestions = findFuzzySuggestionsFromList(suggestionCompanies, r.clientName, saasUdfByCompanyId, exactMatchCompanyIds);
   }
   rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
   matchedWithoutUdf.sort((a, b) => a.clientName.localeCompare(b.clientName));
@@ -389,7 +401,7 @@ async function buildSaasProtectionClientsUnmatchedReport() {
 // getDomains() above -- no per-row cost, no dedup needed (confirmed live:
 // one row per tenant, no two customers sharing a display name).
 // ---------------------------------------------------------------------------
-async function buildMicrosoft365ClientsUnmatchedReport() {
+async function buildMicrosoft365ClientsUnmatchedReport(includeInactive) {
   const client = await getClient();
   const [{ customers }, autotaskCompanies, m365UdfMap, m365UdfByCompanyId] = await Promise.all([
     cspCustomers.getCustomers(false),
@@ -416,12 +428,13 @@ async function buildMicrosoft365ClientsUnmatchedReport() {
       continue; // exact match -- not a gap
     }
     if (m365UdfValueSet.has(normalized)) continue; // already matched via the UDF write path
-    rows.push({
-      clientName,
-      tenantId: c.tenantId,
-      suggestions: findFuzzySuggestionsFromList(autotaskCompanies, clientName, m365UdfByCompanyId),
-      ignored: false,
-    });
+    rows.push({ clientName, tenantId: c.tenantId, ignored: false });
+  }
+  // See Concept 2's own comment on this same two-pass split above.
+  const exactMatchCompanyIds = new Set(matchedWithoutUdf.map((m) => m.companyId));
+  const suggestionCompanies = activeOnlyUnlessIncluded(autotaskCompanies, includeInactive);
+  for (const r of rows) {
+    r.suggestions = findFuzzySuggestionsFromList(suggestionCompanies, r.clientName, m365UdfByCompanyId, exactMatchCompanyIds);
   }
   rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
   matchedWithoutUdf.sort((a, b) => a.clientName.localeCompare(b.clientName));
@@ -448,6 +461,17 @@ async function buildMicrosoft365ClientsUnmatchedReport() {
 const REPORT_CACHE_TTL_MS = 20 * 60 * 1000;
 const reportCache = new Map(); // conceptKey -> { data, expiresAt }
 const reportInFlight = new Map();
+
+// Each concept's report is now cached under TWO keys (`<concept>|true` and
+// `<concept>|false`, one per "Include Inactive" state -- see the route
+// handlers below), so invalidating a write/clear has to drop both; a plain
+// `reportCache.delete(concept)` would miss both actual keys and leave a
+// stale report cached under either Include Inactive state.
+function invalidateReportCache(conceptKey) {
+  reportCache.delete(`${conceptKey}|true`);
+  reportCache.delete(`${conceptKey}|false`);
+  reportCache.delete(conceptKey); // tpp-domains-unmatched has no Include Inactive state, kept bare
+}
 
 async function getCachedReport(conceptKey, force, build) {
   const cached = reportCache.get(conceptKey);
@@ -534,7 +558,7 @@ async function getAllCompanyNames(client) {
   if (!allCompanyNamesInFlight) {
     allCompanyNamesInFlight = listAll(client.companies, [{ op: 'gte', field: 'id', value: 0 }])
       .then((companies) => {
-        const data = companies.map((c) => ({ id: c.id, companyName: c.companyName }));
+        const data = companies.map((c) => ({ id: c.id, companyName: c.companyName, isActive: !!c.isActive }));
         allCompanyNamesCache = { data, expiresAt: Date.now() + ALL_COMPANY_NAMES_TTL_MS };
         return data;
       })
@@ -631,13 +655,45 @@ const FUZZY_SUGGESTION_MIN_SIMILARITY = 0.5;
 // above). `null` when the map wasn't passed, or the company has nothing
 // in it -- same meaning either way (nothing to warn about), the client
 // doesn't need to tell those two apart.
-function findFuzzySuggestionsFromList(companies, companyName, udfValueByCompanyId) {
+//
+// `exactMatchCompanyIds` (optional Set<companyId>) tags each suggestion
+// with `hasExactMatch` -- by request ("I would like the green to
+// represent when the found Autotask Client name has an exact match to any
+// entity in the Exact Match list... Not matching to the entered
+// criteria"): green means THIS SUGGESTED COMPANY is already confirmed, via
+// this same concept's own exact-match check (see each buildXUnmatchedReport's
+// own `matchedWithoutUdf`), to be a real, correctly-named Autotask company
+// -- not how closely it happens to resemble whatever was typed/searched.
+// Deliberately NOT based on `similarity` (dropped from this return shape --
+// a 0.95 prefix/substring match like "arb" -> "ARB Jindalee" is a good
+// guess but says nothing about whether "ARB Jindalee" itself is a
+// confirmed-correct company, which is the actual question green answers).
+function findFuzzySuggestionsFromList(companies, companyName, udfValueByCompanyId, exactMatchCompanyIds) {
   return companies
     .map((c) => ({ ...c, similarity: fuzzySimilarity(companyName, c.companyName) }))
     .filter((c) => c.similarity >= FUZZY_SUGGESTION_MIN_SIMILARITY)
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, FUZZY_SUGGESTION_LIMIT)
-    .map((c) => ({ id: c.id, companyName: c.companyName, udfValue: udfValueByCompanyId?.get(c.id) || null }));
+    .map((c) => ({
+      id: c.id,
+      companyName: c.companyName,
+      udfValue: udfValueByCompanyId?.get(c.id) || null,
+      hasExactMatch: exactMatchCompanyIds?.has(c.id) || false,
+    }));
+}
+
+// Narrows the candidate pool fuzzy suggestions are scored against to
+// active-only companies, unless "Include Inactive" is ticked -- by request
+// ("Add a Include Inactive tick box, default to unticked. Use this when
+// performing possible matches"), default EXCLUDES inactive companies from
+// "Possible matches" suggestions (this account has real long-closed/
+// duplicate companies that otherwise clutter the list). Scoped to
+// suggestions only, same narrow intent as the request -- the exact-match
+// check each buildXUnmatchedReport does against the FULL company list
+// (autotaskCompanyByNormalizedName) is untouched, so a company that's
+// already an exact match still counts as one regardless of this flag.
+function activeOnlyUnlessIncluded(companies, includeInactive) {
+  return includeInactive ? companies : companies.filter((c) => c.isActive);
 }
 
 // `udfName` optional -- omitted only by callers that have no concept of
@@ -720,7 +776,7 @@ async function writeNameMatchUdf({ udfName, matchValue, companyName, reportCache
   });
 
   invalidateCompanyUdfMap(udfName);
-  if (reportCacheKeyToInvalidate) reportCache.delete(reportCacheKeyToInvalidate);
+  if (reportCacheKeyToInvalidate) invalidateReportCache(reportCacheKeyToInvalidate);
 
   return { companyId: result.company.id, companyName: fresh.data.companyName, value: trimmedValue };
 }
@@ -891,7 +947,7 @@ async function clearUdfMatch({ udfName, companyId }) {
   invalidateCompanyUdfMap(trimmedUdfName);
   udfMatchesCache.delete(trimmedUdfName);
   const reportCacheKey = REPORT_CACHE_KEY_BY_UDF[trimmedUdfName];
-  if (reportCacheKey) reportCache.delete(reportCacheKey);
+  if (reportCacheKey) invalidateReportCache(reportCacheKey);
 
   return { companyId: id, companyName: fresh.data.companyName, udfName: trimmedUdfName };
 }
@@ -910,7 +966,12 @@ router.get('/tpp-domains-unmatched', async (req, res) => {
 
 router.get('/ingram-clients-unmatched', async (req, res) => {
   try {
-    res.json(await getCachedReport('ingram-clients-unmatched', req.query.force === 'true', buildIngramClientsUnmatchedReport));
+    const includeInactive = req.query.includeInactive === 'true';
+    res.json(
+      await getCachedReport(`ingram-clients-unmatched|${includeInactive}`, req.query.force === 'true', () =>
+        buildIngramClientsUnmatchedReport(includeInactive)
+      )
+    );
   } catch (err) {
     console.error('Data Matching: Ingram Client Names Not Matching Autotask report failed:', err.message);
     res.status(500).json({ error: err.message });
@@ -919,7 +980,12 @@ router.get('/ingram-clients-unmatched', async (req, res) => {
 
 router.get('/datto-sites-unmatched', async (req, res) => {
   try {
-    res.json(await getCachedReport('datto-sites-unmatched', req.query.force === 'true', buildDattoSitesUnmatchedReport));
+    const includeInactive = req.query.includeInactive === 'true';
+    res.json(
+      await getCachedReport(`datto-sites-unmatched|${includeInactive}`, req.query.force === 'true', () =>
+        buildDattoSitesUnmatchedReport(includeInactive)
+      )
+    );
   } catch (err) {
     console.error('Data Matching: Datto RMM Sites Not Matching Autotask report failed:', err.message);
     res.status(500).json({ error: err.message });
@@ -928,8 +994,11 @@ router.get('/datto-sites-unmatched', async (req, res) => {
 
 router.get('/saas-protection-clients-unmatched', async (req, res) => {
   try {
+    const includeInactive = req.query.includeInactive === 'true';
     res.json(
-      await getCachedReport('saas-protection-clients-unmatched', req.query.force === 'true', buildSaasProtectionClientsUnmatchedReport),
+      await getCachedReport(`saas-protection-clients-unmatched|${includeInactive}`, req.query.force === 'true', () =>
+        buildSaasProtectionClientsUnmatchedReport(includeInactive)
+      )
     );
   } catch (err) {
     console.error('Data Matching: SaaS Protection Clients Not Matching Autotask report failed:', err.message);
@@ -939,8 +1008,11 @@ router.get('/saas-protection-clients-unmatched', async (req, res) => {
 
 router.get('/microsoft365-clients-unmatched', async (req, res) => {
   try {
+    const includeInactive = req.query.includeInactive === 'true';
     res.json(
-      await getCachedReport('microsoft365-clients-unmatched', req.query.force === 'true', buildMicrosoft365ClientsUnmatchedReport),
+      await getCachedReport(`microsoft365-clients-unmatched|${includeInactive}`, req.query.force === 'true', () =>
+        buildMicrosoft365ClientsUnmatchedReport(includeInactive)
+      )
     );
   } catch (err) {
     console.error('Data Matching: Microsoft 365 (CSP) Clients Not Matching Autotask report failed:', err.message);

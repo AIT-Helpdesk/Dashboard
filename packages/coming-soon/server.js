@@ -4,7 +4,6 @@ const {
   getClient,
   listAll,
   fetchByFieldIn,
-  resolveSingleCompany,
   mapWithConcurrency,
   matchesWildcard,
   todayAestKey,
@@ -43,6 +42,14 @@ function daysBetween(fromDateStr, toDateStr) {
   const [ty, tm, td] = toDateStr.split('-').map(Number);
   const msPerDay = 24 * 60 * 60 * 1000;
   return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / msPerDay);
+}
+
+// Case/whitespace-insensitive company-name comparison -- identical to
+// @dashboard/data-matching's own normalizeForExactCompare(), copied rather
+// than imported (same "small enough to just copy" convention as
+// daysBetween() above) since that package has no shared export for it.
+function normalizeForExactCompare(s) {
+  return (s || '').trim().toLowerCase();
 }
 
 // ---------------------------------------------------------------------------
@@ -119,15 +126,18 @@ async function buildDomainsReport(windowKey) {
 //
 // Confirmed live against real data (this account's Ingram catalog is almost
 // entirely Microsoft CSP licensing -- 1456 of 1659 total subscriptions
-// match the name filter below): resolveSingleCompany() does successfully
-// resolve real Ingram customer names to the right Autotask company for
-// several real clients (e.g. "EBP Rehab", "All Safe Financial", "Atho
-// Group" all matched correctly), though not every one (e.g. "Cranny Blue
-// Pty Ltd" and "GEEBUNG BOWLS CLUB INCORPORATED" didn't resolve in this
-// sample -- likely a name-formatting mismatch against whatever's actually
-// on the Autotask Company record, not a bug in the matching itself).
-// Rows whose company didn't resolve still show up with the Ingram-side
-// data; they just don't get the Autotask contracted-quantity column.
+// match the name filter below): an exact (case/whitespace-insensitive)
+// name match against a real Autotask company resolves several real clients
+// outright (e.g. "EBP Rehab", "All Safe Financial", "Atho Group"), but not
+// every one (e.g. "Cranny Blue Pty Ltd" didn't resolve this way -- a real
+// name-formatting mismatch against whatever's actually on the Autotask
+// Company record). Those fall back to the "Name:Ingram Micro" UDF (see
+// buildLicensingReport() below) -- "our normal rules" (by request), same
+// exact-match-then-UDF-fallback convention @dashboard/data-matching's own
+// "Ingram Client Names" concept already established, rather than a second,
+// different matching strategy just for this page. Rows whose company
+// didn't resolve EITHER way still show up with the Ingram-side data; they
+// just don't get the Autotask contracted-quantity column.
 // ---------------------------------------------------------------------------
 
 // Deliberately broad -- by request this covers "Microsoft annual licenses"
@@ -316,18 +326,32 @@ async function buildLicensingReport(windowKey, includeRenewingMonthly) {
   }
 
   // Resolve each distinct Ingram client name to a real Autotask company --
-  // reuses resolveSingleCompany(), the exact same name-match
-  // @dashboard/m365-environment's own route already relies on, rather than
-  // inventing a second matching strategy. mapWithConcurrency caps this at 3
-  // at a time, same convention @dashboard/contract-services uses for its
-  // own per-company resolves.
+  // "our normal rules" (by request), same two-step convention
+  // @dashboard/data-matching's own "Ingram Client Names" concept already
+  // established: an exact (case/whitespace-insensitive) match against a
+  // real Autotask company name first, then the "Name:Ingram Micro" UDF
+  // (hand-populated via Data Matching's own write path for exactly the
+  // names that don't match outright) as the fallback. One bulk fetch of
+  // every company + the UDF map, not a per-name API query -- matching is
+  // then done locally against both maps, so a client name only needs the
+  // UDF fallback when its own exact-name match genuinely fails.
   const client = await getClient();
+  const [allCompanies, ingramUdfMap] = await Promise.all([
+    listAll(client.companies, [{ op: 'gte', field: 'id', value: 0 }]),
+    getCompanyUdfValueToNameMap(client, 'Name:Ingram Micro'),
+  ]);
+  const companyByNormalizedName = new Map(allCompanies.map((c) => [normalizeForExactCompare(c.companyName), c]));
+  const companyByNormalizedUdfValue = new Map();
+  for (const [udfValue, companyName] of ingramUdfMap.entries()) {
+    const company = companyByNormalizedName.get(normalizeForExactCompare(companyName));
+    if (company) companyByNormalizedUdfValue.set(normalizeForExactCompare(udfValue), company);
+  }
   const uniqueClientNames = [...new Set(rows.map((r) => r.clientName))];
   const companyByClientName = new Map();
-  await mapWithConcurrency(uniqueClientNames, 3, async (name) => {
-    const resolved = await resolveSingleCompany(client, name).catch(() => null);
-    companyByClientName.set(name, resolved && resolved.status === 'ok' ? resolved.company : null);
-  });
+  for (const name of uniqueClientNames) {
+    const normalized = normalizeForExactCompare(name);
+    companyByClientName.set(name, companyByNormalizedName.get(normalized) || companyByNormalizedUdfValue.get(normalized) || null);
+  }
 
   // Then, per distinct RESOLVED company (not per row -- several matching
   // subscriptions can belong to the same client), fetch its Autotask

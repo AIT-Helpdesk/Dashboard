@@ -14,6 +14,12 @@ let lastDataByConcept = {
   'microsoft365-clients-unmatched': null,
 };
 
+// "Include Inactive" -- default unticked (by request), narrows the
+// candidate pool "Possible matches" suggestions are scored against to
+// active-only companies unless ticked. Module-scope so it survives a
+// remount, same convention as lastConcept above.
+let lastIncludeInactive = false;
+
 // Which of the three view buttons' own results are CURRENTLY on screen --
 // 'unmatched' | 'udf-matches' | 'exact-match' | null (nothing run yet).
 // By request: the dark-blue "active" look should follow whichever view is
@@ -73,6 +79,9 @@ export function mount(container) {
         <button type="submit" id="load-button" class="button-link button-link--small dm-view-btn">Unmatched</button>
         <button type="button" id="show-udf-matches-button" class="button-link button-link--small dm-view-btn">UDF Matches</button>
         <button type="button" id="show-matched-no-udf-button" class="button-link button-link--small dm-view-btn">Exact Match</button>
+        <label class="inline-checkbox-label" title="When unticked (default), an inactive Autotask company is left out of 'Possible matches' suggestions entirely. Tick to include them too.">
+          <input type="checkbox" id="include-inactive-input" /> Include Inactive
+        </label>
       </form>
       <h1>Data Matching</h1>
     </header>
@@ -86,11 +95,16 @@ export function mount(container) {
   const loadButton = container.querySelector('#load-button');
   const showUdfMatchesButton = container.querySelector('#show-udf-matches-button');
   const showMatchedNoUdfButton = container.querySelector('#show-matched-no-udf-button');
+  const includeInactiveInput = container.querySelector('#include-inactive-input');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
   conceptInput.value = lastConcept;
+  includeInactiveInput.checked = lastIncludeInactive;
+  includeInactiveInput.addEventListener('change', () => {
+    lastIncludeInactive = includeInactiveInput.checked;
+  });
 
   const VIEW_BUTTON_BY_NAME = { 'unmatched': loadButton, 'udf-matches': showUdfMatchesButton, 'exact-match': showMatchedNoUdfButton };
 
@@ -165,6 +179,14 @@ export function mount(container) {
   showUdfMatchesButton.addEventListener('click', () => loadUdfMatches(conceptInput.value));
   showMatchedNoUdfButton.addEventListener('click', () => loadMatchedWithoutUdf(conceptInput.value));
 
+  // Shared by load()/loadMatchedWithoutUdf() below -- both hit the exact
+  // same report endpoint (see loadMatchedWithoutUdf()'s own comment), so
+  // "Include Inactive" only needs to be threaded through in one place.
+  // Harmless on TPP's own route too, which just ignores the extra param.
+  function conceptUrl(concept) {
+    return `/api/data-matching/${concept}?includeInactive=${includeInactiveInput.checked}`;
+  }
+
   async function load(concept) {
     // Defensive only -- the button itself is disabled/greyed out for this
     // case (updateViewButtonsAvailability() above), but guard here too in
@@ -185,7 +207,7 @@ export function mount(container) {
     try {
       // Not forced -- the server caches each concept for 20 min, same
       // convention as Coming Soon, so a repeat Load is instant.
-      const res = await fetch(`/api/data-matching/${concept}`);
+      const res = await fetch(conceptUrl(concept));
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastConcept = concept;
@@ -221,7 +243,7 @@ export function mount(container) {
     resultsEl.innerHTML = '';
 
     try {
-      const res = await fetch(`/api/data-matching/${concept}`);
+      const res = await fetch(conceptUrl(concept));
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       renderMatchedWithoutUdf(data);
@@ -257,13 +279,15 @@ export function mount(container) {
     if (concept === 'saas-protection-clients-unmatched') {
       return [
         { label: 'SaaS Protection Client', cell: (r) => escapeHtml(r.clientName) },
-        { label: 'Seats Used', className: 'ticket-number', cell: (r) => (r.seatsUsed === null ? '' : r.seatsUsed) },
+        { label: 'Seats', className: 'ticket-number', cell: (r) => (r.seatsUsed === null ? '' : r.seatsUsed) },
       ];
     }
     if (concept === 'microsoft365-clients-unmatched') {
       return [
-        { label: 'CSP Tenant', cell: (r) => escapeHtml(r.clientName) },
-        { label: 'Tenant ID', className: 'ticket-number', cell: (r) => escapeHtml(r.tenantId || '') },
+        {
+          label: 'CSP Tenant',
+          cell: (r) => `${escapeHtml(r.clientName)}${r.tenantId ? `<span class="cell-subtext">${escapeHtml(r.tenantId)}</span>` : ''}`,
+        },
       ];
     }
     return null; // TPP -- never reached, loadMatchedWithoutUdf() returns early for it above
@@ -470,7 +494,7 @@ export function mount(container) {
         `every Datto SaaS Protection client's name exactly matches an Autotask company`,
         [
           { label: 'SaaS Protection Client', cell: (r) => escapeHtml(r.clientName) },
-          { label: 'Seats Used', className: 'ticket-number', cell: (r) => (r.seatsUsed === null ? '' : r.seatsUsed) },
+          { label: 'Seats', className: 'ticket-number', cell: (r) => (r.seatsUsed === null ? '' : r.seatsUsed) },
         ],
         {
           endpoint: '/api/data-matching/match-saas-protection-client',
@@ -489,8 +513,10 @@ export function mount(container) {
         'Microsoft 365 (CSP) client',
         `every Microsoft CSP tenant's name exactly matches an Autotask company`,
         [
-          { label: 'CSP Tenant', cell: (r) => escapeHtml(r.clientName) },
-          { label: 'Tenant ID', className: 'ticket-number', cell: (r) => escapeHtml(r.tenantId || '') },
+          {
+            label: 'CSP Tenant',
+            cell: (r) => `${escapeHtml(r.clientName)}${r.tenantId ? `<span class="cell-subtext">${escapeHtml(r.tenantId)}</span>` : ''}`,
+          },
         ],
         {
           endpoint: '/api/data-matching/match-microsoft365-client',
@@ -688,24 +714,65 @@ export function mount(container) {
       // the suggested company already has a value in this concept's own
       // UDF -- by request, so picking a suggestion that's already taken
       // (which the server's own already-set guard above would refuse
-      // anyway) is visible BEFORE clicking it, not just after.
+      // anyway) is visible BEFORE clicking it, not just after. Green, by
+      // request, when the suggested company itself already has a
+      // confirmed exact match in THIS SAME concept's own Exact Match list
+      // (server.js's own `hasExactMatch`, tagged from each
+      // buildXUnmatchedReport's `matchedWithoutUdf`) -- a statement about
+      // how trustworthy the SUGGESTED COMPANY is, not about how closely it
+      // happens to resemble whatever was typed/searched. Red still wins
+      // when a suggestion is both, since that's a hard refusal regardless
+      // of how trustworthy the company is.
       suggestionsEl.innerHTML = `
         <span class="inline-subtext">Possible matches:</span>
         ${list
           .map((s, i) => {
             const taken = !!s.udfValue;
-            const title = taken ? `Already set to "${s.udfValue}"` : '';
-            return `<button type="button" class="button-link button-link--small dm-suggestion-chip${taken ? ' dm-suggestion-chip--taken' : ''}" data-i="${i}" title="${escapeHtml(title)}">${escapeHtml(s.companyName)}</button>`;
+            const exact = !taken && s.hasExactMatch;
+            const stateClass = taken ? ' dm-suggestion-chip--taken' : exact ? ' dm-suggestion-chip--exact' : '';
+            const title = taken ? `Already set to "${s.udfValue}"` : exact ? 'This company already has a confirmed exact match in this concept\'s own Exact Match list' : '';
+            return `<button type="button" class="button-link button-link--small dm-suggestion-chip${stateClass}" data-i="${i}" title="${escapeHtml(title)}">${escapeHtml(s.companyName)}</button>`;
           })
           .join('')}
       `;
       suggestionsEl.querySelectorAll('.dm-suggestion-chip').forEach((btn, i) => {
-        btn.addEventListener('click', () => doWrite(list[i].companyName));
+        btn.addEventListener('click', () => doWrite(list[i].companyName, list[i].hasExactMatch));
       });
     }
     renderSuggestions(suggestions);
 
-    async function doWrite(companyName) {
+    // On-page confirmation, by request ("have this appear on the page...
+    // instead of in this popup") -- replaces the native confirm() this
+    // widget used to show for every write, reusing statusEl's own slot.
+    // `danger` (red, "doesn't need to be red" otherwise) is only used for
+    // confirmOverrideExactMatch() below.
+    function showInlineConfirm(message, { danger = false } = {}) {
+      return new Promise((resolve) => {
+        statusEl.hidden = false;
+        statusEl.className = `dm-match-status dm-inline-confirm${danger ? ' dm-inline-confirm--danger' : ''}`;
+        statusEl.innerHTML = `
+          <span class="dm-inline-confirm-message">${escapeHtml(message)}</span>
+          <button type="button" class="button-link button-link--small dm-inline-confirm-ok-btn">OK</button>
+          <button type="button" class="button-link button-link--small dm-inline-confirm-cancel-btn">Cancel</button>
+        `;
+        statusEl.querySelector('.dm-inline-confirm-ok-btn').addEventListener('click', () => resolve(true), { once: true });
+        statusEl.querySelector('.dm-inline-confirm-cancel-btn').addEventListener('click', () => resolve(false), { once: true });
+      });
+    }
+
+    // Extra warning gate, by request, specifically for clicking a green
+    // (hasExactMatch) suggestion -- writing THIS row's name onto a company
+    // that's already confirmed to be a different real client's exact match
+    // would merge two separate records onto one company, which is
+    // sometimes genuinely correct (one client legitimately has several
+    // subscriptions/sites under different names) but risky enough to need
+    // its own explicit confirmation before the normal write-confirmation
+    // below even runs.
+    function confirmOverrideExactMatch() {
+      return showInlineConfirm("There's already an exact match for this Client. Are you sure you want to OVERRIDE that?", { danger: true });
+    }
+
+    async function doWrite(companyName, hasExactMatch) {
       const trimmed = (companyName || '').trim();
       if (!trimmed) {
         statusEl.hidden = false;
@@ -713,7 +780,26 @@ export function mount(container) {
         statusEl.textContent = 'Enter an Autotask client name first.';
         return;
       }
-      if (!confirm(`Write "${writeValueLabel}" into ${udfName} on Autotask company "${trimmed}"?`)) return;
+      if (hasExactMatch) {
+        const proceed = await confirmOverrideExactMatch();
+        // Resets className back to plain, not just `hidden = true` -- the
+        // REAL bug behind "Cancel doesn't work": .dm-match-status.dm-
+        // inline-confirm's own `display: flex` (an author-stylesheet rule)
+        // outranks the browser's default `[hidden] { display: none }` (a
+        // user-agent rule -- author origin always wins over UA origin
+        // regardless of selector specificity), so `hidden = true` alone had
+        // NO visual effect while dm-inline-confirm was still the element's
+        // class -- the box just silently stayed on screen, looking like
+        // the click did nothing even though resolve(false)/the early
+        // `return` below were firing correctly the whole time.
+        statusEl.hidden = true;
+        statusEl.className = 'dm-match-status';
+        if (!proceed) return;
+      }
+      const confirmedWrite = await showInlineConfirm(`Write "${writeValueLabel}" into ${udfName} on Autotask company "${trimmed}"?`);
+      statusEl.hidden = true;
+      statusEl.className = 'dm-match-status';
+      if (!confirmedWrite) return;
 
       setBusy(true);
       statusEl.hidden = false;
@@ -821,7 +907,7 @@ export function mount(container) {
     const table = document.createElement('table');
     table.innerHTML = `
       <thead>
-        <tr><th>Domain</th><th>Category</th><th>Expiry Date</th><th>Days</th><th>Auto-Renews</th></tr>
+        <tr><th>Domain</th><th>Category</th><th>Expiry Date</th><th>Auto-Renews</th></tr>
       </thead>
       <tbody>
         ${clientGroup.domains
@@ -830,8 +916,7 @@ export function mount(container) {
           <tr>
             <td>${escapeHtml(r.domainName)}</td>
             <td>${r.category ? escapeHtml(r.category) : ''}</td>
-            <td class="ticket-number">${formatDate(r.expiryDate)}</td>
-            <td class="ticket-number">${formatDays(r.daysUntilExpiry)}</td>
+            <td class="ticket-number">${formatDate(r.expiryDate)}${r.daysUntilExpiry === null || r.daysUntilExpiry === undefined ? '' : ` (${formatDays(r.daysUntilExpiry)})`}</td>
             <td class="${r.autoRenew ? 'cell-flag-green' : 'cell-flag-red'}">${r.autoRenew ? 'Yes' : 'No'}</td>
           </tr>`
           )

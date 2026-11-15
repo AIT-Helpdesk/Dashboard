@@ -90,7 +90,7 @@ export function mount(container) {
       resultsEl.innerHTML = '';
 
       const list = document.createElement('div');
-      list.className = 'resource-group';
+      list.className = 'resource-group client-match-list';
       list.innerHTML = `
         <table>
           <tbody>
@@ -496,9 +496,16 @@ export function mount(container) {
 
   // Classification + Active/Inactive after the name on every client-picker
   // list on this dashboard, by request -- same convention this page's own
-  // header badge already uses for a single resolved client.
+  // header badge already uses for a single resolved client. Laid out as
+  // three fixed-width columns (Name/Status/Classification) rather than one
+  // run-on line, by request ("make them look like columns so they line up
+  // nicely") -- see .client-match-list .link-button in styles.css, same
+  // "button styled as a grid with literal column widths" convention
+  // Classification Summary's own .bar-row buttons already use so every
+  // row's columns land in the same place regardless of each row's own
+  // content length.
   function matchLabelHtml(m) {
     const statusBadge = m.isActive ? '<span class="cell-flag-green">Active</span>' : '<span class="cell-flag-red">Inactive</span>';
-    return `${escapeHtml(m.companyName)} ${statusBadge}${m.classification ? ` -- ${escapeHtml(m.classification)}` : ''}`;
+    return `<span class="cml-name" title="${escapeHtml(m.companyName)}">${escapeHtml(m.companyName)}</span><span class="cml-status">${statusBadge}</span><span class="cml-classification">${m.classification ? escapeHtml(m.classification) : ''}</span>`;
   }
 }
