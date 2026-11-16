@@ -1,10 +1,16 @@
 const { get: saasAlertsGet } = require('@dashboard/saasalerts-client');
 const saasProtectionRouter = require('@dashboard/saas-protection/server.js');
+const { getUdfSystemMatchBySystem } = require('@dashboard/shell/udf-system-matches-db.js');
 const { hasDattoEdrCredentials, findLocationMatches } = require('./datto-edr.js');
 const { hasAutoElevateCredentials, findCompanyMatch: findAutoElevateMatch } = require('./autoelevate.js');
 const { hasHuntressCredentials, findOrganizationMatch: findHuntressMatch } = require('./huntress.js');
 const { hasRewstCredentials, findCustomerMatch: findRewstMatch } = require('./rewst.js');
 const { hasInkyCredentials, findTeamMatch: findInkyMatch } = require('./inky.js');
+
+// Resolved once at server start, from the central shell reference table --
+// not hardcoded as a literal string, same convention live-reports/server.js
+// already established for this exact UDF.
+const SAAS_PROTECTION_UDF_NAME = getUdfSystemMatchBySystem('Datto SaaS Protection')?.udf_name || null;
 
 // Pulled out of Client Summary's own server.js (where this originally
 // lived) so TC Elite Services -- which needs the SAME "which services are
@@ -83,10 +89,25 @@ async function findSaasAlertsCustomerId(companyId, force) {
 // staff-maintained rollout data (that tracker is itself what's being
 // verified against a real source, by explicit request -- reusing it here
 // would be circular).
+// UDF-first-then-fallback, by request (same real bug "Sleepy's" surfaced:
+// the Autotask company name doesn't equal the real SaaS Protection customer
+// name "Sleepys", so the fuzzy findDomainMatch() below missed it entirely
+// even though Data Matching's own "Name:SaaS Backups" UDF already had the
+// confirmed match on file) -- same "ensure a UDF match is used before a
+// direct name match" convention live-reports/server.js's own
+// buildSaasProtectionSummary() already established for this exact UDF, just
+// not previously wired into this shared helper (so Client Summary AND TC
+// Elite Services, which both call buildInstalledServices(), were both
+// affected the same way).
+async function findSaasProtectionMatch(company) {
+  const udfValue = SAAS_PROTECTION_UDF_NAME ? (company.userDefinedFields || []).find((u) => u.name === SAAS_PROTECTION_UDF_NAME)?.value?.trim() || null : null;
+  return (udfValue && (await saasProtectionRouter.findDomainMatchExact(udfValue))) || saasProtectionRouter.findDomainMatch(company.companyName);
+}
+
 async function buildInstalledServices(company) {
   const [saasAlertsCustomerId, saasProtectionMatch, inkyMatch, dattoEdrMatches, autoElevateMatch, huntressMatch, rewstMatch] = await Promise.all([
     findSaasAlertsCustomerId(company.id),
-    saasProtectionRouter.findDomainMatch(company.companyName),
+    findSaasProtectionMatch(company),
     hasInkyCredentials() ? findInkyMatch(company.companyName) : Promise.resolve(undefined),
     hasDattoEdrCredentials() ? findLocationMatches(company.companyName) : Promise.resolve(null),
     hasAutoElevateCredentials() ? findAutoElevateMatch(company.companyName) : Promise.resolve(undefined),

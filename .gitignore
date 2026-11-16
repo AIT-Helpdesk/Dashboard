@@ -61,6 +61,16 @@ packages/strety-client/.personal-tokens/
 # checked in either -- see packages/strety-autotask-sync/status.js.
 packages/strety-autotask-sync/last-run.json
 
+# Same reasoning, for domain-itglue-gap's own run.js -- last-run.json is
+# runtime state (status.js), run-log.jsonl is its JSON-Lines event log
+# (log.js), data.db is its own SQLite database of currently-open gaps
+# (db.js) -- real operational data, not source.
+packages/domain-itglue-gap/last-run.json
+packages/domain-itglue-gap/run-log.jsonl
+packages/domain-itglue-gap/data.db
+packages/domain-itglue-gap/data.db-shm
+packages/domain-itglue-gap/data.db-wal
+
 # Same reasoning, for Report Ingest's own runtime state (which SharePoint
 # items have already been processed, plus the last run's own result) -- see
 # packages/meeting-prep/ingest.js.

@@ -742,14 +742,10 @@ function vendorWidgetsHtml(vendors) {
 // resolved domain yet, by request ("untick this section so that it is
 // excluded from the PDF") -- there's nothing real to show in that case,
 // unlike every other card here which defaults ticked.
-// Shared select/input pair, by request ("allow untick/tick to re-choose
-// or enter primary domain even if the correct domain was selected
-// automatically") -- used both by the 'ok' card's own hidden picker
-// (revealed by unticking the include-in-PDF checkbox, see
-// renderEmailDomainProtection() below) and the unresolved states' own
-// always-visible one. `selectedDomain` pre-selects the dropdown's current
-// match (the 'ok' case only -- there's nothing to pre-select when
-// nothing's resolved yet).
+// Shared select/input pair -- used both by the 'ok' card's own always-
+// visible picker and the unresolved states' own picker. `selectedDomain`
+// pre-selects the dropdown's current match (the 'ok' case only -- there's
+// nothing to pre-select when nothing's resolved yet).
 function edpPickerFieldsHtml(domains, selectedDomain) {
   return `
     ${
@@ -763,6 +759,22 @@ function edpPickerFieldsHtml(domains, selectedDomain) {
     }
     <label for="edp-new-domain">Or use this domain instead</label>
     <input type="text" id="edp-new-domain" placeholder="example.com.au" />
+  `;
+}
+
+// "Set this Domain as Primary" checkbox, by request -- ticking it when
+// "Use this domain" is clicked tags that domain as this organisation's own
+// Primary Domain in IT Glue's Flexible Asset (see
+// setPrimaryDomainForSite() server-side), not just for this one report.
+// Only works for a domain already in IT Glue's own Domain Tracker (the
+// dropdown's own options) -- a brand-new typed-in domain can't be tagged
+// yet, and the save handler below surfaces that plainly if tried.
+function edpSetPrimaryCheckboxHtml() {
+  return `
+    <label class="inline-checkbox-label" for="edp-set-primary-input">
+      <input type="checkbox" id="edp-set-primary-input" />
+      Set this Domain as Primary
+    </label>
   `;
 }
 
@@ -809,25 +821,33 @@ function emailDomainProtectionCardHtml(state) {
     // No "fix IT Glue" reminder here any more, by request -- that
     // instruction now lives only on the 'needs-domain' card itself (next
     // to its own Use this domain button, below), not repeated again here
-    // once a domain's actually resolved. The picker itself DOES still live
-    // here though, just hidden -- untick the "include in PDF" box to
-    // reveal it (renderEmailDomainProtection() below wires that), by
-    // request, so a correctly auto-resolved domain can still be
-    // overridden for this report.
+    // once a domain's actually resolved. The override picker only shows
+    // when the resolved domain ISN'T already an explicit Flexible Asset
+    // tag, by request ("if a primary domain is found we don't need this
+    // part") -- an EXPLICIT tag (state.primarySource === 'flexible-asset')
+    // is already authoritative, so there's nothing to override; the
+    // IMPLICIT single-domain fallback still offers the picker + "Set this
+    // Domain as Primary" checkbox so it can be promoted to a real tag.
+    const showPicker = state.primarySource !== 'flexible-asset';
     return `
       <div class="mtg-widget live-reports-cyber-card" id="edp-card">
         ${cyberCardToggleHtml('emailDomainProtection')}
         <p class="mtg-widget-title">Mail Domain Protection DNS Check</p>
         <p class="live-reports-edp-domain">Domain: ${escapeHtml(state.domain)}</p>
         <div class="live-reports-edp-rows">${rowsHtml}</div>
-        <div class="live-reports-edp-picker" id="edp-picker" hidden>
-          <p class="live-reports-edp-reason">Pick a different domain for this report:</p>
-          ${edpPickerFieldsHtml(state.domains || [], state.domain)}
-          <div class="live-reports-edp-action-row">
-            <button type="button" id="edp-save-button" class="button-link button-link--small">Use this domain</button>
-          </div>
-          <p class="status error" id="edp-error" hidden></p>
-        </div>
+        ${
+          showPicker
+            ? `<div class="live-reports-edp-picker" id="edp-picker">
+                 <p class="live-reports-edp-reason">Pick a different domain for this report:</p>
+                 ${edpPickerFieldsHtml(state.domains || [], state.domain)}
+                 <div class="live-reports-edp-action-row">
+                   <button type="button" id="edp-save-button" class="button-link button-link--small">Use this domain</button>
+                   ${edpSetPrimaryCheckboxHtml()}
+                 </div>
+                 <p class="status error" id="edp-error" hidden></p>
+               </div>`
+            : ''
+        }
       </div>`;
   }
   // 'needs-domain' / 'org-not-found' / 'org-ambiguous' / 'error' -- no
@@ -855,11 +875,11 @@ function emailDomainProtectionCardHtml(state) {
       ${edpPickerFieldsHtml(domains, null)}
       <div class="live-reports-edp-action-row">
         <button type="button" id="edp-save-button" class="button-link button-link--small">Use this domain</button>
-        ${state.status === 'needs-domain' ? `<p class="live-reports-edp-fix-note">Please update IT Glue Domain Tracker</p>` : ''}
+        ${edpSetPrimaryCheckboxHtml()}
       </div>
       ${
         state.status === 'needs-domain'
-          ? `<p class="live-reports-edp-fix-note live-reports-edp-fix-note--full">Add the domain or type "Primary." at the beginning of the Notes field</p>`
+          ? `<p class="live-reports-edp-fix-note live-reports-edp-fix-note--full">If the domain isn't listed above, add it to IT Glue's Domain Tracker first -- then it can be tagged as Primary.</p>`
           : ''
       }
       <p class="status error" id="edp-error" hidden></p>
@@ -1330,32 +1350,18 @@ export function mount(container) {
   // truth -- see this file's own sectionToggles/cyberCardToggles comment)
   // and edpDomain (the domain name Create PDF sends through for the PDF's
   // own fresh re-check -- see createPdf() below). Wires the picker's own
-  // "Use this domain" button always now, by request ("allow untick/tick
-  // to re-choose or enter primary domain even if the correct domain was
-  // selected automatically") -- the 'ok' card has one too now, just
-  // hidden inside #edp-picker until the checkbox below reveals it.
+  // "Use this domain" button always now, by request -- the 'ok' card's
+  // own picker is always visible now too (no longer gated behind
+  // unticking "include in PDF"), so this is just one listener either way.
   function renderEmailDomainProtection(slot, siteName, state) {
     slot.innerHTML = emailDomainProtectionCardHtml(state);
     cyberCardToggles.emailDomainProtection = state.status === 'ok';
     edpDomain = state.status === 'ok' ? state.domain : null;
     const card = slot.querySelector('#edp-card');
 
-    // Untick to reveal the 'ok' card's own hidden picker, by request --
-    // a SECOND, direct listener on this same checkbox (the delegated one
-    // on `container`, wired once in mount() above, still separately
-    // updates cyberCardToggles -- the two don't conflict). Re-ticking
-    // without having picked anything new just hides it again; nothing
-    // else changes, since nothing was actually re-checked.
-    const picker = card.querySelector('#edp-picker');
-    if (picker) {
-      const toggle = card.querySelector('.live-reports-card-toggle-input');
-      toggle.addEventListener('change', () => {
-        picker.hidden = toggle.checked;
-      });
-    }
-
     const select = card.querySelector('#edp-domain-select');
     const newInput = card.querySelector('#edp-new-domain');
+    const setPrimaryInput = card.querySelector('#edp-set-primary-input');
     const saveButton = card.querySelector('#edp-save-button');
     if (!saveButton) return;
     const errorEl = card.querySelector('#edp-error');
@@ -1364,6 +1370,7 @@ export function mount(container) {
       const existingDomain = select ? select.value : '';
       const newDomain = newInput.value.trim();
       const domain = existingDomain || newDomain;
+      const setAsPrimary = !!setPrimaryInput?.checked;
       if (!domain) {
         errorEl.hidden = false;
         errorEl.textContent = 'Pick an existing domain, or type one.';
@@ -1375,7 +1382,7 @@ export function mount(container) {
         const res = await fetch('/api/live-reports/email-domain-protection/check-domain', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain }),
+          body: JSON.stringify({ domain, siteName, setAsPrimary }),
         });
         const newState = await res.json();
         if (!res.ok) throw new Error(newState.error || `Request failed (${res.status})`);
@@ -1385,7 +1392,21 @@ export function mount(container) {
         // stays populated across a manual re-check, instead of emptying
         // out after the first one.
         if (!newState.domains) newState.domains = state.domains || [];
-        if (slot.isConnected) renderEmailDomainProtection(slot, siteName, newState);
+        if (slot.isConnected) {
+          renderEmailDomainProtection(slot, siteName, newState);
+          // "Set this Domain as Primary" is a deliberately separate,
+          // non-fatal write from the DNS check itself -- a failure here
+          // (e.g. a brand-new typed-in domain not yet in IT Glue's Domain
+          // Tracker) still leaves a perfectly good DNS result showing, just
+          // flagged alongside it rather than losing the check over it.
+          if (newState.primarySetError) {
+            const freshError = slot.querySelector('#edp-card #edp-error');
+            if (freshError) {
+              freshError.hidden = false;
+              freshError.textContent = `Domain check succeeded, but couldn't set it as Primary: ${newState.primarySetError}`;
+            }
+          }
+        }
       } catch (err) {
         errorEl.hidden = false;
         errorEl.textContent = `Could not check this domain: ${err.message}`;
@@ -1558,23 +1579,40 @@ export function mount(container) {
     }
   }
 
-  // More than one real Autotask company matched -- by request, a plain
-  // clickable list rather than a <select> (this is the page's own main
-  // lookup, not a small in-widget picker like Mail Domain Protection's
-  // own org picker further down, so it gets full prominence in the
-  // results area rather than squeezed into a dropdown).
+  // More than one real Autotask company matched -- by request, same
+  // compact "Client Name/Status/Classification, columns aligned, no
+  // header" list format Client Summary/Client Activity/Client Financials/
+  // M365 Environment's own ambiguous-match pickers already use
+  // (.client-match-list in styles.css, matchLabelHtml() below), rather
+  // than this page's own previous plain name-only list -- this is the
+  // page's own main lookup, not a small in-widget picker like Mail Domain
+  // Protection's own org picker further down, so it still gets full
+  // prominence in the results area rather than squeezed into a dropdown.
   function renderClientPicker(matches, clientSearch) {
-    resultsEl.innerHTML = `
-      <p class="inline-subtext">More than one Autotask Client matches "${escapeHtml(clientSearch)}" -- choose one:</p>
-      <ul class="live-reports-client-picker">
-        ${matches
-          .map((m) => `<li><button type="button" class="live-reports-client-picker-btn" data-company-id="${m.companyId}">${escapeHtml(m.companyName)}</button></li>`)
-          .join('')}
-      </ul>
+    resultsEl.innerHTML = `<p class="inline-subtext">More than one Autotask Client matches "${escapeHtml(clientSearch)}" -- choose one:</p>`;
+    const list = document.createElement('div');
+    list.className = 'resource-group client-match-list';
+    list.innerHTML = `
+      <table>
+        <tbody>
+          ${matches
+            .map((m) => `<tr><td><button type="button" class="link-button${m.isActive ? '' : ' link-button--inactive'}" data-company-id="${m.companyId}">${matchLabelHtml(m)}</button></td></tr>`)
+            .join('')}
+        </tbody>
+      </table>
     `;
-    resultsEl.querySelectorAll('.live-reports-client-picker-btn').forEach((btn, i) => {
+    list.querySelectorAll('button[data-company-id]').forEach((btn, i) => {
       btn.addEventListener('click', () => useResolvedClient(matches[i]));
     });
+    resultsEl.appendChild(list);
+  }
+
+  // Same three-column layout (Name/Status/Classification) every other
+  // client-picker list on this dashboard uses -- see .client-match-list in
+  // styles.css for the fixed-width grid that keeps them aligned.
+  function matchLabelHtml(m) {
+    const statusBadge = m.isActive ? '<span class="cell-flag-green">Active</span>' : '<span class="cell-flag-red">Inactive</span>';
+    return `<span class="cml-name" title="${escapeHtml(m.companyName)}">${escapeHtml(m.companyName)}</span><span class="cml-status">${statusBadge}</span><span class="cml-classification">${m.classification ? escapeHtml(m.classification) : ''}</span>`;
   }
 
   function useResolvedClient(match) {

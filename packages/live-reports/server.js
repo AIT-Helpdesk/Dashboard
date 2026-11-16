@@ -1471,10 +1471,28 @@ router.get('/resolve-client', async (req, res) => {
       const udf = (company.userDefinedFields || []).find((u) => u.name === 'Name:Datto RMM');
       return udf?.value?.trim() || null;
     };
+    // Classification/Active-Status, by request ("do this list of clients
+    // like the format on the other Client Name Search multiples returned")
+    // -- same tiered Active-with-Classification/Active-no-Classification/
+    // Inactive sort @dashboard/autotask-client's own resolveSingleCompany()
+    // already established for every other ambiguous-match picker on this
+    // dashboard, looked up only here (the rare ambiguous path), never on
+    // the common single-match path above.
+    const classificationLabels = matches.length > 1 ? await getPicklistLabels(client.companies, 'classification') : null;
+    function tierOf(c) {
+      if (!c.isActive) return 2;
+      return c.classification ? 0 : 1;
+    }
     res.json({
       matches: matches
-        .map((c) => ({ companyId: c.id, companyName: c.companyName, dattoSite: dattoSiteUdf(c) }))
-        .sort((a, b) => a.companyName.localeCompare(b.companyName)),
+        .map((c) => ({
+          companyId: c.id,
+          companyName: c.companyName,
+          dattoSite: dattoSiteUdf(c),
+          isActive: c.isActive,
+          classification: classificationLabels ? classificationLabels.get(c.classification) || null : null,
+        }))
+        .sort((a, b) => tierOf(a) - tierOf(b) || a.companyName.localeCompare(b.companyName)),
     });
   } catch (err) {
     console.error('Live Reports: resolve-client failed:', err.message);
@@ -1575,20 +1593,47 @@ router.get('/report-explanations', async (req, res) => {
 // with a long device list genuinely exceeds that.
 router.use(express.json({ limit: '5mb' }));
 
-// IT Glue's Domains resource turned out to be READ-ONLY via their public
-// API (confirmed live -- see email-domain-protection.js's own header
-// comment: GET /domains/{id} works, every PATCH shape tried 404s with an
-// empty body). So there's no write-back route any more -- this just runs
-// the real DNS checks against whatever domain the admin picked/typed on
-// screen for the CURRENT report, by request ("Allow the user of Live
-// Reports to choose or enter a domain and prompt them to fix IT Glue").
-// client.js's own picker shows the "go fix IT Glue" instruction itself;
-// this route only ever does the DNS part.
+// Runs the real DNS checks against whatever domain the admin picked/typed
+// on screen for the CURRENT report, by request ("Allow the user of Live
+// Reports to choose or enter a domain"). IT Glue's native Domains resource
+// is still read-only via their public API (confirmed live -- see
+// email-domain-protection.js's own header comment), but its "Primary
+// Domain" Flexible Asset IS writable -- `setAsPrimary: true` (the
+// "Set this Domain as Primary" checkbox) calls
+// setPrimaryDomainForSite() to tag it there for real, by request. That's a
+// deliberately SEPARATE, non-fatal step from the DNS check itself: the
+// check always runs and is always returned even if tagging fails (e.g. a
+// brand-new typed-in domain that isn't in IT Glue's Domain Tracker yet
+// can't be tagged) -- `primarySetError` carries that failure back
+// alongside a perfectly good DNS result, rather than losing the check over
+// a secondary write.
 router.post('/email-domain-protection/check-domain', async (req, res) => {
   const domain = (req.body?.domain || '').trim();
+  const siteName = (req.body?.siteName || '').trim();
+  const setAsPrimary = !!req.body?.setAsPrimary;
   if (!domain) return res.status(400).json({ error: '"domain" is required.' });
+  let primarySetError = null;
+  let primarySet = false;
+  if (setAsPrimary) {
+    if (!siteName) {
+      primarySetError = "Missing this report's client name -- could not set this domain as Primary.";
+    } else {
+      try {
+        await emailDomainProtection.setPrimaryDomainForSite(siteName, domain);
+        primarySet = true;
+      } catch (err) {
+        primarySetError = err.message;
+      }
+    }
+  }
   try {
-    res.json({ status: 'ok', ...(await emailDomainProtection.runDnsChecks(domain)) });
+    // `primarySource: 'flexible-asset'` on a successful tag, by request
+    // ("once the data is collected, the extra Pick fields should no
+    // longer show") -- client.js's own emailDomainProtectionCardHtml()
+    // already hides the override picker for that exact value (the same
+    // rule getStatus() uses for an already-tagged domain), so this just
+    // reuses it rather than a second flag.
+    res.json({ status: 'ok', ...(await emailDomainProtection.runDnsChecks(domain)), primarySetError, primarySource: primarySet ? 'flexible-asset' : undefined });
   } catch (err) {
     console.error('live-reports: Email Domain Protection check-domain failed:', err.message);
     res.status(500).json({ error: err.message });

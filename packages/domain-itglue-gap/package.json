@@ -1,0 +1,19 @@
+{
+  "name": "@dashboard/domain-itglue-gap",
+  "version": "1.0.0",
+  "private": true,
+  "main": "job.js",
+  "dashboardPage": {
+    "id": "domain-itglue-gap",
+    "label": "Domain / IT Glue Gaps",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "@dashboard/autotask-client": "*",
+    "@dashboard/tpp-client": "*",
+    "@dashboard/itglue-client": "*",
+    "dotenv": "^16.4.5"
+  }
+}

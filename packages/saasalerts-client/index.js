@@ -22,10 +22,21 @@ const { SAASALERTS_API_KEY: API_KEY } = process.env;
 // (it's base64) to what looks like a `<uuid>:<partnerId>` Basic-auth pair.
 // Confirmed against the real API: the api_key header alone is sufficient,
 // SAASALERTS_PARTNER_ID isn't needed on any request.
+// A real client (Queensland Greyhound Racing Club) confirmed live this
+// session that this endpoint can take 60-70+ seconds to respond before the
+// vendor's own server eventually gives up with a 408 -- axios has NO
+// default timeout (waits indefinitely), so Live Reports' own Create PDF
+// button stayed stuck on "Loading" that whole time waiting on this one
+// call (every OTHER vendor call for the same client succeeded in well
+// under a second). 20s is generous for a REST call that's normally fast,
+// but short enough that a client-side timeout here now fails well before
+// the vendor's own 408 would, letting live-reports/server.js's own
+// catchVendorError() move on quickly instead of blocking the whole page.
 async function get(path, params) {
   const res = await axios.get(`${BASE_URL}${path}`, {
     headers: { api_key: API_KEY, Accept: 'application/json' },
     params,
+    timeout: 20000,
   });
   return res.data;
 }

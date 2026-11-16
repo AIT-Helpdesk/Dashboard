@@ -40,8 +40,10 @@ db.exec(`
 // (the authoritative write path for each of these UDFs) and whichever
 // page(s) each one's own UDF-first-then-name-match lookup lives in
 // (check-client/client.js for Ingram Micro/Datto RMM; live-reports/
-// server.js for Datto RMM/SaaS Backups; csp-customers/server.js's own
-// matching functions for Microsoft 365, not yet wired into a page).
+// server.js and client-summary/installed-services.js (shared by Client
+// Summary and TC Elite Services) for SaaS Backups; csp-customers/
+// server.js's own matching functions for Microsoft 365, not yet wired
+// into a page).
 const SEED_ROWS = [
   {
     udfName: 'Name:TPP',
@@ -72,7 +74,7 @@ const SEED_ROWS = [
     matchesField: "SaaS Protection's own customer name",
     dataMatchingConcept: 'saas-protection-clients-unmatched',
     notes:
-      'Written via data-matching/server.js Concept 4. Read by live-reports/server.js\'s buildSaasProtectionSummary() via saas-protection/server.js\'s findDomainMatchExact() (tried before the fuzzy name-match fallback).',
+      'Written via data-matching/server.js Concept 4. Read by live-reports/server.js\'s buildSaasProtectionSummary() and client-summary/installed-services.js\'s findSaasProtectionMatch() (shared by Client Summary and TC Elite Services), both via saas-protection/server.js\'s findDomainMatchExact() (tried before the fuzzy name-match fallback).',
   },
   {
     udfName: 'Name:Microsoft 365',

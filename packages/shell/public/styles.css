@@ -5548,6 +5548,33 @@ td.ticket-number a:hover {
   white-space: nowrap;
 }
 
+/* Domain / IT Glue Gaps -- same narrower-row/smaller-text table style as
+   Data Matching, by request. */
+.domain-itglue-gap-page table th,
+.domain-itglue-gap-page table td {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.75rem;
+}
+/* Click-to-sort column headers, by request -- same convention
+   @dashboard/contact-search's own .cs-sort-btn already established. */
+.dig-sort-btn {
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dig-sort-btn:hover {
+  color: var(--accent);
+}
+.dig-sort-btn--active {
+  color: var(--accent);
+}
+
 /* Coming Soon's own tables -- both Domains and Microsoft Licensing's
    Annual/Monthly sub-tables -- by request, more compact rows/smaller text
    than the dashboard-wide default, same 0.78rem/0.3rem 0.75rem DNS
@@ -10283,36 +10310,6 @@ tr.accrued-time-yellow-row th {
   font-size: 0.78rem;
   color: var(--muted);
 }
-/* resolveClientAndLoad()'s own ambiguous-match picker in live-reports/
-   client.js -- plain clickable list, one real Autotask company per row,
-   same .button-link--small pill look every other small action button on
-   this dashboard uses, just stacked instead of inline (there can be
-   several real matches). */
-.live-reports-client-picker {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  max-width: 24rem;
-}
-.live-reports-client-picker-btn {
-  width: 100%;
-  text-align: left;
-  padding: 0.45rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--card);
-  color: var(--fg);
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-.live-reports-client-picker-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /* Live Reports' own main-section grouping box, by request ("a box (border
    only)... to distinguish them better on screen") -- border only, no fill,
    so it doesn't read as another nested card on top of the real .mtg-widget
