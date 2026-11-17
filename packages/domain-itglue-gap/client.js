@@ -4,6 +4,7 @@ export const label = "Domain / IT Glue Gaps";
 // Module-scope, not inside mount() -- same "survives a shell re-mount"
 // convention every other page's client.js already uses.
 let lastData = null;
+let lastNoPrimaryDomainClients = null;
 
 export function mount(container) {
   // Scopes the narrower-row/smaller-text table style below (styles.css)
@@ -16,6 +17,11 @@ export function mount(container) {
       <h1>Domain / IT Glue Gaps</h1>
       <button type="button" id="refresh-button" class="button-link button-link--small">Refresh</button>
     </header>
+    <div class="resource-group" id="npd-section">
+      <div class="resource-group-header"><span>IT Glue Clients Missing a Primary Domain</span><span class="count" id="npd-count"></span></div>
+      <p class="status" id="npd-status">Loading...</p>
+      <div id="npd-rows" hidden></div>
+    </div>
     <p id="status" class="status">Loading...</p>
     <div id="last-run" class="inline-subtext" hidden></div>
     <div id="summary" class="summary" hidden></div>
@@ -27,6 +33,9 @@ export function mount(container) {
   const lastRunEl = container.querySelector('#last-run');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
+  const npdCountEl = container.querySelector('#npd-count');
+  const npdStatusEl = container.querySelector('#npd-status');
+  const npdRowsEl = container.querySelector('#npd-rows');
 
   // Refresh button = a real LIVE pull (force=true -- same query-param
   // convention @dashboard/tc-elite-services's own GET / already uses),
@@ -34,8 +43,13 @@ export function mount(container) {
   // open ticket, never a new ticket or a full rewrite -- that's the
   // scheduled/manual job's job alone (see job.js's own refreshLive()
   // comment). The initial page load (no button click) stays a plain, fast
-  // read of the last stored state.
-  refreshButton.addEventListener('click', () => load(true));
+  // read of the last stored state. Also re-runs the "Clients missing a
+  // Primary Domain" section's own live pull, by request -- it previously
+  // only ever loaded once at mount, never again on a Refresh click.
+  refreshButton.addEventListener('click', () => {
+    load(true);
+    loadNoPrimaryDomain();
+  });
 
   async function load(force) {
     refreshButton.disabled = true;
@@ -58,6 +72,153 @@ export function mount(container) {
     } finally {
       refreshButton.disabled = false;
     }
+  }
+
+  // "Clients missing a Primary Domain" -- loaded independently of the main
+  // gap list above, by request structure (its own section, own loading
+  // state), same "don't slow down the fast stuff waiting on a slower one"
+  // split @dashboard/live-reports' own Email Domain Protection card
+  // already uses. Always a real live IT Glue pull (no persisted/cached
+  // state server-side, see server.js's own comment) -- this isn't tied to
+  // the TPP/ticket job at all, just a live data-quality check.
+  async function loadNoPrimaryDomain() {
+    npdStatusEl.hidden = false;
+    npdStatusEl.className = 'status';
+    npdStatusEl.textContent = 'Loading...';
+    npdRowsEl.hidden = true;
+    try {
+      const res = await fetch('/api/domain-itglue-gap/no-primary-domain');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      lastNoPrimaryDomainClients = data.clients;
+      renderNoPrimaryDomain(data.clients);
+    } catch (err) {
+      npdStatusEl.hidden = false;
+      npdStatusEl.className = 'status error';
+      npdStatusEl.textContent = `Error: ${err.message}`;
+    }
+  }
+
+  function renderNoPrimaryDomain(clients) {
+    npdCountEl.textContent = clients.length;
+    if (clients.length === 0) {
+      npdStatusEl.hidden = false;
+      npdStatusEl.className = 'status';
+      npdStatusEl.textContent = 'Every IT Glue client with a domain on file has a Primary Domain tagged.';
+      npdRowsEl.hidden = true;
+      return;
+    }
+    npdStatusEl.hidden = true;
+    npdRowsEl.hidden = false;
+    // One shared width across every row's dropdown, sized to the single
+    // longest domain name in the WHOLE list ("fit the worst case"), by
+    // request -- not each row's own browser-default sizing, which would
+    // otherwise stretch to fill the grid column's full width (see
+    // .npd-domain-select's own comment in styles.css).
+    const placeholderLabel = '-- choose a domain --';
+    const widestChars = Math.max(placeholderLabel.length, ...clients.flatMap((c) => c.domains.map((d) => d.name.length)));
+    const selectWidth = `${widestChars + 3}ch`;
+    npdRowsEl.innerHTML = clients
+      .map((c) => {
+        // Only one domain on file -- nothing to actually pick, by request
+        // ("show the one domain in a box with no dropdown"). A plain
+        // readonly box (same [readonly] look @dashboard/access4-sms's own
+        // phone input already established) instead of a <select>, and the
+        // button starts enabled since there's no selection to wait on.
+        const singleDomain = c.domains.length === 1 ? c.domains[0] : null;
+        const domainFieldHtml = singleDomain
+          ? `<input type="text" class="npd-domain-single" style="width: ${selectWidth}" value="${escapeHtml(singleDomain.name)}" data-domain-id="${escapeHtml(singleDomain.id)}" readonly />`
+          : `<select class="npd-domain-select" style="width: ${selectWidth}">
+               <option value="">${escapeHtml(placeholderLabel)}</option>
+               ${c.domains.map((d) => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.name)}</option>`).join('')}
+             </select>`;
+        return `
+      <div class="npd-row" data-org-id="${escapeHtml(c.organizationId)}">
+        <span class="npd-client-name">${c.organizationUrl ? `<a href="${escapeHtml(c.organizationUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(c.organizationName)}</a>` : escapeHtml(c.organizationName || '')}</span>
+        ${domainFieldHtml}
+        <button type="button" class="npd-set-primary-btn button-link button-link--small" ${singleDomain ? '' : 'disabled'}>Set as Primary</button>
+        <p class="dm-match-status" hidden></p>
+      </div>`;
+      })
+      .join('');
+    npdRowsEl.querySelectorAll('.npd-row').forEach((rowEl) => wireNoPrimaryDomainRow(rowEl));
+  }
+
+  // On-page confirm (OK before Cancel, same convention @dashboard/data-
+  // matching's own showInlineConfirm() already established), by request
+  // ("present a warning next to the button stating domain.xxx.xx will be
+  // set as Primary for client XXX, OK, Cancel") -- reuses that same shared
+  // .dm-match-status/.dm-inline-confirm styling rather than a new one-off.
+  function wireNoPrimaryDomainRow(rowEl) {
+    const orgId = rowEl.dataset.orgId;
+    const clientName = rowEl.querySelector('.npd-client-name').textContent;
+    const select = rowEl.querySelector('.npd-domain-select');
+    const singleInput = rowEl.querySelector('.npd-domain-single');
+    const button = rowEl.querySelector('.npd-set-primary-btn');
+    const statusEl2 = rowEl.querySelector('.dm-match-status');
+
+    // The single-domain case has nothing to select at all -- its id/name
+    // come straight off the readonly box, button already enabled from the
+    // start (see renderNoPrimaryDomain above).
+    function currentSelection() {
+      if (singleInput) return { id: singleInput.dataset.domainId, name: singleInput.value };
+      return { id: select.value, name: select.options[select.selectedIndex]?.textContent };
+    }
+
+    if (select) {
+      select.addEventListener('change', () => {
+        button.disabled = !select.value;
+      });
+    }
+
+    function showInlineConfirm(message) {
+      return new Promise((resolve) => {
+        statusEl2.hidden = false;
+        statusEl2.className = 'dm-match-status dm-inline-confirm';
+        statusEl2.innerHTML = `
+          <span class="dm-inline-confirm-message">${escapeHtml(message)}</span>
+          <button type="button" class="button-link button-link--small dm-inline-confirm-ok-btn">OK</button>
+          <button type="button" class="button-link button-link--small dm-inline-confirm-cancel-btn">Cancel</button>
+        `;
+        statusEl2.querySelector('.dm-inline-confirm-ok-btn').addEventListener('click', () => resolve(true), { once: true });
+        statusEl2.querySelector('.dm-inline-confirm-cancel-btn').addEventListener('click', () => resolve(false), { once: true });
+      });
+    }
+
+    button.addEventListener('click', async () => {
+      const { id: domainId, name: domainName } = currentSelection();
+      if (!domainId) return;
+      const proceed = await showInlineConfirm(`${domainName} will be set as Primary for client ${clientName}.`);
+      statusEl2.hidden = true;
+      statusEl2.className = 'dm-match-status';
+      if (!proceed) return;
+      button.disabled = true;
+      if (select) select.disabled = true;
+      if (singleInput) singleInput.disabled = true;
+      button.textContent = 'Setting...';
+      try {
+        const res = await fetch('/api/domain-itglue-gap/set-primary-domain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ organizationId: orgId, domainId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        // Done -- this client's no longer missing a Primary Domain, so its
+        // row just disappears (update in place, same convention
+        // toggleTick() below already uses, rather than a full re-fetch).
+        lastNoPrimaryDomainClients = (lastNoPrimaryDomainClients || []).filter((c) => c.organizationId !== orgId);
+        renderNoPrimaryDomain(lastNoPrimaryDomainClients);
+      } catch (err) {
+        statusEl2.hidden = false;
+        statusEl2.className = 'status error dm-match-status'; // same combined-class convention @dashboard/data-matching's own validation errors use, so it still sizes/sits correctly inline in this row
+        statusEl2.textContent = `Error: ${err.message}`;
+        button.disabled = false;
+        if (select) select.disabled = false;
+        if (singleInput) singleInput.disabled = false;
+        button.textContent = 'Set as Primary';
+      }
+    });
   }
 
   function renderLastRun(lastRun) {
@@ -236,6 +397,9 @@ export function mount(container) {
 
   if (lastData) render(lastData);
   else load(false);
+
+  if (lastNoPrimaryDomainClients) renderNoPrimaryDomain(lastNoPrimaryDomainClients);
+  else loadNoPrimaryDomain();
 
   function formatDate(isoDateOnly) {
     if (!isoDateOnly) return '';

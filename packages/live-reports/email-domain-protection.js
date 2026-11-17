@@ -27,70 +27,20 @@
 // /organizations/{id}/relationships/domains, and to the nested single-
 // resource relationship path all 404 (empty body, not a validation error --
 // the route itself doesn't exist for writes). Flexible Assets are a
-// SEPARATE, writable IT Glue resource, though -- setPrimaryDomain() below
-// writes there, never to the native Domains resource itself. A brand-new,
+// SEPARATE, writable IT Glue resource, though -- setPrimaryDomain() writes
+// there, never to the native Domains resource itself. A brand-new,
 // just-typed-in domain that doesn't exist as a Domains record yet still
 // can't be tagged as Primary as a result (there's nothing with an id to
-// tag) -- setPrimaryDomainForSite() surfaces that plainly rather than
-// silently doing nothing.
+// tag) -- setPrimaryDomainForSite() below surfaces that plainly rather
+// than silently doing nothing.
+//
+// The "Primary Domain" Flexible Asset helpers themselves (type lookup,
+// per-org read, write) now live in @dashboard/itglue-client, shared with
+// @dashboard/domain-itglue-gap's own "clients missing a Primary Domain"
+// section -- both need to agree on exactly the same Flexible Asset
+// Type/trait, so neither keeps its own copy any more.
 const dns = require('dns').promises;
-const { get, post, patch } = require('@dashboard/itglue-client');
-
-// The Flexible Asset Type's own id is looked up by name once and cached --
-// same "resolved fresh, cached, no hardcoded id" convention the rest of
-// this dashboard already uses for Autotask picklists/UDFs. Fetches the
-// full type list (24 total on this account) and matches client-side rather
-// than trusting an unconfirmed `filter[name]` semantics on this endpoint.
-const PRIMARY_DOMAIN_ASSET_TYPE_NAME = 'Primary Domain';
-const PRIMARY_DOMAIN_TRAIT_NAME = 'primary-domain-tag';
-let primaryDomainTypeIdCache = null;
-
-async function getPrimaryDomainTypeId() {
-  if (primaryDomainTypeIdCache) return primaryDomainTypeIdCache;
-  const res = await get('/flexible_asset_types', { 'page[size]': 1000 });
-  const match = (res.data || []).find((t) => (t.attributes.name || '').trim().toLowerCase() === PRIMARY_DOMAIN_ASSET_TYPE_NAME.toLowerCase());
-  if (!match) return null; // Type genuinely doesn't exist -- treat as "nothing tagged yet", not a hard error.
-  primaryDomainTypeIdCache = match.id;
-  return primaryDomainTypeIdCache;
-}
-
-// Reads whichever domain (if any) this organisation's own "Primary Domain"
-// Flexible Asset record currently tags. A Tag-type trait reads back as
-// `{type, values: [{id, name, ...}]}` (confirmed live) even though it's a
-// single-value tag on this asset type -- only `values[0]` is ever used.
-async function findPrimaryDomainFromFlexibleAsset(organizationId) {
-  const typeId = await getPrimaryDomainTypeId();
-  if (!typeId) return null;
-  const res = await get('/flexible_assets', { 'filter[flexible-asset-type-id]': typeId, 'filter[organization-id]': organizationId, 'page[size]': 1 });
-  const record = res.data?.[0];
-  const tagged = record?.attributes?.traits?.[PRIMARY_DOMAIN_TRAIT_NAME]?.values?.[0];
-  if (!tagged?.name) return null;
-  return { id: String(tagged.id), name: tagged.name };
-}
-
-// Creates or updates this organisation's own "Primary Domain" Flexible
-// Asset record to tag `domainId` -- one record per organisation (upsert,
-// never a second one), by request ("if ticked, Update the flexible asset
-// to tag the correct Domain"). The write shape (traits keyed by the Tag
-// field's own name, value = the tagged resource's plain id) follows IT
-// Glue's own documented Flexible Asset write format -- confirmed live
-// against a real client (iCar), both the "Set this Domain as Primary"
-// write itself and the resulting getStatus() read-back via the tag.
-async function setPrimaryDomain(organizationId, domainId) {
-  const typeId = await getPrimaryDomainTypeId();
-  if (!typeId) {
-    const err = new Error(`No Flexible Asset Type named "${PRIMARY_DOMAIN_ASSET_TYPE_NAME}" exists in IT Glue -- cannot tag a Primary Domain.`);
-    throw err;
-  }
-  const existing = await get('/flexible_assets', { 'filter[flexible-asset-type-id]': typeId, 'filter[organization-id]': organizationId, 'page[size]': 1 });
-  const record = existing.data?.[0];
-  const traits = { [PRIMARY_DOMAIN_TRAIT_NAME]: domainId };
-  if (record) {
-    await patch(`/flexible_assets/${record.id}`, { data: { type: 'flexible-assets', attributes: { traits } } });
-  } else {
-    await post('/flexible_assets', { data: { type: 'flexible-assets', attributes: { 'organization-id': organizationId, 'flexible-asset-type-id': typeId, traits } } });
-  }
-}
+const { get, getPrimaryDomainForOrganization, setPrimaryDomain } = require('@dashboard/itglue-client');
 
 // Resolves the organisation + the real Domains-record id for `domainName`
 // (by name, case-insensitive), then tags it as Primary. `domainName` must
@@ -250,7 +200,7 @@ async function getStatus(siteName) {
   if (orgResult.status !== 'ok') return { status: orgResult.status === 'ambiguous' ? 'org-ambiguous' : 'org-not-found' };
   const organizationId = orgResult.organization.id;
   const domains = await getDomains(organizationId);
-  const flexAssetPrimary = await findPrimaryDomainFromFlexibleAsset(organizationId);
+  const flexAssetPrimary = await getPrimaryDomainForOrganization(organizationId);
   const primary = flexAssetPrimary || findPrimaryDomainFallback(domains);
   if (!primary) return { status: 'needs-domain', organizationId, domains };
   const checks = await runDnsChecks(primary.name);

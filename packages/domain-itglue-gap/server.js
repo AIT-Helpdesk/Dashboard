@@ -2,6 +2,8 @@ const express = require('express');
 const { listGaps, setTicked, getSummaryCounts } = require('./db');
 const { readLastRunStatus } = require('./status');
 const { refreshLive } = require('./job');
+const { computeClientsMissingPrimaryDomain } = require('./primary-domain-gaps');
+const { setPrimaryDomain } = require('@dashboard/itglue-client');
 
 function getActor(req) {
   return { email: req.session.user.email, name: req.session.user.name };
@@ -65,6 +67,39 @@ router.post('/:domainName/tick', (req, res) => {
     res.json(rowToJson(row));
   } catch (err) {
     console.error('domain-itglue-gap: failed to update tick state:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Clients missing a Primary Domain" section, by request -- loaded
+// independently by client.js (its own fetch, own loading state), same
+// "don't slow down the fast stuff waiting on a slower one" split
+// @dashboard/live-reports already uses for its own Email Domain
+// Protection card. Computed fresh on every call (not persisted in db.js --
+// this isn't tied to the TPP/ticket workflow at all, just a live IT Glue
+// data-quality check), so this route alone carries that cost, never the
+// main gap list's own plain GET /.
+router.get('/no-primary-domain', async (req, res) => {
+  try {
+    res.json({ clients: await computeClientsMissingPrimaryDomain() });
+  } catch (err) {
+    console.error('domain-itglue-gap: no-primary-domain fetch failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Tags `domainId` as `organizationId`'s own Primary Domain in IT Glue,
+// from the "clients missing a Primary Domain" section's own dropdown +
+// "Set as Primary" button -- same shared setPrimaryDomain() helper
+// @dashboard/live-reports' own "Set this Domain as Primary" checkbox uses.
+router.post('/set-primary-domain', async (req, res) => {
+  const { organizationId, domainId } = req.body || {};
+  if (!organizationId || !domainId) return res.status(400).json({ error: 'organizationId and domainId are required.' });
+  try {
+    await setPrimaryDomain(organizationId, domainId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('domain-itglue-gap: set-primary-domain failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

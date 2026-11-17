@@ -73,4 +73,42 @@ async function fetchOrganizationUrlsByName() {
   return map;
 }
 
-module.exports = { fetchAllItGlueDomainNames, normalizeDomainName, fetchOrganizationUrlsByName };
+// Every domain on the account, grouped by its own organisation -- same one
+// bulk `GET /domains` fetch as fetchAllItGlueDomainNames() above, just also
+// keeping `organization-id`/`organization-name` (both present on every
+// domain's own attributes, confirmed live) instead of discarding them. Used
+// by primary-domain-gaps.js to find which organisations have domains on
+// file at all, for the "clients missing a Primary Domain" section -- a
+// different question from fetchAllItGlueDomainNames()'s own flat name set.
+async function fetchAllDomainsGroupedByOrg() {
+  const rows = [];
+  let page = 1;
+  for (;;) {
+    const res = await itglue.get('/domains', { 'page[size]': PAGE_SIZE, 'page[number]': page });
+    for (const d of res.data || []) {
+      if (d.attributes?.name && d.attributes?.['organization-id']) {
+        rows.push({
+          id: d.id,
+          name: d.attributes.name,
+          organizationId: String(d.attributes['organization-id']),
+          organizationName: d.attributes['organization-name'] || null,
+        });
+      }
+    }
+    const nextPage = res.meta?.['next-page'];
+    if (!nextPage) break;
+    page = nextPage;
+  }
+  return rows;
+}
+
+// Same org-page-URL convention fetchOrganizationUrlsByName() above already
+// uses (ITGLUE_WEB_BASE_URL + "/" + the org's own id) but keyed by id, not
+// name -- primary-domain-gaps.js already has each organisation's real id on
+// hand (from the domains it just grouped), so no name-matching is needed
+// here at all.
+function organizationUrlById(organizationId) {
+  return WEB_BASE_URL ? `${WEB_BASE_URL}/${organizationId}` : null;
+}
+
+module.exports = { fetchAllItGlueDomainNames, normalizeDomainName, fetchOrganizationUrlsByName, fetchAllDomainsGroupedByOrg, organizationUrlById };

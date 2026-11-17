@@ -1586,6 +1586,15 @@ h1 {
 .dm-inline-confirm-message {
   flex-basis: 100%;
 }
+/* The Append/Cancel offer (Data Matching's own "already set" conflict)
+   keeps OK/Cancel on the SAME line as the message instead, by request --
+   this message is always short, so there's no reason to wrap the buttons
+   down under it. Opt-in modifier (showInlineConfirm's own `inline` option)
+   rather than changing the default, which every other confirm on this
+   page still wants wrapped per the original request above. */
+.dm-inline-confirm-message--inline {
+  flex-basis: auto;
+}
 .dm-match-status.dm-inline-confirm--danger {
   background: color-mix(in srgb, #dc2626 12%, transparent);
   border-color: color-mix(in srgb, #dc2626 40%, transparent);
@@ -5573,6 +5582,92 @@ td.ticket-number a:hover {
 }
 .dig-sort-btn--active {
   color: var(--accent);
+}
+
+/* "Clients missing a Primary Domain" section, by request -- a plain list
+   of rows (client name + domain picker + button) rather than a <table>
+   (the row content doesn't fit neat columns the way the rest of this
+   page's gap tables do), same "plain <p>/<div> content inside a
+   .resource-group needs its own padding" convention @dashboard/dns-check's
+   own .dns-check-section-note already established. */
+#npd-status {
+  margin: 0;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.78rem;
+}
+/* Grid, not flex, by request -- the confirm/error message needs to start
+   under the Domain dropdown's own column (not flush left under Client
+   Name), which a shared flex-basis:100% line can't target on its own;
+   grid-column lets it start at the dropdown's exact column instead. Same
+   narrower-row/smaller-text sizing as this page's other tables, by
+   request ("make all the text smaller and the row heights tighter like
+   all the other tables on this page"), via font-size/padding matching
+   .domain-itglue-gap-page table th/td's own values below. */
+.npd-row {
+  display: grid;
+  /* No 1fr column, by request ("does not need 100% width") -- every
+     column sizes to its own content and sits snug next to Client Name
+     instead of the dropdown/button being pushed out to the far right edge
+     of the full-width row. */
+  grid-template-columns: minmax(160px, max-content) max-content max-content;
+  justify-content: start;
+  align-items: baseline;
+  column-gap: 0.75rem;
+  row-gap: 0.3rem;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.78rem;
+  border-top: 1px solid var(--border);
+}
+.npd-row:first-child {
+  border-top: none;
+}
+.npd-client-name {
+  grid-column: 1;
+  font-weight: 500;
+}
+/* Width set inline per row (client.js computes it from the longest domain
+   name across every row, "fit the worst case" rather than stretching to
+   fill the row), so this just turns off the <select>'s own browser default
+   sizing/growth -- the inline width wins either way. */
+.npd-domain-select {
+  grid-column: 2;
+  width: auto;
+  font-size: inherit;
+}
+/* The single-domain case, by request ("show the one domain in a box with
+   no dropdown") -- same [readonly] treatment @dashboard/access4-sms's own
+   #sms-phone-input already established, so it reads as "fixed, not a
+   choice" rather than a plain editable text box. */
+.npd-domain-single[readonly] {
+  grid-column: 2;
+  font-size: inherit;
+  background: var(--section-header-bg);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+}
+.npd-set-primary-btn {
+  grid-column: 3;
+}
+/* The inline confirm/error (.dm-match-status, shared with @dashboard/data-
+   matching) starts under the Domain dropdown, by request, not flush left
+   under Client Name -- grid-column 2 is exactly that dropdown's own
+   column; -1 extends it through the button column too so OK/Cancel still
+   have room to sit on their own line underneath. */
+.npd-row .dm-match-status {
+  grid-column: 2 / -1;
+  padding-left: 0;
+  padding-right: 0;
+  font-size: inherit;
+}
+/* OK/Cancel stay on the SAME line as the message here, by request --
+   overrides .dm-inline-confirm-message's own flex-basis: 100% (which Data
+   Matching wants, to force OK/Cancel onto their own line underneath a
+   possibly-long message), since this message is always short and there's
+   no reason to wrap the buttons down under it. */
+.npd-row .dm-inline-confirm-message {
+  flex-basis: auto;
 }
 
 /* Coming Soon's own tables -- both Domains and Microsoft Licensing's

@@ -746,13 +746,19 @@ export function mount(container) {
     // widget used to show for every write, reusing statusEl's own slot.
     // `danger` (red, "doesn't need to be red" otherwise) is only used for
     // confirmOverrideExactMatch() below.
-    function showInlineConfirm(message, { danger = false } = {}) {
+    // `okLabel` lets the same box double as the "already set -- Append or
+    // Cancel?" offer below, by request, without a second near-duplicate
+    // confirm function.
+    // `inline` keeps OK/Cancel on the SAME line as the message (the
+    // Append/Cancel offer, by request) instead of the default wrapped-
+    // below layout every other confirm on this page still wants.
+    function showInlineConfirm(message, { danger = false, okLabel = 'OK', inline = false } = {}) {
       return new Promise((resolve) => {
         statusEl.hidden = false;
         statusEl.className = `dm-match-status dm-inline-confirm${danger ? ' dm-inline-confirm--danger' : ''}`;
         statusEl.innerHTML = `
-          <span class="dm-inline-confirm-message">${escapeHtml(message)}</span>
-          <button type="button" class="button-link button-link--small dm-inline-confirm-ok-btn">OK</button>
+          <span class="dm-inline-confirm-message${inline ? ' dm-inline-confirm-message--inline' : ''}">${escapeHtml(message)}</span>
+          <button type="button" class="button-link button-link--small dm-inline-confirm-ok-btn">${escapeHtml(okLabel)}</button>
           <button type="button" class="button-link button-link--small dm-inline-confirm-cancel-btn">Cancel</button>
         `;
         statusEl.querySelector('.dm-inline-confirm-ok-btn').addEventListener('click', () => resolve(true), { once: true });
@@ -772,7 +778,7 @@ export function mount(container) {
       return showInlineConfirm("There's already an exact match for this Client. Are you sure you want to OVERRIDE that?", { danger: true });
     }
 
-    async function doWrite(companyName, hasExactMatch) {
+    async function doWrite(companyName, hasExactMatch, append = false) {
       const trimmed = (companyName || '').trim();
       if (!trimmed) {
         statusEl.hidden = false;
@@ -796,24 +802,44 @@ export function mount(container) {
         statusEl.className = 'dm-match-status';
         if (!proceed) return;
       }
-      const confirmedWrite = await showInlineConfirm(`Write "${writeValueLabel}" into ${udfName} on Autotask company "${trimmed}"?`);
-      statusEl.hidden = true;
-      statusEl.className = 'dm-match-status';
-      if (!confirmedWrite) return;
+      // `append` retries skip the normal write-confirm below -- the
+      // Append/Cancel offer (further down) already confirmed the write.
+      if (!append) {
+        const confirmedWrite = await showInlineConfirm(`Write "${writeValueLabel}" into ${udfName} on Autotask company "${trimmed}"?`);
+        statusEl.hidden = true;
+        statusEl.className = 'dm-match-status';
+        if (!confirmedWrite) return;
+      }
 
       setBusy(true);
       statusEl.hidden = false;
       statusEl.className = 'status loading dm-match-status';
-      statusEl.textContent = 'Updating...';
+      statusEl.textContent = append ? 'Appending...' : 'Updating...';
 
       try {
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...extraBody, companyName: trimmed }),
+          body: JSON.stringify({ ...extraBody, companyName: trimmed, ...(append ? { append: true } : {}) }),
         });
         const result = await res.json();
         if (!res.ok) {
+          // Already set, but this UDF allows appending (server's own
+          // APPEND_ALLOWED_UDFS, by request -- currently just Name:TPP) --
+          // offer Append/Cancel instead of just showing the refusal as
+          // plain text.
+          if (result.canAppend && !append) {
+            setBusy(false);
+            const proceedAppend = await showInlineConfirm(result.error, { okLabel: 'Append', inline: true });
+            statusEl.hidden = true;
+            statusEl.className = 'dm-match-status';
+            if (proceedAppend) {
+              await doWrite(companyName, hasExactMatch, true);
+            } else {
+              renderSuggestions(result.suggestions);
+            }
+            return;
+          }
           statusEl.className = 'status error dm-match-status';
           statusEl.textContent = result.error || `Request failed (${res.status})`;
           renderSuggestions(result.suggestions);

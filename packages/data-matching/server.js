@@ -727,7 +727,15 @@ function normalizeForExactCompare(s) {
 // "Name:Datto RMM" (or similar) field in this account's real UDF list, so
 // it stays read-only on the client until one is created, same convention
 // as "Name:TPP"/"Name:Ingram Micro" were (manually, in Autotask's own UI).
-async function writeNameMatchUdf({ udfName, matchValue, companyName, reportCacheKeyToInvalidate }) {
+// Scoped to just this one UDF, by request ("On the Data Matching UDF
+// Field Name:TPP... give the option with buttons to append or cancel") --
+// the other 4 concepts' UDFs keep their existing "refuse if already set"
+// safety behaviour unchanged. A Set, not an inline `=== 'Name:TPP'` check,
+// so a second UDF can opt in later with a one-line change here rather than
+// a new branch.
+const APPEND_ALLOWED_UDFS = new Set(['Name:TPP']);
+
+async function writeNameMatchUdf({ udfName, matchValue, companyName, reportCacheKeyToInvalidate, append }) {
   const trimmedValue = (matchValue || '').trim();
   const trimmedName = (companyName || '').trim();
   if (!trimmedValue) {
@@ -760,11 +768,19 @@ async function writeNameMatchUdf({ udfName, matchValue, companyName, reportCache
   const fresh = await client.companies.get(result.company.id);
   const currentUdf = (fresh.data?.userDefinedFields || []).find((u) => u.name === udfName);
   const currentValue = currentUdf?.value?.trim();
-  if (currentValue) {
+  const canAppend = APPEND_ALLOWED_UDFS.has(udfName);
+  if (currentValue && !(append && canAppend)) {
     const err = new Error(`${fresh.data.companyName}'s ${udfName} is already set to "${currentValue}" -- refusing to overwrite.`);
     err.status = 409;
+    err.canAppend = canAppend;
+    err.currentValue = currentValue;
     throw err;
   }
+  // Semicolon-separated, by request ("append the Account name to the UDF
+  // field separated from the existing data by a semi-colon") -- only
+  // reached when `append` was explicitly confirmed AND this UDF allows it;
+  // a plain (non-conflicting) write still just writes `trimmedValue` alone.
+  const newValue = currentValue && append && canAppend ? `${currentValue};${trimmedValue}` : trimmedValue;
 
   // Same direct-axios PATCH workaround as the original batch-write scripts
   // -- autotask-node's own update()/patch() sends to the wrong URL
@@ -772,16 +788,16 @@ async function writeNameMatchUdf({ udfName, matchValue, companyName, reportCache
   // the body) and gets a real 405 back from Autotask's actual API.
   await client.companies.axios.patch(client.companies.endpoint, {
     id: result.company.id,
-    userDefinedFields: [{ name: udfName, value: trimmedValue }],
+    userDefinedFields: [{ name: udfName, value: newValue }],
   });
 
   invalidateCompanyUdfMap(udfName);
   if (reportCacheKeyToInvalidate) invalidateReportCache(reportCacheKeyToInvalidate);
 
-  return { companyId: result.company.id, companyName: fresh.data.companyName, value: trimmedValue };
+  return { companyId: result.company.id, companyName: fresh.data.companyName, value: newValue };
 }
 
-async function matchTppClient({ accountReference, companyName }) {
+async function matchTppClient({ accountReference, companyName, append }) {
   const trimmedRef = (accountReference || '').trim();
   if (!trimmedRef) {
     const err = new Error('Missing TPP account reference.');
@@ -793,6 +809,7 @@ async function matchTppClient({ accountReference, companyName }) {
     matchValue: trimmedRef,
     companyName,
     reportCacheKeyToInvalidate: 'tpp-domains-unmatched',
+    append,
   });
   return { companyId: result.companyId, companyName: result.companyName, accountReference: trimmedRef };
 }
@@ -1027,7 +1044,7 @@ router.post('/match-tpp-client', async (req, res) => {
     console.log(`Data Matching: wrote Name:TPP="${result.accountReference}" on "${result.companyName}" (company #${result.companyId})${actor ? ` -- by ${actor}` : ''}.`);
     res.json(result);
   } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
+    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions, canAppend: err.canAppend });
     console.error('Data Matching: match-tpp-client failed:', err.message);
     res.status(500).json({ error: err.message });
   }
@@ -1042,7 +1059,7 @@ router.post('/match-ingram-client', async (req, res) => {
     );
     res.json(result);
   } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
+    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions, canAppend: err.canAppend });
     console.error('Data Matching: match-ingram-client failed:', err.message);
     res.status(500).json({ error: err.message });
   }
@@ -1057,7 +1074,7 @@ router.post('/match-datto-site', async (req, res) => {
     );
     res.json(result);
   } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
+    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions, canAppend: err.canAppend });
     console.error('Data Matching: match-datto-site failed:', err.message);
     res.status(500).json({ error: err.message });
   }
@@ -1072,7 +1089,7 @@ router.post('/match-saas-protection-client', async (req, res) => {
     );
     res.json(result);
   } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
+    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions, canAppend: err.canAppend });
     console.error('Data Matching: match-saas-protection-client failed:', err.message);
     res.status(500).json({ error: err.message });
   }
@@ -1087,7 +1104,7 @@ router.post('/match-microsoft365-client', async (req, res) => {
     );
     res.json(result);
   } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions });
+    if (err.status) return res.status(err.status).json({ error: err.message, suggestions: err.suggestions, canAppend: err.canAppend });
     console.error('Data Matching: match-microsoft365-client failed:', err.message);
     res.status(500).json({ error: err.message });
   }

@@ -550,7 +550,19 @@ async function getCompanyUdfValueToNameMap(client, udfName) {
       for (const c of companies) {
         const udf = (c.userDefinedFields || []).find((u) => u.name === udfName);
         const value = udf?.value?.trim();
-        if (value) map.set(value, c.companyName);
+        if (!value) continue;
+        // Split on ";" -- a UDF value can now hold more than one entry
+        // (e.g. a client with two TPP accounts, "TEM-291;TEM-456"), by
+        // request (data-matching's own "append... separated by a
+        // semi-colon" write path). Splitting here, once, in the one shared
+        // map-building function, means every consumer of this map
+        // (Coming Soon, Data Matching, Domain/IT Glue Gaps) keeps matching
+        // on each individual value with zero changes of its own -- a
+        // plain single-value UDF just splits into one piece, unchanged
+        // behaviour.
+        for (const piece of value.split(';').map((v) => v.trim()).filter(Boolean)) {
+          map.set(piece, c.companyName);
+        }
       }
       companyUdfMapCache.set(udfName, { data: map, expiresAt: Date.now() + COMPANY_UDF_MAP_TTL_MS });
       return map;

@@ -5,11 +5,12 @@
   "main": "server.js",
   "dashboardPage": {
     "id": "access4-sms",
-    "label": "SMS (Access4)",
+    "label": "SMS",
     "client": "client.js",
     "server": "server.js"
   },
   "dependencies": {
+    "@dashboard/autotask-client": "*",
     "axios": "^1.7.2",
     "express": "^4.19.2"
   }
