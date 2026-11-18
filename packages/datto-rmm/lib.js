@@ -508,6 +508,36 @@ async function getAllDevices() {
   return raw.map(mapDeviceSummary).filter(Boolean);
 }
 
+// Every saved filter (custom + Datto's own built-in "default" ones),
+// deduplicated by id, with NO narrowing to CURATED_FILTER_NAMES -- added for
+// RMM Filters' own "TC Elite */TC ESS *" tabs, which need to find filters by
+// their own separate name list rather than this file's curated shortlist.
+// Confirmed against the real account: 125 real filters. Purely additive --
+// every existing export/behavior in this file is unchanged.
+async function getAllFilters() {
+  const [custom, defaults] = await Promise.all([
+    fetchAllPages('/v2/filter/custom-filters', {}, 'filters'),
+    fetchAllPages('/v2/filter/default-filters', {}, 'filters'),
+  ]);
+  const byId = new Map();
+  for (const filter of [...custom, ...defaults]) {
+    if (filter?.id != null) byId.set(filter.id, filter);
+  }
+  return [...byId.values()];
+}
+
+// All devices matching one filter, fully paginated -- unlike
+// getDevicesForFilter() (capped at one page/250, for its own popup-list use
+// case), RMM Filters needs the REAL complete per-filter device list to group
+// by site itself (one real filter here already has 722 matching devices,
+// well past that 250 cap). Same MAX_DEVICE_PAGES margin as getAllDevices().
+// Purely additive -- every existing export/behavior in this file is
+// unchanged.
+async function getAllDevicesForFilter(filterId) {
+  const raw = await fetchAllPages('/v2/account/devices', { filterId }, 'devices', MAX_DEVICE_PAGES);
+  return raw.map(mapDeviceSummary).filter(Boolean);
+}
+
 // Disk-space parsing -- the ORIGINAL client's own parseDisksFromAudit()
 // used a multi-key-guess + deep-recursive-search approach, on the theory
 // that Datto's audit shape for disks varies by OS/agent version. Confirmed
@@ -632,4 +662,4 @@ async function getDeviceDetails(deviceUid) {
   };
 }
 
-module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts, getAllDevices, getDeviceAudit, getSiteAlertsBreakdown };
+module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts, getAllDevices, getDeviceAudit, getSiteAlertsBreakdown, getAllFilters, getAllDevicesForFilter };

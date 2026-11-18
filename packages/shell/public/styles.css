@@ -10207,6 +10207,86 @@ tr.accrued-time-yellow-row th {
   background: var(--accent);
   color: #fff;
 }
+
+/* RMM Filters -- its own 2-row tab strip (filters, then result sections).
+   By request ("make the tabs look like actual tabs ... like [a browser's
+   tab strip] but in our colour scheme"): the strip itself gets its own
+   "browser chrome bar" background (.rmmf-tabs), background/inactive tabs sit
+   muted and recessed (top: 1px, tucked just under the strip's own bottom
+   edge), and the active tab pops forward to the page's own background
+   color, sitting 1px higher and with no bottom border -- so it visually
+   fuses into the content open beneath it, same light/dark-tab-vs-page
+   relationship a real browser tab strip uses, just this dashboard's own
+   tokens (--section-header-bg for the chrome bar, --bg for the active
+   tab/page, --card for a background tab) rather than that screenshot's
+   literal blue. */
+.rmmf-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.3rem;
+  background: var(--section-header-bg);
+  border: 1px solid var(--border);
+  border-bottom: 2px solid var(--border);
+  border-radius: 10px 10px 0 0;
+  padding: 0.4rem 0.4rem 0;
+  margin: 0.5rem 0 1.25rem;
+}
+/* The top (filter) row, by request ("the top row to be in a darker but
+   dull blue background to better distinguish the difference") -- a muted,
+   desaturated steel-blue (accent blended into --muted, not a vivid accent
+   fill) rather than .rmmf-tabs' own pale default, so the two tab rows read
+   as two distinct levels of navigation at a glance. Only the strip's own
+   background changes here -- each tab button still paints its own
+   background over it (.rmmf-tab's --card/--bg), so this mainly shows
+   through the gaps/padding around the tabs, framing the row. */
+.rmmf-tabs--primary {
+  background: color-mix(in srgb, var(--accent) 45%, var(--muted));
+  /* Closer to the section-tab row underneath it, by request ("the 2 filter
+     rows can go a little closer together now") -- .rmmf-tabs' own default
+     1.25rem bottom margin was sized for a tab strip sitting right above a
+     page's results, not right above a second tab strip. */
+  margin-bottom: 0.07rem;
+}
+
+/* RMM Filters -- same narrower-row/smaller-text table style as Data
+   Matching/Domain IT Glue Gaps, by request. */
+.rmm-filters-page table th,
+.rmm-filters-page table td {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.75rem;
+}
+.rmmf-tabs[hidden] {
+  display: none;
+}
+.rmmf-tab {
+  appearance: none;
+  position: relative;
+  top: 1px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+  padding: 0.55rem 1.1rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rmmf-tab:hover {
+  top: 0;
+  color: var(--fg);
+}
+.rmmf-tab--active,
+.rmmf-tab--active:hover {
+  top: 0;
+  background: var(--bg);
+  border-color: var(--border);
+  border-bottom: 2px solid var(--bg); /* sits over the strip's own bottom rule, fusing into the content below */
+  color: var(--fg);
+}
+
 /* "Show full table data (Appendix N)" -- a real #anchor link to that
    section's own appendix (see report/client.js's own reportSectionHtml()).
    Print only, by request ("keep the sections that will become the
