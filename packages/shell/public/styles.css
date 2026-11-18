@@ -1092,16 +1092,24 @@ h1 {
    ragged multi-row block instead of one strip) -- when there isn't room
    for every tab, the strip scrolls horizontally instead of dropping
    tabs to a new row (overflow-x: auto; flex-shrink: 0 on each button so
-   they keep their natural width rather than squeezing). The .tab-bar-
-   toggle minimize button (see styles below) is the small-screen answer
-   to the same problem, collapsing the strip down to one button instead
-   of needing to scroll it. Small bordered pill/card buttons, not the
-   earlier folder-tab illusion (rounded top corners only + a border
-   trick to visually "merge" the active tab into the page below it) --
-   that trick only makes sense for a single row sitting right above the
-   content. A plain divider line under the strip. Compact by request
-   (small padding/font, small gap) -- this is a navigation strip, not
-   the page's main content.
+   they keep their natural width rather than squeezing). Compact by
+   request (small padding/font, small gap) -- this is a navigation strip,
+   not the page's main content.
+   A real folder-tab look, by request ("try changing the tabs on Tab Pages
+   to look like the top darker blue ones ... [RMM Filter Checks']" then "a
+   little more change needed ... the blue visible below the tabs needs to
+   not be there ... need a better distinction of which tab is selected") --
+   same recipe as .rmmf-tab/.rmmf-tabs--primary: a dull steel-blue "chrome
+   bar" behind the row (color-mix(accent, muted), not the earlier plain
+   var(--card) panel shade), flush to its own bottom border (no bottom
+   padding below the tabs -- that's what was leaving a strip of blue
+   showing beneath them), each inactive tab tucked 1px under that border
+   (position: relative; top: 1px) with a light blue-tinted fill distinct
+   from the page's own background, and the active tab popping up 1px with
+   its own bottom border painted the exact page background color, masking
+   the bar's shared line right under it so it reads as fused straight into
+   the content open below -- a much stronger "this one's open" cue than
+   font-weight/color alone.
    Sticky, by request -- tab-page-client.js's mount() renders this as the
    very first child of #page-content itself (app.js's actual overflow-y:
    auto scroll container, not some inner wrapper), so position: sticky
@@ -1109,36 +1117,40 @@ h1 {
    page's own content scrolls underneath it, keeping it (and its own
    divider line) reachable without scrolling back up first. An opaque
    background is required for a sticky element to actually mask the
-   content scrolling behind it -- var(--card), the same light panel shade
-   the sidebar itself uses (.sidebar's own background), by request, rather
-   than var(--bg) (which would've just matched the page and shown nothing
-   at all). Padding + border-radius turn that into an actual small panel
-   around the row instead of a flat colour band with square-cut edges;
-   negative side margins pull it back out to sit flush with the rest of
-   the page's own left/right edge (#page-content's own 2rem side padding
-   otherwise doubles up with this panel's own). z-index keeps it above
-   ordinary page content (default stacking level) without needing to
-   out-rank real overlays like .tcr-tooltip/.history-modal-overlay
-   further down. */
+   content scrolling behind it. Padding + border-radius turn that into an
+   actual small panel around the row instead of a flat colour band with
+   square-cut edges; negative side margins pull it back out to sit flush
+   with the rest of the page's own left/right edge (#page-content's own
+   2rem side padding otherwise doubles up with this panel's own). z-index
+   keeps it above ordinary page content (default stacking level) without
+   needing to out-rank real overlays like .tcr-tooltip/.history-modal-
+   overlay further down. */
 .tab-bar {
   display: flex;
   flex-wrap: nowrap;
   overflow-x: auto;
+  align-items: flex-end;
   gap: 0.3rem;
-  border-bottom: 1px solid var(--border);
-  padding: 0.5rem 0.75rem 0.4rem;
+  border-bottom: 2px solid var(--border);
+  padding: 0.5rem 0.75rem 0;
   margin: 0 -0.75rem 0.6rem;
-  border-radius: 8px;
+  border-radius: 8px 8px 0 0;
   position: sticky;
   top: 0;
   z-index: 5;
-  background: var(--card);
+  background: color-mix(in srgb, var(--accent) 45%, var(--muted));
 }
 .tab-button {
+  position: relative;
+  top: 1px;
   padding: 0.2rem 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: none;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  /* A light blue-tinted fill, by request -- a background tab reads as
+     "still part of the chrome bar" rather than nearly indistinguishable
+     from the active tab's own (plain page-background) white/dark. */
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
   color: var(--muted);
   font: inherit;
   font-size: 0.78rem;
@@ -1160,10 +1172,12 @@ h1 {
   transform: translateY(-1px);
 }
 .tab-button.active {
-  color: var(--accent);
+  top: 0;
+  color: var(--fg);
   font-weight: 600;
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--card));
+  border-color: var(--border);
+  background: var(--bg);
+  border-bottom: 2px solid var(--bg);
 }
 /* Drag-to-reorder (Ticket Info's own tab strip) -- same visual language
    (.dragging opacity, an accent inset line for .drag-over) the sidebar's
@@ -1184,39 +1198,6 @@ h1 {
 .tab-button--small {
   padding: 0.2rem 0.45rem;
   margin-left: auto;
-}
-
-/* The minimize/expand toggle, by request -- sits before the first tab so
-   it's reachable without scrolling the strip on a small screen. Same
-   compact bordered-pill language as .tab-button, but square/icon-only
-   rather than a labeled pill, and never wraps away from the strip's own
-   start (flex-shrink: 0) even if the tab labels beside it are long. */
-.tab-bar-toggle {
-  flex-shrink: 0;
-  padding: 0.2rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  line-height: 1;
-  cursor: pointer;
-  transition: color 0.12s ease, border-color 0.12s ease;
-}
-.tab-bar-toggle:hover {
-  color: var(--fg);
-  border-color: var(--accent);
-}
-
-/* Minimized state -- every tab button is gone (tab-page-client.js's own
-   renderTabBar() renders nothing but the toggle in this state), so the
-   strip's own bottom divider/padding go too, by request ("save space on
-   a small screen"); without this the empty strip would still take up a
-   full row's worth of border+padding for nothing. */
-.tab-bar--minimized {
-  border-bottom: none;
-  padding-bottom: 0;
-  margin-bottom: 0.3rem;
 }
 
 /* Dragging a page in FROM the sidebar to add it as a tab (see app.js's
@@ -10229,7 +10210,7 @@ tr.accrued-time-yellow-row th {
   border: 1px solid var(--border);
   border-bottom: 2px solid var(--border);
   border-radius: 10px 10px 0 0;
-  padding: 0.4rem 0.4rem 0;
+  padding: 0.3rem 0.3rem 0;
   margin: 0.5rem 0 1.25rem;
 }
 /* The top (filter) row, by request ("the top row to be in a darker but
@@ -10267,10 +10248,18 @@ tr.accrued-time-yellow-row th {
   border: 1px solid var(--border);
   border-bottom: none;
   border-radius: 10px 10px 0 0;
-  padding: 0.55rem 1.1rem;
+  /* Same height as Tab Pages' own .tab-button, by request -- identical
+     padding (was 0.35rem 0.9rem, tightened for this page's own tables but
+     still slightly taller than that one). */
+  padding: 0.2rem 0.6rem;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   font-weight: 600;
+  /* Same small-caps treatment as Tab Pages' own .tab-button, by request --
+     these labels are also Title Case ("TC Elite Servers Filter",
+     "Missing (17)"), so it reads the same way: a normal first-letter-
+     capital word with the rest of each word in small caps. */
+  font-variant: small-caps;
   color: var(--muted);
   cursor: pointer;
 }

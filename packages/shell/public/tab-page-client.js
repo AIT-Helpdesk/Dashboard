@@ -151,28 +151,6 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
   }
   let lastActiveTabId = loadLastActiveTabId(new Set([...DEFAULT_TAB_IDS, HELP_TAB.id]));
 
-  // Minimize the tab strip down to just a toggle button, by request --
-  // for small screens, where a whole row of tabs eats a lot of vertical
-  // space. Per-BROWSER (localStorage, same "personal viewing preference"
-  // pattern the sidebar's own collapsed/pinned toggles use in app.js),
-  // defaults to NOT minimized, by request.
-  const TAB_BAR_MINIMIZED_KEY = `${id}.tabBarMinimized`;
-  function loadTabBarMinimized() {
-    try {
-      return localStorage.getItem(TAB_BAR_MINIMIZED_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  }
-  function saveTabBarMinimized(value) {
-    try {
-      localStorage.setItem(TAB_BAR_MINIMIZED_KEY, String(value));
-    } catch {
-      // localStorage unavailable -- the choice still applies for this page load, just won't persist.
-    }
-  }
-  let tabBarMinimized = loadTabBarMinimized();
-
   // Custom, admin-editable notes shown on this page's own Help tab, on
   // top of the always-generated "how this works" explanation below --
   // by request. Genuinely shared (every viewer sees the same notes), so
@@ -303,62 +281,39 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
 
     // Renders the tab strip in tabOrder's current order (draggable for
     // the admin only -- see wireDragReorder below, a non-admin's strip is
-    // read-only) plus HELP_TAB fixed at the end, with a minimize toggle
-    // BEFORE all of them (by request -- "put it before the 1st menu item
-    // so that it's easily accessible on small screens"). Called again
-    // after every reorder, add, remove, or minimize toggle.
+    // read-only) plus HELP_TAB fixed at the end. Called again after every
+    // reorder, add, or remove. (The minimize-to-a-toggle-button state this
+    // used to have was removed by request.)
     function renderTabBar() {
-      // Minimizing "collapses upward" -- by request, not a shrink-in-
-      // place to a smaller strip but every tab button vanishing entirely,
-      // leaving only this one tiny toggle, to actually reclaim vertical
-      // space on a small screen. A downward chevron reads as "pull this
-      // open"; the mirror upward chevron shown once expanded reads as
-      // "push this back up" -- .tab-bar--minimized (styles.css) also
-      // drops the strip's own bottom padding/divider in this state so
-      // there's really nothing left but the button.
-      tabBarEl.classList.toggle('tab-bar--minimized', tabBarMinimized);
+      const tabsById = allTabsById();
+      const orderedTabs = tabOrder.map((tabId) => tabsById.get(tabId)).filter(Boolean);
+      tabBarEl.innerHTML =
+        orderedTabs
+          .map((t) => `<button type="button" class="tab-button" draggable="${isTabAdmin}" data-tab-id="${t.id}">${escapeHtml(t.label)}</button>`)
+          .join('') +
+        `<button type="button" class="tab-button tab-button--small" data-tab-id="${HELP_TAB.id}">${escapeHtml(HELP_TAB.label)}</button>`;
 
-      if (tabBarMinimized) {
-        tabBarEl.innerHTML = `<button type="button" class="tab-bar-toggle" id="tab-bar-toggle" title="Expand tabs" aria-label="Expand tabs">&#9662;</button>`;
-      } else {
-        const toggleBtnHtml = `<button type="button" class="tab-bar-toggle" id="tab-bar-toggle" title="Minimize tabs" aria-label="Minimize tabs">&#9652;</button>`;
-        const tabsById = allTabsById();
-        const orderedTabs = tabOrder.map((tabId) => tabsById.get(tabId)).filter(Boolean);
-        tabBarEl.innerHTML =
-          toggleBtnHtml +
-          orderedTabs
-            .map((t) => `<button type="button" class="tab-button" draggable="${isTabAdmin}" data-tab-id="${t.id}">${escapeHtml(t.label)}</button>`)
-            .join('') +
-          `<button type="button" class="tab-button tab-button--small" data-tab-id="${HELP_TAB.id}">${escapeHtml(HELP_TAB.label)}</button>`;
-
-        tabBarEl.querySelectorAll('.tab-button').forEach((btn) => {
-          const tabId = btn.dataset.tabId;
-          btn.classList.toggle('active', tabId === lastActiveTabId);
-          btn.addEventListener('click', () => selectTab(tabId));
-          // Right-click -- wired for EVERY viewer now, not just the tab
-          // admin (by request: "add that page to the current user's
-          // favourites" needs to work for anyone, same as the sidebar's own
-          // right-click Add/Remove Favourites). Never on Help, which is
-          // always fixed and isn't a real favouritable page anyway.
-          // showTabContextMenu() below is the one place that decides which
-          // actions actually show -- Remove This Tab stays admin-only
-          // there, Favourites doesn't.
-          if (tabId !== HELP_TAB.id) {
-            btn.addEventListener('contextmenu', (e) => {
-              e.preventDefault();
-              showTabContextMenu(e.clientX, e.clientY, tabId);
-            });
-          }
-        });
-
-        wireDragReorder();
-      }
-
-      tabBarEl.querySelector('#tab-bar-toggle').addEventListener('click', () => {
-        tabBarMinimized = !tabBarMinimized;
-        saveTabBarMinimized(tabBarMinimized);
-        renderTabBar();
+      tabBarEl.querySelectorAll('.tab-button').forEach((btn) => {
+        const tabId = btn.dataset.tabId;
+        btn.classList.toggle('active', tabId === lastActiveTabId);
+        btn.addEventListener('click', () => selectTab(tabId));
+        // Right-click -- wired for EVERY viewer now, not just the tab
+        // admin (by request: "add that page to the current user's
+        // favourites" needs to work for anyone, same as the sidebar's own
+        // right-click Add/Remove Favourites). Never on Help, which is
+        // always fixed and isn't a real favouritable page anyway.
+        // showTabContextMenu() below is the one place that decides which
+        // actions actually show -- Remove This Tab stays admin-only
+        // there, Favourites doesn't.
+        if (tabId !== HELP_TAB.id) {
+          btn.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            showTabContextMenu(e.clientX, e.clientY, tabId);
+          });
+        }
       });
+
+      wireDragReorder();
     }
 
     // Plain HTML5 drag-and-drop, same event set (dragstart/dragover/drop,
@@ -579,13 +534,6 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         tabOrder = computeTabOrder();
         savedTabOrderIds = tabOrder;
         await pushSharedTabOrder(tabOrder);
-        // Auto-expand if minimized -- otherwise a drag-drop while
-        // minimized would silently succeed with nothing visibly
-        // different on screen.
-        if (tabBarMinimized) {
-          tabBarMinimized = false;
-          saveTabBarMinimized(false);
-        }
         renderTabBar();
         selectTab(pageId); // jump straight to the newly added tab
       });
