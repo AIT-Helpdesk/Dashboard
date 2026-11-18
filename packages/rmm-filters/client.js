@@ -65,6 +65,7 @@ export function mount(container) {
       <h1>RMM Filter Checks</h1>
       <button type="button" id="refresh-button" class="button-link button-link--small">Refresh</button>
     </header>
+    <p class="inline-subtext">Filter content checks for any Datto RMM filter starting with "TC Elite *" or "TC ESS *" and compares them to Autotask clients with Classification "Tech Cover E*". Clients with an incorrect Classification will report as false negatives.</p>
     <p id="status" class="status">Loading...</p>
     <div id="as-of" class="inline-subtext" hidden></div>
     <div id="tabs" class="rmmf-tabs rmmf-tabs--primary" hidden></div>
