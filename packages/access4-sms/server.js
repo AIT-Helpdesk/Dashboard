@@ -302,11 +302,22 @@ router.post('/conversations/:id/send', async (req, res) => {
     });
     const data = apiRes.data || {};
     const ok = String(data.code) === '200';
+    // The message bubble only ever shows data.message (by design, see
+    // below) -- the FULL raw response is console.error'd here so a real
+    // failure's complete detail (any extra field Access4 sends beyond
+    // .message) is still recoverable from production's own server logs,
+    // not just the one-line summary stored against the message.
+    if (!ok) console.error(`Access4 SMS send failed (HTTP ${apiRes.status}, conversation #${id}):`, JSON.stringify(data));
     recordOutboundMessage(id, { body, status: ok ? 'sent' : 'failed', access4SmsId: data.smsId, error: ok ? null : data.message, ticketNumber, actor });
     res.status(201).json({ ok, smsId: data.smsId, messages: listMessages(id).map(toApiMessage) });
   } catch (err) {
     const apiError = err.response?.data;
     const errorMessage = apiError?.message || err.message;
+    // Same reasoning as above -- a thrown error (non-2xx HTTP, e.g. the
+    // "Unauthorized" case) only ever surfaced apiError?.message to the UI;
+    // this logs the full response body/status so there's something to
+    // check beyond that one word next time a send fails.
+    console.error(`Access4 SMS send failed (HTTP ${err.response?.status ?? 'no response'}, conversation #${id}):`, JSON.stringify(apiError ?? err.message));
     recordOutboundMessage(id, { body, status: 'failed', error: errorMessage, ticketNumber, actor });
     res.status(201).json({ ok: false, error: errorMessage, messages: listMessages(id).map(toApiMessage) });
   }
