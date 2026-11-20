@@ -54,17 +54,36 @@ function normalizeName(s) {
 // A Datto RMM site's name doesn't always exactly match the Autotask company
 // it belongs to (e.g. "Sleepy's Caringbah" has no Autotask company of that
 // exact name -- it's one of several real stores under the "Sleepy's"
-// company). This dashboard already has a dedicated place that records the
-// real site<->company mapping by hand -- Data Matching's own "Datto RMM
-// Sites" UDF, "Name:Datto RMM" -- confirmed live on this account to hold
-// several real semicolon-separated multi-site values (a company with more
-// than one Datto site, same multi-value convention getCompanyUdfValueToNameMap
-// already splits on ";" for). This resolves each Datto site to a company via
-// that UDF FIRST, falling back to an exact site-name == company-name guess
-// only when the UDF has no entry for that site -- same "assume matches"
-// fallback Check Client's own resolve-client route already documents for
-// this exact UDF.
-function resolveCompanyForSite(siteName, udfValueToCompanyName, companyByLowerName) {
+// company). Three sources are checked, in priority order:
+//   1. Datto RMM's own native PSA Company link for the site (confirmed
+//      live this session as real raw fields on `/v2/account/sites` --
+//      `autotaskCompanyId`/`autotaskCompanyName`, see getAllSites() in
+//      @dashboard/datto-rmm/lib.js) -- the most authoritative source there
+//      is, an explicit Autotask company ID someone set directly in Datto
+//      RMM's own site settings, by request ("check against the PSA
+//      Company Name for the Datto RMM site"). Resolved by that ID, not by
+//      Datto's own cached autotaskCompanyName -- confirmed live this
+//      session that the cached name can go stale: a real site's PSA link
+//      still pointed at company id 1184 ("Sleepy's Caringbah", long since
+//      disabled) even though the live, active replacement company
+//      ("Sleepy's Caringbah (HO)", id 2156) existed in Autotask -- the id
+//      itself doesn't drift the way a cached name can, so resolving by id
+//      is strictly more correct even though it can't fix a genuinely stale
+//      PSA link on Datto's own side (that needs fixing there, not here).
+//   2. This dashboard's own hand-maintained mapping -- Data Matching's own
+//      "Datto RMM Sites" UDF, "Name:Datto RMM" -- confirmed live on this
+//      account to hold several real semicolon-separated multi-site values
+//      (a company with more than one Datto site, same multi-value
+//      convention getCompanyUdfValueToNameMap already splits on ";" for).
+//   3. An exact site-name == company-name guess, same "assume matches"
+//      fallback Check Client's own resolve-client route already documents
+//      for this exact UDF.
+function resolveCompanyForSite(siteName, siteUid, psaCompanyIdBySiteUid, companyById, udfValueToCompanyName, companyByLowerName) {
+  const psaCompanyId = siteUid ? psaCompanyIdBySiteUid.get(siteUid) : null;
+  if (psaCompanyId != null) {
+    const company = companyById.get(psaCompanyId);
+    if (company) return company;
+  }
   const viaUdfCompanyName = udfValueToCompanyName.get(siteName);
   if (viaUdfCompanyName) {
     const company = companyByLowerName.get(normalizeName(viaUdfCompanyName));
@@ -77,7 +96,7 @@ async function buildRmmFilters() {
   if (!dattoRmm.hasDattoCredentials()) return { status: 'not-connected' };
 
   const client = await getClient();
-  const [allFilters, companies, classificationLabels, udfValueToCompanyName, allDevices] = await Promise.all([
+  const [allFilters, companies, classificationLabels, udfValueToCompanyName, allDevices, allSites] = await Promise.all([
     dattoRmm.getAllFilters(),
     // ALL companies, not just active customer/prospect ones -- the UDF map
     // below is built the same way (every company, any type/status), and a
@@ -92,10 +111,16 @@ async function buildRmmFilters() {
     // eligibility check (see FILTER_SPECS' deviceCategories comment), not
     // re-fetched per tab.
     dattoRmm.getAllDevices(),
+    // Every Datto RMM site, once -- just for its own native PSA Company
+    // link (resolveCompanyForSite()'s first, highest-priority source, by
+    // request). Not re-fetched per tab, same reasoning as allDevices above.
+    dattoRmm.getAllSites(),
   ]);
 
   const byLowerFilterName = new Map(allFilters.map((f) => [normalizeName(f.name), f]));
   const companyByLowerName = new Map(companies.map((c) => [normalizeName(c.companyName), c]));
+  const companyById = new Map(companies.map((c) => [c.id, c]));
+  const psaCompanyIdBySiteUid = new Map(allSites.filter((s) => s.autotaskCompanyId != null).map((s) => [s.uid, s.autotaskCompanyId]));
 
   // Every distinct device-category this account's devices resolve to, per
   // company -- built once, from the whole account's devices (not just one
@@ -105,7 +130,7 @@ async function buildRmmFilters() {
   for (const d of allDevices) {
     const siteName = (d.site || '').trim();
     if (!siteName) continue;
-    const company = resolveCompanyForSite(siteName, udfValueToCompanyName, companyByLowerName);
+    const company = resolveCompanyForSite(siteName, d.siteUid, psaCompanyIdBySiteUid, companyById, udfValueToCompanyName, companyByLowerName);
     if (!company) continue;
     if (!deviceCategoriesByCompanyId.has(company.id)) deviceCategoriesByCompanyId.set(company.id, new Set());
     deviceCategoriesByCompanyId.get(company.id).add(d.deviceType);
@@ -139,11 +164,15 @@ async function buildRmmFilters() {
     const devices = await dattoRmm.getAllDevicesForFilter(filter.id);
     // Group by site name (trim) -- same "RMM site stands in for an Autotask
     // Client" convention Check Client's own Datto RMM section already uses.
-    const bySite = new Map(); // siteName -> { siteName, count }
+    // siteUid is captured once per group (from whichever device is seen
+    // first for that site name) -- every device at one real Datto site
+    // shares the same siteUid, needed below for the PSA-Company-by-id
+    // resolution (resolveCompanyForSite()'s own first-priority source).
+    const bySite = new Map(); // siteName -> { siteName, siteUid, count }
     for (const d of devices) {
       const siteName = (d.site || '').trim();
       if (!siteName) continue;
-      if (!bySite.has(siteName)) bySite.set(siteName, { siteName, count: 0 });
+      if (!bySite.has(siteName)) bySite.set(siteName, { siteName, siteUid: d.siteUid, count: 0 });
       bySite.get(siteName).count += 1;
     }
 
@@ -154,8 +183,8 @@ async function buildRmmFilters() {
     // Included/Correctly Present split further down.
     const resolvedBySite = new Map(); // siteName -> { siteName, count, company }
     const presentCompanyIds = new Set();
-    for (const { siteName, count } of bySite.values()) {
-      const company = resolveCompanyForSite(siteName, udfValueToCompanyName, companyByLowerName);
+    for (const { siteName, siteUid, count } of bySite.values()) {
+      const company = resolveCompanyForSite(siteName, siteUid, psaCompanyIdBySiteUid, companyById, udfValueToCompanyName, companyByLowerName);
       resolvedBySite.set(siteName, { siteName, count, company });
       if (company) presentCompanyIds.add(company.id);
     }
@@ -163,11 +192,26 @@ async function buildRmmFilters() {
     const missing = [];
     for (const c of targetCompanies) {
       if (presentCompanyIds.has(c.id)) continue;
-      // Not "missing" if this client has no device of the kind this filter
-      // is even about anywhere in Datto RMM -- e.g. a client with zero real
-      // servers can't be missing from a Servers filter.
+      // Not "missing" if this client HAS devices in Datto RMM but none of
+      // the kind this filter is even about -- e.g. a client with real
+      // desktops/laptops but zero real servers can't be missing from a
+      // Servers filter; that's a genuine structural fact about them, not a
+      // gap. But a client with NO devices in Datto RMM AT ALL (categories
+      // undefined -- nothing resolved to them anywhere) is deliberately
+      // NOT excluded by that same check, by request ("a site... but has
+      // zero devices should still be present in the filter so that
+      // devices are included once they get added") -- a brand-new/pending
+      // client hasn't been onboarded into Datto RMM yet, and flagging them
+      // as Missing now is exactly what prompts adding their site to the
+      // filter ahead of their first real device, rather than only
+      // noticing once they already have one. This also means a client
+      // whose devices are all being mis-attributed elsewhere (e.g. a
+      // stale Datto RMM PSA Company link -- confirmed live this session,
+      // see resolveCompanyForSite()'s own comment) surfaces here instead
+      // of silently vanishing from the whole report, which is exactly the
+      // kind of gap this page exists to catch.
       const categories = deviceCategoriesByCompanyId.get(c.id);
-      if (!categories || !spec.deviceCategories.some((cat) => categories.has(cat))) continue;
+      if (categories && !spec.deviceCategories.some((cat) => categories.has(cat))) continue;
       // subjectKey: always "company:<id>" here -- a Missing row is always a
       // real Autotask company (see targetCompanies above), never an
       // unresolved site the way a Wrongly Included row can be.

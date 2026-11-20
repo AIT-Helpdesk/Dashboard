@@ -508,6 +508,33 @@ async function getAllDevices() {
   return raw.map(mapDeviceSummary).filter(Boolean);
 }
 
+// Every site on the account, fully paginated -- added for RMM Filter
+// Checks' own site<->company resolution (by request): a Datto RMM site
+// can carry its own native PSA integration link to a real Autotask
+// company, confirmed live this session as real raw fields on
+// `/v2/account/sites` -- `autotaskCompanyId`/`autotaskCompanyName` (a
+// string id and a cached display name; the id is what matters, since the
+// cached name can go stale once a company's later renamed in Autotask --
+// confirmed this happened for real, see rmm-filters/server.js's own
+// comment on resolveCompanyForSite()). Both null when a site has never
+// been linked to a PSA company at all. `autotaskCompanyId` is parsed to a
+// number here (the raw API returns it as a numeric STRING, e.g. "1184")
+// so callers can compare it directly against Autotask company ids without
+// each one re-deriving that conversion. Same MAX_DEVICE_PAGES-style
+// generous page-count margin as getAllDevices() -- a few hundred real
+// sites needs far fewer pages than that, but there's no reason to use a
+// smaller cap just because today's real count happens to be lower.
+async function getAllSites() {
+  const raw = await fetchAllPages('/v2/account/sites', {}, 'sites', MAX_DEVICE_PAGES);
+  return raw.map((s) => ({
+    id: s.id,
+    uid: s.uid,
+    name: s.name,
+    autotaskCompanyId: toNumber(s.autotaskCompanyId),
+    autotaskCompanyName: s.autotaskCompanyName ?? null,
+  }));
+}
+
 // Every saved filter (custom + Datto's own built-in "default" ones),
 // deduplicated by id, with NO narrowing to CURATED_FILTER_NAMES -- added for
 // RMM Filters' own "TC Elite */TC ESS *" tabs, which need to find filters by
@@ -662,4 +689,4 @@ async function getDeviceDetails(deviceUid) {
   };
 }
 
-module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts, getAllDevices, getDeviceAudit, getSiteAlertsBreakdown, getAllFilters, getAllDevicesForFilter };
+module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts, getAllDevices, getAllSites, getDeviceAudit, getSiteAlertsBreakdown, getAllFilters, getAllDevicesForFilter };

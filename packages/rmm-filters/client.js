@@ -248,8 +248,12 @@ export function mount(container) {
 
   // Allowed Exceptions list, below the main table -- by request. Each
   // exception row is the SAME shape as a main-list row (splitByExceptions()
-  // in server.js just spreads the original row plus exceptionId), so
-  // section.clientNameFor(r) works unchanged here too.
+  // in server.js just spreads the original row plus exceptionId), so this
+  // reuses section.columns directly -- same Classification/Devices columns
+  // Wrongly Included's own main table shows (Missing has only its one
+  // Client column either way, same as its main table), by request ("Show
+  // the Classification and Device Count when displaying the Allowed
+  // Exceptions").
   function exceptionsListEl(exceptions, section) {
     const wrap = document.createElement('div');
     wrap.className = 'rmmf-exceptions';
@@ -266,15 +270,19 @@ export function mount(container) {
       return wrap;
     }
 
-    const ul = document.createElement('ul');
-    ul.className = 'rmmf-exceptions-list';
-    ul.innerHTML = exceptions
-      .map(
-        (e) =>
-          `<li><button type="button" class="rmmf-exception-remove-btn" title="Remove from Allowed Exceptions" data-exception-id="${e.exceptionId}">${REMOVE_EXCEPTION_ICON_SVG}</button><span>${escapeHtml(section.clientNameFor(e))}</span></li>`
-      )
-      .join('');
-    wrap.appendChild(ul);
+    const columns = section.columns;
+    const table = document.createElement('table');
+    table.className = 'rmmf-exceptions-table';
+    table.innerHTML = `
+      <thead><tr>${columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('')}<th></th></tr></thead>
+      <tbody>${exceptions
+        .map(
+          (e) =>
+            `<tr>${columns.map((c) => `<td${c.className ? ` class="${c.className}"` : ''}>${c.cell(e)}</td>`).join('')}<td class="rmmf-action-cell"><button type="button" class="rmmf-exception-remove-btn" title="Remove from Allowed Exceptions" data-exception-id="${e.exceptionId}">${REMOVE_EXCEPTION_ICON_SVG}</button></td></tr>`
+        )
+        .join('')}</tbody>
+    `;
+    wrap.appendChild(table);
     return wrap;
   }
 

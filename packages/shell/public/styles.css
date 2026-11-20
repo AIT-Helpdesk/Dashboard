@@ -10259,6 +10259,30 @@ tr.accrued-time-yellow-row th {
   font-size: 0.78rem;
   padding: 0.3rem 0.75rem;
 }
+/* Overrides the dashboard-wide `table { width: 100% }` (styles.css, below)
+   for just this page's tables, by request ("do not use 100% width, use
+   only the width required") -- every column here (Client/Classification/
+   Devices) is short, fixed-shape content, not the long free-text titles
+   other pages' own 100%-wide tables are sized for. */
+.rmm-filters-page table {
+  width: auto;
+}
+/* The table's own width:auto above wasn't enough on its own -- .resource-
+   group (the bordered card wrapping each table) is a plain block <div>,
+   which stretches to 100% of ITS OWN container regardless of how narrow
+   the table inside happens to be, so the card's visible border/background
+   kept reading as full-width even once the table itself had shrunk.
+   width: fit-content shrinks the card down to its content's real width
+   instead; max-width: 100% is the safety net for a table that's
+   genuinely wider than the page (long content), falling back to
+   .resource-group's own overflow-x: auto scrolling in that case rather
+   than ever overflowing the page. Scoped to this page only -- every other
+   page's own .resource-group cards are deliberately full-width (tables
+   with long free-text columns that want the room). */
+.rmm-filters-page .resource-group {
+  width: fit-content;
+  max-width: 100%;
+}
 /* Allowed Exceptions, by request -- the Mark/Remove icon buttons (plain
    bare icon, no border/background of their own, same borderless-icon-
    button convention the scorecards' own Update icon uses) and the
@@ -10286,22 +10310,14 @@ tr.accrued-time-yellow-row th {
 .rmmf-exception-remove-btn:hover {
   color: #dc2626;
 }
+/* Allowed Exceptions is its own small table now (reusing the main
+   section's own columns -- Classification/Devices included for Wrongly
+   Included, by request), not a plain bullet list -- picks up this page's
+   own compact table rules (.rmm-filters-page table th/td, width: auto)
+   automatically since it's still a plain <table>. Just needs its own
+   top margin to separate it from the main table above it. */
 .rmmf-exceptions {
   margin-top: 0.75rem;
-}
-.rmmf-exceptions-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.78rem;
-}
-.rmmf-exceptions-list li {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
 }
 .rmmf-tabs[hidden] {
   display: none;
