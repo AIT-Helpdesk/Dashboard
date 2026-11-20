@@ -1,6 +1,17 @@
 const express = require('express');
 const { getClient, listAll, getPicklistLabels, getCompanyUrl, getCompanyUdfValueToNameMap } = require('@dashboard/autotask-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
+// Lives in packages/shell (this dashboard's own "central shell database",
+// packages/shell/data.db), not here -- by request. See that file's own
+// comment for why.
+const exceptionsDb = require('@dashboard/shell/rmm-filter-exceptions-db.js');
+
+// { email, name } for whoever's making this request -- requireAuth (see
+// packages/shell/auth.js) already guarantees a signed-in session before any
+// route on this router runs, same as every other page's server.js.
+function actorFrom(req) {
+  return { email: req.session.user.email, name: req.session.user.name };
+}
 
 // The 3 real Datto RMM filters this page checks, by request -- confirmed
 // live this session against the real account's 125 saved filters (custom +
@@ -157,7 +168,10 @@ async function buildRmmFilters() {
       // servers can't be missing from a Servers filter.
       const categories = deviceCategoriesByCompanyId.get(c.id);
       if (!categories || !spec.deviceCategories.some((cat) => categories.has(cat))) continue;
-      missing.push({ companyId: c.id, companyName: c.companyName, companyUrl: await getCompanyUrl(c.id) });
+      // subjectKey: always "company:<id>" here -- a Missing row is always a
+      // real Autotask company (see targetCompanies above), never an
+      // unresolved site the way a Wrongly Included row can be.
+      missing.push({ companyId: c.id, companyName: c.companyName, companyUrl: await getCompanyUrl(c.id), subjectKey: `company:${c.id}` });
     }
 
     const correctlyPresent = [];
@@ -167,6 +181,11 @@ async function buildRmmFilters() {
       if (company && companyClassificationLabel === spec.classificationLabel) {
         correctlyPresent.push({ companyId: company.id, companyName: company.companyName, companyUrl: await getCompanyUrl(company.id), deviceCount: count });
       } else {
+        // subjectKey: keyed by the resolved company when there is one (so
+        // the SAME company showing up under a different Datto site name
+        // later still matches an existing exception), falling back to the
+        // raw, un-resolved site name only when there's genuinely no company
+        // to key it by instead (see db.js's own comment on this).
         wronglyIncluded.push({
           siteName,
           companyId: company ? company.id : null,
@@ -174,6 +193,7 @@ async function buildRmmFilters() {
           companyUrl: company ? await getCompanyUrl(company.id) : null,
           classificationLabel: companyClassificationLabel,
           deviceCount: count,
+          subjectKey: company ? `company:${company.id}` : `site:${siteName}`,
         });
       }
     }
@@ -204,7 +224,12 @@ const CACHE_TTL_MS = 15 * 60 * 1000;
 let cached = null; // { data, expiresAt }
 let inFlight = null;
 
-async function getRmmFilters(force) {
+// The expensive Datto RMM/Autotask build, cached as above -- Allowed
+// Exceptions are deliberately NOT part of this cached blob (see
+// splitByExceptions()/getRmmFilters() below), so marking/unmarking one
+// takes effect on the very next request regardless of how long is left on
+// this cache.
+async function getCachedRawFilters(force) {
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
   if (!inFlight) {
     inFlight = buildRmmFilters()
@@ -219,7 +244,40 @@ async function getRmmFilters(force) {
   return inFlight;
 }
 
+// Splits one tab's own missing/wronglyIncluded rows into { items,
+// exceptions }, by request -- a cheap, un-cached local SQLite read applied
+// fresh on EVERY call (unlike the expensive raw build above), so marking a
+// row an exception stops it cluttering the main list immediately rather
+// than waiting out whatever's left of the 15-minute cache. `exceptionId`
+// rides along on each excepted row -- client.js's own "remove from
+// Exceptions" icon needs it for the DELETE route below.
+function splitByExceptions(filterName, subTab, rows) {
+  const exceptionsByKey = exceptionsDb.getExceptionsMap(filterName, subTab);
+  const items = [];
+  const exceptions = [];
+  for (const row of rows) {
+    const exception = exceptionsByKey.get(row.subjectKey);
+    if (exception) exceptions.push({ ...row, exceptionId: exception.id });
+    else items.push(row);
+  }
+  return { items, exceptions };
+}
+
+async function getRmmFilters(force) {
+  const raw = await getCachedRawFilters(force);
+  if (raw.status !== 'ok') return raw;
+  return {
+    ...raw,
+    tabs: raw.tabs.map((tab) => ({
+      ...tab,
+      missing: splitByExceptions(tab.name, 'missing', tab.missing),
+      wronglyIncluded: splitByExceptions(tab.name, 'wrongly_included', tab.wronglyIncluded),
+    })),
+  };
+}
+
 const router = express.Router();
+router.use(express.json());
 
 router.get('/', async (req, res) => {
   try {
@@ -231,4 +289,54 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Marks one Missing/Wrongly Included row an Allowed Exception, by request
+// -- the small icon on each row in client.js. subTab is the wire-format
+// 'missing'/'wrongly_included' (matches db.js's own CHECK constraint and
+// splitByExceptions()'s own call above) -- client.js sends it directly, no
+// translation needed either side.
+router.post('/exceptions', (req, res) => {
+  try {
+    const { filterName, subTab, subjectKey, clientName } = req.body || {};
+    if (!filterName || !subTab || !subjectKey || !clientName) {
+      return res.status(400).json({ error: 'filterName, subTab, subjectKey, and clientName are all required.' });
+    }
+    if (!['missing', 'wrongly_included'].includes(subTab)) {
+      return res.status(400).json({ error: `Invalid subTab "${subTab}".` });
+    }
+    const { email, name } = actorFrom(req);
+    exceptionsDb.addException({ filterName, subTab, subjectKey, clientName, email, name });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Removes one Allowed Exception, by request -- the small icon on each row
+// in the Allowed Exceptions list, client.js. The row then simply reappears
+// in the main list on the very next GET / (no separate "undo" state to
+// track -- splitByExceptions() above just won't find a matching exception
+// for it anymore).
+router.delete('/exceptions/:id', (req, res) => {
+  try {
+    exceptionsDb.removeException(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// getRmmFilters is also exported directly (not just mounted as this
+// router's own GET /), by request -- What's On's "Today's Brief
+// (Kaseya-MCP Morning Pulse)" box reuses this page's own already-cached
+// Missing counts for its "Found N Clients Missing from DRMM Filters" line,
+// same cross-page server-side reuse convention @dashboard/whats-on already
+// follows elsewhere in this file for @dashboard/strety-autotask-sync's
+// status.js/metrics.js/client.js -- calling this directly (in-process,
+// same server) rather than an HTTP round trip to this page's own /api/
+// route. Attached as a property on the exported router function (an
+// Express Router IS a function) -- it still mounts exactly as before
+// everywhere that just does `require(...)`.
 module.exports = router;
+module.exports.getRmmFilters = getRmmFilters;

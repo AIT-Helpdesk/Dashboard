@@ -2892,11 +2892,11 @@ h1 {
 .section-heading--scorecard {
   background: var(--section-header-bg);
 }
-/* Today & Tomorrow's three column headings (Service Calls/Subscriptions
-   Expiring/My Strety Tasks), by request -- same --accent blue used
-   elsewhere on this dashboard (e.g. .resource-group's own selected/focus
-   ring), not a new one-off color. Scoped to just these three columns'
-   .section-heading, not a dashboard-wide change. */
+/* Today & Tomorrow's column headings (Service Calls/Subscriptions
+   Expiring), by request -- same --accent blue used elsewhere on this
+   dashboard (e.g. .resource-group's own selected/focus ring), not a new
+   one-off color. Scoped to just these columns' .section-heading, not a
+   dashboard-wide change. */
 .tt-column .section-heading {
   color: var(--accent);
 }
@@ -2997,24 +2997,33 @@ h1 {
 }
 
 /* What's On's "Today & Tomorrow" section -- three columns, each its own
-   .resource-group card, stacking to one column on narrow viewports same
-   as this dashboard's other multi-column layouts. Back to three, by
-   request ("go back to a 3 column layout") -- Service Calls stays in its
-   own top-level section above (.wo-top-row), and this third column is a
-   new one (Time Zones' digital clocks, client.js's own clockColumnHtml())
-   rather than Service Calls returning. Time Zones is `max-content`, by
+   card, stacking to one column on narrow viewports same as this
+   dashboard's other multi-column layouts. Time Zones is `max-content`, by
    request ("make the clock width fit and the column width fit the
    clocks") -- sized to its own widest tile's natural width (see
    .wo-clock-tile/.wo-clock-list, styles.css below) rather than a forced
    fraction of the row, so it never carries empty padding wider than its
-   digital clocks actually need. Subscriptions Expiring/My Strety Tasks
-   are `1fr 1fr`, by request ("use 50% each of the remaining space for
-   cols 2 & 3") -- an even split of whatever width Time Zones didn't
-   claim. */
+   digital clocks actually need. Subscriptions Expiring/Helpdesk
+   Scorecards are `1fr 1fr`, by request ("use 50% each of the remaining
+   space for cols 2 & 3") -- an even split of whatever width Time Zones
+   didn't claim. The Helpdesk Scorecards box (#scorecards-wrap) moved in
+   here from .wo-top-row, by request, replacing what used to be a third
+   column for My Strety Tasks -- but it's a STATIC direct child of this
+   grid, not something client.js's renderTodayTomorrow() rebuilds the way
+   it rebuilds the clock/Subscriptions Expiring columns (see mount()'s own
+   template comment in client.js for why). `#tt-columns` -- the inner
+   wrapper JS actually clears/rebuilds -- is `display: contents` so ITS
+   two children land directly in this grid's own first two tracks, exactly
+   as if they were direct children of it; #scorecards-wrap, the grid's
+   real third child, lands in the third track untouched by any of that
+   clearing/rebuilding. */
 .tt-columns {
   display: grid;
   grid-template-columns: max-content 1fr 1fr;
   gap: 1rem;
+}
+#tt-columns {
+  display: contents;
 }
 @media (max-width: 900px) {
   .tt-columns {
@@ -3022,18 +3031,20 @@ h1 {
   }
 }
 
-/* Service Calls (left, 1/3) + Scorecards (right, 2/3), by request
+/* Service Calls (left, 1/3) + Today's Brief (right, 2/3), by request
    ("please move the Service Calls section out of the Today and Tomorrow
    ... up to the top. Put the Score cards to the right of the Service
    Calls" -- width ratio a later request, "use only 1/3 of the available
-   width and use the 2/3 for the scorecards"). Both panels share the same
-   green-bordered card look .tt-section's own panel already uses, for
-   visual parity as a paired top row. Collapses to one column on a narrow
-   window, same breakpoint as every other multi-column layout on this
-   dashboard -- the JS-driven height match between the two (see
-   client.js's own syncServiceCallsHeight()) is deliberately turned off
-   below that width too, since a forced height would fight the natural
-   stacked layout instead of matching it. */
+   width and use the 2/3 for the scorecards"). The right-hand box used to
+   BE the Helpdesk Scorecards table -- that table has since moved into the
+   Today & Tomorrow row's third column instead (see .tt-columns above),
+   but this box itself stays right here, repurposed under a new heading
+   ("Today's Brief (Kaseya-MCP)"), by request -- "keep the green box that
+   Helpdesk Scorecards is currently in" meant keep the BOX, not keep the
+   scorecards table in it. Both panels share the same green-bordered card
+   look .tt-section's own panel already uses, for visual parity as a
+   paired top row. Collapses to one column on a narrow window, same
+   breakpoint as every other multi-column layout on this dashboard. */
 .wo-top-row {
   display: grid;
   grid-template-columns: 1fr 2fr;
@@ -3047,7 +3058,8 @@ h1 {
   }
 }
 .wo-sc-section,
-.wo-scorecards-section {
+.wo-scorecards-section,
+.wo-today-brief-section {
   background: var(--card);
   border: 1px solid #16a34a;
   border-radius: 0.5rem;
@@ -3058,66 +3070,84 @@ h1 {
      column's own long ticket titles/scorecard rows. */
   min-width: 0;
 }
-/* Horizontal scroll on each scorecard table's own card, by request ("add
-   back in 4 more scorecard entries to make it 7. and a horizontal scroll
-   for that section if required") -- Scorecards now sits in the narrower
-   2/3-width side of .wo-top-row (was a full-width section before Service
-   Calls moved in beside it), so a real 7-period-wide table (Metric +
-   Target + 7 date columns, each with its own un-wrapped metric name --
-   see .scorecard-table td:first-child above) can genuinely be wider than
-   that column provides. Scoped to just the scorecard cards inside this
-   section (not a dashboard-wide .resource-group change) -- every other
-   page's own .resource-group tables stay exactly as they were. */
+/* .section-heading's own 1rem left/right padding (styles.css, above) is
+   meant for headings that span the FULL card edge to edge -- stacked on
+   TOP of .wo-today-brief-section's own 1rem container padding, it was
+   indenting the heading text a further 1rem past #brief-body's own
+   content (which has no padding of its own beyond the container's), by
+   request ("have the left of the Heading and the text below align
+   nicely"). Zeroed out here, scoped to just this box -- Service Calls/
+   Scorecards' own headings keep their normal padding; it's each the
+   FIRST thing inside their own card, same potential mismatch, just never
+   flagged.
+   The matching right-side padding is intentionally left exactly as-is --
+   the Refresh button's own .date-form wrapper still needs that inset, so
+   only the left side is zeroed below. */
+.wo-today-brief-section > .section-heading {
+  padding-left: 0;
+}
+/* Today's Brief's own compact bullet lists (Datto RMM findings, each
+   Autotask group's top few tickets) -- same tight row-size convention
+   this page's own scorecard tables use (small font, no large bullet
+   indent), since this box is meant to be skimmed in a few seconds, not
+   read like a full ticket table. */
+.wo-brief-list {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+}
+/* Horizontal scroll on each scorecard table's own card -- Scorecards now
+   sits in a narrow 1fr column of the Today & Tomorrow row (moved there
+   from .wo-top-row, by request, replacing My Strety Tasks; shown at only
+   HISTORY_LIMIT=3 periods now rather than the 7 it showed at full width),
+   so even a 3-period-wide table (Metric + Target + 3 date columns, each
+   with its own un-wrapped metric name -- see .scorecard-table
+   td:first-child above) can genuinely be wider than that column provides.
+   Scoped to just the scorecard cards inside this section (not a
+   dashboard-wide .resource-group change) -- every other page's own
+   .resource-group tables stay exactly as they were. */
 .wo-scorecards-section .resource-group {
   overflow-x: auto;
 }
-/* #sc-section (client.js) is the exact element syncServiceCallsHeight()
-   sets an explicit height on, kept in lock-step with the Scorecards
-   column's own total height ("not over, not under", by request) -- flex
-   column so its own heading/status text keeps its natural height and
-   #sc-column-wrap (below) fills whatever room is left under that,
-   scrolling internally rather than pushing the box taller. */
+/* Flex column so #sc-column-wrap (below) fills whatever height is left
+   under the heading/status text above it, scrolling internally rather
+   than pushing the box taller. */
 .wo-sc-section {
   display: flex;
   flex-direction: column;
 }
-/* flex: 1 fills the remaining height inside the now-fixed-height
-   #sc-section above; min-height: 0 is what actually lets a flex child
-   shrink below its own content's natural height at all (the real CSS
-   Grid/Flexbox default is min-height: auto, which would otherwise force
-   this to grow to fit its content and defeat the height cap entirely);
-   overflow-y: auto is the ONE scrollbar that shows up once the real
-   content doesn't fit the room left after the heading/status above it --
-   .tt-list's own 15rem cap is overridden away just below, by request
-   ("have the service calls list use the available space instead of
-   having an unnecessary scrollbar when there's room to use") -- without
-   that override, the inner list capped itself at 15rem and grew its OWN
-   separate scrollbar there regardless of how much real room this outer
-   wrap actually had above/below it. */
+/* min-height: 0 is what actually lets a flex child shrink below its own
+   content's natural height at all (the real CSS Grid/Flexbox default is
+   min-height: auto); overflow-y: auto is the ONE scrollbar that shows up
+   once the real content doesn't fit the room left after the
+   heading/status above it -- .tt-list's own 15rem cap is overridden away
+   just below, by request ("have the service calls list use the available
+   space instead of having an unnecessary scrollbar when there's room to
+   use") -- without that override, the inner list capped itself at 15rem
+   and grew its OWN separate scrollbar there regardless of how much real
+   room this outer wrap actually had above/below it. */
 .wo-sc-wrap {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 /* Overrides .tt-list's own 15rem max-height/overflow-y (styles.css,
-   below) -- scoped to Service Calls' own context specifically (My
-   Strety Tasks, the one other column that can legitimately run long,
-   keeps its original per-list cap; it isn't inside a height-matched box
-   the way Service Calls is now). max-height: none plus overflow-y:
-   visible hands scrolling entirely to .wo-sc-wrap above, the one real
-   scroll boundary that actually matches the height Service Calls is
-   meant to reach. */
+   below) -- scoped to Service Calls' own context specifically. max-height:
+   none plus overflow-y: visible hands scrolling entirely to .wo-sc-wrap
+   above, the one real scroll boundary that actually matches the height
+   Service Calls is meant to reach. */
 .wo-sc-wrap .tt-list {
   max-height: none;
   overflow-y: visible;
 }
 /* Flex column, by request -- so .tt-column-body (below) can grow to fill
    whatever height it's given (the grid's own default row-stretch inside
-   .tt-columns, or the fixed pixel height client.js's own
-   syncServiceCallsHeight() sets on #sc-section for the Service Calls
-   card specifically), pushing .tt-column-footer down to the same fixed
-   spot at the bottom of every card regardless of how much content is
-   above it. */
+   .tt-columns), pushing .tt-column-footer down to the same fixed spot at
+   the bottom of every card regardless of how much content is above it. */
 .tt-column {
   display: flex;
   flex-direction: column;
@@ -3191,12 +3221,11 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  /* My Strety Tasks can legitimately run to dozens of overdue rows -- cap
-     the column's own height and let it scroll internally rather than
-     stretching the whole three-column row to match it. Same .tt-list class
-     is shared by all three columns' <ul> (see ttColumn() in client.js), so
-     this one cap applies uniformly to Service Calls/Subscriptions Expiring
-     too, by request. */
+  /* A column can legitimately run to dozens of rows (overdue service
+     calls, expiring subscriptions) -- cap the column's own height and let
+     it scroll internally rather than stretching the whole row to match
+     it. Same .tt-list class is shared by every ttColumn()-built <ul>
+     (client.js), so this one cap applies uniformly, by request. */
   max-height: 15rem;
   overflow-y: auto;
 }
@@ -3212,7 +3241,7 @@ h1 {
 }
 /* The whole row is the click target for the Open ticket/Mark Complete
    popup, by request -- see serviceCallRowHtml()/the delegated click
-   listener on #tt-columns in whats-on/client.js. */
+   listener on #sc-column-wrap in whats-on/client.js. */
 .tt-service-call-row {
   cursor: pointer;
 }
@@ -3271,13 +3300,6 @@ h1 {
 }
 .wo-clock-variance {
   font-variant-numeric: tabular-nums;
-}
-/* By request: My Strety Tasks' own title text sized to match .cell-subtext
-   (the muted allocation/subscription-detail line the other two columns
-   show) -- same 0.8rem, color left as the row's normal (non-muted) text
-   since only the size was asked to match. */
-.tt-strety-title {
-  font-size: 0.8rem;
 }
 .tt-tag {
   display: inline-block;
@@ -10236,6 +10258,50 @@ tr.accrued-time-yellow-row th {
 .rmm-filters-page table td {
   font-size: 0.78rem;
   padding: 0.3rem 0.75rem;
+}
+/* Allowed Exceptions, by request -- the Mark/Remove icon buttons (plain
+   bare icon, no border/background of their own, same borderless-icon-
+   button convention the scorecards' own Update icon uses) and the
+   Allowed Exceptions list itself underneath each Missing/Wrongly Included
+   table. */
+.rmmf-action-cell {
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+}
+.rmmf-exception-btn,
+.rmmf-exception-remove-btn {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0.2rem;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.rmmf-exception-btn:hover {
+  color: #16a34a;
+}
+.rmmf-exception-remove-btn:hover {
+  color: #dc2626;
+}
+.rmmf-exceptions {
+  margin-top: 0.75rem;
+}
+.rmmf-exceptions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.78rem;
+}
+.rmmf-exceptions-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 .rmmf-tabs[hidden] {
   display: none;

@@ -8,7 +8,7 @@ const { isDashboardAdmin } = require('@dashboard/shell/registry.js');
 // for why). The shared connection/its own /auth/strety/connect route still
 // exist (used by nothing in this file anymore, but kept -- see that
 // README) rather than removed outright.
-const { getPersonalClient, getTodoUrl, getMetricUrl } = require('@dashboard/strety-client');
+const { getPersonalClient, getMetricUrl } = require('@dashboard/strety-client');
 const { readLastRunStatus } = require('@dashboard/strety-autotask-sync/status.js');
 const { METRICS: AUTOTASK_SYNC_METRICS } = require('@dashboard/strety-autotask-sync/metrics.js');
 // Only for its connectedIdentity() below (a plain file read, no live API
@@ -33,8 +33,18 @@ const {
   getPicklistLabels,
   toAest,
   fetchLeaveTimeOffRequests,
+  excludeMonitoringAlerts,
 } = require('@dashboard/autotask-client');
 const { getTeams, getShiftsByDay } = require('@dashboard/teams-shifts/lib.js');
+// For the "Today's Brief (Kaseya-MCP Morning Pulse)" box's Datto RMM half,
+// by request -- same lib every other Datto RMM-backed page on this
+// dashboard already uses (RMM Filter Checks, Live Reports, Check Client).
+const dattoRmm = require('@dashboard/datto-rmm/lib.js');
+// Reuses RMM Filter Checks' own already-cached Missing-client counts, by
+// request ("Found N Clients Missing from DRMM Filters" line) -- see that
+// package's own server.js for why getRmmFilters is exported alongside its
+// router.
+const { getRmmFilters } = require('@dashboard/rmm-filters/server.js');
 // Aliased -- @dashboard/ingram-client's own fetchAllPages/getToken would
 // otherwise collide with @dashboard/strety-client's identically-named
 // exports already imported above (two wholly separate systems that happen
@@ -167,21 +177,8 @@ const AUTO_MANAGED_METRIC_TITLES = new Set(
 // metrics on this account), deliberately left out here. Order here is the
 // order groups render in.
 const FREQUENCIES = ['daily', 'weekly', 'monthly'];
-const HISTORY_LIMIT = 7; // was 8, then 3 ("show only the last 3 entries"), then back up to 7 ("add back in 4 more scorecard entries to make it 7"), by request
+const HISTORY_LIMIT = 3; // was 8, then 3, then 7 ("add back in 4 more scorecard entries to make it 7"), now back down to 3 ("only show the last 3 days") -- the Helpdesk Scorecards box moved into the Today & Tomorrow row's third column (replacing My Strety Tasks), where it needs to be compact, by request
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-// Same email-match convention as My Strety Tasks -- see that package's
-// README for why this is safe (every real Ambient iT person's Strety email
-// matches their Microsoft 365 one exactly). Takes an explicit client (the
-// signed-in user's own personal connection, see getPersonalClient()) rather
-// than always using the shared module-level `get` -- the /people directory
-// itself does appear visible either way (confirmed real data), but this
-// keeps every personal-space lookup consistently going through the same
-// per-user connection rather than mixing the two for no reason.
-async function findPersonByEmail(email, client) {
-  const res = await client.get('/people', { 'filter[email]': email });
-  return res.data[0] || null;
-}
 
 // A DELIBERATE exception to this dashboard's usual "no caching, always
 // live" stance (see My Strety Tasks' README) -- confirmed against the real
@@ -1097,113 +1094,40 @@ async function fetchSubscriptionsExpiringTodayTomorrow() {
   return rows;
 }
 
-// My Strety Tasks due today or tomorrow -- same /todos query as My Strety
-// Tasks' own fetchOpenTasksFor() (packages/my-strety-tasks/server.js), just
-// filtered down to a due_date of exactly today or tomorrow (that page shows
-// every open to-do regardless of due date; this is specifically the
-// "what's due right now" subset). findPersonByEmail() above is reused, not
-// re-resolved a second way.
-// By request: also includes OVERDUE to-dos (due_date before today), not
-// just today/tomorrow -- but ordered with today's and tomorrow's own tasks
-// FIRST (in that natural chronological order), overdue ones AFTER (latest
-// due date first within that group, by request -- the most recently-missed
-// task surfaces at the top of its own group rather than the bottom). A
-// plain string comparison against "today"/"tomorrow" is enough to tell
-// overdue apart from due-soon here, since due_date and today/tomorrow are
-// all the same "YYYY-MM-DD" lexically-sortable shape.
-// Tasks with no due_date at all are excluded either way -- there's no date
-// to judge "overdue" against, and that's a deliberate, different concept
-// from My Strety Tasks' own page (which shows every open to-do regardless
-// of due date, no-due-date included).
-function isOverdue(dueDate, today) {
-  return Boolean(dueDate) && dueDate < today;
-}
-// `client` is the signed-in user's own personal Strety connection (see
-// getPersonalClient()), not the shared one -- confirmed against real
-// production data the shared connection has zero visibility into anyone's
-// personal todos.
-async function fetchStretyTasksDueTodayTomorrow(client, personId, today, tomorrow) {
-  const todos = await client.fetchAllPages('/todos', {
-    'filter[completed]': 'false',
-    'filter[assignee_id]': personId,
-  });
-  const rows = todos
-    .filter((t) => t.attributes.due_date === today || t.attributes.due_date === tomorrow || isOverdue(t.attributes.due_date, today))
-    .map((t) => ({
-      id: t.id,
-      title: t.attributes.title,
-      dueDate: t.attributes.due_date,
-      priority: t.attributes.priority || null,
-      overdue: isOverdue(t.attributes.due_date, today),
-      // Deep link to open this to-do directly in Strety's own web app, by
-      // request -- same helper My Strety Tasks' own server.js uses.
-      todoUrl: getTodoUrl(t.id),
-    }));
-  rows.sort((a, b) => {
-    if (a.overdue !== b.overdue) return a.overdue ? 1 : -1; // today/tomorrow group first, overdue group after
-    // Within the overdue group: latest first, oldest last, by request --
-    // reversed from the today/tomorrow group's own ascending order (kept
-    // as-is below).
-    if (a.overdue) return b.dueDate.localeCompare(a.dueDate);
-    return a.dueDate.localeCompare(b.dueDate);
-  });
-  return rows;
-}
-
-// The three columns run concurrently (Promise.all) -- three wholly separate
-// external systems (Autotask/Ingram/Strety), not three requests hitting the
+// The two columns run concurrently (Promise.all) -- two wholly separate
+// external systems (Autotask/Ingram), not two requests hitting the
 // SAME rate-limited API the way multiple Strety calls at once would be
 // (see @dashboard/strety-client's own README, "Rate limiting" -- that
 // caution is specifically about concurrent requests to Strety itself, not
 // about running unrelated systems' own calls in parallel). Each column is
 // independently try/caught -- confirmed the right shape given how many
 // independent systems are involved here: one column's real failure (say,
-// Ingram briefly down) shouldn't blank out the other two, which have
+// Ingram briefly down) shouldn't blank out the other, which has
 // nothing to do with it.
 async function buildTodayTomorrow(email) {
   const today = todayAestKey();
   const tomorrow = addDaysToKey(today, 1);
 
-  const [serviceCalls, subscriptionsExpiring, stretyTasks] = await Promise.all([
+  const [serviceCalls, subscriptionsExpiring] = await Promise.all([
     fetchServiceCallsTodayTomorrow(email)
       .then((rows) => ({ ok: true, rows }))
       .catch((err) => ({ ok: false, error: describeColumnError(err) })),
     fetchSubscriptionsExpiringTodayTomorrow()
       .then((rows) => ({ ok: true, rows }))
       .catch((err) => ({ ok: false, error: describeColumnError(err) })),
-    (async () => {
-      // The signed-in user's OWN Strety connection, not the shared one --
-      // see @dashboard/strety-client's getPersonalClient() for why. Checked
-      // explicitly (not just letting a stretyTasks_not_connected-shaped
-      // error fall through to describeColumnError()) so this column can
-      // show its own real "Connect your Strety" link rather than the
-      // generic "see above" wording that error message uses for the
-      // SHARED connection's own not-connected state (there's no "above" to
-      // point to here -- the shared connection can be perfectly healthy
-      // while this signed-in user just hasn't connected their own yet).
-      const personalClient = getPersonalClient(email);
-      if (!personalClient.isConnected()) return { ok: true, personalNotConnected: true, rows: [] };
-      const person = await findPersonByEmail(email, personalClient);
-      if (!person) return { ok: true, personFound: false, rows: [] };
-      const rows = await fetchStretyTasksDueTodayTomorrow(personalClient, person.id, today, tomorrow);
-      return { ok: true, personFound: true, rows };
-    })().catch((err) => {
-      if (err.strety_reauth_required) {
-        return { ok: true, personalReauthRequired: true, personalConnectedAs: getPersonalClient(email).connectedIdentity(), rows: [] };
-      }
-      return { ok: false, personFound: true, error: describeColumnError(err) };
-    }),
   ]);
 
-  return { asOf: new Date().toISOString(), today, tomorrow, serviceCalls, subscriptionsExpiring, stretyTasks };
+  return { asOf: new Date().toISOString(), today, tomorrow, serviceCalls, subscriptionsExpiring };
 }
 
 // Cached PER SIGNED-IN USER (keyed by email, lowercased) -- confirmed
-// necessary, not just cautious: the Strety column is entirely personal
-// (the signed-in user's own due-soon to-dos), same "cache key includes the
-// email" reasoning Service Calls' own isMine flag needed -- a shared,
-// email-less cache key would leak one person's own Strety tasks into
-// whoever else happens to load this page within the same cache window.
+// necessary, not just cautious: Service Calls' own "Just Mine" flag
+// (isMine) is personal (resolved against the signed-in user's own Autotask
+// resource id), so a shared, email-less cache key would leak one person's
+// own flags into whoever else happens to load this page within the same
+// cache window. (My Strety Tasks was previously a third, Strety-backed
+// column here too -- removed, by request, now that the Helpdesk
+// Scorecards box has taken its spot in the Today & Tomorrow row.)
 // Same 10-minute TTL/reasoning as Service Calls'/Teams Shifts' own report
 // caches -- "what's scheduled today" is exactly the kind of thing that
 // gets fixed within the hour, not something worth staying stale as long as
@@ -1228,6 +1152,395 @@ async function getTodayTomorrow(email, force) {
     todayTomorrowInFlightByEmail.set(key, build);
   }
   return todayTomorrowInFlightByEmail.get(key);
+}
+
+// -- "Today's Brief (Kaseya-MCP Morning Pulse)" box -- by request.
+// A deliberately LIGHTWEIGHT, cached version of the much heavier (several-
+// minutes, many-tool-call) datto-rmm:drmm-morning-pulse skill run manually
+// this session -- that skill's own elaborate tiering (disk/backup/AD
+// replication diagnostics-text matching, overnight-window reconstruction,
+// cross-site correlation) isn't reproduced here; this surfaces just its two
+// highest-impact, cheapest-to-compute signals (a site fully dark, and a
+// recently-dropped infrastructure device with no open alert covering it --
+// a monitoring gap) from data this dashboard already pulls elsewhere
+// (getAllDevices()/getOpenAlerts(), same calls RMM Filter Checks/the Datto
+// RMM overview page already use), plus a matching lightweight Autotask
+// ticket pull. Both halves cached together below (BRIEF_CACHE_TTL_MS) --
+// this is a "first look" built from two one-off live research pulls
+// (several hundred thousand tokens combined across two subagents), not a
+// faithful reimplementation of either; revisit if it needs to get smarter.
+
+// Same three confirmed-live picklist values Tickets Dashboard's own
+// server.js already uses (CRITICAL_PRIORITY_VALUE/
+// P1_CANNOT_BE_MOVED_PRIORITY_VALUE/CUSTOMER_NOTE_ADDED_STATUS_VALUE) --
+// duplicated here rather than cross-imported, same per-page-duplicated-
+// boilerplate convention this dashboard already follows elsewhere (e.g.
+// this file's own formatWeekRangeShort() in client.js).
+const BRIEF_CRITICAL_PRIORITY_VALUE = 4; // "P1 - CRITICAL"
+const BRIEF_P1_CANNOT_BE_MOVED_PRIORITY_VALUE = 10; // "P1 - CANNOT BE MOVED"
+const BRIEF_CUSTOMER_NOTE_ADDED_STATUS_VALUE = 19; // "Customer Note Added" -- waiting on us
+
+// 2 hours -- "Breached" covers tickets already overdue AND tickets due
+// imminently, by request (the Morning Priorities brief's own definition:
+// "SLA breached or due within next 2 hours"). A moment-in-time comparison
+// (like fetchOverdueCount() in tickets-dashboard/server.js), not a
+// calendar-day one. Read fresh at call time (not a module-scope constant)
+// since recheckAutotaskBriefFindings() below calls the matches* predicates
+// again, potentially hours after the morning build -- the window has to
+// slide with "now", not freeze at whatever moment the process happened to
+// evaluate a top-level const.
+const BRIEF_BREACH_WINDOW_MS = 2 * 60 * 60 * 1000;
+function briefBreachCutoffIso() {
+  return new Date(Date.now() + BRIEF_BREACH_WINDOW_MS).toISOString();
+}
+const BRIEF_TOP_N = 5; // this is a compact brief box, not a full ticket table
+
+// Shared open/match predicates -- used BOTH for the once-a-day full build
+// (as an in-process filter after each narrowed server-side query) AND for
+// recheckAutotaskBriefFindings() below (re-applied to a fresh re-fetch of
+// just the SAME ticket ids the morning's build already found, by request
+// -- "just check the records found at the beginning of the day" rather
+// than re-querying the whole open-ticket queue again on every Refresh
+// click). Keeping one predicate per group means both call sites can never
+// quietly drift apart on what "still qualifies" means.
+function isBriefTicketOpen(t) {
+  return !t.completedDate && t.status !== 20; // 20 = "Billing - Contract", always counts as done
+}
+function matchesBreachedTicket(t) {
+  return (
+    isBriefTicketOpen(t) &&
+    [BRIEF_CRITICAL_PRIORITY_VALUE, BRIEF_P1_CANNOT_BE_MOVED_PRIORITY_VALUE].includes(t.priority) &&
+    !!t.dueDateTime &&
+    t.dueDateTime < briefBreachCutoffIso()
+  );
+}
+function matchesUnassignedTicket(t) {
+  return isBriefTicketOpen(t) && !t.assignedResourceID;
+}
+function matchesWaitingOnUsTicket(t) {
+  return !t.completedDate && t.status === BRIEF_CUSTOMER_NOTE_ADDED_STATUS_VALUE;
+}
+
+async function fetchBriefBreachedTickets(client) {
+  const tickets = await listAll(client.tickets, [
+    { op: 'notExist', field: 'completedDate' },
+    { op: 'in', field: 'priority', value: [BRIEF_CRITICAL_PRIORITY_VALUE, BRIEF_P1_CANNOT_BE_MOVED_PRIORITY_VALUE] },
+    { op: 'lt', field: 'dueDateTime', value: briefBreachCutoffIso() },
+  ]);
+  return excludeMonitoringAlerts(tickets).filter(matchesBreachedTicket);
+}
+
+async function fetchBriefUnassignedTickets(client) {
+  const tickets = await listAll(client.tickets, [
+    { op: 'notExist', field: 'completedDate' },
+    { op: 'notExist', field: 'assignedResourceID' },
+  ]);
+  return excludeMonitoringAlerts(tickets).filter(matchesUnassignedTicket);
+}
+
+async function fetchBriefWaitingOnUsTickets(client) {
+  // Same shape as Tickets Dashboard's own "Client Updates" widget
+  // (fetchOpenTicketsByStatus(), same status value) -- excludeMonitoringAlerts
+  // applied, status!=20 not needed (a billed-and-closed ticket doesn't sit
+  // at "Customer Note Added").
+  const tickets = await listAll(client.tickets, [
+    { op: 'notExist', field: 'completedDate' },
+    { op: 'eq', field: 'status', value: BRIEF_CUSTOMER_NOTE_ADDED_STATUS_VALUE },
+  ]);
+  return excludeMonitoringAlerts(tickets).filter(matchesWaitingOnUsTicket);
+}
+
+async function shapeBriefTicket(client, t) {
+  return {
+    id: t.id,
+    ticketNumber: t.ticketNumber,
+    title: t.title,
+    clientName: await resolveCompanyName(client, t.companyID),
+    dueDateTime: t.dueDateTime,
+    ticketUrl: await getTicketUrl(t.id),
+  };
+}
+
+// Shapes one group's already-filtered ticket list into what the box
+// renders (`items`, capped at BRIEF_TOP_N) PLUS `allIds` -- every matching
+// ticket's id, not just the shown ones, kept specifically so
+// recheckAutotaskBriefFindings() below has the FULL set of "records found
+// at the beginning of the day" to re-verify later, not just whichever five
+// happened to be displayed.
+async function shapeBriefGroup(client, tickets) {
+  const sorted = [...tickets].sort((a, b) => (a.dueDateTime || '').localeCompare(b.dueDateTime || ''));
+  const items = await Promise.all(sorted.slice(0, BRIEF_TOP_N).map((t) => shapeBriefTicket(client, t)));
+  return { count: sorted.length, items, allIds: sorted.map((t) => t.id) };
+}
+
+async function getAutotaskBriefFindings(client) {
+  const [breachedTickets, unassignedTickets, waitingOnUsTickets] = await mapWithConcurrency(
+    [
+      () => fetchBriefBreachedTickets(client),
+      () => fetchBriefUnassignedTickets(client),
+      () => fetchBriefWaitingOnUsTickets(client),
+    ],
+    3,
+    (fn) => fn()
+  );
+
+  // Pre-resolves each unique client name once, concurrently, across all
+  // three groups combined -- same "warm the cache before the per-row loop"
+  // pattern tickets-dashboard/server.js already uses.
+  const allTickets = [...breachedTickets, ...unassignedTickets, ...waitingOnUsTickets];
+  const uniqueCompanyIds = [...new Set(allTickets.map((t) => t.companyID).filter((cid) => cid !== null && cid !== undefined))];
+  await mapWithConcurrency(uniqueCompanyIds, 3, (cid) => resolveCompanyName(client, cid));
+
+  const [breached, unassigned, waitingOnUs] = await Promise.all([
+    shapeBriefGroup(client, breachedTickets),
+    shapeBriefGroup(client, unassignedTickets),
+    shapeBriefGroup(client, waitingOnUsTickets),
+  ]);
+  return { status: 'ok', breached, unassigned, waitingOnUs };
+}
+
+// The cheap "Refresh" pass, by request -- re-fetches ONLY the exact
+// ticket ids the morning's full build already found (fetchByFieldIn, a
+// single batched query, same helper this dashboard uses everywhere for
+// "I already have the ids, I just need fresh rows") and re-applies the
+// SAME matches* predicate, rather than re-running the three account-wide
+// queries above. A ticket that's since been closed/reassigned/replied-to
+// quietly drops out; this can never surface a NEW ticket that started
+// qualifying only after the morning build ran -- that's the explicit
+// trade-off asked for ("just check the records found at the beginning of
+// the day"), not an oversight. Company names resolve through
+// resolveCompanyName()'s own internal cache (already warm from the
+// morning build for any repeat client), so no separate pre-warm pass is
+// needed for a handful of rechecked tickets.
+async function recheckAutotaskBriefFindings(client, previousAutotask) {
+  async function recheckGroup(prevGroup, matchesFn) {
+    if (!prevGroup || prevGroup.allIds.length === 0) return { count: 0, items: [], allIds: [] };
+    const tickets = await fetchByFieldIn(client.tickets, 'id', prevGroup.allIds);
+    const stillMatching = excludeMonitoringAlerts(tickets).filter(matchesFn);
+    return shapeBriefGroup(client, stillMatching);
+  }
+  const [breached, unassigned, waitingOnUs] = await Promise.all([
+    recheckGroup(previousAutotask.breached, matchesBreachedTicket),
+    recheckGroup(previousAutotask.unassigned, matchesUnassignedTicket),
+    recheckGroup(previousAutotask.waitingOnUs, matchesWaitingOnUsTicket),
+  ]);
+  return { status: 'ok', breached, unassigned, waitingOnUs };
+}
+
+// Infrastructure, same definition as the drmm-morning-pulse skill's own
+// (minus ESXi hosts -- confirmed against real data earlier this session,
+// this account has none): a Server, or one of the confirmed real "Network
+// Device (...)" category variants (see @dashboard/datto-rmm/lib.js's own
+// mapDeviceSummary() comment for the confirmed real category list).
+function isBriefInfraDevice(device) {
+  const category = device.deviceType || '';
+  return category === 'Server' || category.startsWith('Network Device');
+}
+
+// 14 days -- generous on purpose: this lightweight check has no overnight-
+// window reconstruction (unlike the full morning-pulse skill), so "recent"
+// here just means "not obviously ancient dead gear" rather than "dropped
+// last night specifically".
+const BRIEF_INFRA_RECENT_DAYS = 14;
+const BRIEF_INFRA_TOP_N = 5;
+
+async function getDattoBriefFindings() {
+  if (!dattoRmm.hasDattoCredentials()) return { status: 'not-connected', items: [], truncatedCount: 0 };
+
+  const [devices, openAlertsResult] = await Promise.all([dattoRmm.getAllDevices(), dattoRmm.getOpenAlerts()]);
+  const alertDeviceUids = new Set(openAlertsResult.alerts.map((a) => a.deviceUid).filter(Boolean));
+
+  const bySite = new Map();
+  for (const d of devices) {
+    const site = d.site || 'Unknown site';
+    if (!bySite.has(site)) bySite.set(site, []);
+    bySite.get(site).push(d);
+  }
+
+  const recentCutoffMs = Date.now() - BRIEF_INFRA_RECENT_DAYS * 24 * 60 * 60 * 1000;
+  const items = [];
+
+  for (const [site, siteDevices] of bySite) {
+    const infra = siteDevices.filter(isBriefInfraDevice);
+    if (infra.length === 0) continue;
+    const offlineInfra = infra.filter((d) => !d.online);
+    if (offlineInfra.length === 0) continue;
+
+    const lastSeenTimes = offlineInfra.map((d) => (d.lastSeen ? new Date(d.lastSeen).getTime() : 0)).filter((t) => t > 0);
+    const mostRecentLastSeen = lastSeenTimes.length > 0 ? Math.max(...lastSeenTimes) : 0;
+    const isRecentEnoughToBeNews = mostRecentLastSeen >= recentCutoffMs;
+
+    // Site down -- every infrastructure device at this site is offline,
+    // and it's recent enough that this isn't just long-dead gear.
+    // `deviceIds` carries every infra device at the site (not just the
+    // offline ones) -- recheckDattoBriefItems() below needs to re-look at
+    // all of them to find the new offline count, not just assume the same
+    // ones are still down.
+    if (offlineInfra.length === infra.length && isRecentEnoughToBeNews) {
+      items.push({
+        kind: 'site-down',
+        rank: 0,
+        site,
+        deviceIds: infra.map((d) => d.id),
+        text: `${site}: fully offline (${offlineInfra.length} of ${infra.length} infrastructure devices)`,
+      });
+      continue; // already covered -- no need to also list its own devices as separate monitoring gaps below
+    }
+
+    // Monitoring gap -- a recently-dropped infrastructure device with no
+    // open High/Critical alert covering it, so nobody's been told.
+    for (const d of offlineInfra) {
+      if (!d.lastSeen) continue;
+      const seenAtMs = new Date(d.lastSeen).getTime();
+      if (seenAtMs < recentCutoffMs) continue; // too old to be news in this lightweight check
+      if (alertDeviceUids.has(d.id)) continue; // already has an open alert -- someone's been told
+      items.push({
+        kind: 'monitoring-gap',
+        rank: 1,
+        site,
+        deviceId: d.id,
+        text: `${d.hostname} (${site}): offline since ${isoDateAest(d.lastSeen)}, no open alert raised`,
+      });
+    }
+  }
+
+  items.sort((a, b) => a.rank - b.rank);
+  const kept = items.slice(0, BRIEF_INFRA_TOP_N);
+  return { status: 'ok', items: kept, truncatedCount: Math.max(0, items.length - kept.length) };
+}
+
+// The cheap "Refresh" pass for the Datto RMM half, by request -- re-checks
+// ONLY the specific devices the morning's full build already flagged
+// (getDeviceDetails(), a per-device lookup -- a handful of calls, not the
+// full account-wide getAllDevices()+getOpenAlerts() pull above) rather than
+// re-scanning all ~1600 devices again. A site that's fully recovered, or a
+// device that's either come back online or since had a real alert raised
+// on it, quietly drops out; this can never surface a site/device that
+// started looking wrong only after the morning build ran -- same explicit
+// "just check the records found at the beginning of the day" trade-off
+// recheckAutotaskBriefFindings() above makes.
+async function recheckDattoBriefItems(items) {
+  const rechecked = [];
+  for (const item of items) {
+    if (item.kind === 'site-down') {
+      const details = await Promise.all(item.deviceIds.map((id) => dattoRmm.getDeviceDetails(id).catch(() => null)));
+      const stillOffline = details.filter((d) => d && !d.online).length;
+      if (stillOffline === 0) continue; // fully back online -- drop it
+      rechecked.push({ ...item, text: `${item.site}: fully offline (${stillOffline} of ${item.deviceIds.length} infrastructure devices)` });
+    } else if (item.kind === 'monitoring-gap') {
+      const d = await dattoRmm.getDeviceDetails(item.deviceId).catch(() => null);
+      if (!d || d.online) continue; // back online -- drop it
+      if (d.openAlertCount > 0) continue; // an alert's since been raised -- someone's been told, drop it
+      rechecked.push(item);
+    }
+  }
+  return { status: 'ok', items: rechecked, truncatedCount: 0 };
+}
+
+// "Found N Clients Missing from DRMM Filters: TC Elite (N) TC Essentials
+// (N)" line, by request -- reuses RMM Filter Checks' own already-cached
+// Missing lists (see that package's own server.js for why getRmmFilters is
+// exported) rather than recomputing anything here. Distinct COMPANIES, not
+// a naive sum of each tab's own missing.length -- a company genuinely
+// missing from BOTH TC Elite tabs (Servers and Workstations) should only
+// count once toward "TC Elite (N)", same reasoning as every other
+// distinct-count in this codebase.
+async function getMissingFromRmmFiltersSummary() {
+  try {
+    const data = await getRmmFilters(false);
+    if (data.status !== 'ok') return null;
+    const eliteIds = new Set();
+    const essentialsIds = new Set();
+    const allIds = new Set();
+    for (const tab of data.tabs) {
+      const bucket = tab.classificationLabel === 'Tech Cover Elite' ? eliteIds : tab.classificationLabel === 'Tech Cover Essentials' ? essentialsIds : null;
+      // tab.missing is now { items, exceptions } (rmm-filters' own Allowed
+      // Exceptions feature) -- only .items counts here: an allowed
+      // exception is explicitly NOT something needing action, so it
+      // shouldn't inflate this count.
+      for (const m of tab.missing.items) {
+        allIds.add(m.companyId);
+        if (bucket) bucket.add(m.companyId);
+      }
+    }
+    return { total: allIds.size, elite: eliteIds.size, essentials: essentialsIds.size };
+  } catch (err) {
+    console.error('Whats On: RMM Filter Checks summary (for Today\'s Brief) failed:', err.message);
+    return null;
+  }
+}
+
+// The expensive full build -- every open ticket queue query, the whole-
+// account Datto RMM device+alert pull, by request only ever runs ONCE PER
+// AEST DAY (see getBrief() below), not on a short TTL. This is what runs
+// the very first time anyone opens What's On on a given day.
+async function buildBriefFull() {
+  const client = await getClient();
+  const [datto, autotask, rmmFilterSummary] = await Promise.all([
+    getDattoBriefFindings(),
+    getAutotaskBriefFindings(client),
+    getMissingFromRmmFiltersSummary(),
+  ]);
+  return { asOf: new Date().toISOString(), datto, autotask, rmmFilterSummary };
+}
+
+// The cheap re-verification pass a manual "Refresh" click triggers for the
+// REST of the day, by request -- re-checks just the specific tickets/
+// devices the day's own buildBriefFull() already found (see
+// recheckAutotaskBriefFindings()/recheckDattoBriefItems() above for how
+// each half does that), rather than repeating either half's expensive
+// account-wide pull. The RMM Filter Checks summary line is left exactly
+// as it was this morning -- that page's own 15-minute cache/?force=true is
+// a separate, already-cheap concern (see getMissingFromRmmFiltersSummary()'s
+// own comment); there's nothing expensive here worth re-verifying twice.
+async function recheckBriefFull(previous) {
+  const client = await getClient();
+  const [datto, autotask] = await Promise.all([
+    previous.datto?.status === 'ok' ? recheckDattoBriefItems(previous.datto.items) : previous.datto,
+    previous.autotask?.status === 'ok' ? recheckAutotaskBriefFindings(client, previous.autotask) : previous.autotask,
+  ]);
+  return { asOf: new Date().toISOString(), datto, autotask, rmmFilterSummary: previous.rmmFilterSummary };
+}
+
+// Keyed by AEST day (todayAestKey()), not a TTL -- by request ("definitely
+// don't want to run this each time... run it just once a day"). The first
+// request on a new AEST day always gets the full, expensive build
+// (buildBriefFull()); every request after that on the SAME day -- a plain
+// page load or a manual Refresh alike -- reuses that day's own cache,
+// Refresh just triggering the cheap recheckBriefFull() pass instead of
+// rebuilding from scratch. Rolls over naturally at AEST midnight: the next
+// request after that sees a dayKey mismatch and triggers a fresh full
+// build for the new day.
+let briefCache = null; // { data, dayKey }
+let briefInFlight = null;
+
+async function getBrief(force) {
+  if (briefInFlight) return briefInFlight;
+
+  const dayKey = todayAestKey();
+  if (!briefCache || briefCache.dayKey !== dayKey) {
+    briefInFlight = buildBriefFull()
+      .then((data) => {
+        briefCache = { data, dayKey };
+        return data;
+      })
+      .finally(() => {
+        briefInFlight = null;
+      });
+    return briefInFlight;
+  }
+
+  if (!force) return briefCache.data;
+
+  briefInFlight = recheckBriefFull(briefCache.data)
+    .then((data) => {
+      briefCache = { data, dayKey };
+      return data;
+    })
+    .finally(() => {
+      briefInFlight = null;
+    });
+  return briefInFlight;
 }
 
 const router = express.Router();
@@ -1280,6 +1593,21 @@ router.get('/today-tomorrow', async (req, res) => {
   }
 });
 
+// "Today's Brief (Kaseya-MCP Morning Pulse)" box's own data -- deliberately
+// a SEPARATE endpoint/cache from both routes above, same "don't force an
+// expensive, unrelated re-fetch" reasoning /shifts and /today-tomorrow
+// already give for staying separate from each other and from the main
+// scorecards route below.
+router.get('/brief', async (req, res) => {
+  try {
+    const data = await getBrief(req.query.force === 'true');
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/', async (req, res) => {
   try {
     const email = req.session?.user?.email;
@@ -1287,17 +1615,18 @@ router.get('/', async (req, res) => {
       return res.json({ status: 'no-session-email' });
     }
 
-    // Both groups below -- Helpdesk Task Tracker team AND Personal -- use
-    // the SIGNED-IN USER'S OWN Strety connection (see
+    // This used to also fetch a second, Personal group (the signed-in
+    // user's own personal Strety space) -- moved out, by request: this
+    // route now feeds the compact "Today's Brief (Kaseya-MCP Morning Pulse)"
+    // box (the Helpdesk Scorecards box, relocated into the Today & Tomorrow row's
+    // third column, replacing My Strety Tasks), which only ever wants the
+    // team's own scorecards; Personal Scorecards is moving to the About Me
+    // page instead (not yet done -- see that package when it is). Still
+    // uses the SIGNED-IN USER'S OWN Strety connection (see
     // @dashboard/strety-client's getPersonalClient()), not a separate
-    // shared one for the team group. By request: everyone already has
-    // permission to see the team's own scorecards (unlike personal-space
-    // data, where visibility is deliberately per-person), so there's no
-    // reason to maintain a second connection just for that -- and doing so
-    // previously meant the WHOLE page (including the team group) broke
-    // whenever the shared connection's own token happened to need
-    // reconnecting, even though the Personal group never depended on it.
-    // One connection, one gate, one real failure point to reconnect.
+    // shared one -- by request, everyone already has permission to see the
+    // team's own scorecards, so there's no reason to maintain a second
+    // connection just for that.
     const personalClient = getPersonalClient(email);
     if (!personalClient.isConnected()) {
       return res.json({ status: 'not-connected' });
@@ -1318,16 +1647,6 @@ router.get('/', async (req, res) => {
       // deleted team in Strety shouldn't just make this section vanish
       // without explanation.
       groups.push({ label: HELPDESK_TEAM_NAME, notFound: true, byFrequency: {} });
-    }
-
-    const person = await findPersonByEmail(email, personalClient);
-    if (!person) {
-      groups.push({ label: 'Personal', personNotFound: true, byFrequency: {} });
-    } else {
-      groups.push({
-        label: `Personal -- ${person.attributes.name}`,
-        byFrequency: await fetchScorecardsFor('person', person.id, allMetrics, personalClient),
-      });
     }
 
     res.json({

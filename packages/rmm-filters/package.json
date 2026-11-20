@@ -12,6 +12,7 @@
   "dependencies": {
     "@dashboard/autotask-client": "*",
     "@dashboard/datto-rmm": "*",
+    "@dashboard/shell": "*",
     "express": "^4.19.2"
   }
 }

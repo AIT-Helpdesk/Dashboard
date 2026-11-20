@@ -29,22 +29,32 @@ let lastShiftsData = null;
 // shifts excerpt.
 let lastTodayTomorrowData = null;
 
+// "Today's Brief (Kaseya-MCP Morning Pulse)" box's own state, same
+// wholly-separate-fetch reasoning as the other excerpts above -- its own
+// /brief route, server-cached once per AEST day (see server.js's own
+// comment on getBrief()), so this client-side restore-on-revisit is purely
+// about avoiding a loading flash on navigating back within one browser
+// tab, not about dodging a real re-fetch cost -- the server would answer
+// from its own cache instantly either way.
+let lastBriefData = null;
+
 // Whichever mount() is CURRENTLY on screen registers its own render(),
-// renderShifts(), and renderTodayTomorrow() here, overwriting whatever the
-// previous mount left behind. Fixes a real bug (see check-client/client.js's
-// own activeRenderers for the fuller writeup): load()/loadShifts()/
-// loadTodayTomorrow() below are each a closure over THEIR OWN mount()'s
-// local DOM elements, so if you navigate away before one finishes and come
-// back before it actually resolves, the in-flight fetch's own render call
-// was writing into the OLD, torn-down mount's detached elements --
-// invisible, so nothing ever seemed to happen. Routing each load's render
-// call through these instead of calling its own closed-over render
-// function directly means whichever mount is actually visible always
-// receives the update, even when the fetch that produced it was kicked off
-// by a mount that no longer exists.
+// renderShifts(), renderTodayTomorrow(), and renderBrief() here,
+// overwriting whatever the previous mount left behind. Fixes a real bug
+// (see check-client/client.js's own activeRenderers for the fuller
+// writeup): load()/loadShifts()/loadTodayTomorrow()/loadBrief() below are
+// each a closure over THEIR OWN mount()'s local DOM elements, so if you
+// navigate away before one finishes and come back before it actually
+// resolves, the in-flight fetch's own render call was writing into the
+// OLD, torn-down mount's detached elements -- invisible, so nothing ever
+// seemed to happen. Routing each load's render call through these instead
+// of calling its own closed-over render function directly means whichever
+// mount is actually visible always receives the update, even when the
+// fetch that produced it was kicked off by a mount that no longer exists.
 let activeRender = null;
 let activeRenderShifts = null;
 let activeRenderTodayTomorrow = null;
+let activeRenderBrief = null;
 
 // Helpdesk Handler banner -- copied here from @dashboard/check-up's own
 // client.js verbatim (by request, "Copy the whole Helpdesk handler
@@ -542,15 +552,21 @@ export function mount(container) {
         <p id="sc-status" class="status">Loading...</p>
         <div id="sc-column-wrap" class="wo-sc-wrap"></div>
       </div>
-      <div class="wo-scorecards-section" id="scorecards-wrap">
-        <p id="status" class="status">Helpdesk Task Tracker's scorecards, followed by your own personal scorecards -- up to the last 7 real check-in periods, most recent first. Hover a value for its check-in note.</p>
-        <div id="summary" class="section-heading section-heading--nav section-heading-row" hidden>
-          <span id="summary-text"></span>
+      <!-- The box the Helpdesk Scorecards table used to live in, by
+           request -- KEPT in place here (same green card, same spot
+           beside Service Calls), just repurposed under a new heading now
+           that the scorecards table itself has moved to the Today &
+           Tomorrow row's third column (below). Static placeholder for
+           now -- Kaseya-MCP recommended actions aren't wired up yet. -->
+      <div class="wo-today-brief-section" id="today-brief-section">
+        <div class="section-heading section-heading--nav section-heading-row">
+          <span>Today's Brief (Kaseya-MCP Morning Pulse)</span>
           <div class="date-form">
-            <button type="button" id="refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh Scorecards</button>
+            <button type="button" id="brief-refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh</button>
           </div>
         </div>
-        <div id="results" class="results"></div>
+        <p id="brief-status" class="status">Loading...</p>
+        <div id="brief-body"></div>
       </div>
     </div>
 
@@ -562,7 +578,38 @@ export function mount(container) {
         </div>
       </div>
       <p id="tt-status" class="status">Loading...</p>
-      <div id="tt-columns" class="tt-columns"></div>
+      <!-- Helpdesk Scorecards moved here from .wo-top-row, by request --
+           it now fills the third column (clock | subscriptions |
+           scorecards), replacing My Strety Tasks, shown as just the last
+           HISTORY_LIMIT periods so it fits a column this narrow. Its own
+           heading stays "Helpdesk Scorecards" (unchanged) -- the box it
+           used to sit in, back in .wo-top-row above, kept the "Today's
+           Brief (Kaseya-MCP)" heading instead; the two are separate boxes,
+           not one renamed box. This one's a STATIC sibling of
+           #tt-columns, not a child of it -- #tt-columns itself gets
+           wiped (innerHTML = '') and rebuilt by
+           loadTodayTomorrow()/renderTodayTomorrow() below on every load/
+           refresh, which would otherwise destroy this box (it has its own
+           entirely separate fetch/refresh/render cycle, see load()
+           further down). display: contents on #tt-columns (styles.css)
+           makes ITS children (the clock + Subscriptions Expiring columns
+           JS appends into it) act as direct children of this outer
+           .tt-columns grid instead, landing in tracks 1 and 2 exactly as
+           before; #scorecards-wrap is the grid's 3rd direct child, landing
+           in track 3 untouched by any of that rebuilding. -->
+      <div class="tt-columns">
+        <div id="tt-columns"></div>
+        <div class="wo-scorecards-section" id="scorecards-wrap">
+          <p id="status" class="status">Helpdesk Task Tracker's scorecards -- the last 3 real check-in periods, most recent first. Hover a value for its check-in note.</p>
+          <div id="summary" class="section-heading section-heading--nav section-heading-row" hidden>
+            <span id="summary-text"></span>
+            <div class="date-form">
+              <button type="button" id="refresh-button" class="button-link button-link--small refresh-button--emphasis">Refresh Scorecards</button>
+            </div>
+          </div>
+          <div id="results" class="results"></div>
+        </div>
+      </div>
     </div>
 
     <div class="wo-shifts-section">
@@ -620,17 +667,18 @@ export function mount(container) {
   const summaryEl = container.querySelector('#summary');
   const summaryTextEl = container.querySelector('#summary-text');
   const resultsEl = container.querySelector('#results');
-  const scorecardsWrapEl = container.querySelector('#scorecards-wrap');
 
-  const scSectionEl = container.querySelector('#sc-section');
   const scRefreshButton = container.querySelector('#sc-refresh-button');
   const scStatusEl = container.querySelector('#sc-status');
   const scColumnWrapEl = container.querySelector('#sc-column-wrap');
 
-  const ttSectionEl = container.querySelector('.tt-section');
   const ttRefreshButton = container.querySelector('#tt-refresh-button');
   const ttStatusEl = container.querySelector('#tt-status');
   const ttColumnsEl = container.querySelector('#tt-columns');
+
+  const briefRefreshButton = container.querySelector('#brief-refresh-button');
+  const briefStatusEl = container.querySelector('#brief-status');
+  const briefBodyEl = container.querySelector('#brief-body');
 
   // -- Helpdesk Handler -- copied from @dashboard/check-up/client.js, see
   // this section's own module-scope comment up top for why. Every
@@ -829,20 +877,20 @@ export function mount(container) {
   // Same handler, same refresh -- Service Calls moved out of #tt-columns
   // into its own top-level section (#sc-column-wrap), by request, but its
   // data still comes from the SAME combined /today-tomorrow fetch as
-  // Subscriptions Expiring/My Strety Tasks, so its own "Refresh" button
-  // just triggers the identical reload.
+  // Subscriptions Expiring, so its own "Refresh" button just triggers the
+  // identical reload.
   scRefreshButton.addEventListener('click', () => loadTodayTomorrow(true));
   // Delegated once on each of the two stable containers Service Calls/
-  // Subscriptions Expiring/My Strety Tasks rows can land in, not re-wired
-  // per render -- renderTodayTomorrow() below replaces their innerHTML on
-  // every load, but a listener on the ancestor itself keeps working
-  // regardless (event delegation), same convention as elsewhere on this
-  // dashboard where content re-renders more often than its container
-  // does. Wired on #sc-column-wrap only -- Service Calls is the only one
-  // of the three columns whose rows/filter buttons carry the
-  // [data-sc-id]/[data-sc-filter] attributes this handler looks for, and
-  // it's the only content #sc-column-wrap ever holds now that it moved
-  // out of #tt-columns.
+  // Subscriptions Expiring rows can land in, not re-wired per render --
+  // renderTodayTomorrow() below replaces their innerHTML on every load,
+  // but a listener on the ancestor itself keeps working regardless (event
+  // delegation), same convention as elsewhere on this dashboard where
+  // content re-renders more often than its container does. Wired on
+  // #sc-column-wrap only -- Service Calls is the only one of the two
+  // columns whose rows/filter buttons carry the [data-sc-id]/
+  // [data-sc-filter] attributes this handler looks for, and it's the only
+  // content #sc-column-wrap ever holds now that it moved out of
+  // #tt-columns.
   function onServiceCallsContainerClick(e) {
     // The Service Calls filter buttons (All/Just Mine/Unallocated), by
     // request -- checked first, before the [data-sc-id] row-click handling
@@ -869,60 +917,13 @@ export function mount(container) {
   }
   scColumnWrapEl.addEventListener('click', onServiceCallsContainerClick);
 
-  // Service Calls' own box height is kept in lock-step with the
-  // Scorecards column's total rendered height, by request ("have the
-  // Service Calls box reach the same depth as the Scorecards total
-  // length, not over, not under") -- a ResizeObserver on the scorecards
-  // wrapper (rather than calling this only right after each known
-  // render) means ANY future height change (scorecard data loading,
-  // admin metric edits, a browser font/zoom change) keeps both boxes in
-  // sync automatically, without hunting down every place scorecards
-  // content can change. Cleared (not applied) below 900px -- the two
-  // columns stack to one on a narrow window (.wo-top-row's own media
-  // query, styles.css), where a forced height would fight the natural
-  // stacked layout instead of matching it.
-  // Sets the height on the OUTER Service Calls box (#sc-section), not
-  // just its inner list wrapper -- #sc-section's own heading/status text
-  // sits above #sc-column-wrap (same shape .wo-scorecards-section's own
-  // status text sits above #results), so matching #sc-column-wrap alone
-  // to scorecardsWrapEl's FULL height would make the outer box taller
-  // than Scorecards' own box by exactly that heading's height. #sc-
-  // section is a flex column (styles.css) with #sc-column-wrap as its
-  // flex: 1, min-height: 0, overflow-y: auto child, so fixing the OUTER
-  // height here correctly lets the inner wrap fill (and scroll within)
-  // whatever room is left after the heading/status above it.
-  const NARROW_LAYOUT_QUERY = '(max-width: 900px)';
-  function syncServiceCallsHeight() {
-    if (window.matchMedia(NARROW_LAYOUT_QUERY).matches) {
-      scSectionEl.style.height = '';
-      return;
-    }
-    scSectionEl.style.height = `${scorecardsWrapEl.offsetHeight}px`;
-  }
-  new ResizeObserver(syncServiceCallsHeight).observe(scorecardsWrapEl);
-  window.addEventListener('resize', syncServiceCallsHeight);
-
-  // Scorecards' own initial loading placeholder is much shorter than its
-  // real, loaded content -- and Service Calls' box (above) is kept in
-  // lock-step with Scorecards' height, so on a fresh page load, where
-  // Service Calls' own data tends to arrive first, Service Calls briefly
-  // renders tiny and then visibly jumps taller once Scorecards' slower
-  // fetch finally lands. By request, Scorecards gets a floor of its own --
-  // at least as tall as Today & Tomorrow -- so both boxes start (and stay)
-  // reasonably sized from first paint, real content growing past that
-  // floor exactly as before. Same live-ResizeObserver approach as
-  // syncServiceCallsHeight above (a real measurement, not a guessed pixel
-  // value, and self-updates if Today & Tomorrow's own height ever
-  // changes) rather than a fixed CSS min-height.
-  function syncScorecardsMinHeight() {
-    if (window.matchMedia(NARROW_LAYOUT_QUERY).matches) {
-      scorecardsWrapEl.style.minHeight = '';
-      return;
-    }
-    scorecardsWrapEl.style.minHeight = `${ttSectionEl.offsetHeight}px`;
-  }
-  new ResizeObserver(syncScorecardsMinHeight).observe(ttSectionEl);
-  window.addEventListener('resize', syncScorecardsMinHeight);
+  // Service Calls' box height used to be kept in lock-step with the
+  // Scorecards column (which sat beside it in .wo-top-row) -- removed, by
+  // request, now that Scorecards has moved into the Today & Tomorrow row's
+  // third column instead, so the two no longer sit side by side and have
+  // nothing left to match heights against. Service Calls' own box (#sc-
+  // section) just sizes to its natural content height now, same as every
+  // other section on this page.
 
   // This mount is now the active one -- see activeRenderTodayTomorrow's own
   // comment up top.
@@ -930,6 +931,13 @@ export function mount(container) {
 
   if (lastTodayTomorrowData) renderTodayTomorrow(lastTodayTomorrowData);
   else loadTodayTomorrow(justConnectedStrety);
+
+  // This mount is now the active one for the Brief box too -- see
+  // activeRenderBrief's own comment up top.
+  briefRefreshButton.addEventListener('click', () => loadBrief(true));
+  activeRenderBrief = renderBrief;
+  if (lastBriefData) renderBrief(lastBriefData);
+  else loadBrief(false);
 
   // This mount is now the active one for the Helpdesk Handler banner too
   // -- see its own module-scope comment up top for why this restores
@@ -1045,16 +1053,14 @@ export function mount(container) {
         { totalCount: scColumn.ok ? scColumn.rows.length : undefined, headingExtraHtml: scColumn.ok ? serviceCallFilterButtonsHtml() : '' }
       )
     );
-    // Height sync is normally driven by the ResizeObserver on the
-    // scorecards column (see mount()'s own comment), but that only fires
-    // when SCORECARDS' own size changes -- calling it here too covers the
-    // very first paint, where Service Calls renders its real content
-    // before any scorecards resize event has necessarily fired yet.
-    syncServiceCallsHeight();
     // Column 1 -- static digital clocks, by request ("go back to a 3
     // column layout ... Add into column 1: digital clocks"). Appended
-    // first so it lands leftmost; Subscriptions Expiring/My Strety Tasks
-    // (columns 2 & 3) follow below exactly as before.
+    // first so it lands leftmost; Subscriptions Expiring (column 2)
+    // follows below exactly as before. Column 3 -- My Strety Tasks,
+    // formerly rebuilt here on every load/refresh same as columns 1 & 2 --
+    // is gone, by request; the Helpdesk Scorecards box now fills that
+    // spot instead, as a static sibling of #tt-columns that this function
+    // never touches (see mount()'s own template comment for why).
     ttColumnsEl.appendChild(clockColumnHtml());
     ttColumnsEl.appendChild(
       ttColumn(
@@ -1066,31 +1072,78 @@ export function mount(container) {
         { href: '#subscriptions-expiring', label: 'Show All Expiring Subscriptions' }
       )
     );
-    // My Strety Tasks' own connection states -- distinct from the shared
-    // Strety connection's page-level banner elsewhere on this page (this
-    // column depends on the SIGNED-IN USER'S OWN personal connection, see
-    // @dashboard/strety-client's getPersonalClient(); the shared one can be
-    // perfectly healthy while this signed-in user just hasn't connected
-    // their own yet). Checked before the generic personFound-false message
-    // below, since "not connected at all" and "connected, but no matching
-    // person" are different situations worth telling apart.
-    let stretyOverrideHtml = null;
-    if (data.stretyTasks.personalNotConnected) {
-      stretyOverrideHtml = `Your Strety account isn't connected yet. <a class="button-link" href="/auth/strety-personal/connect">Connect Strety</a>`;
-    } else if (data.stretyTasks.personalReauthRequired) {
-      const who = data.stretyTasks.personalConnectedAs ? ` (currently connected as ${escapeHtml(data.stretyTasks.personalConnectedAs)})` : '';
-      stretyOverrideHtml = `Your Strety connection${who} has stopped working and needs to be reconnected. <a class="button-link" href="/auth/strety-personal/connect">Reconnect Strety</a>`;
+  }
+
+  // "Today's Brief (Kaseya-MCP Morning Pulse)" box -- see server.js's own
+  // comment on getBrief() for the once-a-day-build/cheap-recheck-on-Refresh
+  // caching this is backed by. `force` here just controls the query param
+  // (?force=true asks the server to recheck instead of serving its cached
+  // day); the server, not this function, decides whether that's actually
+  // possible (a brand-new day always gets the full build regardless).
+  async function loadBrief(force) {
+    briefRefreshButton.disabled = true;
+    briefStatusEl.hidden = false;
+    briefStatusEl.className = 'status';
+    briefStatusEl.textContent = 'Loading...';
+    try {
+      const res = await fetch(`/api/whats-on/brief${force ? '?force=true' : ''}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      lastBriefData = data;
+      activeRenderBrief(data);
+    } catch (err) {
+      briefStatusEl.hidden = false;
+      briefStatusEl.className = 'status error';
+      briefStatusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      briefRefreshButton.disabled = false;
     }
-    ttColumnsEl.appendChild(
-      ttColumn(
-        'My Strety Tasks',
-        data.stretyTasks,
-        (row) => stretyTaskRowHtml(row, data.today, data.tomorrow),
-        data.stretyTasks.personFound === false ? `No Strety account found for you.` : null,
-        stretyOverrideHtml,
-        { href: '#my-strety-tasks', label: 'Show All of My Strety Tasks' }
+  }
+
+  function renderBrief(data) {
+    briefStatusEl.hidden = true;
+    const parts = [];
+
+    if (data.rmmFilterSummary) {
+      const s = data.rmmFilterSummary;
+      parts.push(
+        `<p class="status error">Found <strong>${s.total}</strong> client${s.total === 1 ? '' : 's'} missing from DRMM filters: TC Elite (${s.elite}) &middot; TC Essentials (${s.essentials})</p>`
+      );
+    }
+
+    if (data.datto.status === 'not-connected') {
+      parts.push(`<p class="status">Datto RMM isn't connected.</p>`);
+    } else if (data.datto.items.length === 0) {
+      parts.push(`<p class="status">Nothing flagged from Datto RMM right now.</p>`);
+    } else {
+      parts.push(`<ul class="wo-brief-list">${data.datto.items.map((i) => `<li>${escapeHtml(i.text)}</li>`).join('')}</ul>`);
+      if (data.datto.truncatedCount > 0) parts.push(`<p class="inline-subtext-tiny">+ ${data.datto.truncatedCount} more not shown</p>`);
+    }
+
+    parts.push(briefTicketGroupHtml('Breached', data.autotask.breached));
+    parts.push(briefTicketGroupHtml('Unassigned', data.autotask.unassigned));
+    parts.push(briefTicketGroupHtml('Waiting on us', data.autotask.waitingOnUs));
+
+    briefBodyEl.innerHTML = parts.join('');
+  }
+
+  // One Autotask group's own compact block -- heading line (label + real
+  // total count, not just however many are shown) then up to BRIEF_TOP_N
+  // rows (server.js), each a link straight to the real ticket, same
+  // open-ticket-link convention every other page on this dashboard uses.
+  function briefTicketGroupHtml(label, group) {
+    if (!group) return '';
+    if (group.count === 0) return `<p class="status"><strong>${escapeHtml(label)}:</strong> none.</p>`;
+    const rows = group.items
+      .map(
+        (t) =>
+          `<li><a href="${escapeHtml(t.ticketUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.ticketNumber)}</a> -- <strong>${escapeHtml(t.clientName)}</strong>: ${escapeHtml(t.title)}</li>`
       )
-    );
+      .join('');
+    const moreCount = group.count - group.items.length;
+    return `<p class="status"><strong>${escapeHtml(label)} (${group.count}):</strong></p><ul class="wo-brief-list">${rows}</ul>${
+      moreCount > 0 ? `<p class="inline-subtext-tiny">+ ${moreCount} more not shown</p>` : ''
+    }`;
   }
 
   // Column 1's card -- static, no fetch/error/empty states to account for
@@ -1277,7 +1330,7 @@ export function mount(container) {
     // The WHOLE row is the click target for the Open ticket/Mark Complete
     // popup, by request -- not just the day tag, since a call with no
     // linked ticket at all still needs to be clickable for Mark Complete
-    // (see the delegated click listener on ttColumnsEl above).
+    // (see the delegated click listener on scColumnWrapEl above).
     return `
       <li class="tt-service-call-row" data-sc-id="${row.id}" data-sc-complete="${row.isComplete ? 'true' : 'false'}" data-sc-ticket-url="${escapeHtml(row.ticketUrl || '')}" data-sc-start="${escapeHtml(row.startDateTime || '')}" data-sc-end="${escapeHtml(row.endDateTime || '')}">
         ${ttDayTag(row.dayKey, today, tomorrow, row.ticketUrl, tooltip)}
@@ -1594,22 +1647,6 @@ export function mount(container) {
         ${ttDayTag(row.expirationDate, today, tomorrow)}
         <strong>${escapeHtml(row.clientName)}</strong>
         <span class="cell-subtext">${escapeHtml(row.name)} -- ${renew}</span>
-      </li>`;
-  }
-
-  // Opens the to-do directly in Strety's own web app, by request -- on the
-  // day tag itself (Today/Tomorrow/date), NOT the title text (tried that
-  // first, looked bad by request -- reverted). Same href-on-ttDayTag
-  // convention Service Calls' own rows already use for their ticket link.
-  // row.todoUrl is null when getTodoUrl() (server.js/
-  // @dashboard/strety-client) has nothing to build from -- ttDayTag()
-  // renders a plain non-link tag in that case, same as any other row with
-  // no href.
-  function stretyTaskRowHtml(row, today, tomorrow) {
-    return `
-      <li>
-        ${ttDayTag(row.dueDate, today, tomorrow, row.todoUrl)}
-        <span class="tt-strety-title">${escapeHtml(row.title)}</span>
       </li>`;
   }
 
@@ -2281,11 +2318,10 @@ export function mount(container) {
 
   function render(data) {
     if (data.status === 'not-connected') {
-      // The SIGNED-IN USER'S OWN Strety connection now (both the Helpdesk
-      // team group and Personal group use it, by request -- see
-      // server.js), not the old shared one -- points at
-      // /auth/strety-personal/connect, which authorizes as whoever's
-      // currently signed into the dashboard.
+      // The SIGNED-IN USER'S OWN Strety connection (the Helpdesk team
+      // group uses it, by request -- see server.js), not the old shared
+      // one -- points at /auth/strety-personal/connect, which authorizes
+      // as whoever's currently signed into the dashboard.
       statusEl.hidden = false;
       statusEl.className = 'status error';
       statusEl.innerHTML = `Your Strety account isn't connected yet.<br><a class="button-link" href="/auth/strety-personal/connect">Connect Strety</a>`;
@@ -2396,11 +2432,12 @@ export function mount(container) {
     }
 
     data.groups.forEach((group) => {
-      // The Personal group is always second (see server.js -- Helpdesk is
-      // pushed first, unconditionally). No separating heading here, by
-      // request -- Personal Scorecards sits directly below Helpdesk's own,
-      // rather than getting its own "Your Personal Scorecards -- as at..."
-      // heading first.
+      // Only ever the one Helpdesk Task Tracker group now -- Personal
+      // Scorecards used to be a second group here (always pushed after
+      // Helpdesk, with no separating heading of its own), but it's been
+      // removed, by request: Personal Scorecards is moving to the About Me
+      // page instead (not yet done), and this box needs to stay compact
+      // now that it lives in the Today & Tomorrow row's third column.
       if (group.notFound) {
         resultsEl.appendChild(notice(`"${group.label}" wasn't found in Strety -- it may have been renamed or removed.`));
         return;

@@ -11,7 +11,9 @@
   },
   "dependencies": {
     "@dashboard/autotask-client": "*",
+    "@dashboard/datto-rmm": "*",
     "@dashboard/ingram-client": "*",
+    "@dashboard/rmm-filters": "*",
     "@dashboard/shell": "*",
     "@dashboard/strety-client": "*",
     "@dashboard/teams-shifts": "*",
