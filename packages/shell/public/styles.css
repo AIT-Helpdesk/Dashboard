@@ -10318,6 +10318,14 @@ tr.accrued-time-yellow-row th {
    top margin to separate it from the main table above it. */
 .rmmf-exceptions {
   margin-top: 0.75rem;
+  /* Same width fix as .rmm-filters-page .resource-group (above) -- this
+     wrapper isn't a .resource-group itself (no card border/background
+     wanted here), so it never picked up that rule and was still
+     stretching full-width like any other block <div>, keeping its own
+     <table> stretched wide along with it even though that table's own
+     `width: auto` would otherwise have shrunk it. */
+  width: fit-content;
+  max-width: 100%;
 }
 .rmmf-tabs[hidden] {
   display: none;

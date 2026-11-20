@@ -122,18 +122,28 @@ async function buildRmmFilters() {
   const companyById = new Map(companies.map((c) => [c.id, c]));
   const psaCompanyIdBySiteUid = new Map(allSites.filter((s) => s.autotaskCompanyId != null).map((s) => [s.uid, s.autotaskCompanyId]));
 
-  // Every distinct device-category this account's devices resolve to, per
+  // Every device-category count this account's devices resolve to, per
   // company -- built once, from the whole account's devices (not just one
   // filter's own matches), so "Missing" can tell a genuine gap from a
   // client with no device of that kind anywhere to ever be captured.
-  const deviceCategoriesByCompanyId = new Map(); // companyId -> Set<category>
+  // A count per category, not just a Set of which categories exist, by
+  // request ("show... the Devices column" on Missing too) -- Missing's own
+  // Devices column (below) shows how many of THIS filter's relevant
+  // categories a company already has ACCOUNT-WIDE even though none of them
+  // are captured by this filter yet -- 0 reads as "genuinely no presence
+  // yet" (new/pending onboarding), anything higher points at a real
+  // site-matching gap (e.g. the stale Datto RMM PSA Company link case
+  // confirmed live this session, see resolveCompanyForSite()'s own
+  // comment).
+  const deviceCategoryCountsByCompanyId = new Map(); // companyId -> Map<category, count>
   for (const d of allDevices) {
     const siteName = (d.site || '').trim();
     if (!siteName) continue;
     const company = resolveCompanyForSite(siteName, d.siteUid, psaCompanyIdBySiteUid, companyById, udfValueToCompanyName, companyByLowerName);
     if (!company) continue;
-    if (!deviceCategoriesByCompanyId.has(company.id)) deviceCategoriesByCompanyId.set(company.id, new Set());
-    deviceCategoriesByCompanyId.get(company.id).add(d.deviceType);
+    if (!deviceCategoryCountsByCompanyId.has(company.id)) deviceCategoryCountsByCompanyId.set(company.id, new Map());
+    const counts = deviceCategoryCountsByCompanyId.get(company.id);
+    counts.set(d.deviceType, (counts.get(d.deviceType) || 0) + 1);
   }
 
   // One pre-sorted "should be in a filter targeting this classification"
@@ -210,12 +220,24 @@ async function buildRmmFilters() {
       // see resolveCompanyForSite()'s own comment) surfaces here instead
       // of silently vanishing from the whole report, which is exactly the
       // kind of gap this page exists to catch.
-      const categories = deviceCategoriesByCompanyId.get(c.id);
-      if (categories && !spec.deviceCategories.some((cat) => categories.has(cat))) continue;
+      const categoryCounts = deviceCategoryCountsByCompanyId.get(c.id);
+      const relevantDeviceCount = categoryCounts ? spec.deviceCategories.reduce((sum, cat) => sum + (categoryCounts.get(cat) || 0), 0) : 0;
+      if (categoryCounts && relevantDeviceCount === 0) continue;
       // subjectKey: always "company:<id>" here -- a Missing row is always a
       // real Autotask company (see targetCompanies above), never an
       // unresolved site the way a Wrongly Included row can be.
-      missing.push({ companyId: c.id, companyName: c.companyName, companyUrl: await getCompanyUrl(c.id), subjectKey: `company:${c.id}` });
+      // classificationLabel: always spec.classificationLabel here (that's
+      // the definition of targetCompanies) -- included anyway, by request,
+      // so Missing's own table has the same Client/Classification/Devices
+      // columns every other section's table does.
+      missing.push({
+        companyId: c.id,
+        companyName: c.companyName,
+        companyUrl: await getCompanyUrl(c.id),
+        classificationLabel: spec.classificationLabel,
+        deviceCount: relevantDeviceCount,
+        subjectKey: `company:${c.id}`,
+      });
     }
 
     const correctlyPresent = [];
@@ -223,7 +245,17 @@ async function buildRmmFilters() {
     for (const { siteName, count, company } of resolvedBySite.values()) {
       const companyClassificationLabel = company ? classificationLabels.get(company.classification) || null : null;
       if (company && companyClassificationLabel === spec.classificationLabel) {
-        correctlyPresent.push({ companyId: company.id, companyName: company.companyName, companyUrl: await getCompanyUrl(company.id), deviceCount: count });
+        // classificationLabel: always spec.classificationLabel here (that's
+        // the definition of correctlyPresent) -- included anyway, by
+        // request, so Correct's own table has the same Client/
+        // Classification/Devices columns every other section's table does.
+        correctlyPresent.push({
+          companyId: company.id,
+          companyName: company.companyName,
+          companyUrl: await getCompanyUrl(company.id),
+          classificationLabel: companyClassificationLabel,
+          deviceCount: count,
+        });
       } else {
         // subjectKey: keyed by the resolved company when there is one (so
         // the SAME company showing up under a different Datto site name

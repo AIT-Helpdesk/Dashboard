@@ -28,7 +28,15 @@ const SECTIONS = [
     label: 'Missing',
     subTabWire: 'missing',
     emptyMessage: (tab) => `Every "${tab.classificationLabel}" client is present in this filter.`,
-    columns: [{ label: 'Client', cell: (r) => (r.companyUrl ? `<a href="${escapeHtml(r.companyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.companyName)}</a>` : escapeHtml(r.companyName)) }],
+    columns: [
+      { label: 'Client', cell: (r) => (r.companyUrl ? `<a href="${escapeHtml(r.companyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.companyName)}</a>` : escapeHtml(r.companyName)) },
+      { label: 'Classification', cell: (r) => escapeHtml(r.classificationLabel) },
+      // Count of this filter's own relevant-category devices the client
+      // already has ACCOUNT-WIDE (even though none are captured by this
+      // filter), by request -- 0 reads as "genuinely no presence yet",
+      // anything higher points at a real site-matching gap instead.
+      { label: 'Devices', className: 'ticket-number', cell: (r) => String(r.deviceCount) },
+    ],
     clientNameFor: (r) => r.companyName,
   },
   {
@@ -56,6 +64,7 @@ const SECTIONS = [
     emptyMessage: () => 'No clients are correctly present in this filter.',
     columns: [
       { label: 'Client', cell: (r) => `<a href="${escapeHtml(r.companyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.companyName)}</a>` },
+      { label: 'Classification', cell: (r) => escapeHtml(r.classificationLabel) },
       { label: 'Devices', className: 'ticket-number', cell: (r) => String(r.deviceCount) },
     ],
   },
