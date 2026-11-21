@@ -5052,6 +5052,30 @@ a.client-summary-service-badge {
 .tc-elite-services-page .client-summary-service-badge--warn {
   border: 1px solid #f59e0b;
 }
+/* TC Elite's own table -- same narrower-row/smaller-text style as RMM
+   Filter Checks, by request ("make the rows tighter like RMM Filter check
+   tables"), and not stretched to 100% width, by request -- same
+   .rmm-filters-page table convention. */
+.tc-elite-page table {
+  width: auto;
+}
+.tc-elite-page table th,
+.tc-elite-page table td {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.75rem;
+}
+/* Click-to-sort column headers, by request ("allow sort by any column")
+   -- plain cursor/hover affordance, no new color (the ▲/▼ marker itself,
+   built per-page in client.js, is what shows the active sort). Shared
+   class name, not page-scoped -- any page's own sortable <th> can use it. */
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.sortable-th:hover {
+  color: var(--accent);
+}
 /* The Default Contract pill specifically when its matched contract is a
    plain "T&M" one, by request -- a T&M default isn't really informative
    the way a real named contract is, so it's demoted from the blue --info

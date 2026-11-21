@@ -5,7 +5,7 @@
   "main": "server.js",
   "dashboardPage": {
     "id": "tc-elite",
-    "label": "TC Elite",
+    "label": "TC Elite Summary",
     "client": "client.js",
     "server": "server.js"
   },

@@ -26,14 +26,27 @@ const { getClient, listAll, fetchByFieldIn, resolveCompanyName, mapWithConcurren
 //   Discount/Credit", id 478 "Tech Cover Elite - Specialist Service".
 const TC_ELITE_SERVICE_IDS = [207, 471, 478];
 
-// Contracts literally named "Tech Cover Elite" (not a wildcard/contains
-// match -- every real one confirmed to use this exact name), restricted
-// to status 1 (In Effect) -- every such contract found against real data
-// was already status 1, but this is still an explicit filter, not an
+// Contracts whose name STARTS WITH `contractName` -- NOT an exact match,
+// by request ("Fairway Capital is not in the list. Others are also
+// missing"). Confirmed live: only half of the real "Tech Cover Elite"
+// contracts (status 1) are named exactly "Tech Cover Elite" -- the other
+// 21 of 42 use a variant name (Fairway Capital's own is "Tech Cover
+// Elite [3 Years]"; others: "Tech Cover Elite Platinum", "Tech Cover
+// Elite [3 YEARS]", "Tech Cover Elite - Franchise Site", "Tech Cover
+// Elite - Managed Service Agreement", "Tech Cover Elite Managed Services
+// - Lumineye"). An exact-name filter was silently dropping every one of
+// those. `beginsWith` is a real, working Autotask filter op (confirmed
+// live here, same as @dashboard/times' own AITTIME_TITLE_PREFIX query)
+// -- same "match the classification label as a name PREFIX" convention
+// @dashboard/tc-elite-services' own buildContractPills() already uses
+// for its contract pills (normalizeContractName(...).startsWith(...)),
+// just applied via the API filter here instead of client-side.
+// Restricted to status 1 (In Effect) -- every real contract found was
+// already status 1, but this is still an explicit filter, not an
 // assumption, so a future terminated one doesn't silently start showing.
-async function fetchTcEliteContracts(client) {
+async function fetchContractsByName(client, contractName) {
   return listAll(client.contracts, [
-    { op: 'eq', field: 'contractName', value: 'Tech Cover Elite' },
+    { op: 'beginsWith', field: 'contractName', value: contractName },
     { op: 'eq', field: 'status', value: 1 },
   ]);
 }
@@ -59,10 +72,12 @@ function isCurrentPeriod(unit, today) {
 // row per company that currently has at least one qualifying line --
 // "qualifying" meaning: on an active "Tech Cover Elite" contract, its
 // underlying service is one of TC_ELITE_SERVICE_IDS, its CURRENT period
-// exists, and that period's `price` is positive (excludes a $0 line --
-// e.g. a placeholder/comment row -- and any credit/discount line that
-// nets to zero or negative, by request: "count only the TC Elite lines
-// on entries with a positive $ value").
+// exists, and that period's `price` is non-zero (excludes only a genuine
+// $0 line, e.g. a placeholder/comment row). A negative line (a
+// credit/discount) now counts toward the $ total -- by request, "include
+// the negative lines in the $$ calculation" -- but NOT toward the seat
+// count, which only ever sums `units` from a positive-price line (a
+// credit/discount row's own `units` isn't a real seat count).
 //
 // `units` is summed AS-IS across every qualifying line for that company,
 // by request -- worth knowing honestly: on real contracts this is not
@@ -76,18 +91,32 @@ function isCurrentPeriod(unit, today) {
 // "user seats only" rule (e.g. matching on invoiceDescription text, not
 // just the service ID) is easy to layer on once this first pass has been
 // reviewed against what it actually surfaces.
-async function fetchTcEliteSeats() {
+// Generalized over contractName/serviceIds, by request (TC Services' own
+// summary line reuses this exact methodology for "Tech Cover Essentials"
+// too, not just Elite) -- confirmed live the same way Elite's own service
+// IDs were: exactly ONE real service carries the "Tech Cover Essentials"
+// branding, id 360 "Tech Cover Essentials - Business Security
+// Essentials" (vs Elite's three), and 164 real "Tech Cover Essentials"
+// contracts exist at status 1. getTcEliteSeats() below is now a thin
+// Elite-specific wrapper over this; nothing about its own real behavior
+// changed.
+// `targetDateKey` ("YYYY-MM-DD") is the day whose billing period counts
+// as "current" -- defaults to today, but the Month selector (by request)
+// passes the 1st of whichever month was picked instead, so "current
+// period" means "the period covering that month" rather than always
+// meaning today.
+async function fetchSeatsForContract(contractName, serviceIds, targetDateKey) {
   const client = await getClient();
-  const today = todayAestKey();
+  const today = targetDateKey || todayAestKey();
 
-  const contracts = await fetchTcEliteContracts(client);
+  const contracts = await fetchContractsByName(client, contractName);
   const contractById = new Map(contracts.map((c) => [c.id, c]));
   const contractIds = contracts.map((c) => c.id);
 
   const allContractServices = contractIds.length > 0 ? await fetchByFieldIn(client.contractServices, 'contractID', contractIds) : [];
-  const tcEliteContractServices = allContractServices.filter((cs) => TC_ELITE_SERVICE_IDS.includes(cs.serviceID));
+  const matchedContractServices = allContractServices.filter((cs) => serviceIds.includes(cs.serviceID));
 
-  const csIds = tcEliteContractServices.map((cs) => cs.id);
+  const csIds = matchedContractServices.map((cs) => cs.id);
   const allUnits = csIds.length > 0 ? await fetchByFieldIn(client.contractServiceUnits, 'contractServiceID', csIds) : [];
   const currentUnitByCsId = new Map();
   for (const u of allUnits) {
@@ -95,14 +124,14 @@ async function fetchTcEliteSeats() {
   }
 
   const byCompany = new Map(); // companyID -> { seats, totalPrice, lines: [] }
-  for (const cs of tcEliteContractServices) {
+  for (const cs of matchedContractServices) {
     const contract = contractById.get(cs.contractID);
     const unit = currentUnitByCsId.get(cs.id);
-    if (!contract || !unit || !(unit.price > 0)) continue;
+    if (!contract || !unit || unit.price === 0) continue;
 
     if (!byCompany.has(contract.companyID)) byCompany.set(contract.companyID, { seats: 0, totalPrice: 0, lines: [] });
     const entry = byCompany.get(contract.companyID);
-    entry.seats += unit.units;
+    if (unit.price > 0) entry.seats += unit.units;
     entry.totalPrice += unit.price;
     entry.lines.push({
       // First line only -- some invoiceDescriptions here are long,
@@ -121,8 +150,25 @@ async function fetchTcEliteSeats() {
   const companyIds = [...byCompany.keys()];
   await mapWithConcurrency(companyIds, 3, (id) => resolveCompanyName(client, id));
 
+  // Parent company name, by request ("Clients with a Parent Company in a
+  // separate list at the bottom") -- same real parentCompanyID field
+  // Classification Summary/TC Services already resolve for their own
+  // identical drilldown/grouping. One batched Companies fetch for every
+  // company in this result (not per-row), then every distinct parent id
+  // resolved once (bounded concurrency) -- resolveCompanyName() also
+  // caches per id for the life of this server process, so a repeat id is
+  // instant either way.
+  const companies = companyIds.length > 0 ? await fetchByFieldIn(client.companies, 'id', companyIds) : [];
+  const companyRecordById = new Map(companies.map((c) => [c.id, c]));
+  const distinctParentIds = [...new Set(companies.map((c) => c.parentCompanyID).filter(Boolean))];
+  const parentNameById = new Map();
+  await mapWithConcurrency(distinctParentIds, 5, async (id) => {
+    parentNameById.set(id, await resolveCompanyName(client, id));
+  });
+
   const rows = [];
   for (const [companyId, entry] of byCompany.entries()) {
+    const parentCompanyId = companyRecordById.get(companyId)?.parentCompanyID || null;
     rows.push({
       companyId,
       companyName: await resolveCompanyName(client, companyId),
@@ -130,45 +176,59 @@ async function fetchTcEliteSeats() {
       seats: entry.seats,
       totalPrice: entry.totalPrice,
       lines: entry.lines,
+      hasParent: !!parentCompanyId,
+      parentCompanyName: parentCompanyId ? parentNameById.get(parentCompanyId) || null : null,
     });
   }
-  // Most seats first, by request-equivalent reasoning (the biggest TC
-  // Elite clients are the most useful to see at a glance) -- company name
-  // as the tiebreak for a stable, predictable order among equal counts.
+  // Most seats first, by request-equivalent reasoning (the biggest
+  // clients are the most useful to see at a glance) -- company name as
+  // the tiebreak for a stable, predictable order among equal counts.
   rows.sort((a, b) => b.seats - a.seats || a.companyName.localeCompare(b.companyName));
 
   return { asOf: new Date().toISOString(), today, rows };
 }
 
+async function fetchTcEliteSeats(targetDateKey) {
+  return fetchSeatsForContract('Tech Cover Elite', TC_ELITE_SERVICE_IDS, targetDateKey);
+}
+
 // Same reasoning Service Calls'/Today Things' own report caches give for
 // their own short windows -- a contract change (a client added/removed,
 // seats adjusted) should stop showing stale within the hour, not linger
-// for this dashboard's more usual 20-minute default.
+// for this dashboard's more usual 20-minute default. Keyed per month, by
+// request (the Month selector) -- a cache hit for "this month" must
+// never serve stale data for a different month picked a moment later,
+// and vice versa.
 const CACHE_TTL_MS = 10 * 60 * 1000;
-let cached = null; // { data, expiresAt }
-let inFlight = null;
+const cacheByMonth = new Map(); // monthKey -> { data, expiresAt }
+const inFlightByMonth = new Map(); // monthKey -> Promise
 
-async function getTcEliteSeats(force) {
+async function getTcEliteSeats(force, monthKey) {
+  const cached = cacheByMonth.get(monthKey);
   if (!force && cached && Date.now() < cached.expiresAt) return cached.data;
-  if (!inFlight) {
-    inFlight = fetchTcEliteSeats()
+  if (!inFlightByMonth.has(monthKey)) {
+    const promise = fetchTcEliteSeats(`${monthKey}-01`)
       .then((data) => {
-        cached = { data, expiresAt: Date.now() + CACHE_TTL_MS };
+        cacheByMonth.set(monthKey, { data, expiresAt: Date.now() + CACHE_TTL_MS });
         return data;
       })
       .finally(() => {
-        inFlight = null;
+        inFlightByMonth.delete(monthKey);
       });
+    inFlightByMonth.set(monthKey, promise);
   }
-  return inFlight;
+  return inFlightByMonth.get(monthKey);
 }
+
+const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
 
 const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
-    const data = await getTcEliteSeats(req.query.force === 'true');
-    res.json(data);
+    const monthKey = MONTH_KEY_RE.test(req.query.month || '') ? req.query.month : todayAestKey().slice(0, 7);
+    const data = await getTcEliteSeats(req.query.force === 'true', monthKey);
+    res.json({ ...data, month: monthKey });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
