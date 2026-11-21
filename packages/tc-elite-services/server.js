@@ -108,7 +108,14 @@ async function buildServicesForSpec(client, spec, companies, parentNameById) {
 
   const [pillsByCompany, installedServicesPairs] = await Promise.all([
     buildContractPills(client, companyIds, contractPrefix),
-    mapWithConcurrency(companies, FAN_OUT_CONCURRENCY, async (c) => [c.id, await buildInstalledServices(c)]),
+    // includeBillableSeatCount: false -- this page only ever surfaced that
+    // number in a hover tooltip, never as visible text, and it was the
+    // single biggest cost in this fan-out (a genuinely live per-company
+    // API call, unlike every other vendor check here, see
+    // buildInstalledServices()'s own comment). Confirmed live by request
+    // ("we aren't showing the billable seat count on the TC Services page
+    // -- why are we getting this?").
+    mapWithConcurrency(companies, FAN_OUT_CONCURRENCY, async (c) => [c.id, await buildInstalledServices(c, { includeBillableSeatCount: false })]),
   ]);
   const installedServicesByCompany = new Map(installedServicesPairs);
 

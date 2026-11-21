@@ -104,7 +104,19 @@ async function findSaasProtectionMatch(company) {
   return (udfValue && (await saasProtectionRouter.findDomainMatchExact(udfValue))) || saasProtectionRouter.findDomainMatch(company.companyName);
 }
 
-async function buildInstalledServices(company) {
+// `includeBillableSeatCount` defaults to true (Client Summary's own
+// single-client page, unaffected either way) -- TC Elite Services/TC
+// Services passes false, by request ("we aren't showing the billable
+// seat count on the TC Services page -- why are we getting this?").
+// Confirmed live this was the real cost behind that page's own slowness:
+// unlike every other vendor here (one bulk list fetched/cached once, then
+// matched in-memory per company), getBillableSeatCount() is a SECOND,
+// genuinely live, per-customer API call (not bulk) -- fine for Client
+// Summary's one-client-at-a-time page, but a real per-client network call
+// multiplied across TC Services' own concurrency-5 fan-out of dozens of
+// companies, for a number that page only ever surfaced in a hover
+// tooltip, never as visible text.
+async function buildInstalledServices(company, { includeBillableSeatCount = true } = {}) {
   const [saasAlertsCustomerId, saasProtectionMatch, inkyMatch, dattoEdrMatches, autoElevateMatch, huntressMatch, rewstMatch] = await Promise.all([
     findSaasAlertsCustomerId(company.id),
     findSaasProtectionMatch(company),
@@ -116,12 +128,14 @@ async function buildInstalledServices(company) {
   ]);
   // SaaS Protection's own billable-seat count needs a SECOND live call
   // (per-customer /seats, not the bulk /domains list findDomainMatch()
-  // already used) -- only made when there's actually a match, by request
-  // ("show the user count or billable seats rather than total seats" --
-  // /domains' own seatsUsed lumps in SharePoint sites/Teams/shared
-  // mailboxes alongside real licensed users; confirmed live on a real
-  // account, 173 total seat rows there, only 52 actually billable).
-  const billableSeatCount = saasProtectionMatch ? await saasProtectionRouter.getBillableSeatCount(saasProtectionMatch.customerId) : null;
+  // already used) -- only made when there's actually a match AND the
+  // caller actually wants it, by request ("show the user count or
+  // billable seats rather than total seats" -- /domains' own seatsUsed
+  // lumps in SharePoint sites/Teams/shared mailboxes alongside real
+  // licensed users; confirmed live on a real account, 173 total seat rows
+  // there, only 52 actually billable).
+  const billableSeatCount =
+    saasProtectionMatch && includeBillableSeatCount ? await saasProtectionRouter.getBillableSeatCount(saasProtectionMatch.customerId) : null;
   return {
     saasAlerts: { installed: saasAlertsCustomerId !== null },
     saasProtection: saasProtectionMatch
