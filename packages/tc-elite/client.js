@@ -14,9 +14,9 @@ let lastData = null; // module-scope, survives the shell's teardown/re-mount, sa
 // contracts in that month for the list. Default to Next Month.") --
 // 'selectedMonth' ("YYYY-MM") is sent to the server, which picks the 1st
 // of that month as the day whose billing period counts as "current"
-// (see server.js's own comment). Offered range: 3 months back through 6
-// months forward -- enough to look back at a prior month or plan several
-// months ahead, without an unbounded dropdown. Plain local-date math (not
+// (see server.js's own comment). Offered range: next month at the top,
+// then back 13 months from there, by request -- newest/most-useful
+// first, not an unbounded dropdown. Plain local-date math (not
 // AEST-anchored) -- a month-level UI default doesn't need AEST precision,
 // unlike a same-day financial cutoff elsewhere on this dashboard.
 function monthKeyOffset(offset) {
@@ -67,7 +67,7 @@ export function mount(container) {
         <div class="date-form">
           <label for="month-select">Month</label>
           <select id="month-select">
-            ${Array.from({ length: 10 }, (_, i) => monthKeyOffset(i - 3))
+            ${Array.from({ length: 14 }, (_, i) => monthKeyOffset(1 - i))
               .map((key) => `<option value="${key}"${key === selectedMonth ? ' selected' : ''}>${monthLabelFor(key)}</option>`)
               .join('')}
           </select>
@@ -81,13 +81,22 @@ export function mount(container) {
   `;
 
   const refreshButton = container.querySelector('#refresh-button');
+  const monthSelect = container.querySelector('#month-select');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
   refreshButton.addEventListener('click', () => load(true));
+  // Changing the month was never actually wired to a reload -- the
+  // dropdown updated but every request still asked for whatever month
+  // the page happened to load with, so the list never changed. Fixed:
+  // picking a month updates selectedMonth and reloads for real.
+  monthSelect.addEventListener('change', () => {
+    selectedMonth = monthSelect.value;
+    load(false);
+  });
 
-  if (lastData) render(lastData);
+  if (lastData && lastData.month === selectedMonth) render(lastData);
   else load(false);
 
   async function load(force) {
@@ -95,7 +104,7 @@ export function mount(container) {
     resultsEl.innerHTML = '';
     summaryEl.hidden = true;
     try {
-      const res = await fetch(`/api/tc-elite${force ? '?force=true' : ''}`);
+      const res = await fetch(`/api/tc-elite?month=${selectedMonth}${force ? '&force=true' : ''}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastData = data;
