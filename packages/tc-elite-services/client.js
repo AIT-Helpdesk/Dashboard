@@ -148,7 +148,7 @@ export function mount(container) {
               <td>${companyLink(r)}</td>
               ${showParentColumn ? `<td>${escapeHtml(r.parentCompanyName)}</td>` : ''}
               <td>${renderContractPills(r, tab)}</td>
-              <td>${renderServicePills(r)}</td>
+              <td>${renderServicePills(r, tab)}</td>
             </tr>`
             )
             .join('')}
@@ -205,8 +205,18 @@ export function mount(container) {
   // Same badge markup/classes Client Summary's own renderInstalledServiceBadges()
   // builds for its green/red/grey Installed Services pills -- its own
   // column here, separate from the 2 contract pills above, by request.
-  function renderServicePills(r) {
+  function renderServicePills(r, tab) {
     const services = r.installedServices;
+    // AutoElevate/Huntress aren't a standard TC Essentials service, by
+    // request ("show Autoelevate and Huntress greyed out unless the
+    // service IS active, then green ... no reds needed as this is not
+    // normally a TC Essentials service") -- on that tab only, a plain
+    // "not installed" (false) renders as the same grey as "not
+    // configured" instead of red; genuinely active (true) still shows
+    // green, and Huntress' own "ambiguous" state (ANOTHER tab's/this
+    // one's real can't-tell-from-name-alone case) is untouched either way
+    // -- it isn't a plain absence. The Elite tab is unaffected.
+    const isEssentialsTab = tab.key === 'essentials';
     const items = [
       { label: 'SaaS Alerts', installed: services.saasAlerts.installed },
       {
@@ -231,7 +241,9 @@ export function mount(container) {
             installed: services.dattoEdr.installed,
             detail: services.dattoEdr.installed ? `${services.dattoEdr.locationCount} location${services.dattoEdr.locationCount === 1 ? '' : 's'}` : null,
           },
-      services.autoElevate.status === 'not-configured' ? { label: 'AutoElevate', installed: null } : { label: 'AutoElevate', installed: services.autoElevate.installed },
+      services.autoElevate.status === 'not-configured'
+        ? { label: 'AutoElevate', installed: null }
+        : { label: 'AutoElevate', installed: isEssentialsTab && !services.autoElevate.installed ? 'na' : services.autoElevate.installed },
       services.huntress.status === 'not-configured'
         ? { label: 'Huntress', installed: null }
         : services.huntress.status === 'ambiguous'
@@ -242,7 +254,7 @@ export function mount(container) {
             }
           : {
               label: 'Huntress',
-              installed: services.huntress.installed,
+              installed: isEssentialsTab && !services.huntress.installed ? 'na' : services.huntress.installed,
               detail: services.huntress.agentsCount != null ? `${services.huntress.agentsCount} agent${services.huntress.agentsCount === 1 ? '' : 's'}` : null,
             },
       services.rewst.status === 'not-configured'
@@ -253,18 +265,32 @@ export function mount(container) {
     // "ambiguous" (orange/yellow -- multiple real matches, not a plain
     // pass/fail) sits between --unknown (grey, vendor not configured at
     // all) and --yes/--no, by request ("show these as our Orangy-Yellow
-    // colour" -- see huntress.js's own findOrganizationMatch()).
+    // colour" -- see huntress.js's own findOrganizationMatch()). "na"
+    // (grey, same class as --unknown) is a plain "not installed" on a
+    // service that isn't standard for this tab's own classification --
+    // see the comment above.
     const servicePills = items
       .map((i) => {
         const cls =
-          i.installed === null
+          i.installed === null || i.installed === 'na'
             ? 'client-summary-service-badge--unknown'
             : i.installed === 'ambiguous'
               ? 'client-summary-service-badge--warn'
               : i.installed
                 ? 'client-summary-service-badge--yes'
                 : 'client-summary-service-badge--no';
-        const title = i.installed === null ? 'Not yet connected' : i.installed === 'ambiguous' ? i.detail : i.detail ? i.detail : i.installed ? 'Installed' : 'Not installed';
+        const title =
+          i.installed === null
+            ? 'Not yet connected'
+            : i.installed === 'na'
+              ? 'Not installed -- not a standard TC Essentials service'
+              : i.installed === 'ambiguous'
+                ? i.detail
+                : i.detail
+                  ? i.detail
+                  : i.installed
+                    ? 'Installed'
+                    : 'Not installed';
         return `<span class="client-summary-service-badge ${cls}" title="${escapeHtml(title)}">${escapeHtml(i.label)}</span>`;
       })
       .join('');
