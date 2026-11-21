@@ -316,11 +316,17 @@ export function mount(container) {
       services.autoElevate.status === 'not-configured' ? { label: 'AutoElevate', installed: null } : { label: 'AutoElevate', installed: services.autoElevate.installed },
       services.huntress.status === 'not-configured'
         ? { label: 'Huntress', installed: null }
-        : {
-            label: 'Huntress',
-            installed: services.huntress.installed,
-            detail: services.huntress.agentsCount != null ? `${services.huntress.agentsCount} agent${services.huntress.agentsCount === 1 ? '' : 's'}` : null,
-          },
+        : services.huntress.status === 'ambiguous'
+          ? {
+              label: 'Huntress',
+              installed: 'ambiguous',
+              detail: `${services.huntress.candidateCount} matching Huntress organizations -- check manually`,
+            }
+          : {
+              label: 'Huntress',
+              installed: services.huntress.installed,
+              detail: services.huntress.agentsCount != null ? `${services.huntress.agentsCount} agent${services.huntress.agentsCount === 1 ? '' : 's'}` : null,
+            },
       // Detail is just the matched Rewst customer's own name, not a real
       // connected-integrations list -- that data isn't available from the
       // one Rewst workflow this reuses (see server.js's own comment).
@@ -329,14 +335,25 @@ export function mount(container) {
         : { label: 'Rewst', installed: services.rewst.installed, detail: services.rewst.rewstCompanyName ? `Rewst: ${services.rewst.rewstCompanyName}` : null },
     ];
 
+    // "ambiguous" (orange/yellow -- multiple real matches, not a plain
+    // pass/fail) sits between --unknown (grey, vendor not configured at
+    // all) and --yes/--no, by request ("show these as our Orangy-Yellow
+    // colour" -- see huntress.js's own findOrganizationMatch()).
     const wrap = document.createElement('div');
     wrap.className = 'client-summary-service-badges';
     wrap.innerHTML =
       contractPillsHtml +
       items
         .map((i) => {
-          const cls = i.installed === null ? 'client-summary-service-badge--unknown' : i.installed ? 'client-summary-service-badge--yes' : 'client-summary-service-badge--no';
-          const title = i.installed === null ? 'Not yet connected' : i.detail ? i.detail : i.installed ? 'Installed' : 'Not installed';
+          const cls =
+            i.installed === null
+              ? 'client-summary-service-badge--unknown'
+              : i.installed === 'ambiguous'
+                ? 'client-summary-service-badge--warn'
+                : i.installed
+                  ? 'client-summary-service-badge--yes'
+                  : 'client-summary-service-badge--no';
+          const title = i.installed === null ? 'Not yet connected' : i.installed === 'ambiguous' ? i.detail : i.detail ? i.detail : i.installed ? 'Installed' : 'Not installed';
           return `<span class="client-summary-service-badge ${cls}" title="${escapeHtml(title)}">${escapeHtml(i.label)}</span>`;
         })
         .join('');

@@ -136,10 +136,23 @@ async function buildInstalledServices(company) {
         ? { status: 'not-configured' }
         : { status: 'ok', installed: dattoEdrMatches.length > 0, locationCount: dattoEdrMatches.length },
     autoElevate: autoElevateMatch === undefined ? { status: 'not-configured' } : { status: 'ok', installed: autoElevateMatch !== null },
+    // "ambiguous" is its own status, distinct from "ok"/installed:false --
+    // by request ("show these as our Orangy-Yellow colour"), a client
+    // whose name matches MORE THAN ONE real Huntress organization
+    // (confirmed live for multi-location franchises -- Sleepy's/Lenard's)
+    // isn't genuinely unprotected, it's just unresolvable from a name
+    // match alone; shown as a distinct warning state rather than a plain
+    // red "not installed", see huntress.js's own findOrganizationMatch().
     huntress:
       huntressMatch === undefined
         ? { status: 'not-configured' }
-        : { status: 'ok', installed: huntressMatch !== null, agentsCount: huntressMatch ? huntressMatch.agents_count : null },
+        : huntressMatch.status === 'ambiguous'
+          ? { status: 'ambiguous', candidateCount: huntressMatch.candidateCount }
+          : {
+              status: 'ok',
+              installed: huntressMatch.status === 'matched',
+              agentsCount: huntressMatch.status === 'matched' ? huntressMatch.organization.agents_count : null,
+            },
     // "installed" here only means "has a matching Rewst CSP customer
     // record" -- there's no per-organization connected-integrations list
     // available from the one Rewst workflow this reuses, see

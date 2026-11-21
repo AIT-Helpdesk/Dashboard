@@ -1100,31 +1100,47 @@ export function mount(container) {
     }
   }
 
+  // Two columns, by request -- Datto RMM's own findings (left, plus the
+  // RMM Filter Checks summary line, which is itself Datto-RMM-sourced) and
+  // Autotask's own ticket groups (right) are already two logically
+  // separate sources, so splitting them side by side uses this box's
+  // actual width instead of one long stacked list.
   function renderBrief(data) {
     briefStatusEl.hidden = true;
-    const parts = [];
 
+    const dattoParts = [];
     if (data.rmmFilterSummary) {
       const s = data.rmmFilterSummary;
-      parts.push(
-        `<p class="status error">Found <strong>${s.total}</strong> client${s.total === 1 ? '' : 's'} missing from DRMM filters: TC Elite (${s.elite}) &middot; TC Essentials (${s.essentials})</p>`
+      // Jumps straight to RMM Filter Checks, by request -- same internal
+      // hash-navigation convention every other "Show All X" link on this
+      // page already uses (e.g. ttColumn()'s own footerLink, "#service-
+      // calls"), just paired inline with this status line instead of
+      // sitting in its own footer row.
+      dattoParts.push(
+        `<p class="status error wo-brief-rmm-summary"><span><strong>${s.total}</strong> client${s.total === 1 ? '' : 's'} missing from DRMM filters: TC Elite (${s.elite}) &middot; TC Essentials (${s.essentials})</span><a class="button-link button-link--small" href="#rmm-filters">RMM Filter Checks</a></p>`
       );
     }
-
     if (data.datto.status === 'not-connected') {
-      parts.push(`<p class="status">Datto RMM isn't connected.</p>`);
+      dattoParts.push(`<p class="status">Datto RMM isn't connected.</p>`);
     } else if (data.datto.items.length === 0) {
-      parts.push(`<p class="status">Nothing flagged from Datto RMM right now.</p>`);
+      dattoParts.push(`<p class="status">Nothing flagged from Datto RMM right now.</p>`);
     } else {
-      parts.push(`<ul class="wo-brief-list">${data.datto.items.map((i) => `<li>${escapeHtml(i.text)}</li>`).join('')}</ul>`);
-      if (data.datto.truncatedCount > 0) parts.push(`<p class="inline-subtext-tiny">+ ${data.datto.truncatedCount} more not shown</p>`);
+      dattoParts.push(`<ul class="wo-brief-list">${data.datto.items.map((i) => `<li>${escapeHtml(i.text)}</li>`).join('')}</ul>`);
+      if (data.datto.truncatedCount > 0) dattoParts.push(`<p class="inline-subtext-tiny">+ ${data.datto.truncatedCount} more not shown</p>`);
     }
 
-    parts.push(briefTicketGroupHtml('Breached', data.autotask.breached));
-    parts.push(briefTicketGroupHtml('Unassigned', data.autotask.unassigned));
-    parts.push(briefTicketGroupHtml('Waiting on us', data.autotask.waitingOnUs));
+    const autotaskParts = [
+      briefTicketGroupHtml('Breached', data.autotask.breached),
+      briefTicketGroupHtml('Unassigned', data.autotask.unassigned),
+      briefTicketGroupHtml('Waiting on us', data.autotask.waitingOnUs),
+    ];
 
-    briefBodyEl.innerHTML = parts.join('');
+    briefBodyEl.innerHTML = `
+      <div class="wo-brief-columns">
+        <div class="wo-brief-col">${dattoParts.join('')}</div>
+        <div class="wo-brief-col">${autotaskParts.join('')}</div>
+      </div>
+    `;
   }
 
   // One Autotask group's own compact block -- heading line (label + real

@@ -76,16 +76,29 @@ function normalize(s) {
     .trim();
 }
 
+// Returns { status: 'matched', organization } | { status: 'none' } |
+// { status: 'ambiguous', candidateCount } -- by request ("show these as
+// our Orangy-Yellow colour"), distinguishing "genuinely no Huntress
+// coverage" from "can't tell which of several real orgs this is" rather
+// than collapsing both into the same plain null this used to return.
+// Confirmed live this matters for real multi-location franchise clients
+// (Sleepy's: 17 real Huntress orgs match "sleepy" -- one per store, plus
+// a plain "Sleepy's"/"Sleepy's Pty Ltd"; Lenard's: 3) -- Huntress is
+// genuinely deployed there, just split across several site-level orgs
+// instead of one combined one, so a plain red "not installed" was
+// actively misleading, not just imprecise.
 async function findOrganizationMatch(companyName, force) {
   const organizations = await getOrganizations(force);
   const normCompany = normalize(companyName);
-  if (!normCompany) return null;
+  if (!normCompany) return { status: 'none' };
   const pool = organizations.filter((o) => {
     const n = normalize(o.name);
     if (!n) return false;
     return n === normCompany || n.includes(normCompany) || normCompany.includes(n);
   });
-  return pool.length === 1 ? pool[0] : null;
+  if (pool.length === 0) return { status: 'none' };
+  if (pool.length > 1) return { status: 'ambiguous', candidateCount: pool.length };
+  return { status: 'matched', organization: pool[0] };
 }
 
 module.exports = { hasHuntressCredentials, getOrganizations, findOrganizationMatch };

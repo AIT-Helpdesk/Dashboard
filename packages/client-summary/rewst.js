@@ -65,15 +65,40 @@ function normalize(s) {
     .trim();
 }
 
+// Every name worth matching against for one Rewst customer record --
+// company_name, plus each linked_organizations[].name, by request
+// ("EBP Rehab shows as NOT being in Rewst when it is"). Confirmed live:
+// company_name can be a bare domain slug instead of a real business name
+// (a real example, "ebprehab.com.au" for the Autotask company "EBP
+// Rehab") -- normalizing a domain like that never lines up with a normal
+// two-word company name (no word boundary between "ebp" and "rehab" in
+// the slug), so a match purely on company_name silently misses it, even
+// though that SAME record's own linked_organizations already carries the
+// correct human name ("EBP Rehab") right there. check-client/server.js's
+// own matchRewstCustomerByName() already does this same broadened check
+// (confirmed working there) -- this mirrors that fix here specifically,
+// not a shared refactor of the two.
+function candidateNames(customer) {
+  const names = [customer.company_name];
+  if (Array.isArray(customer.linked_organizations)) {
+    for (const org of customer.linked_organizations) {
+      if (org && org.name) names.push(org.name);
+    }
+  }
+  return names;
+}
+
 async function findCustomerMatch(companyName, force) {
   const customers = await getCustomers(force);
   const normCompany = normalize(companyName);
   if (!normCompany) return null;
-  const pool = customers.filter((c) => {
-    const n = normalize(c.company_name);
-    if (!n) return false;
-    return n === normCompany || n.includes(normCompany) || normCompany.includes(n);
-  });
+  const pool = customers.filter((c) =>
+    candidateNames(c).some((name) => {
+      const n = normalize(name);
+      if (!n) return false;
+      return n === normCompany || n.includes(normCompany) || normCompany.includes(n);
+    })
+  );
   return pool.length === 1 ? pool[0] : null;
 }
 

@@ -3100,6 +3100,32 @@ h1 {
   gap: 0.3rem;
   font-size: 0.78rem;
 }
+/* Two columns -- Datto RMM's own findings (left) and Autotask's own
+   ticket groups (right), by request ("there's probably room to put this
+   in 2 lists") -- uses this box's actual width instead of one long
+   stacked list. Stacks to one column on a narrow window, same breakpoint
+   as every other multi-column layout on this page. */
+.wo-brief-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+@media (max-width: 900px) {
+  .wo-brief-columns {
+    grid-template-columns: 1fr;
+  }
+}
+/* "RMM Filter Checks" jump button sits inline with the Missing-clients
+   summary line, by request -- wraps to its own line on a narrow column
+   rather than squeezing beside the text once this box stacks to one
+   column (see .wo-brief-columns' own breakpoint above). */
+.wo-brief-rmm-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
 /* Horizontal scroll on each scorecard table's own card -- Scorecards now
    sits in a narrow 1fr column of the Today & Tomorrow row (moved there
    from .wo-top-row, by request, replacing My Strety Tasks; shown at only
@@ -4988,6 +5014,19 @@ a.client-summary-service-badge {
   background: color-mix(in srgb, var(--muted) 15%, transparent);
   color: var(--muted);
 }
+/* "Ambiguous" -- more than one real vendor organization matched a
+   client's name (Huntress's own findOrganizationMatch(), confirmed live
+   for multi-location franchises e.g. Sleepy's/Lenard's), by request
+   ("show these as our Orangy-Yellow colour") -- #f59e0b is this
+   dashboard's own established warning orange (.text-highlight-orange/
+   .cell-flag-orange elsewhere), not a new one-off colour. Distinct from
+   both --no (genuinely not installed, red) and --unknown (vendor not
+   configured at all, grey) -- this one means "can't tell from a name
+   match alone", not "not protected". */
+.client-summary-service-badge--warn {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #f59e0b;
+}
 /* TC Elite Services' own pill overrides, by request -- scoped to just
    this page via its own .tc-elite-services-page wrapper (client.js), not
    a change to the base .client-summary-service-badge--* classes
@@ -5009,6 +5048,9 @@ a.client-summary-service-badge {
 }
 .tc-elite-services-page .client-summary-service-badge--info {
   border: 1px solid var(--accent);
+}
+.tc-elite-services-page .client-summary-service-badge--warn {
+  border: 1px solid #f59e0b;
 }
 /* The Default Contract pill specifically when its matched contract is a
    plain "T&M" one, by request -- a T&M default isn't really informative
