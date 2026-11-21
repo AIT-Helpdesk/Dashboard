@@ -1274,13 +1274,23 @@ async function shapeBriefGroup(client, tickets) {
 }
 
 async function getAutotaskBriefFindings(client) {
+  // Sequential (concurrency 1), not 3 -- confirmed live this session this
+  // was tripping Autotask's own real thread-threshold alert ("the API
+  // thread threshold of 3 threads has been exceeded", Entity: Ticket) on
+  // production: 3 concurrent Ticket queries from this alone can already
+  // saturate the account's whole allowed concurrency for this integration,
+  // so any OTHER concurrent Ticket query happening at the same moment
+  // (Tickets Dashboard, Service Calls, another signed-in user) tips it
+  // over. This only runs once a day (or on a manual Refresh -- see
+  // getBrief()'s own comment), so there's no real latency reason to run
+  // these three queries at the same time at all.
   const [breachedTickets, unassignedTickets, waitingOnUsTickets] = await mapWithConcurrency(
     [
       () => fetchBriefBreachedTickets(client),
       () => fetchBriefUnassignedTickets(client),
       () => fetchBriefWaitingOnUsTickets(client),
     ],
-    3,
+    1,
     (fn) => fn()
   );
 
@@ -1319,11 +1329,22 @@ async function recheckAutotaskBriefFindings(client, previousAutotask) {
     const stillMatching = excludeMonitoringAlerts(tickets).filter(matchesFn);
     return shapeBriefGroup(client, stillMatching);
   }
-  const [breached, unassigned, waitingOnUs] = await Promise.all([
-    recheckGroup(previousAutotask.breached, matchesBreachedTicket),
-    recheckGroup(previousAutotask.unassigned, matchesUnassignedTicket),
-    recheckGroup(previousAutotask.waitingOnUs, matchesWaitingOnUsTicket),
-  ]);
+  // Sequential, not a plain Promise.all -- this was the bigger offender of
+  // the two (see getAutotaskBriefFindings()'s own comment): a plain
+  // Promise.all here ran all three fetchByFieldIn() queries fully
+  // unthrottled, with no concurrency cap at all. Runs on every manual
+  // Refresh click, so this is the one most likely to land at the exact
+  // same moment as someone else's own Ticket query elsewhere on the
+  // dashboard.
+  const [breached, unassigned, waitingOnUs] = await mapWithConcurrency(
+    [
+      () => recheckGroup(previousAutotask.breached, matchesBreachedTicket),
+      () => recheckGroup(previousAutotask.unassigned, matchesUnassignedTicket),
+      () => recheckGroup(previousAutotask.waitingOnUs, matchesWaitingOnUsTicket),
+    ],
+    1,
+    (fn) => fn()
+  );
   return { status: 'ok', breached, unassigned, waitingOnUs };
 }
 

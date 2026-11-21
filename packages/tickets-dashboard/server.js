@@ -185,12 +185,22 @@ async function shapeTicketRows(client, tickets, statusLabels) {
 router.get('/', async (req, res) => {
   try {
     const client = await getClient();
-    // Throttled via mapWithConcurrency (same ~5 req/s rate-limit reasoning
-    // as its own comment up in autotask-client/index.js), NOT a flat
-    // Promise.all -- firing all 6 of these as independent concurrent
-    // POST /query calls the instant the page loads tripped Autotask's
-    // rate limit (observed live: every request came back 429) once a
-    // third widget row was added on top of the original two.
+    // Throttled via mapWithConcurrency, NOT a flat Promise.all -- firing
+    // all 6 of these as independent concurrent POST /query calls the
+    // instant the page loads tripped Autotask's rate limit (observed live:
+    // every request came back 429) once a third widget row was added on
+    // top of the original two. Sequential (concurrency 1), not 3 -- dropped
+    // further after confirming live (separately, via What's On's own
+    // Today's Brief box) that Autotask also enforces a real hard THREAD
+    // threshold for this integration ("the API thread threshold of 3
+    // threads has been exceeded", Entity: Ticket) distinct from the ~5
+    // req/s rate limit the original concurrency-3 choice was guarding
+    // against -- this page has no cache at all (runs live on every page
+    // view/Rotate swap, by design, for freshness), so 3 concurrent Ticket
+    // queries from here alone could already consume the account's WHOLE
+    // allowed concurrency for this integration every time this page loads,
+    // leaving zero headroom for any other page's own Ticket query landing
+    // at the same moment.
     const [criticalTickets, triageTickets, doTodayTickets, scheduledMeTickets, clientUpdatesTickets, overdueCount] = await mapWithConcurrency(
       [
         () => fetchOpenTicketsByPriority(client, CRITICAL_PRIORITY_VALUE),
@@ -200,7 +210,7 @@ router.get('/', async (req, res) => {
         () => fetchOpenTicketsByStatus(client, CUSTOMER_NOTE_ADDED_STATUS_VALUE),
         () => fetchOverdueCount(client),
       ],
-      3,
+      1,
       (fn) => fn()
     );
 
@@ -216,13 +226,17 @@ router.get('/', async (req, res) => {
     // Sequential, not a Promise.all of all three -- now that there are 5
     // widgets' worth of unique companies/resources to resolve instead of
     // 2, running the picklist fetch and both already-throttled
-    // mapWithConcurrency(..., 3, ...) passes AT THE SAME TIME could put up
-    // to 7 requests in flight together, over Autotask's ~5 req/s limit
-    // (same 429 cause as the ticket-group fetches above). Each pass alone
-    // still stays within its own concurrency-3 cap.
+    // mapWithConcurrency(...) passes AT THE SAME TIME could put up to 7
+    // requests in flight together, over Autotask's ~5 req/s limit (same
+    // 429 cause as the ticket-group fetches above). Each pass alone also
+    // dropped to concurrency 1 (was 3), same thread-threshold reasoning as
+    // the ticket-group fetch above -- these hit the same shared API user
+    // as the Ticket queries, so they count against the same real account-
+    // wide concurrency budget even though the entity is Company/Resource,
+    // not Ticket.
     const statusLabels = await getPicklistLabels(client.tickets, 'status');
-    await mapWithConcurrency(uniqueCompanyIds, 3, (cid) => resolveCompanyName(client, cid));
-    await mapWithConcurrency(uniqueResourceIds, 3, (rid) => resolveResourceName(client, rid));
+    await mapWithConcurrency(uniqueCompanyIds, 1, (cid) => resolveCompanyName(client, cid));
+    await mapWithConcurrency(uniqueResourceIds, 1, (rid) => resolveResourceName(client, rid));
 
     const [criticalTicketRows, triageTicketRows, doTodayTicketRows, scheduledMeTicketRows, clientUpdatesTicketRows] = await Promise.all([
       shapeTicketRows(client, criticalTickets, statusLabels),
