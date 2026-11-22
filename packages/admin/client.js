@@ -77,10 +77,50 @@ export function mount(container) {
   }
 
   function renderTab(tab) {
+    resultsEl.innerHTML = '';
     if (!tab || tab.key === 'scheduled-tasks') {
-      resultsEl.innerHTML = '';
       resultsEl.appendChild(renderScheduledTasksTable(tab ? tab.rows : []));
+    } else if (tab.key === 'udf-name-mapping') {
+      resultsEl.appendChild(renderUdfNameMappingTable(tab.rows));
     }
+  }
+
+  // UDF Name, System, Matches Field, Notes -- the documented set from
+  // @dashboard/shell/udf-system-matches-db.js's own reference table
+  // (server.js's own comment). A row with no systemLabel is a REAL live
+  // "Name:*" UDF on Companies that isn't documented there yet -- flagged
+  // in red rather than silently shown as if it were a normal row, since
+  // it means that reference table needs a new entry added by hand.
+  function renderUdfNameMappingTable(rows) {
+    const wrap = document.createElement('div');
+    wrap.className = 'resource-group';
+    if (rows.length === 0) {
+      wrap.innerHTML = '<p class="status" style="margin: 0.75rem;">No "Name:*" UDFs found on Companies.</p>';
+      return wrap;
+    }
+    wrap.innerHTML = `
+      <table>
+        <thead><tr><th>UDF Name</th><th>System</th><th>Matches Field</th><th>Notes</th></tr></thead>
+        <tbody>
+          ${rows
+            .map((r) =>
+              r.documented
+                ? `<tr>
+                    <td>${escapeHtml(r.udfName)}</td>
+                    <td>${escapeHtml(r.systemLabel || '')}</td>
+                    <td>${escapeHtml(r.matchesField || '')}</td>
+                    <td>${escapeHtml(r.notes || '')}</td>
+                  </tr>`
+                : `<tr>
+                    <td>${escapeHtml(r.udfName)}</td>
+                    <td colspan="3"><span class="cell-flag-red">Not yet documented -- add it to udf-system-matches-db.js's own SEED_ROWS</span></td>
+                  </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    `;
+    return wrap;
   }
 
   // Name and Schedule, by request -- State/Last run/Next run are shown as

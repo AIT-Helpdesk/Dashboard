@@ -41,6 +41,19 @@ job can never disagree with either of those about what counts as matched.
   `accountReference`, `expiryDate`, `createdDate`, `modifiedDate`, `login`,
   `autoRenew`) -- the account reference code is shown as-is, by request,
   rather than presenting it as if it were a real name.
+- **Resolved + in IT Glue, but under the WRONG organisation** -> "Wrong
+  Client in IT Glue", by request ("If a domain appears on an IT Glue Client
+  but that Client is not the same client as the Autotask Client on which
+  the TPP Account appears in the UDF"). `itglue-domains.js`'s own
+  `fetchAllDomainsGroupedByOrg()` gives each IT Glue domain's real
+  organisation, compared (exact, case-insensitive, trimmed -- same "never
+  guess past an exact match" convention this job already follows
+  elsewhere) against the Name:TPP-resolved Client name. A real mismatch
+  found live on this account: `disipioauto.com.au` sits under "Di Sipio
+  Auto Electrical" in IT Glue, but its own TPP account reference resolves
+  to Autotask Client "Paul Crooks Advertising". Shown with both the
+  correct Client (linked to that Client's own IT Glue org) and the wrong
+  organisation it's actually filed under (linked to that org instead).
 
 Only active domains are included (`expiryDate` not already in the past --
 TPP's own domain list has no separate active/inactive flag, same convention
@@ -50,16 +63,17 @@ skipped -- those are known not to belong in IT Glue.
 
 ## IT Glue
 
-`itglue-domains.js`'s `fetchAllItGlueDomainNames()` -- confirmed live this
+`itglue-domains.js`'s `fetchAllDomainsGroupedByOrg()` -- confirmed live this
 session that IT Glue's flat `GET /domains` resource DOES return across every
-organisation on the account (556 domains total, fits in one request at
-`page[size]: 1000`, IT Glue's own documented max), so no per-organisation
-looping is needed (unlike `@dashboard/live-reports/email-domain-protection.js`'s
-own `getDomains(orgId)`, which is scoped to one org for a different purpose).
-Only `attributes.name` is read -- gap rows are labelled with the Autotask
-Client name already resolved via `Name:TPP`, not whichever IT Glue
-organisation a domain happens to sit under, so IT Glue's own organisation
-attribution is never needed.
+organisation on the account (fits in one request at `page[size]: 1000`, IT
+Glue's own documented max), so no per-organisation looping is needed (unlike
+`@dashboard/live-reports/email-domain-protection.js`'s own `getDomains(orgId)`,
+which is scoped to one org for a different purpose). Reads each domain's own
+`organization-id`/`organization-name` as well as its name -- originally just
+the flat name set (gap rows are labelled with the Autotask Client name
+already resolved via `Name:TPP`, not IT Glue's own organisation), but the
+real per-domain organisation is now also needed for the "Wrong Client in IT
+Glue" check above.
 
 ## The dashboard page
 
@@ -132,12 +146,12 @@ Autotask doesn't silently break this.
 the full per-domain list was about to exceed Autotask's own confirmed-live
 8000-character description limit, which would have silently hidden most of
 the "no matching client" section from anyone just reading the ticket. The
-body is now just the run date, the two counts, and a link to the dashboard
+body is now just the run date, the three counts, and a link to the dashboard
 page above (`http://dashboard.ambientit.com.au/#domain-itglue-gap` --
 hardcoded, by request, deliberately NOT read from `APP_BASE_URL`/env, so a
 manual run from a dev machine never puts a `localhost` link in a real
-ticket) -- the full, tickable list lives there instead. A CSV of both lists
-is still attached as an offline copy.
+ticket) -- the full, tickable list lives there instead. A CSV of all three
+lists is still attached as an offline copy.
 
 **Dedup/update, not one ticket per run**: searches for an open ticket (status
 not in `[5, 20]` -- Complete / Billing-Contract, the same open/closed

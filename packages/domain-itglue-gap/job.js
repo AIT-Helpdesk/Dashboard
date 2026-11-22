@@ -1,6 +1,6 @@
 const { fetchAllDomains } = require('@dashboard/tpp-client');
 const { getClient, listAll, getCompanyUdfValueToNameMap, todayAestKey, getTicketUrl } = require('@dashboard/autotask-client');
-const { fetchAllItGlueDomainNames, normalizeDomainName, fetchOrganizationUrlsByName } = require('./itglue-domains');
+const { normalizeDomainName, fetchOrganizationUrlsByName, fetchAllDomainsGroupedByOrg, organizationUrlById } = require('./itglue-domains');
 const { resolveTicketPicklists } = require('./ticket-picklists');
 const { buildGapCsv } = require('./csv');
 const { logEvent, logFailure } = require('./log');
@@ -100,31 +100,71 @@ async function computeGaps() {
     else unmatched.push(d);
   }
 
-  let itGlueNames;
+  // Grouped by organisation, not just a flat name set -- needed for the
+  // "wrong Client in IT Glue" check below, not just "is this domain in IT
+  // Glue at all".
+  let itGlueDomains;
   try {
-    itGlueNames = await fetchAllItGlueDomainNames();
-    logEvent({ stage: 'itglue-pull', message: `Pulled ${itGlueNames.length} IT Glue domains.`, recordCount: itGlueNames.length });
+    itGlueDomains = await fetchAllDomainsGroupedByOrg();
+    logEvent({ stage: 'itglue-pull', message: `Pulled ${itGlueDomains.length} IT Glue domains.`, recordCount: itGlueDomains.length });
   } catch (err) {
     logFailure('itglue-pull', err, { recordCount: 0, stopped: true });
     throw err;
   }
 
-  if (itGlueNames.length === 0) {
+  if (itGlueDomains.length === 0) {
     const err = new Error('IT Glue returned zero domains -- treating as a failed pull, not a real empty account.');
     logFailure('itglue-pull', err, { recordCount: 0, stopped: true });
     throw err;
   }
 
-  const itGlueSet = new Set(itGlueNames.map(normalizeDomainName));
-  const gapsBeforeOrgLink = matched
-    .filter((d) => !itGlueSet.has(normalizeDomainName(d.domainName)))
-    .sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
+  // First match wins for a domain that somehow sits under more than one
+  // organisation -- not expected in real data, but this is a best-effort
+  // check either way, not a guarantee.
+  const itGlueOrgByDomain = new Map();
+  for (const d of itGlueDomains) {
+    const key = normalizeDomainName(d.name);
+    if (!itGlueOrgByDomain.has(key)) itGlueOrgByDomain.set(key, { organizationId: d.organizationId, organizationName: d.organizationName });
+  }
+
+  // Three outcomes for a MATCHED domain (a real Name:TPP UDF resolved it to
+  // an Autotask Client), by request ("If a domain appears on an IT Glue
+  // Client but that Client is not the same client as the Autotask Client on
+  // which the TPP Account appears in the UDF"):
+  //   - not in IT Glue at all -> gapsBeforeOrgLink (the existing "Missing
+  //     from IT Glue" check, unchanged)
+  //   - in IT Glue, under an org whose name doesn't match (exact,
+  //     case-insensitive, trimmed -- same "never guess past an exact match"
+  //     convention fetchOrganizationUrlsByName() already uses) the resolved
+  //     Client name -> wrongClientBeforeOrgLink, a NEW check
+  //   - in IT Glue, under the right org -> not a gap at all, dropped here
+  // A domain whose IT Glue organisation name is missing/blank is left out
+  // of the wrong-client check entirely (nothing to compare against), not
+  // flagged as wrong.
+  const gapsBeforeOrgLink = [];
+  const wrongClientBeforeOrgLink = [];
+  for (const d of matched) {
+    const orgInfo = itGlueOrgByDomain.get(normalizeDomainName(d.domainName));
+    if (!orgInfo) {
+      gapsBeforeOrgLink.push(d);
+      continue;
+    }
+    const normalizedOrgName = (orgInfo.organizationName || '').trim().toLowerCase();
+    const normalizedClientName = d.autotaskClientName.trim().toLowerCase();
+    if (normalizedOrgName && normalizedOrgName !== normalizedClientName) {
+      wrongClientBeforeOrgLink.push({ ...d, wrongOrgId: orgInfo.organizationId, wrongOrgName: orgInfo.organizationName });
+    }
+  }
+  gapsBeforeOrgLink.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
+  wrongClientBeforeOrgLink.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
   unmatched.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
 
   // Attaches a link to the resolved Client's own IT Glue organisation page,
   // by request -- a gap row's domain itself is never IN IT Glue (that's why
   // it's a gap), but its Client's organisation record usually is, so clicking
-  // the Client name opens that instead of nothing.
+  // the Client name opens that instead of nothing. Reused for the
+  // wrong-client rows' own "should be" link (the CORRECT client's org page,
+  // for comparison against wrongOrgUrl, the domain's ACTUAL current org).
   let orgUrlByName;
   try {
     orgUrlByName = await fetchOrganizationUrlsByName();
@@ -133,15 +173,21 @@ async function computeGaps() {
     orgUrlByName = new Map(); // non-fatal -- rows just render without a link
   }
   const gaps = gapsBeforeOrgLink.map((d) => ({ ...d, itGlueOrgUrl: orgUrlByName.get(d.autotaskClientName.trim().toLowerCase()) || null }));
+  const wrongClient = wrongClientBeforeOrgLink.map((d) => ({
+    ...d,
+    itGlueOrgUrl: orgUrlByName.get(d.autotaskClientName.trim().toLowerCase()) || null,
+    wrongOrgUrl: organizationUrlById(d.wrongOrgId),
+  }));
 
   logEvent({
     stage: 'comparison',
-    message: `${gaps.length} domains missing from IT Glue, ${unmatched.length} domains with no matching Autotask Client.`,
+    message: `${gaps.length} domains missing from IT Glue, ${unmatched.length} domains with no matching Autotask Client, ${wrongClient.length} domains filed under the wrong Client in IT Glue.`,
     gapCount: gaps.length,
     unmatchedCount: unmatched.length,
+    wrongClientCount: wrongClient.length,
   });
 
-  return { gaps, unmatched };
+  return { gaps, unmatched, wrongClient };
 }
 
 // Short, by request -- the full 155-item list was about to exceed
@@ -151,15 +197,18 @@ async function computeGaps() {
 // list now lives on its own dashboard page (persisted in db.js) instead --
 // this body is just the summary + counts + a link there, plus the
 // attached CSV as an offline copy.
-function buildTicketBody({ gaps, unmatched }, asOfIso) {
+function buildTicketBody({ gaps, unmatched, wrongClient }, asOfIso) {
   const lines = [];
   lines.push(`Run date: ${asOfIso}`);
   lines.push(`Domains missing from IT Glue: ${gaps.length}`);
   lines.push(`Domains with no matching Autotask Client (Name:TPP UDF): ${unmatched.length}`);
+  lines.push(`Domains filed under the wrong Client in IT Glue: ${wrongClient.length}`);
   lines.push('');
   lines.push(`View, tick off, and work through the full list here: ${GAP_PAGE_URL}`);
   lines.push('');
-  lines.push('Add each domain to the correct organisation in IT Glue, then tag it on the client\'s Primary Domain asset where relevant. A full CSV of both lists is also attached to this ticket.');
+  lines.push(
+    'Add each domain to the correct organisation in IT Glue, then tag it on the client\'s Primary Domain asset where relevant. Move a wrongly-filed domain to its correct organisation. A full CSV of all three lists is also attached to this ticket.'
+  );
   return lines.join('\n');
 }
 
@@ -173,9 +222,14 @@ function buildTicketBody({ gaps, unmatched }, asOfIso) {
 // this run's gap list, same "don't guess, let a person check" convention
 // this job already follows elsewhere.
 function buildFixedNoteBody(resolvedRows, asOfIso) {
-  const lines = [`Live refresh ${asOfIso} -- ${resolvedRows.length} domain(s) no longer appear in the gap list (no longer missing from IT Glue, or no longer unmatched):`, ''];
+  const lines = [`Live refresh ${asOfIso} -- ${resolvedRows.length} domain(s) no longer appear in the gap list (no longer missing from IT Glue, no longer unmatched, or no longer under the wrong Client):`, ''];
   for (const r of resolvedRows) {
-    const label = r.category === 'missing_from_itglue' ? r.autotask_client_name || 'unknown client' : 'no matching Autotask Client';
+    const label =
+      r.category === 'missing_from_itglue'
+        ? r.autotask_client_name || 'unknown client'
+        : r.category === 'wrong_client'
+          ? `was under "${r.wrong_itglue_org_name || 'unknown'}", should be ${r.autotask_client_name || 'unknown client'}`
+          : 'no matching Autotask Client';
     lines.push(`- ${r.domain_name} (was: ${label})`);
   }
   lines.push('', `Full current list: ${GAP_PAGE_URL}`);
@@ -194,12 +248,12 @@ function buildFixedNoteBody(resolvedRows, asOfIso) {
 // happens at all -- only the dashboard's own db.js state changes.
 async function refreshLive() {
   const client = await getClient();
-  const { gaps, unmatched } = await computeGaps();
-  const dbResult = replaceCurrentGaps(gaps, unmatched);
+  const { gaps, unmatched, wrongClient } = await computeGaps();
+  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient);
   logEvent({ stage: 'comparison', message: `Live refresh: ${dbResult.upserted} currently open, ${dbResult.resolved} resolved since last stored state.`, ...dbResult });
 
   if (dbResult.resolvedRows.length === 0) {
-    return { gaps, unmatched, fixed: [], ticketNoteAdded: false };
+    return { gaps, unmatched, wrongClient, fixed: [], ticketNoteAdded: false };
   }
 
   let openTicket = null;
@@ -211,36 +265,36 @@ async function refreshLive() {
     openTicket = existing[0] || null;
   } catch (err) {
     logFailure('autotask-search', err, { endpoint: 'Tickets (live refresh fixed-note check)' });
-    return { gaps, unmatched, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
+    return { gaps, unmatched, wrongClient, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
   }
 
   // No open ticket -- nothing to note. Deliberately never creates one here;
   // that's run()'s job alone, per request.
   if (!openTicket) {
-    return { gaps, unmatched, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
+    return { gaps, unmatched, wrongClient, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
   }
 
   const asOfIso = new Date().toISOString();
   await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: buildFixedNoteBody(dbResult.resolvedRows, asOfIso), noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
   logEvent({ stage: 'ticket-update', message: `Live refresh: added a fixed-items note to ticket ${openTicket.ticketNumber} (${dbResult.resolvedRows.length} domain(s)).`, ticketNumber: openTicket.ticketNumber, fixedCount: dbResult.resolvedRows.length });
 
-  return { gaps, unmatched, fixed: dbResult.resolvedRows, ticketNoteAdded: true, ticket: openTicket };
+  return { gaps, unmatched, wrongClient, fixed: dbResult.resolvedRows, ticketNoteAdded: true, ticket: openTicket };
 }
 
 // Dry run computes everything for real (TPP, IT Glue, Autotask search) and
 // returns what WOULD happen, without ever writing to Autotask.
 async function run({ dryRun }) {
   const client = await getClient();
-  const { gaps, unmatched } = await computeGaps();
+  const { gaps, unmatched, wrongClient } = await computeGaps();
   const asOfIso = new Date().toISOString();
-  const body = buildTicketBody({ gaps, unmatched }, asOfIso);
-  const csv = buildGapCsv(gaps, unmatched);
+  const body = buildTicketBody({ gaps, unmatched, wrongClient }, asOfIso);
+  const csv = buildGapCsv(gaps, unmatched, wrongClient);
 
   // Persisted regardless of dry-run -- the dashboard page's own db.js is
   // this job's own local state, not an Autotask write, so it always
   // reflects the latest real computation (ticked state preserved for any
   // domain still present; rows for anything now resolved are dropped).
-  const dbResult = replaceCurrentGaps(gaps, unmatched);
+  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient);
   logEvent({ stage: 'comparison', message: `Dashboard list updated: ${dbResult.upserted} currently open, ${dbResult.resolved} resolved since last run.`, ...dbResult });
 
   let existing;
@@ -257,30 +311,30 @@ async function run({ dryRun }) {
 
   const openTicket = existing[0] || null;
 
-  if (gaps.length === 0 && unmatched.length === 0) {
+  if (gaps.length === 0 && unmatched.length === 0 && wrongClient.length === 0) {
     if (!openTicket) {
       logEvent({ stage: 'comparison', message: 'No gaps, no open ticket -- nothing to do.' });
-      return { action: 'none', gaps, unmatched };
+      return { action: 'none', gaps, unmatched, wrongClient };
     }
-    const resolveNote = 'All domains previously listed on this ticket are now resolved (found in IT Glue, or matched to an Autotask Client). Left open for a person to close.';
+    const resolveNote = 'All domains previously listed on this ticket are now resolved (found in IT Glue, matched to an Autotask Client, or no longer under the wrong Client). Left open for a person to close.';
     if (dryRun) {
       logEvent({ stage: 'comparison', message: `DRY RUN: would add a resolved-note to ticket ${openTicket.ticketNumber} and leave it open.` });
-      return { action: 'note-resolved', ticket: openTicket, note: resolveNote, gaps, unmatched };
+      return { action: 'note-resolved', ticket: openTicket, note: resolveNote, gaps, unmatched, wrongClient };
     }
     await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: resolveNote, noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
     logEvent({ stage: 'ticket-update', message: `Added resolved-note to ticket ${openTicket.ticketNumber}.`, ticketNumber: openTicket.ticketNumber });
-    return { action: 'note-resolved', ticket: openTicket, gaps, unmatched };
+    return { action: 'note-resolved', ticket: openTicket, gaps, unmatched, wrongClient };
   }
 
   if (openTicket) {
     if (dryRun) {
       logEvent({ stage: 'comparison', message: `DRY RUN: would update ticket ${openTicket.ticketNumber} with a refreshed note + CSV.` });
-      return { action: 'update', ticket: openTicket, body, csv, gaps, unmatched };
+      return { action: 'update', ticket: openTicket, body, csv, gaps, unmatched, wrongClient };
     }
     await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: body, noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
     logEvent({ stage: 'ticket-update', message: `Added refreshed note to ticket ${openTicket.ticketNumber}.`, ticketNumber: openTicket.ticketNumber });
     await attachCsv(client, openTicket.id, csv, asOfIso);
-    return { action: 'update', ticket: openTicket, gaps, unmatched };
+    return { action: 'update', ticket: openTicket, gaps, unmatched, wrongClient };
   }
 
   // No open ticket -- was there a RECENTLY CLOSED one with this exact title?
@@ -306,7 +360,7 @@ async function run({ dryRun }) {
 
   if (dryRun) {
     logEvent({ stage: 'comparison', message: 'DRY RUN: would create a new ticket.' });
-    return { action: 'create', body: finalBody, csv, picklists, dueDateTime, recentlyClosed, gaps, unmatched };
+    return { action: 'create', body: finalBody, csv, picklists, dueDateTime, recentlyClosed, gaps, unmatched, wrongClient };
   }
 
   const createRes = await client.tickets.create({
@@ -323,7 +377,7 @@ async function run({ dryRun }) {
   const ticketUrl = await getTicketUrl(ticketId);
   logEvent({ stage: 'ticket-create', message: `Created ticket #${ticketId}.`, ticketId, ticketUrl });
   await attachCsv(client, ticketId, csv, asOfIso);
-  return { action: 'create', ticketId, ticketUrl, gaps, unmatched };
+  return { action: 'create', ticketId, ticketUrl, gaps, unmatched, wrongClient };
 }
 
 // Same POST /Tickets/{id}/Attachments shape @dashboard/workshop/server.js

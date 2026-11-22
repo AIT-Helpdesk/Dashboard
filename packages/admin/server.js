@@ -1,5 +1,7 @@
 const express = require('express');
 const { execFile } = require('child_process');
+const { getClient, getUserDefinedFieldDefinitions } = require('@dashboard/autotask-client');
+const { listUdfSystemMatches } = require('@dashboard/shell/udf-system-matches-db.js');
 
 // Scoped to this dashboard's own scheduled jobs only (the "Ambient*" naming
 // convention every Register-ScheduledTask call in DEPLOYMENT.md already
@@ -184,18 +186,58 @@ async function buildScheduledTasksTab() {
   return { key: 'scheduled-tasks', label: 'Scheduled Tasks', rows };
 }
 
+// "UDF Name Mapping" tab, by request -- the real Companies UDFs this
+// dashboard uses to cross-reference a Client's identity in another
+// system (e.g. "Name:TPP" holding TPP Wholesale's own account reference
+// code). The AUTHORITATIVE list already lives in code, not just
+// discovered here fresh: @dashboard/shell/udf-system-matches-db.js's own
+// SEED_ROWS, a hand-maintained reference table that ALSO records what
+// each UDF's value actually holds and which page reads/writes it --
+// confirmed live against the real account when that file was written
+// ("these 5 are the complete current list"). This tab shows those 5
+// documented rows, AND cross-checks them against a fresh live pull of
+// every real "Name:*" UDF currently defined on Companies (same
+// `getUserDefinedFieldDefinitions(client.companies)` call
+// @dashboard/data-matching's own GET /other-udf-concepts already uses
+// for the identical purpose) -- any live one NOT in the documented set
+// is flagged, since that means a new UDF was added by hand in Autotask
+// and udf-system-matches-db.js's own SEED_ROWS needs a new entry, per
+// that file's own comment.
+async function buildUdfNameMappingTab() {
+  const documented = listUdfSystemMatches();
+  const documentedNames = new Set(documented.map((r) => r.udf_name));
+
+  const client = await getClient();
+  const fields = await getUserDefinedFieldDefinitions(client.companies);
+  const undocumented = fields
+    .filter((f) => /^Name:/i.test(f.name) && !documentedNames.has(f.name))
+    .map((f) => ({ udfName: f.name, documented: false }));
+
+  const rows = [
+    ...documented.map((r) => ({
+      udfName: r.udf_name,
+      systemLabel: r.system_label,
+      matchesField: r.matches_field,
+      notes: r.notes,
+      documented: true,
+    })),
+    ...undocumented,
+  ].sort((a, b) => a.udfName.localeCompare(b.udfName));
+
+  return { key: 'udf-name-mapping', label: 'UDF Name Mapping', rows };
+}
+
 // Tabs array, same shape @dashboard/tc-elite-services' own GET / uses --
-// only one tab today ("Scheduled Tasks", by request: "First Tab will be
-// ... Check scheduled tasks"), built this way so a later admin tab is
-// just one more entry here, not a page restructure.
+// built this way so a later admin tab is just one more entry here, not a
+// page restructure.
 const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
-    const scheduledTasksTab = await buildScheduledTasksTab();
-    res.json({ asOf: new Date().toISOString(), tabs: [scheduledTasksTab] });
+    const [scheduledTasksTab, udfNameMappingTab] = await Promise.all([buildScheduledTasksTab(), buildUdfNameMappingTab()]);
+    res.json({ asOf: new Date().toISOString(), tabs: [scheduledTasksTab, udfNameMappingTab] });
   } catch (err) {
-    console.error('admin: failed to build Scheduled Tasks tab:', err.message);
+    console.error('admin: failed to build a tab:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

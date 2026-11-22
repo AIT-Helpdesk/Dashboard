@@ -13,26 +13,8 @@ const WEB_BASE_URL = process.env.ITGLUE_WEB_BASE_URL;
 // organisation looping needed, unlike @dashboard/live-reports/email-domain-
 // protection.js's getDomains(orgId), which is scoped to one org at a time for
 // a different purpose (resolving ONE client's own domain, not a full-account
-// gap scan). Only `attributes.name` is needed here -- this job labels a gap
-// with the Autotask Client name already resolved via the Name:TPP UDF, not
-// whichever IT Glue org a domain happens to sit under, so organisation
-// attribution from IT Glue's own side is never read.
+// gap scan).
 const PAGE_SIZE = 1000;
-
-async function fetchAllItGlueDomainNames() {
-  const names = [];
-  let page = 1;
-  for (;;) {
-    const res = await itglue.get('/domains', { 'page[size]': PAGE_SIZE, 'page[number]': page });
-    for (const d of res.data || []) {
-      if (d.attributes?.name) names.push(d.attributes.name);
-    }
-    const nextPage = res.meta?.['next-page'];
-    if (!nextPage) break;
-    page = nextPage;
-  }
-  return names;
-}
 
 // Same "lower-case, trim, strip a trailing dot" normalisation the brief
 // specified for the domain-name comparison -- IT Glue's own names are
@@ -73,13 +55,13 @@ async function fetchOrganizationUrlsByName() {
   return map;
 }
 
-// Every domain on the account, grouped by its own organisation -- same one
-// bulk `GET /domains` fetch as fetchAllItGlueDomainNames() above, just also
-// keeping `organization-id`/`organization-name` (both present on every
-// domain's own attributes, confirmed live) instead of discarding them. Used
-// by primary-domain-gaps.js to find which organisations have domains on
-// file at all, for the "clients missing a Primary Domain" section -- a
-// different question from fetchAllItGlueDomainNames()'s own flat name set.
+// Every domain on the account, grouped by its own organisation -- one bulk
+// `GET /domains` fetch, keeping `organization-id`/`organization-name` (both
+// present on every domain's own attributes, confirmed live) rather than
+// discarding them. Used by primary-domain-gaps.js (which organisations have
+// domains on file at all) and by job.js's own computeGaps() (which
+// organisation a given domain actually sits under, for the "wrong client in
+// IT Glue" check -- see that file's own comment).
 async function fetchAllDomainsGroupedByOrg() {
   const rows = [];
   let page = 1;
@@ -111,4 +93,4 @@ function organizationUrlById(organizationId) {
   return WEB_BASE_URL ? `${WEB_BASE_URL}/${organizationId}` : null;
 }
 
-module.exports = { fetchAllItGlueDomainNames, normalizeDomainName, fetchOrganizationUrlsByName, fetchAllDomainsGroupedByOrg, organizationUrlById };
+module.exports = { normalizeDomainName, fetchOrganizationUrlsByName, fetchAllDomainsGroupedByOrg, organizationUrlById };

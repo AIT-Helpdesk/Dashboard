@@ -10,6 +10,8 @@
     "server": "server.js"
   },
   "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/shell": "*",
     "express": "^4.19.2"
   }
 }

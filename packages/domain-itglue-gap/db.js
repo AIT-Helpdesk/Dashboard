@@ -25,10 +25,12 @@ db.exec('PRAGMA journal_mode = WAL');
 db.exec(`
   CREATE TABLE IF NOT EXISTS domain_gaps (
     domain_name TEXT PRIMARY KEY,
-    category TEXT NOT NULL CHECK (category IN ('missing_from_itglue', 'unmatched_client')),
+    category TEXT NOT NULL CHECK (category IN ('missing_from_itglue', 'unmatched_client', 'wrong_client')),
     expiry_date TEXT,
-    autotask_client_name TEXT,     -- null for unmatched_client rows
+    autotask_client_name TEXT,     -- the CORRECT resolved Client, for every category except unmatched_client (null there)
     itglue_org_url TEXT,           -- the resolved Client's own IT Glue org page, null if no exact name match
+    wrong_itglue_org_name TEXT,    -- wrong_client rows only: the org this domain is ACTUALLY filed under in IT Glue
+    wrong_itglue_org_url TEXT,     -- wrong_client rows only: that wrong org's own IT Glue page
     tpp_account_reference TEXT,
     first_seen_at TEXT NOT NULL,   -- when this domain first appeared as a gap, preserved across runs
     last_seen_at TEXT NOT NULL,    -- updated every run it's still present
@@ -51,36 +53,114 @@ function migrateAddItglueOrgUrl() {
 }
 migrateAddItglueOrgUrl();
 
+// A CHECK constraint can't be altered in place in SQLite -- the table has
+// to be rebuilt to widen it to allow 'wrong_client', by request ("If a
+// domain appears on an IT Glue Client but that Client is not the same
+// client as the Autotask Client..."). Detected the same way
+// migrateAddCreatedBy()-style migrations elsewhere on this dashboard check
+// "has this already run" -- reading the table's own stored CREATE
+// statement back out of sqlite_master and looking for the new value.
+function migrateAddWrongClientCategory() {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'domain_gaps'`).get();
+  if (!row || row.sql.includes('wrong_client')) return;
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('domain_gaps')`).all().map((c) => c.name);
+  const hasWrongOrgColumns = columns.includes('wrong_itglue_org_name');
+  db.exec('ALTER TABLE domain_gaps RENAME TO domain_gaps_old');
+  db.exec(`
+    CREATE TABLE domain_gaps (
+      domain_name TEXT PRIMARY KEY,
+      category TEXT NOT NULL CHECK (category IN ('missing_from_itglue', 'unmatched_client', 'wrong_client')),
+      expiry_date TEXT,
+      autotask_client_name TEXT,
+      itglue_org_url TEXT,
+      wrong_itglue_org_name TEXT,
+      wrong_itglue_org_url TEXT,
+      tpp_account_reference TEXT,
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      ticked INTEGER NOT NULL DEFAULT 0,
+      ticked_at TEXT,
+      ticked_by_email TEXT,
+      ticked_by_name TEXT
+    );
+  `);
+  db.exec(`
+    INSERT INTO domain_gaps (domain_name, category, expiry_date, autotask_client_name, itglue_org_url, ${hasWrongOrgColumns ? 'wrong_itglue_org_name, wrong_itglue_org_url,' : ''} tpp_account_reference, first_seen_at, last_seen_at, ticked, ticked_at, ticked_by_email, ticked_by_name)
+    SELECT domain_name, category, expiry_date, autotask_client_name, itglue_org_url, ${hasWrongOrgColumns ? 'wrong_itglue_org_name, wrong_itglue_org_url,' : ''} tpp_account_reference, first_seen_at, last_seen_at, ticked, ticked_at, ticked_by_email, ticked_by_name
+    FROM domain_gaps_old
+  `);
+  db.exec('DROP TABLE domain_gaps_old');
+}
+migrateAddWrongClientCategory();
+
 function nowIso() {
   return new Date().toISOString();
 }
 
-// `gaps`/`unmatched` are this run's FRESH computed lists (job.js's own
-// computeGaps() shape: {domainName, expiryDate, autotaskClientName,
-// accountReference}). Upserts each as a row, preserving ticked/ticked_at/
-// ticked_by/first_seen_at for anything already in the table, then deletes
-// every row NOT in this run's fresh set -- those are resolved.
-function replaceCurrentGaps(gaps, unmatched) {
+// `gaps`/`unmatched`/`wrongClient` are this run's FRESH computed lists
+// (job.js's own computeGaps() shape: {domainName, expiryDate,
+// autotaskClientName, accountReference}, wrongClient rows also carrying
+// wrongOrgName/wrongOrgUrl). Upserts each as a row, preserving
+// ticked/ticked_at/ticked_by/first_seen_at for anything already in the
+// table, then deletes every row NOT in this run's fresh set -- those are
+// resolved.
+function replaceCurrentGaps(gaps, unmatched, wrongClient) {
   const now = nowIso();
   const upsert = db.prepare(`
-    INSERT INTO domain_gaps (domain_name, category, expiry_date, autotask_client_name, itglue_org_url, tpp_account_reference, first_seen_at, last_seen_at)
-    VALUES ($domainName, $category, $expiryDate, $autotaskClientName, $itglueOrgUrl, $tppAccountReference, $now, $now)
+    INSERT INTO domain_gaps (domain_name, category, expiry_date, autotask_client_name, itglue_org_url, wrong_itglue_org_name, wrong_itglue_org_url, tpp_account_reference, first_seen_at, last_seen_at)
+    VALUES ($domainName, $category, $expiryDate, $autotaskClientName, $itglueOrgUrl, $wrongItglueOrgName, $wrongItglueOrgUrl, $tppAccountReference, $now, $now)
     ON CONFLICT (domain_name) DO UPDATE SET
       category = excluded.category,
       expiry_date = excluded.expiry_date,
       autotask_client_name = excluded.autotask_client_name,
       itglue_org_url = excluded.itglue_org_url,
+      wrong_itglue_org_name = excluded.wrong_itglue_org_name,
+      wrong_itglue_org_url = excluded.wrong_itglue_org_url,
       tpp_account_reference = excluded.tpp_account_reference,
       last_seen_at = excluded.last_seen_at
   `);
   const currentNames = new Set();
   for (const d of gaps) {
     currentNames.add(d.domainName);
-    upsert.run({ $domainName: d.domainName, $category: 'missing_from_itglue', $expiryDate: d.expiryDate, $autotaskClientName: d.autotaskClientName, $itglueOrgUrl: d.itGlueOrgUrl || null, $tppAccountReference: d.accountReference || null, $now: now });
+    upsert.run({
+      $domainName: d.domainName,
+      $category: 'missing_from_itglue',
+      $expiryDate: d.expiryDate,
+      $autotaskClientName: d.autotaskClientName,
+      $itglueOrgUrl: d.itGlueOrgUrl || null,
+      $wrongItglueOrgName: null,
+      $wrongItglueOrgUrl: null,
+      $tppAccountReference: d.accountReference || null,
+      $now: now,
+    });
   }
   for (const d of unmatched) {
     currentNames.add(d.domainName);
-    upsert.run({ $domainName: d.domainName, $category: 'unmatched_client', $expiryDate: d.expiryDate, $autotaskClientName: null, $itglueOrgUrl: null, $tppAccountReference: d.accountReference || null, $now: now });
+    upsert.run({
+      $domainName: d.domainName,
+      $category: 'unmatched_client',
+      $expiryDate: d.expiryDate,
+      $autotaskClientName: null,
+      $itglueOrgUrl: null,
+      $wrongItglueOrgName: null,
+      $wrongItglueOrgUrl: null,
+      $tppAccountReference: d.accountReference || null,
+      $now: now,
+    });
+  }
+  for (const d of wrongClient) {
+    currentNames.add(d.domainName);
+    upsert.run({
+      $domainName: d.domainName,
+      $category: 'wrong_client',
+      $expiryDate: d.expiryDate,
+      $autotaskClientName: d.autotaskClientName,
+      $itglueOrgUrl: d.itGlueOrgUrl || null,
+      $wrongItglueOrgName: d.wrongOrgName || null,
+      $wrongItglueOrgUrl: d.wrongOrgUrl || null,
+      $tppAccountReference: d.accountReference || null,
+      $now: now,
+    });
   }
 
   // Full rows, not just names, for anything about to be deleted -- the
@@ -119,11 +199,14 @@ function getSummaryCounts() {
   const rows = listGaps();
   const gapRows = rows.filter((r) => r.category === 'missing_from_itglue');
   const unmatchedRows = rows.filter((r) => r.category === 'unmatched_client');
+  const wrongClientRows = rows.filter((r) => r.category === 'wrong_client');
   return {
     gapCount: gapRows.length,
     gapTickedCount: gapRows.filter((r) => r.ticked).length,
     unmatchedCount: unmatchedRows.length,
     unmatchedTickedCount: unmatchedRows.filter((r) => r.ticked).length,
+    wrongClientCount: wrongClientRows.length,
+    wrongClientTickedCount: wrongClientRows.filter((r) => r.ticked).length,
   };
 }
 

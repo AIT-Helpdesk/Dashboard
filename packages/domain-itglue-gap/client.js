@@ -257,8 +257,8 @@ export function mount(container) {
   // bolded; the per-category/ticked breakdown sits alongside it unbolded.
   function renderSummary(summary) {
     summaryEl.hidden = false;
-    const total = summary.gapCount + summary.unmatchedCount;
-    summaryEl.innerHTML = `<strong>${total}</strong> currently open item${total === 1 ? '' : 's'} -- ${summary.gapCount} missing from IT Glue (${summary.gapTickedCount} ticked), ${summary.unmatchedCount} with no matching Autotask Client (${summary.unmatchedTickedCount} ticked)`;
+    const total = summary.gapCount + summary.unmatchedCount + summary.wrongClientCount;
+    summaryEl.innerHTML = `<strong>${total}</strong> currently open item${total === 1 ? '' : 's'} -- ${summary.gapCount} missing from IT Glue (${summary.gapTickedCount} ticked), ${summary.unmatchedCount} with no matching Autotask Client (${summary.unmatchedTickedCount} ticked), ${summary.wrongClientCount} under the wrong Client in IT Glue (${summary.wrongClientTickedCount} ticked)`;
   }
 
   function render(data) {
@@ -269,6 +269,7 @@ export function mount(container) {
 
     const gapRows = data.rows.filter((r) => r.category === 'missing_from_itglue');
     const unmatchedRows = data.rows.filter((r) => r.category === 'unmatched_client');
+    const wrongClientRows = data.rows.filter((r) => r.category === 'wrong_client');
 
     resultsEl.appendChild(
       sectionTable(
@@ -307,6 +308,45 @@ export function mount(container) {
         // own comment); that's exactly what Data Matching's own "TPP
         // Domains" view is for fixing, not something to resolve here.
         `<span class="dig-missing-header-note">Fix these on the <a href="#data-matching">Data Matching</a> page (TPP Domains).</span>`
+      )
+    );
+    resultsEl.appendChild(
+      sectionTable(
+        'Wrong Client in IT Glue',
+        wrongClientRows,
+        [
+          { key: 'domain', label: 'Domain', cell: (r) => escapeHtml(r.domainName), sort: (r) => r.domainName || '' },
+          { key: 'expiry', label: 'Expiry Date', className: 'ticket-number', cell: (r) => formatDate(r.expiryDate), sort: (r) => r.expiryDate || '' },
+          { key: 'tppAcc', label: 'TPP Acc', cell: (r) => escapeHtml(r.tppAccountReference || ''), sort: (r) => r.tppAccountReference || '' },
+          {
+            key: 'shouldBe',
+            label: 'Should Be (Autotask Client)',
+            cell: (r) =>
+              r.autotaskClientName && r.itglueOrgUrl
+                ? `<a href="${escapeHtml(r.itglueOrgUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.autotaskClientName)}</a>`
+                : escapeHtml(r.autotaskClientName || ''),
+            sort: (r) => r.autotaskClientName || '',
+          },
+          {
+            key: 'currentlyUnder',
+            label: 'Currently Filed Under',
+            cell: (r) =>
+              r.wrongItglueOrgName && r.wrongItglueOrgUrl
+                ? `<a href="${escapeHtml(r.wrongItglueOrgUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.wrongItglueOrgName)}</a>`
+                : escapeHtml(r.wrongItglueOrgName || ''),
+            sort: (r) => r.wrongItglueOrgName || '',
+          },
+        ],
+        'domain',
+        // By request ("If a domain appears on an IT Glue Client but that
+        // Client is not the same client as the Autotask Client on which
+        // the TPP Account appears in the UDF") -- the domain IS in IT
+        // Glue (so it's not a "Missing" gap), just under the wrong
+        // organisation. Exact (case-insensitive) name match only, same
+        // convention this whole job already follows -- a genuine naming
+        // difference between an Autotask Client and its own IT Glue
+        // organisation (not an actual misfiling) can also show up here.
+        `<span class="dig-missing-header-note">Move the domain to the correct organisation in IT Glue.</span>`
       )
     );
   }

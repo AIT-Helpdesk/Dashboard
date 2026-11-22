@@ -26,7 +26,14 @@ async function main() {
   if (dryRun) {
     console.log('\n--- DRY RUN RESULT (nothing written to Autotask) ---');
     console.log(JSON.stringify(
-      { action: result.action, gapCount: result.gaps.length, unmatchedCount: result.unmatched.length, ticketNumber: result.ticket?.ticketNumber, dueDateTime: result.dueDateTime },
+      {
+        action: result.action,
+        gapCount: result.gaps.length,
+        unmatchedCount: result.unmatched.length,
+        wrongClientCount: result.wrongClient.length,
+        ticketNumber: result.ticket?.ticketNumber,
+        dueDateTime: result.dueDateTime,
+      },
       null,
       2
     ));
@@ -40,10 +47,11 @@ async function main() {
 
   logEvent({
     stage: 'end',
-    message: `Run finished. Action: ${result.action}. ${result.gaps.length} gap(s), ${result.unmatched.length} unmatched.`,
+    message: `Run finished. Action: ${result.action}. ${result.gaps.length} gap(s), ${result.unmatched.length} unmatched, ${result.wrongClient.length} wrong-client.`,
     action: result.action,
     gapCount: result.gaps.length,
     unmatchedCount: result.unmatched.length,
+    wrongClientCount: result.wrongClient.length,
   });
   writeLastRunStatus({
     runId,
@@ -53,6 +61,7 @@ async function main() {
     action: result.action,
     gapCount: result.gaps.length,
     unmatchedCount: result.unmatched.length,
+    wrongClientCount: result.wrongClient.length,
     ticketId: result.ticketId || result.ticket?.id || null,
     ticketNumber: result.ticket?.ticketNumber || null,
   });
