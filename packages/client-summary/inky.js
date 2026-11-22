@@ -115,29 +115,57 @@ async function getUsage(force) {
 function normalize(s) {
   return (s || '')
     .toLowerCase()
-    .replace(/\s*&\s*/g, ' and ')
     // Apostrophes dropped outright (not turned into a space like every
     // other punctuation char below) -- by request, confirmed INKY's own
     // team_label strips these when a client name has one (e.g. Autotask's
     // "Lenard's Chicken" is INKY's "Lenards Chicken"); turning it into a
     // space instead would wrongly split "Lenard" and "s" into two words
-    // and miss the match.
+    // and miss the match. "&"/"@" are deliberately left to the generic
+    // punctuation-to-space rule below (see normalizeCompanyVariants()'s
+    // own comment) rather than handled here.
     .replace(/['’]/g, '')
     .replace(/[^a-z0-9 ]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
+// INKY's own team_label can never contain a literal "&" or "@" -- by
+// request, EITHER reading of how a team got created for a client whose
+// name has one is accepted, since it's been done both ways historically:
+// spelled out ("Smith & Jones" -> "Smith and Jones", "Jo@TechCo" -> "Jo at
+// TechCo") or simply dropped (-> "Smith Jones", "Jo TechCo").
+// normalize() above already produces the "dropped" reading on its own
+// (its generic punctuation rule turns a bare "&"/"@" into a space), so
+// this only needs to additionally try every "spelled out" reading --
+// every combination of the symbols actually present is tried (in the rare
+// case a name has both), skipped entirely for a name with neither symbol
+// (the one reading is then the only one, so no behaviour change for the
+// vast majority of clients).
+const SYMBOL_SPELLINGS = [
+  { symbol: '&', word: ' and ' },
+  { symbol: '@', word: ' at ' },
+];
+
+function normalizeCompanyVariants(companyName) {
+  const raw = companyName || '';
+  let rawVariants = [raw];
+  for (const { symbol, word } of SYMBOL_SPELLINGS) {
+    if (!raw.includes(symbol)) continue;
+    rawVariants = rawVariants.concat(rawVariants.map((v) => v.split(symbol).join(word)));
+  }
+  return [...new Set(rawVariants.map(normalize).filter(Boolean))];
+}
+
 async function findTeamMatch(companyName, force) {
   const teams = await getTeams(force);
-  const normCompany = normalize(companyName);
-  if (!normCompany) return null;
+  const normCompanyVariants = normalizeCompanyVariants(companyName).filter(Boolean);
+  if (normCompanyVariants.length === 0) return null;
   const pool = teams
     .map((t) => ({ team: t, norm: normalize(t.team_label) }))
-    .filter(({ norm }) => norm && (norm === normCompany || norm.includes(normCompany) || normCompany.includes(norm)));
+    .filter(({ norm }) => norm && normCompanyVariants.some((n) => norm === n || norm.includes(n) || n.includes(norm)));
   if (pool.length === 0) return null;
 
-  const exact = pool.filter((m) => m.norm === normCompany);
+  const exact = pool.filter((m) => normCompanyVariants.includes(m.norm));
   if (exact.length === 1) return exact[0].team;
   if (exact.length > 1) return null;
 
