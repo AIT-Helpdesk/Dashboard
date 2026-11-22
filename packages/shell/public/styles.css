@@ -12726,6 +12726,13 @@ tr.accrued-time-yellow-row th {
   margin-left: 0.6rem;
 }
 
+/* Admin -- new page, by request ("tabs like RMM Filter Checks"). Table
+   fits its content, not 100% width, same standing convention every other
+   page's own table follows. */
+.admin-page table {
+  width: auto;
+}
+
 /* Database Schema -- new page, by request. */
 .dbs-picker {
   padding: 0.75rem 1rem;

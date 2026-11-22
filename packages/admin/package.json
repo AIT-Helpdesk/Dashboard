@@ -1,0 +1,15 @@
+{
+  "name": "@dashboard/admin",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "admin",
+    "label": "Admin",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
