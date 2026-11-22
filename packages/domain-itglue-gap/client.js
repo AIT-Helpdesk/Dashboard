@@ -30,14 +30,12 @@ export function mount(container) {
     </div>
     <p id="status" class="status">Loading...</p>
     <div id="last-run" class="inline-subtext" hidden></div>
-    <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
   `;
 
   const refreshButton = container.querySelector('#refresh-button');
   const statusEl = container.querySelector('#status');
   const lastRunEl = container.querySelector('#last-run');
-  const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
   const npdCountEl = container.querySelector('#npd-count');
   const npdStatusEl = container.querySelector('#npd-status');
@@ -258,19 +256,9 @@ export function mount(container) {
     return `<span class="dig-missing-header-note">${ticketPart}Press Refresh to update the Autotask Ticket with your updates.</span>`;
   }
 
-  // One emphasis per summary line, by request (same convention every other
-  // page's own summary line follows) -- the total open gap count is
-  // bolded; the per-category/ticked breakdown sits alongside it unbolded.
-  function renderSummary(summary) {
-    summaryEl.hidden = false;
-    const total = summary.gapCount + summary.unmatchedCount + summary.wrongClientCount + summary.emailDomainMismatchCount;
-    summaryEl.innerHTML = `<strong>${total}</strong> currently open item${total === 1 ? '' : 's'} -- ${summary.gapCount} missing from IT Glue (${summary.gapTickedCount} ticked), ${summary.unmatchedCount} with no matching Autotask Client (${summary.unmatchedTickedCount} ticked), ${summary.wrongClientCount} under the wrong Client in IT Glue (${summary.wrongClientTickedCount} ticked), ${summary.emailDomainMismatchCount} different from their Primary Contact's email domain (${summary.emailDomainMismatchTickedCount} ticked)`;
-  }
-
   function render(data) {
     statusEl.hidden = true;
     renderLastRun(data.lastRun);
-    renderSummary(data.summary);
     resultsEl.innerHTML = '';
 
     const gapRows = data.rows.filter((r) => r.category === 'missing_from_itglue');

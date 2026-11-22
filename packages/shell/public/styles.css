@@ -1384,28 +1384,6 @@ h1 {
   font-weight: 600;
   margin-bottom: 0.25rem;
 }
-/* Superseded -- #load-button ("Unmatched") now carries .button-link
-   .button-link--small directly in client.js, same as its two sibling
-   view buttons, so this rule's own padding/font-size (identical values)
-   is redundant. Kept only as a marker in case a future id-scoped override
-   is needed here again; the real view-highlighting logic is
-   .dm-view-btn--active below. */
-
-/* The three view buttons (Unmatched/UDF Matches/Exact Match) all default
-   to the same light .button-link--small pill now, by request -- whichever
-   one's own results are CURRENTLY on screen gets this dark-blue "active"
-   look instead (client.js's setActiveView() toggles this class), rather
-   than Unmatched always looking selected just because it happens to be a
-   plain <button> (this dashboard's shared solid-blue .date-form button
-   default) while its two siblings use the lighter pill. Compound selector
-   (class+element+class+class) needed to out-specify .date-form button
-   .button-link--small's own light-tint rule above it in this file -- same
-   "a lone/lower-specificity class loses this tie" fix this stylesheet's
-   other per-button overrides already document (e.g. .cc-mark-renewals-btn). */
-.date-form button.button-link--small.dm-view-btn--active {
-  background: var(--accent);
-  color: white;
-}
 /* "Show UDF Matches" table -- shrunk to its own content, by request, same
    convention @dashboard/dns-check's own .dns-check-compact-table uses. */
 .dm-compact-table {
@@ -10430,6 +10408,19 @@ tr.accrued-time-yellow-row th {
   border-color: var(--border);
   border-bottom: 2px solid var(--bg); /* sits over the strip's own bottom rule, fusing into the content below */
   color: var(--fg);
+}
+/* A sub-tab with no real report behind it for the currently-selected
+   concept (Data Matching's own Unmatched/Exact Match, by request --
+   "just like the tabs and subtabs of the RMM Filter Checks page") --
+   greyed out with its own explanatory title, same disabled-affordance
+   convention this dashboard's buttons already use. */
+.rmmf-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.rmmf-tab:disabled:hover {
+  top: 1px;
+  color: var(--muted);
 }
 
 /* "Show full table data (Appendix N)" -- a real #anchor link to that

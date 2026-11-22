@@ -5,7 +5,14 @@ export const label = "Data Matching";
 // convention every other page's client.js already uses (see
 // @dashboard/subscriptions-expiring/client.js's own comment for the full
 // reasoning).
-let lastConcept = 'tpp-domains-unmatched';
+// Tabs (one per concept) + sub-tabs (Unmatched/UDF Matches/Exact Match),
+// by request ("do the selector dropdowns on Data Matching page as tabs
+// and their Unmatched, UDF Matched and Exact Match as sub-tabs under
+// that just like the tabs and subtabs of the RMM Filter Checks page") --
+// same two-row .rmmf-tabs/.rmmf-tab(s)--primary/.rmmf-subtabs convention
+// that page already established, reused rather than a new tab system.
+let activeConcept = 'tpp-domains-unmatched';
+let activeSubTab = 'unmatched'; // 'unmatched' | 'udf-matches' | 'exact-match'
 let lastDataByConcept = {
   'tpp-domains-unmatched': null,
   'ingram-clients-unmatched': null,
@@ -17,16 +24,8 @@ let lastDataByConcept = {
 // "Include Inactive" -- default unticked (by request), narrows the
 // candidate pool "Possible matches" suggestions are scored against to
 // active-only companies unless ticked. Module-scope so it survives a
-// remount, same convention as lastConcept above.
+// remount, same convention as activeConcept above.
 let lastIncludeInactive = false;
-
-// Which of the three view buttons' own results are CURRENTLY on screen --
-// 'unmatched' | 'udf-matches' | 'exact-match' | null (nothing run yet).
-// By request: the dark-blue "active" look should follow whichever view is
-// actually showing, not always sit on Show Unmatched just because it
-// happens to be a plain <button> (this dashboard's own default solid-blue
-// look) while the other two use the lighter .button-link--small pill.
-let lastActiveView = null;
 
 // One entry per "concept" this page checks -- by request, a page for
 // "various data matching concepts" generally, not just this first one.
@@ -34,10 +33,10 @@ let lastActiveView = null;
 // route in server.js, and one more render function below.
 // `udfName` here is only for "Show UDF Matches" (see loadUdfMatches below)
 // -- each report already carries its own `data.udfName` once loaded, this
-// is just so the button works even before a Load (reading straight off
-// whichever concept is currently selected in the dropdown).
-// `hasReport`/`hasExactMatch` drive updateViewButtonsAvailability() below
-// -- every one of these 5 has a real Unmatched report; only TPP has no
+// is just so that sub-tab works even before Unmatched has ever loaded
+// (reading straight off whichever concept tab is currently active).
+// `hasReport`/`hasExactMatch` drive renderSubTabs() below -- every one of
+// these 5 has a real Unmatched report; only TPP has no
 // "matched without a UDF" case (its own account-reference code never
 // equals a real company name, see server.js's own comment on
 // buildTppDomainsUnmatchedReport). The OTHER-UDF entries appended onto
@@ -71,113 +70,137 @@ export function mount(container) {
   container.classList.add('data-matching-page');
   container.innerHTML = `
     <header class="page-header">
-      <form id="filter-form" class="date-form">
-        <label for="concept-input">Data Match Check with Autotask</label>
-        <select id="concept-input" name="concept">
-          ${CONCEPT_OPTIONS.map((o) => `<option value="${o.value}">${o.label}</option>`).join('')}
-        </select>
-        <button type="submit" id="load-button" class="button-link button-link--small dm-view-btn">Unmatched</button>
-        <button type="button" id="show-udf-matches-button" class="button-link button-link--small dm-view-btn">UDF Matches</button>
-        <button type="button" id="show-matched-no-udf-button" class="button-link button-link--small dm-view-btn">Exact Match</button>
-        <label class="inline-checkbox-label" title="When unticked (default), an inactive Autotask company is left out of 'Possible matches' suggestions entirely. Tick to include them too.">
-          <input type="checkbox" id="include-inactive-input" /> Include Inactive
-        </label>
-      </form>
       <h1>Data Matching</h1>
+      <label class="inline-checkbox-label" title="When unticked (default), an inactive Autotask company is left out of 'Possible matches' suggestions entirely. Tick to include them too.">
+        <input type="checkbox" id="include-inactive-input" /> Include Inactive
+      </label>
     </header>
-    <p id="status" class="status">Pick a check, then click Unmatched.</p>
+    <div id="concept-tabs" class="rmmf-tabs rmmf-tabs--primary"></div>
+    <div id="subtabs" class="rmmf-tabs rmmf-subtabs"></div>
+    <p id="status" class="status">Loading...</p>
     <div id="summary" class="summary" hidden></div>
     <div id="results" class="results"></div>
   `;
 
-  const form = container.querySelector('#filter-form');
-  const conceptInput = container.querySelector('#concept-input');
-  const loadButton = container.querySelector('#load-button');
-  const showUdfMatchesButton = container.querySelector('#show-udf-matches-button');
-  const showMatchedNoUdfButton = container.querySelector('#show-matched-no-udf-button');
+  const conceptTabsEl = container.querySelector('#concept-tabs');
+  const subTabsEl = container.querySelector('#subtabs');
   const includeInactiveInput = container.querySelector('#include-inactive-input');
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
 
-  conceptInput.value = lastConcept;
   includeInactiveInput.checked = lastIncludeInactive;
   includeInactiveInput.addEventListener('change', () => {
     lastIncludeInactive = includeInactiveInput.checked;
+    // "Include Inactive" changes what the server's own suggestion-scoring
+    // actually returns, by request -- re-fetches whichever Unmatched/Exact
+    // Match report is currently on screen so the toggle takes effect
+    // immediately, same as it always has (the old Load/Exact Match
+    // buttons both always re-fetched on click, never relied on a stale
+    // client-side cache either).
+    if (activeSubTab === 'unmatched' || activeSubTab === 'exact-match') loadActiveSubTab();
   });
 
-  const VIEW_BUTTON_BY_NAME = { 'unmatched': loadButton, 'udf-matches': showUdfMatchesButton, 'exact-match': showMatchedNoUdfButton };
-
-  // Dark-blue "active" look follows whichever view actually succeeded in
-  // loading, not any particular button -- called after every successful
-  // load() / loadUdfMatches() / loadMatchedWithoutUdf() below, and once at
-  // mount to restore it (only ever 'unmatched', see the comment on the
-  // mount-time render() call near the bottom of this function -- UDF
-  // Matches/Exact Match views aren't themselves cached across remounts,
-  // only the plain unmatched report is).
-  function setActiveView(view) {
-    lastActiveView = view;
-    for (const [name, btn] of Object.entries(VIEW_BUTTON_BY_NAME)) {
-      btn.classList.toggle('dm-view-btn--active', name === view);
-    }
+  // Top row -- one tab per concept (RMM Filter Checks' own .rmmf-tabs--
+  // primary convention, same dark-chrome-bar look). Clicking a concept
+  // resets the sub-tab to the first one still available for it (e.g.
+  // leaving 'exact-match' when switching to TPP, which has none).
+  function renderConceptTabs() {
+    conceptTabsEl.innerHTML = CONCEPT_OPTIONS.map(
+      (o) => `<button type="button" class="rmmf-tab${o.value === activeConcept ? ' rmmf-tab--active' : ''}" data-concept="${escapeHtml(o.value)}">${escapeHtml(o.label)}</button>`
+    ).join('');
+    conceptTabsEl.querySelectorAll('.rmmf-tab').forEach((btn) => {
+      btn.addEventListener('click', () => switchConcept(btn.dataset.concept));
+    });
   }
 
-  // Unmatched/Exact Match both need a real report builder behind them
-  // (see each concept's own hasReport/hasExactMatch above) -- greyed out
-  // with an explanatory tooltip whenever the selected concept has neither,
-  // re-checked on every dropdown change rather than just once at mount.
-  // Show UDF Matches needs neither -- GET /udf-matches works for any
-  // udfName -- so it's never disabled here.
-  function updateViewButtonsAvailability() {
-    const meta = findConceptMeta(conceptInput.value);
+  // Second row -- Unmatched/UDF Matches/Exact Match, same 3 views the old
+  // button row offered, just styled/structured as RMM Filter Checks' own
+  // .rmmf-subtabs. Unmatched/Exact Match are greyed out (disabled,
+  // explanatory title) for whichever concept has neither a real report
+  // nor an exact-match case, same hasReport/hasExactMatch gating the old
+  // buttons already did -- UDF Matches works for any concept, including
+  // the dynamically-discovered "other UDF" ones that have neither.
+  function renderSubTabs() {
+    const meta = findConceptMeta(activeConcept);
     const hasReport = meta ? !!meta.hasReport : true;
     const hasExactMatch = meta ? !!meta.hasExactMatch : true;
-    loadButton.disabled = !hasReport;
-    loadButton.title = hasReport ? '' : "This UDF has no Unmatched report of its own -- there's no known external system to compare it against, so only Show UDF Matches works here.";
-    showMatchedNoUdfButton.disabled = !hasExactMatch;
-    showMatchedNoUdfButton.title = hasExactMatch
-      ? ''
-      : !hasReport
-        ? "This UDF has no Exact Match report of its own -- there's no known external system to compare it against, so only Show UDF Matches works here."
-        : "TPP matches only via its own UDF -- there's no \"matched without a UDF\" case for this concept.";
+    const subTabs = [
+      {
+        key: 'unmatched',
+        label: 'Unmatched',
+        available: hasReport,
+        title: hasReport ? '' : "This UDF has no Unmatched report of its own -- there's no known external system to compare it against, so only UDF Matches works here.",
+      },
+      { key: 'udf-matches', label: 'UDF Matches', available: true, title: '' },
+      {
+        key: 'exact-match',
+        label: 'Exact Match',
+        available: hasExactMatch,
+        title: hasExactMatch
+          ? ''
+          : !hasReport
+            ? "This UDF has no Exact Match report of its own -- there's no known external system to compare it against, so only UDF Matches works here."
+            : "TPP matches only via its own UDF -- there's no \"matched without a UDF\" case for this concept.",
+      },
+    ];
+    subTabsEl.innerHTML = subTabs
+      .map(
+        (s) =>
+          `<button type="button" class="rmmf-tab${s.key === activeSubTab ? ' rmmf-tab--active' : ''}" data-subtab="${s.key}" ${s.available ? '' : 'disabled'} title="${escapeHtml(s.title)}">${escapeHtml(s.label)}</button>`
+      )
+      .join('');
+    subTabsEl.querySelectorAll('.rmmf-tab:not(:disabled)').forEach((btn) => {
+      btn.addEventListener('click', () => switchSubTab(btn.dataset.subtab));
+    });
   }
-  updateViewButtonsAvailability();
-  conceptInput.addEventListener('change', updateViewButtonsAvailability);
+
+  function switchConcept(concept) {
+    if (concept === activeConcept) return;
+    activeConcept = concept;
+    const meta = findConceptMeta(concept);
+    const hasReport = meta ? !!meta.hasReport : true;
+    const hasExactMatch = meta ? !!meta.hasExactMatch : true;
+    if (activeSubTab === 'unmatched' && !hasReport) activeSubTab = 'udf-matches';
+    else if (activeSubTab === 'exact-match' && !hasExactMatch) activeSubTab = hasReport ? 'unmatched' : 'udf-matches';
+    renderConceptTabs();
+    renderSubTabs();
+    loadActiveSubTab();
+  }
+
+  function switchSubTab(subTab) {
+    if (subTab === activeSubTab) return;
+    activeSubTab = subTab;
+    renderSubTabs();
+    loadActiveSubTab();
+  }
 
   // "Include any UDF Name:{thing} types in the list at the bottom as
   // well" -- any Companies UDF named "Name:*" that doesn't already have
   // one of the 5 concepts above (see server.js's own KNOWN_NAME_UDFS),
   // most likely one created by hand in Autotask after this dashboard was
-  // last updated to know its specific name. Appended as plain <option>s
-  // (not a full re-render of the <select>, which would lose whatever's
-  // currently picked) once this resolves; CONCEPT_OPTIONS itself gets the
-  // same entries pushed on so every other lookup in this file
+  // last updated to know its specific name. CONCEPT_OPTIONS itself gets
+  // the same entries pushed on so every other lookup in this file
   // (findConceptMeta(), loadUdfMatches()'s own CONCEPT_OPTIONS.find())
-  // just works for them with no separate list to keep in sync.
+  // just works for them with no separate list to keep in sync; the tab
+  // row is simply re-rendered once they arrive (no "currently selected"
+  // state to preserve the way the old <select> needed to -- the active
+  // concept tab stays whatever it already was, a re-render doesn't change it).
   if (!extraConceptsFetched) {
     extraConceptsFetched = true;
     fetch('/api/data-matching/other-udf-concepts')
       .then((res) => res.json())
       .then((data) => {
         for (const c of data.concepts || []) {
-          const option = { value: c.udfName, label: c.label, udfName: c.udfName, hasReport: false, hasExactMatch: false };
-          CONCEPT_OPTIONS.push(option);
-          conceptInput.appendChild(new Option(option.label, option.value));
+          CONCEPT_OPTIONS.push({ value: c.udfName, label: c.label, udfName: c.udfName, hasReport: false, hasExactMatch: false });
         }
+        renderConceptTabs();
       })
       .catch((err) => {
         console.error('Data Matching: failed to load other UDF concepts:', err);
         extraConceptsFetched = false;
       });
   }
-
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    load(conceptInput.value);
-  });
-
-  showUdfMatchesButton.addEventListener('click', () => loadUdfMatches(conceptInput.value));
-  showMatchedNoUdfButton.addEventListener('click', () => loadMatchedWithoutUdf(conceptInput.value));
 
   // Shared by load()/loadMatchedWithoutUdf() below -- both hit the exact
   // same report endpoint (see loadMatchedWithoutUdf()'s own comment), so
@@ -187,40 +210,53 @@ export function mount(container) {
     return `/api/data-matching/${concept}?includeInactive=${includeInactiveInput.checked}`;
   }
 
-  async function load(concept) {
-    // Defensive only -- the button itself is disabled/greyed out for this
-    // case (updateViewButtonsAvailability() above), but guard here too in
-    // case something else ever calls this directly.
-    if (!findConceptMeta(concept)?.hasReport) {
-      statusEl.hidden = false;
-      statusEl.className = 'status error';
-      statusEl.textContent = "This UDF has no Unmatched report of its own -- use Show UDF Matches to see what's already set.";
-      return;
-    }
-    loadButton.disabled = true;
+  // Dispatches to whichever fetch+render the currently active sub-tab
+  // needs, by request (tabs auto-load their content, no separate "Load"
+  // button any more). Unmatched/Exact Match share the SAME underlying
+  // report endpoint/cache (matching the old button row's own behaviour --
+  // both always re-fetch live rather than trusting a stale client-side
+  // copy, relying on the server's own 20-min cache for speed), just
+  // rendered two different ways.
+  async function loadActiveSubTab() {
     statusEl.hidden = false;
     statusEl.className = 'status';
     statusEl.textContent = 'Loading...';
     summaryEl.hidden = true;
     resultsEl.innerHTML = '';
-
     try {
-      // Not forced -- the server caches each concept for 20 min, same
-      // convention as Coming Soon, so a repeat Load is instant.
-      const res = await fetch(conceptUrl(concept));
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      lastConcept = concept;
-      lastDataByConcept[concept] = data;
-      render(data);
-      setActiveView('unmatched');
+      if (activeSubTab === 'unmatched') {
+        await load(activeConcept);
+      } else if (activeSubTab === 'exact-match') {
+        await loadMatchedWithoutUdf(activeConcept);
+      } else {
+        await loadUdfMatches(activeConcept);
+      }
     } catch (err) {
       statusEl.hidden = false;
       statusEl.className = 'status error';
       statusEl.textContent = `Error: ${err.message}`;
-    } finally {
-      loadButton.disabled = false;
     }
+  }
+
+  async function load(concept) {
+    // Defensive only -- the sub-tab itself is disabled/greyed out for
+    // this case (renderSubTabs() above), but guard here too in case
+    // something else ever calls this directly.
+    if (!findConceptMeta(concept)?.hasReport) {
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.textContent = "This UDF has no Unmatched report of its own -- use UDF Matches to see what's already set.";
+      return;
+    }
+    // Not forced -- the server caches each concept for 20 min, same
+    // convention as Coming Soon, so a repeat switch back to this tab is
+    // fast. loadActiveSubTab() (the caller) already owns the
+    // loading/error status text -- this just fetches and renders.
+    const res = await fetch(conceptUrl(concept));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    lastDataByConcept[concept] = data;
+    render(data);
   }
 
   // "Exact Match" -- by request, the OTHER thing every
@@ -235,26 +271,11 @@ export function mount(container) {
   async function loadMatchedWithoutUdf(concept) {
     // Defensive only -- see the same comment on load() above.
     if (!findConceptMeta(concept)?.hasExactMatch) return;
-    showMatchedNoUdfButton.disabled = true;
-    statusEl.hidden = false;
-    statusEl.className = 'status';
-    statusEl.textContent = 'Loading...';
-    summaryEl.hidden = true;
-    resultsEl.innerHTML = '';
-
-    try {
-      const res = await fetch(conceptUrl(concept));
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      renderMatchedWithoutUdf(data);
-      setActiveView('exact-match');
-    } catch (err) {
-      statusEl.hidden = false;
-      statusEl.className = 'status error';
-      statusEl.textContent = `Error: ${err.message}`;
-    } finally {
-      showMatchedNoUdfButton.disabled = !findConceptMeta(conceptInput.value)?.hasExactMatch;
-    }
+    const res = await fetch(conceptUrl(concept));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    lastDataByConcept[concept] = data;
+    renderMatchedWithoutUdf(data);
   }
 
   // Per-concept display columns for the matched-without-UDF table --
@@ -333,31 +354,15 @@ export function mount(container) {
   // unmatched reports: every Autotask company that ALREADY has a value in
   // the currently-selected concept's own UDF, so an existing match can be
   // reviewed (and cleared, if wrong) rather than only ever seeing the gaps
-  // still needing one. Reads straight off the dropdown's current selection
-  // -- works even before a Load.
+  // still needing one. Reads straight off the currently selected concept
+  // tab -- works even before that concept's Unmatched has ever been loaded.
   async function loadUdfMatches(concept) {
     const option = CONCEPT_OPTIONS.find((o) => o.value === concept);
     if (!option) return;
-    showUdfMatchesButton.disabled = true;
-    statusEl.hidden = false;
-    statusEl.className = 'status';
-    statusEl.textContent = 'Loading...';
-    summaryEl.hidden = true;
-    resultsEl.innerHTML = '';
-
-    try {
-      const res = await fetch(`/api/data-matching/udf-matches?udfName=${encodeURIComponent(option.udfName)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      renderUdfMatches(data.udfName, data.matches);
-      setActiveView('udf-matches');
-    } catch (err) {
-      statusEl.hidden = false;
-      statusEl.className = 'status error';
-      statusEl.textContent = `Error: ${err.message}`;
-    } finally {
-      showUdfMatchesButton.disabled = false;
-    }
+    const res = await fetch(`/api/data-matching/udf-matches?udfName=${encodeURIComponent(option.udfName)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    renderUdfMatches(data.udfName, data.matches);
   }
 
   // Clear only, never an edit, by request -- a wrong value is corrected by
@@ -954,21 +959,19 @@ export function mount(container) {
     return groupEl;
   }
 
-  // Mirrors the restore logic above: a remount only ever re-renders the
-  // plain unmatched report (UDF Matches/Exact Match views have no cache of
-  // their own to restore from), so that's the only view the highlight can
-  // correctly claim here -- 'udf-matches'/'exact-match' would be wrong if
-  // the page was last showing one of those before navigating away. Nothing
-  // cached at all (a genuinely fresh session) leaves `lastActiveView` at
-  // its initial `null`, so setActiveView(null) below just clears every
-  // button back to the plain light-blue look, per request ("if nothing has
-  // run yet leave them all as the light blue").
-  if (lastDataByConcept[lastConcept]) {
-    render(lastDataByConcept[lastConcept]);
-    setActiveView('unmatched');
-  } else {
-    setActiveView(lastActiveView);
-  }
+  // Mount/remount -- render both tab rows for whatever concept/sub-tab
+  // this module already remembers (same "survives a remount" convention
+  // as every other module-scope variable here), then either restore
+  // instantly from lastDataByConcept's own cache (Unmatched/Exact Match
+  // share it -- the exact "re-render the plain unmatched report on a
+  // remount" behaviour this page already had) or fetch fresh (first
+  // mount ever, or the UDF Matches tab, which has no cache of its own).
+  renderConceptTabs();
+  renderSubTabs();
+  const cached = lastDataByConcept[activeConcept];
+  if (cached && activeSubTab === 'unmatched') render(cached);
+  else if (cached && activeSubTab === 'exact-match') renderMatchedWithoutUdf(cached);
+  else loadActiveSubTab();
 
   function formatDate(isoDateOnly) {
     if (!isoDateOnly) return '';
