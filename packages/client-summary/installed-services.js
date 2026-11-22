@@ -70,9 +70,9 @@ async function findSaasAlertsCustomerId(companyId, force) {
 //     a SaaS Protection client, or a name that didn't line up well enough to
 //     match confidently; this can't currently tell those two apart.
 // Dark Web ID is left out for now -- by request -- it has no live
-// subscription API, only sparse manually-parsed report files for a handful
-// of clients (see @dashboard/meeting-prep), which isn't a reliable
-// "installed or not" signal for the whole client base. INKY (Email
+// subscription API, only sparse manually-parsed monthly report files for a
+// handful of clients, which isn't a reliable "installed or not" signal for
+// the whole client base. INKY (Email
 // Security) DOES now have a live API (confirmed working this session) --
 // see ./inky.js's own findTeamMatch(), a NAME match against INKY's own
 // Teams list, same reasoning/convention as every other vendor below.

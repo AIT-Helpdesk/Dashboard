@@ -1,4 +1,4 @@
-import { scoreBadge } from '/meeting-prep-report-render.js';
+import { scoreBadge } from '/report-widgets.js';
 
 export const id = 'live-health-scores';
 export const label = 'Live Health Scores';

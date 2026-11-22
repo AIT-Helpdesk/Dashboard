@@ -15,7 +15,7 @@
     "@dashboard/client-summary": "*",
     "@dashboard/datto-rmm": "*",
     "@dashboard/itglue-client": "*",
-    "@dashboard/meeting-prep": "*",
+    "@dashboard/report-widgets": "*",
     "@dashboard/saas-protection": "*",
     "@dashboard/saasalerts-client": "*",
     "express": "^4.19.2",

@@ -1,12 +1,15 @@
 const express = require('express');
 const { matchesWildcard, mapWithConcurrency, getClient, resolveSingleCompany, fetchByFieldIn, getPicklistLabels, listAll, parseWildcard } = require('@dashboard/autotask-client');
 const dattoRmm = require('@dashboard/datto-rmm/lib.js');
-// Datto RMM (Live) section, by request -- reuses Meeting Prep's own
+// Datto RMM (Live) section -- reuses @dashboard/report-widgets' own
 // buildDattoLiveDevicesComponent() in-process (same "reuse the sibling's
 // own function, don't duplicate it" convention Check Client already
 // established) rather than re-deriving the same check-in-freshness/
-// device-type breakdown here a second time.
-const meetingPrep = require('@dashboard/meeting-prep/server.js');
+// device-type breakdown here a second time. That function used to live in
+// @dashboard/meeting-prep/server.js -- moved to its own small package once
+// Meeting Prep/Make Report/Service Actions were removed (superseded by
+// this page) and this was the one piece of that package still needed.
+const { buildDattoLiveDevicesComponent } = require('@dashboard/report-widgets');
 // "Other Systems" section, by request ("summary data from other systems...
 // SaaS Alerts, SaaS Protection, EDR, AutoElevate, Huntress") -- every one of
 // these is a cross-vendor NAME match (this page has no Autotask company to
@@ -1346,17 +1349,14 @@ router.get('/', async (req, res) => {
     }));
 
     const asOf = new Date().toISOString();
-    // First section on the page, by request -- same component shape
-    // Meeting Prep's own card and Make Report's own section both already
-    // render via dattoLiveDevicesWidgetsHtml()/deviceListTableHtml()
-    // (/meeting-prep-report-render.js), so client.js can reuse those
-    // functions directly rather than re-rendering this data a third way.
-    // Passed the UNFILTERED allDevices (not this route's own `devices`
-    // above) -- buildDattoLiveDevicesComponent() does its own site
-    // matching (siteMatches(), &/and-normalized), same as Meeting Prep's
-    // own call site. allowedNames (classification filter) is always null
-    // here -- Live Reports has no classification selector of its own.
-    const dattoLive = meetingPrep.buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exactSite, null);
+    // First section on the page -- same component shape rendered via
+    // dattoLiveDevicesWidgetsHtml()/deviceListTableHtml() (/report-
+    // widgets.js), so client.js can reuse those functions directly rather
+    // than re-rendering this data a second way. Passed the UNFILTERED
+    // allDevices (not this route's own `devices` above) --
+    // buildDattoLiveDevicesComponent() does its own site matching
+    // (siteMatches(), &/and-normalized).
+    const dattoLive = buildDattoLiveDevicesComponent(siteTerm, allDevices, asOf, exactSite);
     // Disk Used % merged onto each device row, by request (matching Datto's
     // own Storage Report, which shows a coloured bar + % used per drive) --
     // `audits` above is already fetched (one per device, for Asset

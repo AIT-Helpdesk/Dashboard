@@ -1,18 +1,13 @@
 // Shared, page-agnostic report-component rendering library -- pure HTML-
 // string builders (gauges, donuts, bars, per-report-kind widget/table
-// markup) plus the Recommendations Summary renderer, extracted out of
-// meeting-prep/client.js so a SECOND page (Report -- a read-only,
-// button-free "present to client" view of whatever's currently ticked on
-// Meeting Prep) can render the exact same widgets/tables/recommendations
-// with zero risk of the two drifting apart. Meeting Prep's own client.js
-// still owns everything interactive (the card grid, ticking, drag-to-
-// reorder, the Selected Overview tile's own site-tab switching) -- only
-// the pure "given this component's data, return HTML" functions live here.
-// Same "shared module served from shell/public, imported by absolute path"
-// convention as meeting-prep-recommendations.js already established --
-// see that file's own header for the fuller reasoning.
-
-import { computeFindings } from '/meeting-prep-recommendations.js';
+// markup). Originally extracted out of the old Meeting Prep page's own
+// client.js so a second page (Make Report) could render the exact same
+// widgets/tables with zero risk of the two drifting apart; now used by
+// Live Reports and Live Health Scores, the only two pages left that need
+// these widgets -- Meeting Prep, Make Report, and Service Actions were all
+// removed once Live Reports covered the same ground (the Recommendations
+// Summary renderer those pages used went with them, since nothing still
+// standing needs it).
 
 export function widgetsHtmlForComponent(component) {
   if (component.kind === 'executive-summary') return executiveSummaryWidgetsHtml(component);
@@ -1309,69 +1304,6 @@ export function breachesHtml(rows) {
       <tbody>${body}</tbody>
     </table>
   `;
-}
-
-// -- Recommendations summary ---------------------------------------------
-// A rules-based read of whatever report components are currently loaded,
-// cross-referencing across report kinds the same way a TAM would by eye
-// before a client meeting (which devices are due for replacement AND
-// already causing trouble, whether the reports even agree on a device
-// count, and so on) -- by request ("can you add a button at the top to
-// produce the summary"). Deliberately NOT an LLM call -- there's no AI
-// backend wired into this dashboard, so this is a fixed set of checks
-// against the JSON shapes buildReportComponent() already produces, each
-// one degrading gracefully when its report kind isn't loaded for this
-// client. It's a starting point for the meeting, not a replacement for
-// actually reading the reports -- says so in its own output.
-
-// The actual rules now live in the shared, page-agnostic
-// meeting-prep-recommendations.js module (imported above) -- Service
-// Actions runs the exact same computeFindings() across every client at
-// once, so the checks themselves can't drift between the two pages.
-// This page keeps only its own presentation of the findings.
-export function buildRecommendationsSummary(components, siteTerm) {
-  const findings = computeFindings(components);
-  return renderRecommendationsHtml(siteTerm, components, findings);
-}
-
-export function renderRecommendationsHtml(siteTerm, components, findings) {
-  const tierMeta = {
-    action: { label: 'Fix before you present', className: 'mtg-rec-group--action' },
-    gather: { label: 'Find out before you present', className: 'mtg-rec-group--gather' },
-    watch: { label: 'Worth mentioning in the meeting', className: 'mtg-rec-group--watch' },
-    good: { label: 'Good news to lead with', className: 'mtg-rec-group--good' },
-  };
-  const groups = ['action', 'gather', 'watch', 'good']
-    .map((tier) => ({ tier, meta: tierMeta[tier], items: findings.filter((f) => f.tier === tier) }))
-    .filter((g) => g.items.length > 0);
-
-  const intro = `
-    <p class="inline-subtext">Generated from the ${components.length} report component${components.length === 1 ? '' : 's'} currently loaded for "${escapeHtml(siteTerm)}" -- a rules-based read of what's here, not a substitute for actually opening each report.</p>
-  `;
-
-  if (groups.length === 0) {
-    return `<div class="mtg-rec-panel">${intro}<p class="status">No notable issues surfaced from the loaded reports.</p></div>`;
-  }
-
-  const sections = groups
-    .map(
-      (g) => `
-      <div class="mtg-rec-group ${g.meta.className}">
-        <h3>${escapeHtml(g.meta.label)}</h3>
-        ${g.items
-          .map(
-            (f) => `
-          <div class="mtg-rec-item">
-            <p class="mtg-rec-item-title">${escapeHtml(f.title)}</p>
-            <p class="mtg-rec-item-detail">${escapeHtml(f.detail)}</p>
-          </div>`
-          )
-          .join('')}
-      </div>`
-    )
-    .join('');
-
-  return `<div class="mtg-rec-panel">${intro}${sections}</div>`;
 }
 
 export function formatDateTime(iso) {

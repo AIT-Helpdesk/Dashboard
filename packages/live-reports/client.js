@@ -1,23 +1,22 @@
 // Live Reports -- "Present to Client" -- by request: a live-pulled
 // equivalent of Datto RMM's own canned "Executive Summary Report" PDF,
-// for one client at a time. Reuses the exact same gauge/donut/KPI-tile
-// widget builders Make Report/Meeting Prep's own Executive Summary widget
-// already renders (gaugeSvg/donutWidget/kpiTileRow, /meeting-prep-report-
-// render.js) -- same visual language as that page's own live data, not a
-// second chart implementation. See server.js's own header for what is and
-// isn't reproduced here -- Open Alerts is Critical/High only; Asset
-// Management/Monitoring ARE now shown (Scorecard below, plus their own
-// breakdown tables -- see assetManagementTableHtml()/monitoringTableHtml()
-// below), computed via server.js's own real re-creation of Datto's canned-
-// report formulas (see server.js's own computeAssetManagementDetail()/
+// for one client at a time. Reuses the shared gauge/donut/KPI-tile widget
+// builders (gaugeSvg/donutWidget/kpiTileRow, /report-widgets.js) -- same
+// visual language these widgets have always used, not a second chart
+// implementation. See server.js's own header for what is and isn't
+// reproduced here -- Open Alerts is Critical/High only; Asset Management/
+// Monitoring ARE now shown (Scorecard below, plus their own breakdown
+// tables -- see assetManagementTableHtml()/monitoringTableHtml() below),
+// computed via server.js's own real re-creation of Datto's canned-report
+// formulas (see server.js's own computeAssetManagementDetail()/
 // computeMonitoringDetail() comments).
-import { gaugeSvg, donutWidget, donutSvg, kpiTileRow, deviceTypeBarWidget, checkinFreshnessWidget, deviceListTableHtml, wireDeviceFilters, checkIconSvg } from '/meeting-prep-report-render.js';
+import { gaugeSvg, donutWidget, donutSvg, kpiTileRow, deviceTypeBarWidget, checkinFreshnessWidget, deviceListTableHtml, wireDeviceFilters, checkIconSvg } from '/report-widgets.js';
 
 export const id = 'live-reports';
 export const label = 'Live Reports';
 
 // Same hex values executiveSummaryWidgetsHtml()/patchManagementSummaryWidgetsHtml()
-// (meeting-prep-report-render.js) already use for these exact legend
+// (report-widgets.js) already use for these exact legend
 // labels -- kept as a small local copy rather than importing/exporting
 // that function's own internal map, same "copy the small color literal,
 // don't reach into another widget's private const" convention that file's
@@ -54,7 +53,7 @@ function donutFromLegend(title, legend, colors, deviceHealthItemKey) {
   if (!deviceHealthItemKey) return widget;
   // Corner checkbox, by request ("Allow Each of the Workstation widgets to
   // have their own tick box") -- donutWidget() is shared with other pages
-  // (meeting-prep-report-render.js), so its own markup is never touched
+  // (report-widgets.js), so its own markup is never touched
   // beyond adding a class and inserting the checkbox right after its own
   // opening tags (string surgery, not a wrapping div -- a wrapper div
   // would sit OUTSIDE the flex item .mtg-widget-grid actually sizes/
@@ -116,7 +115,7 @@ function deviceHealthItemToggleHtml(key, label) {
 }
 // Corner-positioned variant of the above, for a widget (like each
 // Workstations donut) whose own heading lives inside a SHARED component
-// (donutWidget(), meeting-prep-report-render.js) this file can't reach
+// (donutWidget(), report-widgets.js) this file can't reach
 // into without touching a module other pages also use -- same
 // .live-reports-cyber-card/.live-reports-card-toggle corner treatment the
 // Cybersecurity Systems cards already use, just a different data
@@ -1930,7 +1929,7 @@ export function mount(container) {
     const freshnessWidget = dattoLive ? checkinFreshnessWidget(dattoLive.summary) : '';
     // "All Devices" toggle sits right in the filter row, by request -- its
     // own heading lives inside deviceListTableHtml() (a shared component,
-    // meeting-prep-report-render.js, never touched directly), so this is
+    // report-widgets.js, never touched directly), so this is
     // the same string-surgery approach donutFromLegend() uses above:
     // inject the checkbox as the filter box's first child instead.
     // No-ops harmlessly when there are no devices at all (that branch
