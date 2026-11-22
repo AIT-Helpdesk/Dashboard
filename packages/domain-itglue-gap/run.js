@@ -31,6 +31,7 @@ async function main() {
         gapCount: result.gaps.length,
         unmatchedCount: result.unmatched.length,
         wrongClientCount: result.wrongClient.length,
+        emailDomainMismatchCount: result.emailDomainMismatch.length,
         ticketNumber: result.ticket?.ticketNumber,
         dueDateTime: result.dueDateTime,
       },
@@ -47,11 +48,12 @@ async function main() {
 
   logEvent({
     stage: 'end',
-    message: `Run finished. Action: ${result.action}. ${result.gaps.length} gap(s), ${result.unmatched.length} unmatched, ${result.wrongClient.length} wrong-client.`,
+    message: `Run finished. Action: ${result.action}. ${result.gaps.length} gap(s), ${result.unmatched.length} unmatched, ${result.wrongClient.length} wrong-client, ${result.emailDomainMismatch.length} email-domain-mismatch.`,
     action: result.action,
     gapCount: result.gaps.length,
     unmatchedCount: result.unmatched.length,
     wrongClientCount: result.wrongClient.length,
+    emailDomainMismatchCount: result.emailDomainMismatch.length,
   });
   writeLastRunStatus({
     runId,
@@ -62,6 +64,7 @@ async function main() {
     gapCount: result.gaps.length,
     unmatchedCount: result.unmatched.length,
     wrongClientCount: result.wrongClient.length,
+    emailDomainMismatchCount: result.emailDomainMismatch.length,
     ticketId: result.ticketId || result.ticket?.id || null,
     ticketNumber: result.ticket?.ticketNumber || null,
   });

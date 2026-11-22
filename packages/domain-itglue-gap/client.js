@@ -5,6 +5,12 @@ export const label = "Domain / IT Glue Gaps";
 // convention every other page's client.js already uses.
 let lastData = null;
 let lastNoPrimaryDomainClients = null;
+// By request ("turns out most of them are ok so let's just put a button
+// at the bottom to view these on request") -- Email Domain Mismatch is
+// still computed every run (ticket/CSV unaffected), just not shown by
+// default on this page any more. Module-scope so the choice survives a
+// Refresh (a fresh render() call), not reset back to hidden every time.
+let emailMismatchExpanded = false;
 
 export function mount(container) {
   // Scopes the narrower-row/smaller-text table style below (styles.css)
@@ -257,8 +263,8 @@ export function mount(container) {
   // bolded; the per-category/ticked breakdown sits alongside it unbolded.
   function renderSummary(summary) {
     summaryEl.hidden = false;
-    const total = summary.gapCount + summary.unmatchedCount + summary.wrongClientCount;
-    summaryEl.innerHTML = `<strong>${total}</strong> currently open item${total === 1 ? '' : 's'} -- ${summary.gapCount} missing from IT Glue (${summary.gapTickedCount} ticked), ${summary.unmatchedCount} with no matching Autotask Client (${summary.unmatchedTickedCount} ticked), ${summary.wrongClientCount} under the wrong Client in IT Glue (${summary.wrongClientTickedCount} ticked)`;
+    const total = summary.gapCount + summary.unmatchedCount + summary.wrongClientCount + summary.emailDomainMismatchCount;
+    summaryEl.innerHTML = `<strong>${total}</strong> currently open item${total === 1 ? '' : 's'} -- ${summary.gapCount} missing from IT Glue (${summary.gapTickedCount} ticked), ${summary.unmatchedCount} with no matching Autotask Client (${summary.unmatchedTickedCount} ticked), ${summary.wrongClientCount} under the wrong Client in IT Glue (${summary.wrongClientTickedCount} ticked), ${summary.emailDomainMismatchCount} different from their Primary Contact's email domain (${summary.emailDomainMismatchTickedCount} ticked)`;
   }
 
   function render(data) {
@@ -270,6 +276,7 @@ export function mount(container) {
     const gapRows = data.rows.filter((r) => r.category === 'missing_from_itglue');
     const unmatchedRows = data.rows.filter((r) => r.category === 'unmatched_client');
     const wrongClientRows = data.rows.filter((r) => r.category === 'wrong_client');
+    const emailDomainMismatchRows = data.rows.filter((r) => r.category === 'email_domain_mismatch');
 
     resultsEl.appendChild(
       sectionTable(
@@ -320,16 +327,20 @@ export function mount(container) {
           { key: 'tppAcc', label: 'TPP Acc', cell: (r) => escapeHtml(r.tppAccountReference || ''), sort: (r) => r.tppAccountReference || '' },
           {
             key: 'shouldBe',
-            label: 'Should Be (Autotask Client)',
+            label: 'Autotask Client UDF',
+            // Links to the real Autotask Company record, by request ("The
+            // links in the 'Autotask Client UDF' column should go to
+            // Autotask, not IT Glue") -- the Domain Tracker column right
+            // after this one is the IT Glue link.
             cell: (r) =>
-              r.autotaskClientName && r.itglueOrgUrl
-                ? `<a href="${escapeHtml(r.itglueOrgUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.autotaskClientName)}</a>`
+              r.autotaskClientName && r.autotaskClientUrl
+                ? `<a href="${escapeHtml(r.autotaskClientUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(r.autotaskClientName)}</a>`
                 : escapeHtml(r.autotaskClientName || ''),
             sort: (r) => r.autotaskClientName || '',
           },
           {
             key: 'currentlyUnder',
-            label: 'Currently Filed Under',
+            label: 'Domain Tracker (IT Glue)',
             cell: (r) =>
               r.wrongItglueOrgName && r.wrongItglueOrgUrl
                 ? `<a href="${escapeHtml(r.wrongItglueOrgUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.wrongItglueOrgName)}</a>`
@@ -349,6 +360,62 @@ export function mount(container) {
         `<span class="dig-missing-header-note">Move the domain to the correct organisation in IT Glue.</span>`
       )
     );
+    // Hidden behind a button by default, by request ("turns out most of
+    // them are ok so let's just put a button at the bottom to view these
+    // on request") -- still fully computed every run (ticket/CSV/summary
+    // counts unaffected), just not shown automatically on this page.
+    if (emailMismatchExpanded) {
+      resultsEl.appendChild(
+        sectionTable(
+          'Email Domain Mismatch',
+          emailDomainMismatchRows,
+          [
+            { key: 'domain', label: 'Domain', cell: (r) => escapeHtml(r.domainName), sort: (r) => r.domainName || '' },
+            { key: 'expiry', label: 'Expiry Date', className: 'ticket-number', cell: (r) => formatDate(r.expiryDate), sort: (r) => r.expiryDate || '' },
+            { key: 'tppAcc', label: 'TPP Acc', cell: (r) => escapeHtml(r.tppAccountReference || ''), sort: (r) => r.tppAccountReference || '' },
+            {
+              key: 'client',
+              label: 'Autotask Client',
+              cell: (r) =>
+                r.autotaskClientName && r.itglueOrgUrl
+                  ? `<a href="${escapeHtml(r.itglueOrgUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.autotaskClientName)}</a>`
+                  : escapeHtml(r.autotaskClientName || ''),
+              sort: (r) => r.autotaskClientName || '',
+            },
+            { key: 'contactEmailDomain', label: 'Primary Contact Email Domain', cell: (r) => escapeHtml(r.contactEmailDomain || ''), sort: (r) => r.contactEmailDomain || '' },
+          ],
+          'domain',
+          // By request ("List where Domain is different from the domain of
+          // the Primary Contact's email address in Autotask ... only do
+          // this match for nominated primary domains in IT Glue") -- scoped
+          // to just the ONE domain IT Glue itself says is primary for that
+          // Client's organisation, not every domain the Client happens to
+          // own (confirmed live this was the right call -- checking every
+          // matched domain produced 319 mostly-noise rows; the primary-
+          // domain-only version is a much tighter, more trustworthy list).
+          `<span class="dig-missing-header-note">Only checks each Client's own nominated Primary Domain in IT Glue.</span>`
+        )
+      );
+      const hideButton = document.createElement('button');
+      hideButton.type = 'button';
+      hideButton.className = 'button-link button-link--small';
+      hideButton.textContent = 'Hide Email Domain Mismatches';
+      hideButton.addEventListener('click', () => {
+        emailMismatchExpanded = false;
+        render(lastData);
+      });
+      resultsEl.appendChild(hideButton);
+    } else {
+      const showButton = document.createElement('button');
+      showButton.type = 'button';
+      showButton.className = 'button-link button-link--small';
+      showButton.textContent = `View Email Domain Mismatches (${emailDomainMismatchRows.length})`;
+      showButton.addEventListener('click', () => {
+        emailMismatchExpanded = true;
+        render(lastData);
+      });
+      resultsEl.appendChild(showButton);
+    }
   }
 
   // Click-to-sort on every column (by request), plus the Done checkbox --
@@ -360,13 +427,14 @@ export function mount(container) {
     groupEl.className = 'resource-group';
     const headerEl = document.createElement('div');
     headerEl.className = 'resource-group-header';
-    // headerExtraHtml sits INSIDE the same flex item as the heading text
-    // (not a separate flex child) so it renders right next to it, by
-    // request -- the outer header is `justify-content: space-between`
-    // between just this one item and the count badge, so a 3rd top-level
-    // child would float to the middle of the bar instead of hugging the
-    // heading.
-    headerEl.innerHTML = `<span>${escapeHtml(heading)}${headerExtraHtml || ''}</span><span class="count">${rows.length}</span>`;
+    // The count sits in brackets right after the heading TEXT, at the same
+    // size as the heading (by request) -- not the dashboard's usual
+    // smaller/muted .count badge, which is why this builds a plain string
+    // here instead of using that class. headerExtraHtml sits in the same
+    // flex item too, so it renders right next to the heading+count rather
+    // than floating to the middle of the bar (this header has only ONE
+    // top-level flex child now, not two).
+    headerEl.innerHTML = `<span>${escapeHtml(heading)} (${rows.length})${headerExtraHtml || ''}</span>`;
     groupEl.appendChild(headerEl);
 
     if (rows.length === 0) {

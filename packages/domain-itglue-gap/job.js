@@ -1,6 +1,7 @@
 const { fetchAllDomains } = require('@dashboard/tpp-client');
-const { getClient, listAll, getCompanyUdfValueToNameMap, todayAestKey, getTicketUrl } = require('@dashboard/autotask-client');
+const { getClient, listAll, fetchByFieldIn, getCompanyUdfValueToNameMap, getCompanyUrl, todayAestKey, getTicketUrl } = require('@dashboard/autotask-client');
 const { normalizeDomainName, fetchOrganizationUrlsByName, fetchAllDomainsGroupedByOrg, organizationUrlById } = require('./itglue-domains');
+const { getAllPrimaryDomainsByOrganizationId } = require('@dashboard/itglue-client');
 const { resolveTicketPicklists } = require('./ticket-picklists');
 const { buildGapCsv } = require('./csv');
 const { logEvent, logFailure } = require('./log');
@@ -159,6 +160,75 @@ async function computeGaps() {
   wrongClientBeforeOrgLink.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
   unmatched.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
 
+  // Email Domain Mismatch, by request ("List where Domain is different
+  // from the domain of the Primary Contact's email address in
+  // Autotask"), narrowed to ONLY a domain's own nominated IT Glue Primary
+  // Domain (by request, "only do this match for nominated primary
+  // domains in IT Glue") -- NOT every domain a Client happens to own.
+  // Confirmed live this was the right call: checking every matched
+  // domain produced 319 rows (mostly a Client's own legitimate extra
+  // domains), almost all noise; this version only ever checks the ONE
+  // domain IT Glue itself says is primary for that organisation.
+  let primaryDomainNameByOrgId;
+  try {
+    primaryDomainNameByOrgId = await getAllPrimaryDomainsByOrganizationId();
+    logEvent({ stage: 'itglue-pull', message: `${primaryDomainNameByOrgId.size} organisation(s) with a Primary Domain tagged.`, recordCount: primaryDomainNameByOrgId.size });
+  } catch (err) {
+    logFailure('itglue-pull', err, { endpoint: 'Flexible Assets (Primary Domain)' });
+    primaryDomainNameByOrgId = new Map(); // non-fatal -- this check just finds nothing
+  }
+  const primaryDomains = matched.filter((d) => {
+    const orgInfo = itGlueOrgByDomain.get(normalizeDomainName(d.domainName));
+    if (!orgInfo) return false; // not in IT Glue at all -- can't be ITS nominated primary domain
+    const primaryName = primaryDomainNameByOrgId.get(orgInfo.organizationId);
+    return !!primaryName && normalizeDomainName(primaryName) === normalizeDomainName(d.domainName);
+  });
+
+  // Needs the Client's real companyID (tppNameMap only ever resolved to a
+  // NAME, see getCompanyUdfValueToNameMap's own comment), so this is the
+  // same real "scan every Company's Name:TPP UDF" query a second time,
+  // just keeping `id` instead of `companyName`.
+  let companyIdByAccountRef;
+  try {
+    companyIdByAccountRef = await buildTppAccountRefToCompanyIdMap(client);
+  } catch (err) {
+    logFailure('tpp-pull', err, { endpoint: 'Companies (Name:TPP UDF, for Primary Contact check)' });
+    companyIdByAccountRef = new Map(); // non-fatal -- this check just finds nothing
+  }
+  const primaryDomainCompanyIds = [...new Set(primaryDomains.map((d) => companyIdByAccountRef.get(d.accountReference)).filter(Boolean))];
+  let primaryContactEmailDomainByCompanyId = new Map();
+  if (primaryDomainCompanyIds.length > 0) {
+    try {
+      // Same real Contacts.primaryContact flag/batched-fetch convention
+      // @dashboard/client-details and @dashboard/client-summary already
+      // use for this exact concept -- "the first one found wins" if more
+      // than one contact somehow has the flag set (Autotask doesn't
+      // enforce uniqueness), same as those pages.
+      const primaryContacts = await fetchByFieldIn(client.contacts, 'companyID', primaryDomainCompanyIds, [{ op: 'eq', field: 'primaryContact', value: true }]);
+      for (const c of primaryContacts) {
+        if (primaryContactEmailDomainByCompanyId.has(c.companyID)) continue;
+        const email = (c.emailAddress || '').trim();
+        const emailDomain = email.includes('@') ? email.split('@').pop().trim().toLowerCase() : null;
+        if (emailDomain) primaryContactEmailDomainByCompanyId.set(c.companyID, emailDomain);
+      }
+    } catch (err) {
+      logFailure('autotask-search', err, { endpoint: 'Contacts (Primary Contact email check)' });
+      primaryContactEmailDomainByCompanyId = new Map(); // non-fatal -- this check just finds nothing
+    }
+  }
+  // Exact (normalized) comparison only -- same "never guess" convention
+  // this job already follows elsewhere.
+  const emailDomainMismatchBeforeOrgLink = [];
+  for (const d of primaryDomains) {
+    const companyId = companyIdByAccountRef.get(d.accountReference);
+    const contactEmailDomain = companyId ? primaryContactEmailDomainByCompanyId.get(companyId) : null;
+    if (!contactEmailDomain) continue; // no Primary Contact / no email -- nothing to compare
+    if (normalizeDomainName(d.domainName) !== contactEmailDomain) {
+      emailDomainMismatchBeforeOrgLink.push({ ...d, contactEmailDomain });
+    }
+  }
+  emailDomainMismatchBeforeOrgLink.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
+
   // Attaches a link to the resolved Client's own IT Glue organisation page,
   // by request -- a gap row's domain itself is never IN IT Glue (that's why
   // it's a gap), but its Client's organisation record usually is, so clicking
@@ -173,21 +243,61 @@ async function computeGaps() {
     orgUrlByName = new Map(); // non-fatal -- rows just render without a link
   }
   const gaps = gapsBeforeOrgLink.map((d) => ({ ...d, itGlueOrgUrl: orgUrlByName.get(d.autotaskClientName.trim().toLowerCase()) || null }));
-  const wrongClient = wrongClientBeforeOrgLink.map((d) => ({
+  // wrongClient's own "Autotask Client UDF" column links to the real
+  // Autotask Company record, by request ("The links in the 'Autotask
+  // Client UDF' column should go to Autotask, not IT Glue") -- itGlueOrgUrl
+  // is kept too (the Client's own IT Glue org, same as every other
+  // section's "should be" link), just no longer what that one column uses.
+  const wrongClient = await Promise.all(
+    wrongClientBeforeOrgLink.map(async (d) => {
+      const companyId = companyIdByAccountRef.get(d.accountReference);
+      return {
+        ...d,
+        itGlueOrgUrl: orgUrlByName.get(d.autotaskClientName.trim().toLowerCase()) || null,
+        wrongOrgUrl: organizationUrlById(d.wrongOrgId),
+        autotaskClientUrl: companyId ? await getCompanyUrl(companyId) : null,
+      };
+    })
+  );
+  const emailDomainMismatch = emailDomainMismatchBeforeOrgLink.map((d) => ({
     ...d,
     itGlueOrgUrl: orgUrlByName.get(d.autotaskClientName.trim().toLowerCase()) || null,
-    wrongOrgUrl: organizationUrlById(d.wrongOrgId),
   }));
 
   logEvent({
     stage: 'comparison',
-    message: `${gaps.length} domains missing from IT Glue, ${unmatched.length} domains with no matching Autotask Client, ${wrongClient.length} domains filed under the wrong Client in IT Glue.`,
+    message: `${gaps.length} domains missing from IT Glue, ${unmatched.length} domains with no matching Autotask Client, ${wrongClient.length} domains filed under the wrong Client in IT Glue, ${emailDomainMismatch.length} domains different from their Primary Contact's email domain.`,
     gapCount: gaps.length,
     unmatchedCount: unmatched.length,
     wrongClientCount: wrongClient.length,
+    emailDomainMismatchCount: emailDomainMismatch.length,
   });
 
-  return { gaps, unmatched, wrongClient };
+  return { gaps, unmatched, wrongClient, emailDomainMismatch };
+}
+
+// Same real "scan every Company's own Name:TPP UDF" query
+// getCompanyUdfValueToNameMap() already does (autotask-client/index.js),
+// just keeping `c.id` instead of `c.companyName` -- that shared helper's
+// own cached Map only ever resolves to a NAME, and the Primary Contact
+// check above needs the real companyID to query Contacts with. Not
+// cached (unlike the shared helper) -- this job only ever runs once per
+// invocation (a weekly scheduled run, a manual run, or one live
+// Refresh), never repeatedly within a single process the way that
+// helper's own callers (coming-soon, data-matching, several per-page
+// views) do.
+async function buildTppAccountRefToCompanyIdMap(client) {
+  const companies = await listAll(client.companies, [{ op: 'gte', field: 'id', value: 0 }]);
+  const map = new Map();
+  for (const c of companies) {
+    const udf = (c.userDefinedFields || []).find((u) => u.name === 'Name:TPP');
+    const value = udf?.value?.trim();
+    if (!value) continue;
+    for (const piece of value.split(';').map((v) => v.trim()).filter(Boolean)) {
+      map.set(piece, c.id);
+    }
+  }
+  return map;
 }
 
 // Short, by request -- the full 155-item list was about to exceed
@@ -197,17 +307,18 @@ async function computeGaps() {
 // list now lives on its own dashboard page (persisted in db.js) instead --
 // this body is just the summary + counts + a link there, plus the
 // attached CSV as an offline copy.
-function buildTicketBody({ gaps, unmatched, wrongClient }, asOfIso) {
+function buildTicketBody({ gaps, unmatched, wrongClient, emailDomainMismatch }, asOfIso) {
   const lines = [];
   lines.push(`Run date: ${asOfIso}`);
   lines.push(`Domains missing from IT Glue: ${gaps.length}`);
   lines.push(`Domains with no matching Autotask Client (Name:TPP UDF): ${unmatched.length}`);
   lines.push(`Domains filed under the wrong Client in IT Glue: ${wrongClient.length}`);
+  lines.push(`Domains different from their Client's Primary Contact email domain: ${emailDomainMismatch.length}`);
   lines.push('');
   lines.push(`View, tick off, and work through the full list here: ${GAP_PAGE_URL}`);
   lines.push('');
   lines.push(
-    'Add each domain to the correct organisation in IT Glue, then tag it on the client\'s Primary Domain asset where relevant. Move a wrongly-filed domain to its correct organisation. A full CSV of all three lists is also attached to this ticket.'
+    'Add each domain to the correct organisation in IT Glue, then tag it on the client\'s Primary Domain asset where relevant. Move a wrongly-filed domain to its correct organisation. The Primary Contact email mismatch list only checks each Client\'s own nominated Primary Domain in IT Glue -- still worth a look, not necessarily wrong. A full CSV of all four lists is also attached to this ticket.'
   );
   return lines.join('\n');
 }
@@ -222,14 +333,16 @@ function buildTicketBody({ gaps, unmatched, wrongClient }, asOfIso) {
 // this run's gap list, same "don't guess, let a person check" convention
 // this job already follows elsewhere.
 function buildFixedNoteBody(resolvedRows, asOfIso) {
-  const lines = [`Live refresh ${asOfIso} -- ${resolvedRows.length} domain(s) no longer appear in the gap list (no longer missing from IT Glue, no longer unmatched, or no longer under the wrong Client):`, ''];
+  const lines = [`Live refresh ${asOfIso} -- ${resolvedRows.length} domain(s) no longer appear in the gap list:`, ''];
   for (const r of resolvedRows) {
     const label =
       r.category === 'missing_from_itglue'
         ? r.autotask_client_name || 'unknown client'
         : r.category === 'wrong_client'
           ? `was under "${r.wrong_itglue_org_name || 'unknown'}", should be ${r.autotask_client_name || 'unknown client'}`
-          : 'no matching Autotask Client';
+          : r.category === 'email_domain_mismatch'
+            ? `didn't match Primary Contact email domain "${r.contact_email_domain || 'unknown'}"`
+            : 'no matching Autotask Client';
     lines.push(`- ${r.domain_name} (was: ${label})`);
   }
   lines.push('', `Full current list: ${GAP_PAGE_URL}`);
@@ -248,12 +361,12 @@ function buildFixedNoteBody(resolvedRows, asOfIso) {
 // happens at all -- only the dashboard's own db.js state changes.
 async function refreshLive() {
   const client = await getClient();
-  const { gaps, unmatched, wrongClient } = await computeGaps();
-  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient);
+  const { gaps, unmatched, wrongClient, emailDomainMismatch } = await computeGaps();
+  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient, emailDomainMismatch);
   logEvent({ stage: 'comparison', message: `Live refresh: ${dbResult.upserted} currently open, ${dbResult.resolved} resolved since last stored state.`, ...dbResult });
 
   if (dbResult.resolvedRows.length === 0) {
-    return { gaps, unmatched, wrongClient, fixed: [], ticketNoteAdded: false };
+    return { gaps, unmatched, wrongClient, emailDomainMismatch, fixed: [], ticketNoteAdded: false };
   }
 
   let openTicket = null;
@@ -265,36 +378,36 @@ async function refreshLive() {
     openTicket = existing[0] || null;
   } catch (err) {
     logFailure('autotask-search', err, { endpoint: 'Tickets (live refresh fixed-note check)' });
-    return { gaps, unmatched, wrongClient, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
+    return { gaps, unmatched, wrongClient, emailDomainMismatch, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
   }
 
   // No open ticket -- nothing to note. Deliberately never creates one here;
   // that's run()'s job alone, per request.
   if (!openTicket) {
-    return { gaps, unmatched, wrongClient, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
+    return { gaps, unmatched, wrongClient, emailDomainMismatch, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
   }
 
   const asOfIso = new Date().toISOString();
   await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: buildFixedNoteBody(dbResult.resolvedRows, asOfIso), noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
   logEvent({ stage: 'ticket-update', message: `Live refresh: added a fixed-items note to ticket ${openTicket.ticketNumber} (${dbResult.resolvedRows.length} domain(s)).`, ticketNumber: openTicket.ticketNumber, fixedCount: dbResult.resolvedRows.length });
 
-  return { gaps, unmatched, wrongClient, fixed: dbResult.resolvedRows, ticketNoteAdded: true, ticket: openTicket };
+  return { gaps, unmatched, wrongClient, emailDomainMismatch, fixed: dbResult.resolvedRows, ticketNoteAdded: true, ticket: openTicket };
 }
 
 // Dry run computes everything for real (TPP, IT Glue, Autotask search) and
 // returns what WOULD happen, without ever writing to Autotask.
 async function run({ dryRun }) {
   const client = await getClient();
-  const { gaps, unmatched, wrongClient } = await computeGaps();
+  const { gaps, unmatched, wrongClient, emailDomainMismatch } = await computeGaps();
   const asOfIso = new Date().toISOString();
-  const body = buildTicketBody({ gaps, unmatched, wrongClient }, asOfIso);
-  const csv = buildGapCsv(gaps, unmatched, wrongClient);
+  const body = buildTicketBody({ gaps, unmatched, wrongClient, emailDomainMismatch }, asOfIso);
+  const csv = buildGapCsv(gaps, unmatched, wrongClient, emailDomainMismatch);
 
   // Persisted regardless of dry-run -- the dashboard page's own db.js is
   // this job's own local state, not an Autotask write, so it always
   // reflects the latest real computation (ticked state preserved for any
   // domain still present; rows for anything now resolved are dropped).
-  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient);
+  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient, emailDomainMismatch);
   logEvent({ stage: 'comparison', message: `Dashboard list updated: ${dbResult.upserted} currently open, ${dbResult.resolved} resolved since last run.`, ...dbResult });
 
   let existing;
@@ -311,30 +424,30 @@ async function run({ dryRun }) {
 
   const openTicket = existing[0] || null;
 
-  if (gaps.length === 0 && unmatched.length === 0 && wrongClient.length === 0) {
+  if (gaps.length === 0 && unmatched.length === 0 && wrongClient.length === 0 && emailDomainMismatch.length === 0) {
     if (!openTicket) {
       logEvent({ stage: 'comparison', message: 'No gaps, no open ticket -- nothing to do.' });
-      return { action: 'none', gaps, unmatched, wrongClient };
+      return { action: 'none', gaps, unmatched, wrongClient, emailDomainMismatch };
     }
-    const resolveNote = 'All domains previously listed on this ticket are now resolved (found in IT Glue, matched to an Autotask Client, or no longer under the wrong Client). Left open for a person to close.';
+    const resolveNote = 'All domains previously listed on this ticket are now resolved. Left open for a person to close.';
     if (dryRun) {
       logEvent({ stage: 'comparison', message: `DRY RUN: would add a resolved-note to ticket ${openTicket.ticketNumber} and leave it open.` });
-      return { action: 'note-resolved', ticket: openTicket, note: resolveNote, gaps, unmatched, wrongClient };
+      return { action: 'note-resolved', ticket: openTicket, note: resolveNote, gaps, unmatched, wrongClient, emailDomainMismatch };
     }
     await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: resolveNote, noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
     logEvent({ stage: 'ticket-update', message: `Added resolved-note to ticket ${openTicket.ticketNumber}.`, ticketNumber: openTicket.ticketNumber });
-    return { action: 'note-resolved', ticket: openTicket, gaps, unmatched, wrongClient };
+    return { action: 'note-resolved', ticket: openTicket, gaps, unmatched, wrongClient, emailDomainMismatch };
   }
 
   if (openTicket) {
     if (dryRun) {
       logEvent({ stage: 'comparison', message: `DRY RUN: would update ticket ${openTicket.ticketNumber} with a refreshed note + CSV.` });
-      return { action: 'update', ticket: openTicket, body, csv, gaps, unmatched, wrongClient };
+      return { action: 'update', ticket: openTicket, body, csv, gaps, unmatched, wrongClient, emailDomainMismatch };
     }
     await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: body, noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
     logEvent({ stage: 'ticket-update', message: `Added refreshed note to ticket ${openTicket.ticketNumber}.`, ticketNumber: openTicket.ticketNumber });
     await attachCsv(client, openTicket.id, csv, asOfIso);
-    return { action: 'update', ticket: openTicket, gaps, unmatched, wrongClient };
+    return { action: 'update', ticket: openTicket, gaps, unmatched, wrongClient, emailDomainMismatch };
   }
 
   // No open ticket -- was there a RECENTLY CLOSED one with this exact title?
@@ -360,7 +473,7 @@ async function run({ dryRun }) {
 
   if (dryRun) {
     logEvent({ stage: 'comparison', message: 'DRY RUN: would create a new ticket.' });
-    return { action: 'create', body: finalBody, csv, picklists, dueDateTime, recentlyClosed, gaps, unmatched, wrongClient };
+    return { action: 'create', body: finalBody, csv, picklists, dueDateTime, recentlyClosed, gaps, unmatched, wrongClient, emailDomainMismatch };
   }
 
   const createRes = await client.tickets.create({
@@ -377,7 +490,7 @@ async function run({ dryRun }) {
   const ticketUrl = await getTicketUrl(ticketId);
   logEvent({ stage: 'ticket-create', message: `Created ticket #${ticketId}.`, ticketId, ticketUrl });
   await attachCsv(client, ticketId, csv, asOfIso);
-  return { action: 'create', ticketId, ticketUrl, gaps, unmatched, wrongClient };
+  return { action: 'create', ticketId, ticketUrl, gaps, unmatched, wrongClient, emailDomainMismatch };
 }
 
 // Same POST /Tickets/{id}/Attachments shape @dashboard/workshop/server.js

@@ -18,6 +18,8 @@ function rowToJson(row) {
     itglueOrgUrl: row.itglue_org_url,
     wrongItglueOrgName: row.wrong_itglue_org_name,
     wrongItglueOrgUrl: row.wrong_itglue_org_url,
+    autotaskClientUrl: row.autotask_client_url,
+    contactEmailDomain: row.contact_email_domain,
     tppAccountReference: row.tpp_account_reference,
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,

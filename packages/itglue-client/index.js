@@ -105,6 +105,33 @@ async function getAllPrimaryDomainTaggedOrganizationIds() {
   return ids;
 }
 
+// Every organisation's own tagged Primary Domain NAME (not just whether
+// one exists) -- same one bulk paginated fetch as
+// getAllPrimaryDomainTaggedOrganizationIds() above, just keeping the
+// actual tagged domain instead of discarding it. For
+// @dashboard/domain-itglue-gap's own "Email Domain Mismatch" check, by
+// request ("only do this match for nominated primary domains in IT
+// Glue") -- that check only ever runs against the ONE domain an
+// organisation has actually nominated as primary, not every domain it
+// happens to own.
+async function getAllPrimaryDomainsByOrganizationId() {
+  const typeId = await getPrimaryDomainAssetTypeId();
+  const map = new Map();
+  if (!typeId) return map;
+  let page = 1;
+  for (;;) {
+    const res = await get('/flexible_assets', { 'filter[flexible-asset-type-id]': typeId, 'page[size]': 1000, 'page[number]': page });
+    for (const record of res.data || []) {
+      const tagged = record.attributes?.traits?.[PRIMARY_DOMAIN_TRAIT_NAME]?.values?.[0];
+      if (tagged?.name) map.set(String(record.attributes['organization-id']), tagged.name);
+    }
+    const nextPage = res.meta?.['next-page'];
+    if (!nextPage) break;
+    page = nextPage;
+  }
+  return map;
+}
+
 // Creates or updates this organisation's own "Primary Domain" Flexible
 // Asset record to tag `domainId` -- one record per organisation (upsert,
 // never a second one).
@@ -130,5 +157,6 @@ module.exports = {
   getPrimaryDomainAssetTypeId,
   getPrimaryDomainForOrganization,
   getAllPrimaryDomainTaggedOrganizationIds,
+  getAllPrimaryDomainsByOrganizationId,
   setPrimaryDomain,
 };

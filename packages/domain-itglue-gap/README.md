@@ -54,6 +54,28 @@ job can never disagree with either of those about what counts as matched.
   to Autotask Client "Paul Crooks Advertising". Shown with both the
   correct Client (linked to that Client's own IT Glue org) and the wrong
   organisation it's actually filed under (linked to that org instead).
+- **A Client's own nominated Primary Domain in IT Glue doesn't match its
+  Primary Contact email domain** -> "Email Domain Mismatch", by request
+  ("List where Domain is different from the domain of the Primary
+  Contact's email address in Autotask ... only do this match for
+  nominated primary domains in IT Glue"). Scoped to ONLY the one domain
+  each organisation has tagged as its own "Primary Domain" Flexible Asset
+  in IT Glue (`@dashboard/itglue-client`'s own new
+  `getAllPrimaryDomainsByOrganizationId()`, one bulk fetch, same Flexible
+  Asset Type the existing "Clients missing a Primary Domain" section
+  already reads) -- NOT every domain a Client happens to own. Confirmed
+  live this was the right call: checking every matched domain first
+  produced 319 mostly-noise rows (a Client legitimately owning several
+  domains showed up for every one that wasn't its Primary Contact's own);
+  scoped to just the nominated Primary Domain, the same real account
+  produces 49 -- a much tighter, more trustworthy list (real finds
+  include a Primary Contact on a personal gmail/hotmail address, and a
+  couple of genuine near-miss domain spellings). Batched `Contacts` fetch
+  (`primaryContact = true`, same real flag/convention
+  `@dashboard/client-details` and `@dashboard/client-summary` already use
+  for this exact concept), compared (normalised, exact) against the
+  domain itself. Shown with the Client (linked to its own IT Glue org)
+  and the real Primary Contact email domain that didn't match.
 
 Only active domains are included (`expiryDate` not already in the past --
 TPP's own domain list has no separate active/inactive flag, same convention
@@ -146,11 +168,11 @@ Autotask doesn't silently break this.
 the full per-domain list was about to exceed Autotask's own confirmed-live
 8000-character description limit, which would have silently hidden most of
 the "no matching client" section from anyone just reading the ticket. The
-body is now just the run date, the three counts, and a link to the dashboard
+body is now just the run date, the four counts, and a link to the dashboard
 page above (`http://dashboard.ambientit.com.au/#domain-itglue-gap` --
 hardcoded, by request, deliberately NOT read from `APP_BASE_URL`/env, so a
 manual run from a dev machine never puts a `localhost` link in a real
-ticket) -- the full, tickable list lives there instead. A CSV of all three
+ticket) -- the full, tickable list lives there instead. A CSV of all four
 lists is still attached as an offline copy.
 
 **Dedup/update, not one ticket per run**: searches for an open ticket (status

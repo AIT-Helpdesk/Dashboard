@@ -25,12 +25,14 @@ db.exec('PRAGMA journal_mode = WAL');
 db.exec(`
   CREATE TABLE IF NOT EXISTS domain_gaps (
     domain_name TEXT PRIMARY KEY,
-    category TEXT NOT NULL CHECK (category IN ('missing_from_itglue', 'unmatched_client', 'wrong_client')),
+    category TEXT NOT NULL CHECK (category IN ('missing_from_itglue', 'unmatched_client', 'wrong_client', 'email_domain_mismatch')),
     expiry_date TEXT,
     autotask_client_name TEXT,     -- the CORRECT resolved Client, for every category except unmatched_client (null there)
     itglue_org_url TEXT,           -- the resolved Client's own IT Glue org page, null if no exact name match
     wrong_itglue_org_name TEXT,    -- wrong_client rows only: the org this domain is ACTUALLY filed under in IT Glue
     wrong_itglue_org_url TEXT,     -- wrong_client rows only: that wrong org's own IT Glue page
+    autotask_client_url TEXT,      -- wrong_client rows only: the real Autotask Company record (not IT Glue)
+    contact_email_domain TEXT,     -- email_domain_mismatch rows only: the Client's own Primary Contact email domain
     tpp_account_reference TEXT,
     first_seen_at TEXT NOT NULL,   -- when this domain first appeared as a gap, preserved across runs
     last_seen_at TEXT NOT NULL,    -- updated every run it's still present
@@ -93,6 +95,59 @@ function migrateAddWrongClientCategory() {
 }
 migrateAddWrongClientCategory();
 
+// Same table-rebuild pattern as migrateAddWrongClientCategory() above,
+// widening the CHECK a second time for 'email_domain_mismatch', by
+// request ("List where Domain is different from the domain of the
+// Primary Contact's email address in Autotask").
+function migrateAddEmailDomainMismatchCategory() {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'domain_gaps'`).get();
+  if (!row || row.sql.includes('email_domain_mismatch')) return;
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('domain_gaps')`).all().map((c) => c.name);
+  const hasWrongOrgColumns = columns.includes('wrong_itglue_org_name');
+  const hasContactEmailDomain = columns.includes('contact_email_domain');
+  db.exec('ALTER TABLE domain_gaps RENAME TO domain_gaps_old');
+  db.exec(`
+    CREATE TABLE domain_gaps (
+      domain_name TEXT PRIMARY KEY,
+      category TEXT NOT NULL CHECK (category IN ('missing_from_itglue', 'unmatched_client', 'wrong_client', 'email_domain_mismatch')),
+      expiry_date TEXT,
+      autotask_client_name TEXT,
+      itglue_org_url TEXT,
+      wrong_itglue_org_name TEXT,
+      wrong_itglue_org_url TEXT,
+      contact_email_domain TEXT,
+      tpp_account_reference TEXT,
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      ticked INTEGER NOT NULL DEFAULT 0,
+      ticked_at TEXT,
+      ticked_by_email TEXT,
+      ticked_by_name TEXT
+    );
+  `);
+  db.exec(`
+    INSERT INTO domain_gaps (domain_name, category, expiry_date, autotask_client_name, itglue_org_url, ${hasWrongOrgColumns ? 'wrong_itglue_org_name, wrong_itglue_org_url,' : ''} ${hasContactEmailDomain ? 'contact_email_domain,' : ''} tpp_account_reference, first_seen_at, last_seen_at, ticked, ticked_at, ticked_by_email, ticked_by_name)
+    SELECT domain_name, category, expiry_date, autotask_client_name, itglue_org_url, ${hasWrongOrgColumns ? 'wrong_itglue_org_name, wrong_itglue_org_url,' : ''} ${hasContactEmailDomain ? 'contact_email_domain,' : ''} tpp_account_reference, first_seen_at, last_seen_at, ticked, ticked_at, ticked_by_email, ticked_by_name
+    FROM domain_gaps_old
+  `);
+  db.exec('DROP TABLE domain_gaps_old');
+}
+migrateAddEmailDomainMismatchCategory();
+
+// Same simple pattern as migrateAddItglueOrgUrl() above -- a plain
+// nullable column add, no CHECK constraint involved, by request ("The
+// links in the 'Autotask Client UDF' column should go to Autotask, not
+// IT Glue"). Runs AFTER the table-rebuild migrations above, not before
+// -- those rebuilds have their own fixed column lists (predating this
+// one) and would otherwise silently drop this column again right after
+// adding it.
+function migrateAddAutotaskClientUrl() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('domain_gaps')`).all();
+  if (columns.some((c) => c.name === 'autotask_client_url')) return;
+  db.exec('ALTER TABLE domain_gaps ADD COLUMN autotask_client_url TEXT');
+}
+migrateAddAutotaskClientUrl();
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -104,11 +159,11 @@ function nowIso() {
 // ticked/ticked_at/ticked_by/first_seen_at for anything already in the
 // table, then deletes every row NOT in this run's fresh set -- those are
 // resolved.
-function replaceCurrentGaps(gaps, unmatched, wrongClient) {
+function replaceCurrentGaps(gaps, unmatched, wrongClient, emailDomainMismatch) {
   const now = nowIso();
   const upsert = db.prepare(`
-    INSERT INTO domain_gaps (domain_name, category, expiry_date, autotask_client_name, itglue_org_url, wrong_itglue_org_name, wrong_itglue_org_url, tpp_account_reference, first_seen_at, last_seen_at)
-    VALUES ($domainName, $category, $expiryDate, $autotaskClientName, $itglueOrgUrl, $wrongItglueOrgName, $wrongItglueOrgUrl, $tppAccountReference, $now, $now)
+    INSERT INTO domain_gaps (domain_name, category, expiry_date, autotask_client_name, itglue_org_url, wrong_itglue_org_name, wrong_itglue_org_url, autotask_client_url, contact_email_domain, tpp_account_reference, first_seen_at, last_seen_at)
+    VALUES ($domainName, $category, $expiryDate, $autotaskClientName, $itglueOrgUrl, $wrongItglueOrgName, $wrongItglueOrgUrl, $autotaskClientUrl, $contactEmailDomain, $tppAccountReference, $now, $now)
     ON CONFLICT (domain_name) DO UPDATE SET
       category = excluded.category,
       expiry_date = excluded.expiry_date,
@@ -116,6 +171,8 @@ function replaceCurrentGaps(gaps, unmatched, wrongClient) {
       itglue_org_url = excluded.itglue_org_url,
       wrong_itglue_org_name = excluded.wrong_itglue_org_name,
       wrong_itglue_org_url = excluded.wrong_itglue_org_url,
+      autotask_client_url = excluded.autotask_client_url,
+      contact_email_domain = excluded.contact_email_domain,
       tpp_account_reference = excluded.tpp_account_reference,
       last_seen_at = excluded.last_seen_at
   `);
@@ -130,6 +187,8 @@ function replaceCurrentGaps(gaps, unmatched, wrongClient) {
       $itglueOrgUrl: d.itGlueOrgUrl || null,
       $wrongItglueOrgName: null,
       $wrongItglueOrgUrl: null,
+      $autotaskClientUrl: null,
+      $contactEmailDomain: null,
       $tppAccountReference: d.accountReference || null,
       $now: now,
     });
@@ -144,6 +203,8 @@ function replaceCurrentGaps(gaps, unmatched, wrongClient) {
       $itglueOrgUrl: null,
       $wrongItglueOrgName: null,
       $wrongItglueOrgUrl: null,
+      $autotaskClientUrl: null,
+      $contactEmailDomain: null,
       $tppAccountReference: d.accountReference || null,
       $now: now,
     });
@@ -158,6 +219,24 @@ function replaceCurrentGaps(gaps, unmatched, wrongClient) {
       $itglueOrgUrl: d.itGlueOrgUrl || null,
       $wrongItglueOrgName: d.wrongOrgName || null,
       $wrongItglueOrgUrl: d.wrongOrgUrl || null,
+      $autotaskClientUrl: d.autotaskClientUrl || null,
+      $contactEmailDomain: null,
+      $tppAccountReference: d.accountReference || null,
+      $now: now,
+    });
+  }
+  for (const d of emailDomainMismatch) {
+    currentNames.add(d.domainName);
+    upsert.run({
+      $domainName: d.domainName,
+      $category: 'email_domain_mismatch',
+      $expiryDate: d.expiryDate,
+      $autotaskClientName: d.autotaskClientName,
+      $itglueOrgUrl: d.itGlueOrgUrl || null,
+      $wrongItglueOrgName: null,
+      $wrongItglueOrgUrl: null,
+      $autotaskClientUrl: null,
+      $contactEmailDomain: d.contactEmailDomain || null,
       $tppAccountReference: d.accountReference || null,
       $now: now,
     });
@@ -200,6 +279,7 @@ function getSummaryCounts() {
   const gapRows = rows.filter((r) => r.category === 'missing_from_itglue');
   const unmatchedRows = rows.filter((r) => r.category === 'unmatched_client');
   const wrongClientRows = rows.filter((r) => r.category === 'wrong_client');
+  const emailDomainMismatchRows = rows.filter((r) => r.category === 'email_domain_mismatch');
   return {
     gapCount: gapRows.length,
     gapTickedCount: gapRows.filter((r) => r.ticked).length,
@@ -207,6 +287,8 @@ function getSummaryCounts() {
     unmatchedTickedCount: unmatchedRows.filter((r) => r.ticked).length,
     wrongClientCount: wrongClientRows.length,
     wrongClientTickedCount: wrongClientRows.filter((r) => r.ticked).length,
+    emailDomainMismatchCount: emailDomainMismatchRows.length,
+    emailDomainMismatchTickedCount: emailDomainMismatchRows.filter((r) => r.ticked).length,
   };
 }
 
