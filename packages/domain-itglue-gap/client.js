@@ -239,6 +239,19 @@ export function mount(container) {
     lastRunEl.textContent = `Last run ${when}${dryRunNote} -- ${lastRun.gapCount} gap(s), ${lastRun.unmatchedCount} unmatched${ticketPart}.`;
   }
 
+  // Small text next to the "Missing from IT Glue" heading, by request --
+  // the open ticket's own number (linked) first, then the Refresh
+  // reminder. ticket is null when the live lookup failed or no open
+  // ticket exists (findOpenTicketInfo() in job.js) -- the reminder still
+  // shows either way, just without a ticket number in front of it.
+  function missingHeaderExtraHtml(ticket) {
+    const ticketPart =
+      ticket && ticket.ticketUrl
+        ? `<a href="${escapeHtml(ticket.ticketUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(ticket.ticketNumber || `Ticket #${ticket.ticketId}`)}</a> -- `
+        : '';
+    return `<span class="dig-missing-header-note">${ticketPart}Press Refresh to update the Autotask Ticket with your updates.</span>`;
+  }
+
   // One emphasis per summary line, by request (same convention every other
   // page's own summary line follows) -- the total open gap count is
   // bolded; the per-category/ticked breakdown sits alongside it unbolded.
@@ -258,20 +271,26 @@ export function mount(container) {
     const unmatchedRows = data.rows.filter((r) => r.category === 'unmatched_client');
 
     resultsEl.appendChild(
-      sectionTable('Missing from IT Glue', gapRows, [
-        { key: 'domain', label: 'Domain', cell: (r) => escapeHtml(r.domainName), sort: (r) => r.domainName || '' },
-        { key: 'expiry', label: 'Expiry Date', className: 'ticket-number', cell: (r) => formatDate(r.expiryDate), sort: (r) => r.expiryDate || '' },
-        { key: 'tppAcc', label: 'TPP Acc', cell: (r) => escapeHtml(r.tppAccountReference || ''), sort: (r) => r.tppAccountReference || '' },
-        {
-          key: 'client',
-          label: 'IT Glue Client Name',
-          cell: (r) =>
-            r.autotaskClientName && r.itglueOrgUrl
-              ? `<a href="${escapeHtml(r.itglueOrgUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.autotaskClientName)}</a>`
-              : escapeHtml(r.autotaskClientName || ''),
-          sort: (r) => r.autotaskClientName || '',
-        },
-      ], 'expiry')
+      sectionTable(
+        'Missing from IT Glue',
+        gapRows,
+        [
+          { key: 'domain', label: 'Domain', cell: (r) => escapeHtml(r.domainName), sort: (r) => r.domainName || '' },
+          { key: 'expiry', label: 'Expiry Date', className: 'ticket-number', cell: (r) => formatDate(r.expiryDate), sort: (r) => r.expiryDate || '' },
+          { key: 'tppAcc', label: 'TPP Acc', cell: (r) => escapeHtml(r.tppAccountReference || ''), sort: (r) => r.tppAccountReference || '' },
+          {
+            key: 'client',
+            label: 'IT Glue Client Name',
+            cell: (r) =>
+              r.autotaskClientName && r.itglueOrgUrl
+                ? `<a href="${escapeHtml(r.itglueOrgUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.autotaskClientName)}</a>`
+                : escapeHtml(r.autotaskClientName || ''),
+            sort: (r) => r.autotaskClientName || '',
+          },
+        ],
+        'expiry',
+        missingHeaderExtraHtml(data.ticket)
+      )
     );
     resultsEl.appendChild(
       sectionTable('No matching Autotask Client', unmatchedRows, [
@@ -286,12 +305,18 @@ export function mount(container) {
   // same "header built once, only tbody replaced on sort" convention
   // @dashboard/contact-search's own results table already established, so
   // a sort click never disturbs any other row's checkbox mid-interaction.
-  function sectionTable(heading, rows, columns, defaultSortKey) {
+  function sectionTable(heading, rows, columns, defaultSortKey, headerExtraHtml) {
     const groupEl = document.createElement('div');
     groupEl.className = 'resource-group';
     const headerEl = document.createElement('div');
     headerEl.className = 'resource-group-header';
-    headerEl.innerHTML = `<span>${escapeHtml(heading)}</span><span class="count">${rows.length}</span>`;
+    // headerExtraHtml sits INSIDE the same flex item as the heading text
+    // (not a separate flex child) so it renders right next to it, by
+    // request -- the outer header is `justify-content: space-between`
+    // between just this one item and the count badge, so a 3rd top-level
+    // child would float to the middle of the bar instead of hugging the
+    // heading.
+    headerEl.innerHTML = `<span>${escapeHtml(heading)}${headerExtraHtml || ''}</span><span class="count">${rows.length}</span>`;
     groupEl.appendChild(headerEl);
 
     if (rows.length === 0) {

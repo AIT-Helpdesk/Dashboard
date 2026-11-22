@@ -2469,6 +2469,7 @@ function showAnnouncementsPopup(announcements) {
         <div class="ann-popup-item ann-severity-${a.severity}" data-ann-id="${a.id}">
           <p class="ann-popup-item-title">${escapeHtml(a.title)}</p>
           ${a.body ? `<p class="ann-popup-item-body">${escapeHtml(a.body)}</p>` : ''}
+          ${a.imageDataUrl ? `<img src="${escapeHtml(a.imageDataUrl)}" class="ann-thumb ann-popup-thumb" alt="" />` : ''}
           ${a.ackRequired ? '<button type="button" class="button-link button-link--small ann-popup-ack-button">Acknowledge</button>' : ''}
           ${a.updatedByName ? `<p class="ann-popup-item-author">${escapeHtml(a.updatedByName)}</p>` : ''}
         </div>
@@ -2489,9 +2490,38 @@ function showAnnouncementsPopup(announcements) {
         }
       });
     });
+    bodyEl.querySelectorAll('.ann-popup-thumb').forEach((img) => {
+      img.addEventListener('click', () => window.openImageLightbox(img.src));
+    });
   }
   renderItems();
 }
+
+// A small screenshot (e.g. on an Announcement) renders inline at a capped
+// thumbnail width via the .ann-thumb CSS class alone -- no JS needed for
+// that part, since max-width only ever shrinks an image, never upscales
+// one already smaller. This is just the "click to show full size" half,
+// by request -- exposed on window (same convention openAnnouncementsPopup
+// already uses) so any page's own client.js can reuse the one overlay
+// implementation instead of building its own. Same shared
+// .history-modal-overlay Escape/click-outside-to-close shape as every
+// other popup on this dashboard, just holding a plain <img> instead of a
+// modal panel.
+window.openImageLightbox = function (src) {
+  const overlay = document.createElement('div');
+  overlay.className = 'history-modal-overlay ann-image-lightbox-overlay';
+  overlay.innerHTML = `<img src="${src.replace(/"/g, '&quot;')}" alt="" />`;
+  document.body.appendChild(overlay);
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKeydown);
+  };
+  function onKeydown(e) {
+    if (e.key === 'Escape') close();
+  }
+  document.addEventListener('keydown', onKeydown);
+  overlay.addEventListener('click', close);
+};
 
 async function maybeShowAnnouncements() {
   let announcements = [];

@@ -18,6 +18,44 @@ const TEAM_OPTIONS = [
 ];
 const SEVERITY_LABELS = { info: 'Info', warning: 'Warning', critical: 'Critical' };
 
+// Screenshot paste -- same FileReader + resizeImageDataUrl round-trip
+// @dashboard/updates' own row editor uses, by request ("put a small
+// screenshot on the Announcements"). Capped on its longest side and
+// re-encoded as JPEG before it's ever saved, so a full-screen capture on
+// a high-DPI display doesn't land in the db as several raw MB.
+const MAX_IMAGE_DIMENSION = 1400;
+const IMAGE_JPEG_QUALITY = 0.82;
+
+function resizeImageDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
+        const scale = MAX_IMAGE_DIMENSION / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+function dataUrlByteLength(dataUrl) {
+  const base64 = dataUrl.split(',')[1] || '';
+  try {
+    return atob(base64).length;
+  } catch {
+    return Math.round((base64.length * 3) / 4);
+  }
+}
+
 function targetsLabel(targets) {
   if (!targets || targets.length === 0) return 'Everyone';
   return targets
@@ -115,6 +153,7 @@ export function mount(container) {
       <thead>
         <tr class="shaded-row">
           <th>Title</th>
+          <th></th>
           <th>Severity</th>
           <th>Window</th>
           <th>Targets</th>
@@ -142,6 +181,7 @@ export function mount(container) {
         return `
           <tr>
             <td>${escapeHtml(a.title)}</td>
+            <td>${a.imageDataUrl ? `<img src="${escapeHtml(a.imageDataUrl)}" class="ann-thumb ann-list-thumb" alt="" />` : ''}</td>
             <td><span class="ann-badge ann-severity-${a.severity}">${SEVERITY_LABELS[a.severity] || a.severity}</span></td>
             <td>${escapeHtml(windowLabel(a))}</td>
             <td>${escapeHtml(targetsLabel(a.targets))}</td>
@@ -151,6 +191,9 @@ export function mount(container) {
         `;
       })
       .join('');
+    tbody.querySelectorAll('.ann-list-thumb').forEach((img) => {
+      img.addEventListener('click', () => window.openImageLightbox(img.src));
+    });
     // Buttons only ever exist inside an actionable row's own .ann-actions-cell
     // (never the blank filler <td> above), so wiring these up unconditionally
     // is safe -- querySelectorAll on an empty set is just a no-op.
@@ -328,6 +371,13 @@ export function mount(container) {
             <textarea id="ann-f-body" class="wsp-field" rows="5">${escapeHtml(announcement ? announcement.body : '')}</textarea>
           </div>
           <div class="pm-form-field">
+            <label>Screenshot (optional)</label>
+            <div class="updates-image-preview ann-image-preview" tabindex="0" title="Click here, then paste (Ctrl+V) a screenshot">
+              ${announcement?.imageDataUrl ? `<img src="${escapeHtml(announcement.imageDataUrl)}" alt="" />` : '<span class="updates-image-placeholder">Click, then paste a screenshot</span>'}
+            </div>
+            <button type="button" class="link-button ann-image-remove-btn" ${announcement?.imageDataUrl ? '' : 'hidden'}>Remove image</button>
+          </div>
+          <div class="pm-form-field">
             <label for="ann-f-severity">Severity</label>
             <select id="ann-f-severity" class="wsp-field">
               ${['info', 'warning', 'critical']
@@ -378,6 +428,37 @@ export function mount(container) {
       if (e.target === overlay) close();
     });
 
+    const imagePreview = overlay.querySelector('.ann-image-preview');
+    const removeImageBtn = overlay.querySelector('.ann-image-remove-btn');
+    let currentImageDataUrl = announcement?.imageDataUrl || null;
+    imagePreview.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items || [];
+      const imageItem = [...items].find((item) => item.type.startsWith('image/'));
+      if (!imageItem) return;
+      e.preventDefault();
+      const file = imageItem.getAsFile();
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        let src = reader.result;
+        try {
+          const resized = await resizeImageDataUrl(reader.result);
+          if (dataUrlByteLength(resized) < file.size) src = resized;
+        } catch {
+          // Best-effort -- fall through with the original, un-shrunk data: URL.
+        }
+        currentImageDataUrl = src;
+        imagePreview.innerHTML = `<img src="${escapeHtml(src)}" alt="" />`;
+        removeImageBtn.hidden = false;
+      };
+      reader.readAsDataURL(file);
+    });
+    removeImageBtn.addEventListener('click', () => {
+      currentImageDataUrl = null;
+      imagePreview.innerHTML = '<span class="updates-image-placeholder">Click, then paste a screenshot</span>';
+      removeImageBtn.hidden = true;
+    });
+
     async function save() {
       const errorEl = overlay.querySelector('.ann-modal-error');
       errorEl.hidden = true;
@@ -390,6 +471,7 @@ export function mount(container) {
         startAt: fromDatetimeLocalValue(overlay.querySelector('#ann-f-start').value),
         endAt: fromDatetimeLocalValue(overlay.querySelector('#ann-f-end').value),
         targets,
+        imageDataUrl: currentImageDataUrl,
       };
       try {
         if (announcement) {

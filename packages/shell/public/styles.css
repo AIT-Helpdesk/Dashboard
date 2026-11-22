@@ -12670,6 +12670,62 @@ tr.accrued-time-yellow-row th {
   color: var(--muted);
 }
 
+/* An Announcement's own optional screenshot, by request ("put a small
+   screenshot on the Announcements ... if the screenshot is large, show as
+   thumbnail and click to show full size"). max-width/max-height only ever
+   SHRINK an image -- a genuinely small screenshot just renders at its own
+   real size, a large one gets capped down to this same thumbnail size, no
+   separate size check needed either way. Clicking opens
+   window.openImageLightbox() (packages/shell/public/app.js), the one
+   shared full-size overlay every page showing a thumbnail reuses. */
+.ann-thumb {
+  display: block;
+  max-width: 220px;
+  max-height: 160px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.ann-popup-thumb {
+  margin: 0 0 0.5rem;
+}
+.ann-list-thumb {
+  max-width: 90px;
+  max-height: 60px;
+}
+/* The full-size view itself -- same .history-modal-overlay dim backdrop
+   every other popup already uses, just centering a plain <img> instead of
+   a modal panel, and closing on a click anywhere (not just an explicit
+   close button) since there's no other control inside it to protect. */
+.ann-image-lightbox-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+.ann-image-lightbox-overlay img {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: 6px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* DNS Check -- "easydmarc" bolded wherever it appears (client.js's own
+   boldEasyDmarc()), by request, now also coloured to stand out. */
+.dns-check-easydmarc {
+  color: #f59e0b;
+}
+
+/* Domain / IT Glue Gaps -- small text next to "Missing from IT Glue",
+   by request: the open ticket number (linked) + a reminder that Refresh
+   is what actually writes back to it. */
+.dig-missing-header-note {
+  font-weight: 400;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-left: 0.6rem;
+}
+
 /* Database Schema -- new page, by request. */
 .dbs-picker {
   padding: 0.75rem 1rem;

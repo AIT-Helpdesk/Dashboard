@@ -113,6 +113,7 @@ function toApiAnnouncement(row, req) {
     startAt: row.start_at,
     endAt: row.end_at,
     targets: JSON.parse(row.targets_json || '[]'),
+    imageDataUrl: row.image_data_url || null,
     retiredAt: row.retired_at,
     retiredByName: row.retired_by_name,
     createdAt: row.created_at,
@@ -143,6 +144,10 @@ function parseFields(body) {
     startAt: typeof body?.startAt === 'string' && body.startAt ? body.startAt : null,
     endAt: typeof body?.endAt === 'string' && body.endAt ? body.endAt : null,
     targets,
+    // Same "a data: URL string or null, no server-side size cap" convention
+    // @dashboard/updates' own imageDataUrl field already uses -- the
+    // resize/compress-before-save work happens client-side.
+    imageDataUrl: typeof body?.imageDataUrl === 'string' && body.imageDataUrl ? body.imageDataUrl : null,
   };
 }
 

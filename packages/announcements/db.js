@@ -84,6 +84,20 @@ function migrateAddCreatedBy() {
 }
 migrateAddCreatedBy();
 
+// Migration: image_data_url -- an optional screenshot, by request ("put a
+// small screenshot on the Announcements"). Same "data: URL straight in a
+// TEXT column" convention @dashboard/updates' own imageDataUrl column
+// already uses -- no new file storage, no static upload directory, and
+// the resize/compress-before-save work already happens client-side
+// (same resizeImageDataUrl()/MAX_IMAGE_DIMENSION round-trip that page's
+// client.js uses) so this column never holds a raw multi-MB screenshot.
+function migrateAddImage() {
+  const current = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'announcements'`).get();
+  if (!current || current.sql.includes('image_data_url')) return;
+  db.exec('ALTER TABLE announcements ADD COLUMN image_data_url TEXT');
+}
+migrateAddImage();
+
 const VALID_SEVERITIES = new Set(['info', 'warning', 'critical']);
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 
@@ -120,8 +134,8 @@ function createAnnouncement(fields, actor) {
   const info = db
     .prepare(
       `INSERT INTO announcements
-         (title, body, severity, ack_required, start_at, end_at, targets_json, created_at, updated_at, updated_by_email, updated_by_name, created_by_email, created_by_name)
-       VALUES ($title, $body, $severity, $ackRequired, $startAt, $endAt, $targetsJson, $now, $now, $email, $name, $email, $name)`
+         (title, body, severity, ack_required, start_at, end_at, targets_json, image_data_url, created_at, updated_at, updated_by_email, updated_by_name, created_by_email, created_by_name)
+       VALUES ($title, $body, $severity, $ackRequired, $startAt, $endAt, $targetsJson, $imageDataUrl, $now, $now, $email, $name, $email, $name)`
     )
     .run({
       $title: fields.title,
@@ -131,6 +145,7 @@ function createAnnouncement(fields, actor) {
       $startAt: fields.startAt || null,
       $endAt: fields.endAt || null,
       $targetsJson: JSON.stringify(fields.targets || []),
+      $imageDataUrl: fields.imageDataUrl || null,
       $now: now,
       $email: actor.email,
       $name: actor.name,
@@ -147,7 +162,7 @@ function updateAnnouncement(id, fields, actor) {
   db.prepare(
     `UPDATE announcements SET
        title = $title, body = $body, severity = $severity, ack_required = $ackRequired,
-       start_at = $startAt, end_at = $endAt, targets_json = $targetsJson,
+       start_at = $startAt, end_at = $endAt, targets_json = $targetsJson, image_data_url = $imageDataUrl,
        updated_at = $updatedAt, updated_by_email = $email, updated_by_name = $name
      WHERE id = $id`
   ).run({
@@ -159,6 +174,7 @@ function updateAnnouncement(id, fields, actor) {
     $startAt: fields.startAt || null,
     $endAt: fields.endAt || null,
     $targetsJson: JSON.stringify(fields.targets || []),
+    $imageDataUrl: fields.imageDataUrl || null,
     $updatedAt: nowIso(),
     $email: actor.email,
     $name: actor.name,

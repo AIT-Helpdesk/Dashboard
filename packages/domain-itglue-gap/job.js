@@ -347,4 +347,31 @@ async function attachCsv(client, ticketId, csv, asOfIso) {
   }
 }
 
-module.exports = { run, computeGaps, buildTicketBody, refreshLive, TICKET_TITLE };
+// The CURRENT open ticket's number + URL, for the dashboard page's own
+// header (by request -- "put the Ticket Number (with link)" next to
+// "Missing from IT Glue"). A live search, not read off last-run.json --
+// that file's own `ticketNumber` is unreliable right after a fresh
+// "create" (Autotask's create response only gives back the numeric
+// ticketId, not the generated ticket NUMBER, so it's never actually
+// captured there -- a real gap in run()'s own "create" branch, left as
+// found rather than fixed here, since this function sidesteps it
+// entirely by searching for the ticket itself instead of trusting what
+// an earlier run recorded). Cached briefly (same reasoning
+// server.js's own membership cache elsewhere on this dashboard gives) so
+// a page load/refresh doesn't re-run this search needlessly.
+const TICKET_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
+let ticketInfoCache = null; // { data, expiresAt }
+async function findOpenTicketInfo() {
+  if (ticketInfoCache && Date.now() < ticketInfoCache.expiresAt) return ticketInfoCache.data;
+  const client = await getClient();
+  const existing = await listAll(client.tickets, [
+    { op: 'eq', field: 'title', value: TICKET_TITLE },
+    { op: 'notIn', field: 'status', value: CLOSED_STATUSES },
+  ]);
+  const openTicket = existing[0] || null;
+  const data = openTicket ? { ticketId: openTicket.id, ticketNumber: openTicket.ticketNumber, ticketUrl: await getTicketUrl(openTicket.id) } : null;
+  ticketInfoCache = { data, expiresAt: Date.now() + TICKET_INFO_CACHE_TTL_MS };
+  return data;
+}
+
+module.exports = { run, computeGaps, buildTicketBody, refreshLive, findOpenTicketInfo, TICKET_TITLE };

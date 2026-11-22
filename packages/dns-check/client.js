@@ -11,6 +11,31 @@ let activeRender = null;
 // remembered across re-mounts same as lastDomain above.
 let lastCtEnabled = true;
 
+// Validates/normalizes the typed domain before a lookup ever runs, by
+// request: no extension (TLD) at all -> assume ".com.au" (our default
+// Australian TLD) and proceed; anything else that doesn't look like a
+// real domain -> warn instead of spending a real lookup on it.
+// Deliberately simple (letters/digits/hyphens per label, a final TLD of
+// at least 2 letters) -- just enough to catch a blank/typo/garbage
+// entry, not a full RFC 1035 validator.
+const DNS_CHECK_DOMAIN_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const DNS_CHECK_DEFAULT_TLD = 'com.au';
+function normalizeDomainInput(raw) {
+  // One trailing dot stripped, same tolerance a browser address bar
+  // gives a fully-qualified domain -- not itself "no extension".
+  const trimmed = (raw || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!trimmed) return { error: 'Enter a domain.' };
+  const hasExtension = trimmed.includes('.');
+  const candidate = hasExtension ? trimmed : `${trimmed}.${DNS_CHECK_DEFAULT_TLD}`;
+  const labels = candidate.split('.');
+  const validLabels = labels.length >= 2 && labels.every((label) => DNS_CHECK_DOMAIN_LABEL_RE.test(label));
+  const validTld = /^[a-z]{2,}$/.test(labels[labels.length - 1]);
+  if (!validLabels || !validTld) {
+    return { error: `"${raw.trim()}" doesn't look like a valid domain.` };
+  }
+  return { domain: candidate, appended: !hasExtension };
+}
+
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   return String(str)
@@ -21,12 +46,16 @@ function escapeHtml(str) {
 }
 
 // By request -- bolds every occurrence of "easydmarc" (case-insensitive,
-// original casing preserved) wherever it shows up in the page's own text.
-// Applied AFTER escapeHtml() everywhere it's used below -- "easydmarc"
-// itself has no characters escapeHtml would touch, so matching it in the
-// already-escaped string is exactly equivalent to matching the raw value.
+// original casing preserved) wherever it shows up in the page's own text,
+// AND colours it the dashboard's established warning-orange (.dns-check-
+// easydmarc, styles.css -- same #f59e0b token every other "orangy-
+// yellow" highlight on this dashboard already uses, e.g. TC Services'
+// own ambiguous-Huntress badge) so it stands out, by request. Applied
+// AFTER escapeHtml() everywhere it's used below -- "easydmarc" itself has
+// no characters escapeHtml would touch, so matching it in the already-
+// escaped string is exactly equivalent to matching the raw value.
 function boldEasyDmarc(html) {
-  return html.replace(/easydmarc/gi, (match) => `<strong>${match}</strong>`);
+  return html.replace(/easydmarc/gi, (match) => `<strong class="dns-check-easydmarc">${match}</strong>`);
 }
 
 // Content-based, not info-string-based -- the guess-based path tags a TXT
@@ -105,7 +134,21 @@ export function mount(container) {
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    load(domainInput.value, ctToggleInput.checked);
+    const result = normalizeDomainInput(domainInput.value);
+    if (result.error) {
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.textContent = result.error;
+      summaryEl.hidden = true;
+      resultsEl.innerHTML = '';
+      return;
+    }
+    // Reflects the ".com.au" default actually being looked up back into
+    // the field, by request ("add .com.au as the default choice then
+    // execute") -- so what runs matches what's shown, not left silently
+    // different from what was typed.
+    if (result.appended) domainInput.value = result.domain;
+    load(result.domain, ctToggleInput.checked);
   });
 
   resultsEl.addEventListener('click', (e) => {

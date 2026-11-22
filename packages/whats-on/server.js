@@ -1350,12 +1350,21 @@ async function recheckAutotaskBriefFindings(client, previousAutotask) {
 
 // Infrastructure, same definition as the drmm-morning-pulse skill's own
 // (minus ESXi hosts -- confirmed against real data earlier this session,
-// this account has none): a Server, or one of the confirmed real "Network
-// Device (...)" category variants (see @dashboard/datto-rmm/lib.js's own
-// mapDeviceSummary() comment for the confirmed real category list).
+// this account has none). Real bug, confirmed live: `deviceType` alone
+// (device_type.category, the hardware CHASSIS type) missed almost every
+// real server on this account -- EVERY genuine domain controller checked
+// (DC01, PMDC01, KFDC01, MO-AZ-DC01, SLP-AZ-DC01, all online, all really
+// running "Windows Server 2016/2019/2022") reports `device_type: "Main
+// System Chassis"`, never literally "Server" -- exactly the pitfall
+// drmm-morning-pulse's own docs warn about ("Windows Servers show as
+// Main System Chassis or Other"). Checking the real OS string instead
+// (contains "server", case-insensitive) is what actually finds them; the
+// device_type === 'Server' check is kept too, as a harmless fallback for
+// an account where Datto's own chassis detection DOES happen to say so.
 function isBriefInfraDevice(device) {
   const category = device.deviceType || '';
-  return category === 'Server' || category.startsWith('Network Device');
+  const os = device.os || '';
+  return category === 'Server' || /server/i.test(os) || category.startsWith('Network Device');
 }
 
 // 14 days -- generous on purpose: this lightweight check has no overnight-
@@ -1363,13 +1372,65 @@ function isBriefInfraDevice(device) {
 // here just means "not obviously ancient dead gear" rather than "dropped
 // last night specifically".
 const BRIEF_INFRA_RECENT_DAYS = 14;
-const BRIEF_INFRA_TOP_N = 5;
+// Raised from 5, by request -- the left column was cutting off into
+// "+ N more not shown" well above where the page's own right column
+// (Autotask groups) ends, leaving real unused space below it. 20 is
+// still a cap, not "show everything" -- a genuinely noisy day still
+// truncates with the same footer, just later.
+const BRIEF_INFRA_TOP_N = 20;
+
+// Same High/Critical-only bar getOpenAlerts() itself applies -- used here
+// just for the monitoring-gap check below ("no open High/Critical alert
+// raised"), unchanged from before. The broader classifyInfraAlerts()
+// pass further down deliberately does NOT apply this filter -- a real
+// disk-usage or security-threat alert on this account is often Moderate
+// priority, confirmed live, and would be silently missed by it.
+const BRIEF_ALERT_PRIORITY_FILTER = new Set(['High', 'Critical']);
+
+// Beyond "fully offline", by request ("Surely there's more things that
+// Today's Brief can find in Datto"). Confirmed against real open alerts
+// on this account before writing this: the vast majority are
+// `eventlog_ctx` with no diagnostics text at all (too noisy/uninformative
+// to list individually), a handful are `perf_disk_usage_ctx` (sometimes
+// carrying a parseable "IS: N% Free" diagnostics line), and a few are
+// `endpoint_security_threat_ctx` (a real security detection -- the
+// highest-value signal here). Grouped PER DEVICE (one line combining
+// everything currently open on it), not one line per alert, same
+// "a device with 2 real problems outranks one with 1" reasoning
+// drmm-morning-pulse's own tier-2 ranking uses -- just without that
+// skill's own disk-audit confirmation call (kept to data already fetched,
+// no new per-device API cost, consistent with this being a lightweight
+// daily check, not the full skill).
+const DISK_FREE_PERCENT_RE = /IS:\s*([\d.]+)%\s*Free/i;
+function classifyInfraAlerts(alerts) {
+  const hasThreat = alerts.some((a) => a.monitorType === 'endpoint_security_threat_ctx');
+  const diskAlert = alerts.find((a) => a.monitorType === 'perf_disk_usage_ctx');
+  const eventlogCount = alerts.filter((a) => a.monitorType === 'eventlog_ctx').length;
+  const knownTypes = new Set(['endpoint_security_threat_ctx', 'perf_disk_usage_ctx', 'eventlog_ctx', 'online_offline_status_ctx']);
+  const otherCount = alerts.filter((a) => a.monitorType && !knownTypes.has(a.monitorType)).length;
+
+  const parts = [];
+  if (hasThreat) parts.push('security threat detected');
+  if (diskAlert) {
+    const m = diskAlert.message ? diskAlert.message.match(DISK_FREE_PERCENT_RE) : null;
+    parts.push(m ? `disk usage alert (${m[1]}% free)` : 'disk usage alert');
+  }
+  if (eventlogCount > 0) parts.push(`${eventlogCount} event log alert${eventlogCount === 1 ? '' : 's'}`);
+  if (otherCount > 0) parts.push(`${otherCount} other alert${otherCount === 1 ? '' : 's'}`);
+  if (parts.length === 0) return null;
+
+  // security threat > disk > everything else -- ranks 2/3/4, slotting in
+  // right after this function's own site-down (0) / monitoring-gap (1).
+  const rank = hasThreat ? 2 : diskAlert ? 3 : 4;
+  return { text: parts.join(', '), rank };
+}
 
 async function getDattoBriefFindings() {
   if (!dattoRmm.hasDattoCredentials()) return { status: 'not-connected', items: [], truncatedCount: 0 };
 
-  const [devices, openAlertsResult] = await Promise.all([dattoRmm.getAllDevices(), dattoRmm.getOpenAlerts()]);
-  const alertDeviceUids = new Set(openAlertsResult.alerts.map((a) => a.deviceUid).filter(Boolean));
+  const [devices, rawAlertsResult] = await Promise.all([dattoRmm.getAllDevices(), dattoRmm.fetchRawOpenAlerts()]);
+  const allAlerts = rawAlertsResult.alerts;
+  const alertDeviceUids = new Set(allAlerts.filter((a) => BRIEF_ALERT_PRIORITY_FILTER.has(a.priority)).map((a) => a.deviceUid).filter(Boolean));
 
   const bySite = new Map();
   for (const d of devices) {
@@ -1425,6 +1486,32 @@ async function getDattoBriefFindings() {
     }
   }
 
+  // Alert-based findings on ONLINE infra devices -- a site with zero
+  // infra offline (so never touched by the per-site loop above) can
+  // still have a real, currently-open disk/security/event-log problem
+  // worth knowing about; this is the actual "more things" being added.
+  const deviceById = new Map(devices.map((d) => [d.id, d]));
+  const alertsByDeviceUid = new Map();
+  for (const a of allAlerts) {
+    if (!a.deviceUid) continue;
+    if (!alertsByDeviceUid.has(a.deviceUid)) alertsByDeviceUid.set(a.deviceUid, []);
+    alertsByDeviceUid.get(a.deviceUid).push(a);
+  }
+  for (const [deviceUid, deviceAlerts] of alertsByDeviceUid) {
+    const d = deviceById.get(deviceUid);
+    if (!d || !d.online || !isBriefInfraDevice(d)) continue;
+    const finding = classifyInfraAlerts(deviceAlerts);
+    if (!finding) continue;
+    items.push({
+      kind: 'infra-alert',
+      rank: finding.rank,
+      site: d.site || 'Unknown site',
+      deviceId: d.id,
+      hostname: d.hostname,
+      text: `${d.hostname} (${d.site || 'Unknown site'}): ${finding.text}`,
+    });
+  }
+
   items.sort((a, b) => a.rank - b.rank);
   const kept = items.slice(0, BRIEF_INFRA_TOP_N);
   return { status: 'ok', items: kept, truncatedCount: Math.max(0, items.length - kept.length) };
@@ -1453,6 +1540,12 @@ async function recheckDattoBriefItems(items) {
       if (!d || d.online) continue; // back online -- drop it
       if (d.openAlertCount > 0) continue; // an alert's since been raised -- someone's been told, drop it
       rechecked.push(item);
+    } else if (item.kind === 'infra-alert') {
+      const d = await dattoRmm.getDeviceDetails(item.deviceId).catch(() => null);
+      if (!d || !d.online) continue; // offline now -- the offline check above covers it instead
+      const finding = classifyInfraAlerts(d.openAlerts || []);
+      if (!finding) continue; // alerts have since cleared -- drop it
+      rechecked.push({ ...item, rank: finding.rank, text: `${item.hostname} (${item.site}): ${finding.text}` });
     }
   }
   return { status: 'ok', items: rechecked, truncatedCount: 0 };

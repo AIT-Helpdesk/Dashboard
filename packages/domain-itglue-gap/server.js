@@ -1,7 +1,7 @@
 const express = require('express');
 const { listGaps, setTicked, getSummaryCounts } = require('./db');
 const { readLastRunStatus } = require('./status');
-const { refreshLive } = require('./job');
+const { refreshLive, findOpenTicketInfo } = require('./job');
 const { computeClientsMissingPrimaryDomain } = require('./primary-domain-gaps');
 const { setPrimaryDomain } = require('@dashboard/itglue-client');
 
@@ -43,10 +43,21 @@ router.get('/', async (req, res) => {
     if (req.query.force === 'true') {
       await refreshLive();
     }
+    // Live ticket lookup (cached briefly, see findOpenTicketInfo()'s own
+    // comment), not last-run.json -- by request, "put the Ticket Number
+    // (with link)" next to "Missing from IT Glue". A failure here is
+    // non-fatal -- the page itself still works without it.
+    let ticket = null;
+    try {
+      ticket = await findOpenTicketInfo();
+    } catch (err) {
+      console.error('domain-itglue-gap: failed to look up the open ticket:', err.message);
+    }
     res.json({
       rows: listGaps().map(rowToJson),
       summary: getSummaryCounts(),
       lastRun: readLastRunStatus(),
+      ticket,
     });
   } catch (err) {
     console.error('domain-itglue-gap: failed to list gaps:', err.message);

@@ -199,6 +199,19 @@ function mapAlert(a) {
     deviceUid: a.alertSourceInfo?.deviceUid || null,
     deviceName: a.alertSourceInfo?.deviceName || 'Unknown device',
     siteName: a.alertSourceInfo?.siteName || '—',
+    // What KIND of alert this is (e.g. "perf_disk_usage_ctx",
+    // "endpoint_security_threat_ctx", "eventlog_ctx") -- confirmed live on
+    // a REAL raw alert object this session: it's a class discriminator
+    // nested at alertContext['@class'], NOT a top-level `monitor_type`
+    // field (that name came from a separate MCP connector tool's own
+    // renamed output, which does NOT match this raw REST response shape
+    // -- a wrong assumption caught by dumping a real raw alert directly
+    // through this exact code path, not by reasoning about the other
+    // tool's output). Today's Brief's own getDattoBriefFindings() uses
+    // this to classify alerts on an online infra device beyond just
+    // "fully offline", by request ("Surely there's more things that
+    // Today's Brief can find in Datto").
+    monitorType: a.alertContext?.['@class'] || null,
   };
 }
 
@@ -210,10 +223,21 @@ function mapAlert(a) {
 // MAX_ALERTS_RETURNED -- `totalCount` is still the real, uncapped
 // High/Critical count (confirmed accurate, not itself truncated, as long
 // as `truncated` below is false).
-async function getOpenAlerts() {
+// The raw paginated fetch, unfiltered by priority and not capped to
+// MAX_ALERTS_RETURNED -- split out so Today's Brief's own
+// getDattoBriefFindings() can classify EVERY open alert on an online
+// infra device (disk/security-threat alerts here are often Moderate
+// priority, not High/Critical, confirmed live) without paying for a
+// second full account-wide pull alongside getOpenAlerts()'s own.
+async function fetchRawOpenAlerts() {
   const rawAlerts = await fetchAllPages('/v2/account/alerts/open', {}, 'alerts', MAX_ALERT_PAGES);
   const hitSafetyCap = rawAlerts.length >= MAX_ALERT_PAGES * 250;
-  const matched = rawAlerts.filter((a) => ALERT_PRIORITY_FILTER.has(a.priority)).map(mapAlert);
+  return { alerts: rawAlerts.map(mapAlert), hitSafetyCap };
+}
+
+async function getOpenAlerts() {
+  const { alerts: allAlerts, hitSafetyCap } = await fetchRawOpenAlerts();
+  const matched = allAlerts.filter((a) => ALERT_PRIORITY_FILTER.has(a.priority));
   matched.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   const alerts = matched.slice(0, MAX_ALERTS_RETURNED);
   return {
@@ -686,7 +710,25 @@ async function getDeviceDetails(deviceUid) {
     memoryFormatted: formatBytes(toNumber(pick(systemInfo.totalPhysicalMemory, systemInfo.memory, audit?.memory?.total))),
     disks: parseDisksFromAudit(audit),
     openAlertCount: openAlerts?.pageDetails?.totalCount ?? openAlerts?.alerts?.length ?? 0,
+    // The real alerts themselves (mapped, with monitorType), not just the
+    // count -- Today's Brief's own recheckDattoBriefItems() needs these to
+    // re-classify an 'infra-alert' finding on Refresh, not just know a
+    // bare count changed.
+    openAlerts: (openAlerts?.alerts || []).map(mapAlert),
   };
 }
 
-module.exports = { hasDattoCredentials, getOverview, getDevicesForFilter, getDeviceDetails, getOpenAlerts, getAllDevices, getAllSites, getDeviceAudit, getSiteAlertsBreakdown, getAllFilters, getAllDevicesForFilter };
+module.exports = {
+  hasDattoCredentials,
+  getOverview,
+  getDevicesForFilter,
+  getDeviceDetails,
+  getOpenAlerts,
+  fetchRawOpenAlerts,
+  getAllDevices,
+  getAllSites,
+  getDeviceAudit,
+  getSiteAlertsBreakdown,
+  getAllFilters,
+  getAllDevicesForFilter,
+};
