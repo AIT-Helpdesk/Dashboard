@@ -15,9 +15,14 @@ node packages/domain-itglue-gap/run.js [--dry-run]
 never writes to Autotask -- it prints the exact ticket title/body/CSV it would
 create or update, and which ticket number (if any) it would update.
 
-Scheduled later via Windows Task Scheduler, same mechanism
-`@dashboard/strety-autotask-sync` already uses -- not wired up yet, by
-request ("build it as a single command... but do not build a scheduler yet").
+## Production setup (Windows Task Scheduler)
+
+Scheduled weekly (Monday 6am) via Windows Task Scheduler, same mechanism
+`@dashboard/strety-autotask-sync`/`@dashboard/contract-checks`/`@dashboard/invoice-intake`
+already use -- see `DEPLOYMENT.md`'s own "Setting up the Domain / IT Glue Gaps
+weekly job" section for the full `Register-ScheduledTask` command, verify
+steps, and how to change the schedule later. Runs `run.js` for real (no
+`--dry-run`) -- it genuinely creates/updates the Autotask ticket each week.
 
 ## Matching
 

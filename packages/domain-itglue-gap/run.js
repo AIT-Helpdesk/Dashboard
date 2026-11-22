@@ -1,10 +1,8 @@
-// Standalone entrypoint -- NOT an Express route. Run manually for now:
+// Standalone entrypoint -- NOT an Express route. Can be run manually:
 //   node packages/domain-itglue-gap/run.js [--dry-run]
-// Scheduled later via Windows Task Scheduler, same mechanism
-// @dashboard/strety-autotask-sync already documents in its own README
-// (`cmd.exe /c node packages\domain-itglue-gap\run.js >> logs\domain-itglue-gap.log 2>&1`),
-// not built here yet -- per the brief, "build it as a single command... but
-// do not build a scheduler yet."
+// Also scheduled weekly via Windows Task Scheduler on production -- see
+// DEPLOYMENT.md's own "Setting up the Domain / IT Glue Gaps weekly job"
+// section for the real Register-ScheduledTask command.
 //
 // Loads the repo-root .env explicitly -- unlike running inside the
 // dashboard's own server process (which already loads it), this script has

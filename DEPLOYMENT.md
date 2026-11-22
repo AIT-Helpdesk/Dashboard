@@ -350,6 +350,73 @@ Register-ScheduledTask -TaskName "AmbientInvoiceIntake" -Action $action -Trigger
 Get-ScheduledTask -TaskName "AmbientInvoiceIntake"
 ```
 
+## Setting up the Domain / IT Glue Gaps weekly job (Windows Task Scheduler)
+
+`@dashboard/domain-itglue-gap` (see its own README for the full writeup) finds
+TPP Wholesale domains missing from IT Glue and raises/updates one Autotask
+ticket -- previously run manually only, by request ("build it as a single
+command... but do not build a scheduler yet"); now being wired up, same
+mechanism every other scheduled job above uses.
+
+Weekly, not daily -- the brief's own cadence, and there's no reason to spend
+an Autotask ticket-note write every day for data that changes slowly (new TPP
+domains, IT Glue entries) -- Monday 6am chosen to match Contract Checks' own
+reasoning (current before anyone's at a desk, and a Monday-morning summary
+gives the week to action it); change `-DaysOfWeek`/`-At` to taste.
+
+### 1. Create the scheduled task
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\apps\autotask-dashboard-git\logs | Out-Null
+
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c node packages\domain-itglue-gap\run.js > logs\domain-itglue-gap.log 2>&1' `
+  -WorkingDirectory "C:\apps\autotask-dashboard-git"
+
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 6am
+
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "AmbientDomainItGlueGapSync" -Action $action -Trigger $trigger -Settings $settings `
+  -Description "Weekly, Monday 6am: find TPP Wholesale domains missing from IT Glue and raise/update the Autotask ticket"
+```
+
+Runs as SYSTEM by default (no `-User` specified), same reasoning as every
+other scheduled job above -- only needs filesystem access to its own package
+folder and outbound HTTPS. The log is overwritten each run (`>` not `>>`) --
+`data.db` (per-domain state) and `last-run.json` are the real durable record
+of what happened; the log is only for diagnosing a failed run. This runs
+`run.js` WITHOUT `--dry-run` -- it really does create/update the real
+Autotask ticket each week.
+
+### 2. Verify it actually works before waiting for the first real run
+
+```powershell
+Start-ScheduledTask -TaskName "AmbientDomainItGlueGapSync"
+Start-Sleep -Seconds 30
+Get-ScheduledTaskInfo -TaskName "AmbientDomainItGlueGapSync"   # LastTaskResult: 0 means success
+Get-Content C:\apps\autotask-dashboard-git\logs\domain-itglue-gap.log
+Get-Content C:\apps\autotask-dashboard-git\packages\domain-itglue-gap\last-run.json
+```
+
+**Changing the schedule later**: same real gotcha as every job above --
+`Set-ScheduledTask -Trigger` doesn't reliably swap a trigger in place, so
+unregister and re-register together as one paste, then re-run the
+`Get-ScheduledTask` verify step immediately to confirm it actually exists:
+
+```powershell
+Unregister-ScheduledTask -TaskName "AmbientDomainItGlueGapSync" -Confirm:$false
+
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c node packages\domain-itglue-gap\run.js > logs\domain-itglue-gap.log 2>&1' `
+  -WorkingDirectory "C:\apps\autotask-dashboard-git"
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 6am
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "AmbientDomainItGlueGapSync" -Action $action -Trigger $trigger -Settings $settings `
+  -Description "Weekly, Monday 6am: find TPP Wholesale domains missing from IT Glue and raise/update the Autotask ticket"
+
+Get-ScheduledTask -TaskName "AmbientDomainItGlueGapSync"
+```
+
 ## One-time data sync -- product_mappings' real Microsoft SKU GUIDs
 
 Needed once, the first deploy after this was added (not part of the normal "Updating later" flow below -- `git pull` brings the CODE change, `db.js`'s own `migrateAddMsSkuId()` adds the empty COLUMN automatically on next start, but the real per-row DATA (every SKU's actual `ms_sku_id`, a few corrected/new rows) only exists in this chat session and has to be applied by hand, same reasoning as every other real per-environment `data.db` on this dashboard):
