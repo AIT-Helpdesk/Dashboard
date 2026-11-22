@@ -132,7 +132,7 @@ export function mount(container) {
       showList: false, // widget + count only, by request -- no ticket list here
     });
     renderTicketWidget(scheduledMeChartEl, data.scheduledMeOpenCount, data.scheduledMeTickets, {
-      label: 'Scheduled Me',
+      label: 'Schedule Me',
       sub: 'To Be Scheduled',
       statusColored: false, // not inherently critical, same reasoning as Triage Now
       showList: false,
@@ -193,7 +193,21 @@ export function mount(container) {
     // own comment above for why.
     const color = donutColor || (count > 0 ? DONUT_COLORS.danger : DONUT_COLORS.healthy);
     const card = document.createElement('div');
-    card.className = 'datto-card';
+    // Every widget card is clickable, by request ("Each Widget should be
+    // able to be clicked to show a list of tickets") -- opens the SAME
+    // ticketsTableHtml() a widget with showList:true already renders
+    // inline, in a popup, for the widgets that have no inline list
+    // (DO TODAY/Schedule Me/Client Updates) and ALSO for Critical (P1)/
+    // Triage Now, by explicit request ("Keep Critical and Triage Now as
+    // they are with tickets showing... Add popup for all Widgets") --
+    // their own inline list stays exactly as-is, the popup is an addition,
+    // not a replacement. Same .history-modal-overlay/-panel shell every
+    // other popup on this dashboard already uses (see e.g. SaaS
+    // Protection's own openModal()), not a new modal system.
+    card.className = 'datto-card tkd-clickable-card';
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    card.title = `Click to view ${label} tickets`;
     card.innerHTML = `
       <div class="datto-donut-wrap critical-donut-wrap--large">
         ${donutSvg(count, donutScale, color, 180)}
@@ -202,6 +216,16 @@ export function mount(container) {
       <div class="datto-card-label">${escapeHtml(label)}</div>
       <div class="datto-card-sub">${escapeHtml(sub)}</div>
     `;
+    function openList() {
+      openTicketsModal(label, tickets, statusColored);
+    }
+    card.addEventListener('click', openList);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openList();
+      }
+    });
     donutWrap.appendChild(card);
     layout.appendChild(donutWrap);
 
@@ -217,6 +241,41 @@ export function mount(container) {
     }
 
     containerEl.appendChild(layout);
+  }
+
+  // Same .history-modal-overlay/-panel shell every other popup on this
+  // dashboard already uses (e.g. SaaS Protection's own openModal()) --
+  // reused as-is rather than a new modal system, just inlined here since
+  // this page needs only the one simple "title + ticket table" shape, no
+  // header-bar extra actions or loading state (the data's already in
+  // memory by the time a widget card is clicked). .tkd-modal-panel widens
+  // it past the shared 30rem default (styles.css) -- the ticket table's 5
+  // columns crowd that badly otherwise.
+  function openTicketsModal(label, tickets, statusColored) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel tkd-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>${escapeHtml(label)}</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body">${ticketsTableHtml(tickets, statusColored)}</div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
   }
 
   // Plain <table> (no page-specific width class -- the generic base

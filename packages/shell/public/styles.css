@@ -6274,6 +6274,35 @@ tr.row-text-highlight-blue td {
 .history-modal-panel.saas-widget-modal-panel {
   max-width: min(54.6rem, 90vw);
 }
+
+/* Tickets Dashboard's own widget-click popup (openTicketsModal() in
+   client.js) -- widened past the shared 30rem default, same reasoning as
+   .saas-widget-modal-panel above: its ticket table's 5 columns (Status,
+   Ticket #, Client, Title, Resource) crowd badly at the default width.
+   Compound selector (.history-modal-panel.tkd-modal-panel), not a bare
+   single class -- same equal-specificity gotcha documented throughout
+   this file wherever a page widens its own popup. */
+.history-modal-panel.tkd-modal-panel {
+  max-width: min(60rem, 90vw);
+}
+
+/* Every Tickets Dashboard widget card is clickable now (openTicketsModal(),
+   client.js) -- cursor + a subtle border/shadow lift on hover is the only
+   affordance needed, same "no visual noise beyond a pointer cursor"
+   convention .order-copy-btn's own comment documents elsewhere in this
+   file, just with a touch more presence since this is a whole card, not
+   inline text. */
+.tkd-clickable-card {
+  cursor: pointer;
+}
+.tkd-clickable-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.tkd-clickable-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .history-modal-panel-header {
   display: flex;
   justify-content: space-between;
