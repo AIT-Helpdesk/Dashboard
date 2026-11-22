@@ -288,7 +288,7 @@ export function mount(container) {
             sort: (r) => r.autotaskClientName || '',
           },
         ],
-        'expiry',
+        'client',
         missingHeaderExtraHtml(data.ticket)
       )
     );
