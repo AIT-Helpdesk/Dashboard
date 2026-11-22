@@ -293,11 +293,21 @@ export function mount(container) {
       )
     );
     resultsEl.appendChild(
-      sectionTable('No matching Autotask Client', unmatchedRows, [
-        { key: 'domain', label: 'Domain', cell: (r) => escapeHtml(r.domainName), sort: (r) => r.domainName || '' },
-        { key: 'expiry', label: 'Expiry Date', className: 'ticket-number', cell: (r) => formatDate(r.expiryDate), sort: (r) => r.expiryDate || '' },
-        { key: 'tppAcc', label: 'TPP Account Reference', cell: (r) => escapeHtml(r.tppAccountReference || ''), sort: (r) => r.tppAccountReference || '' },
-      ], 'expiry')
+      sectionTable(
+        'No matching Autotask Client',
+        unmatchedRows,
+        [
+          { key: 'domain', label: 'Domain', cell: (r) => escapeHtml(r.domainName), sort: (r) => r.domainName || '' },
+          { key: 'expiry', label: 'Expiry Date', className: 'ticket-number', cell: (r) => formatDate(r.expiryDate), sort: (r) => r.expiryDate || '' },
+          { key: 'tppAcc', label: 'TPP Account Reference', cell: (r) => escapeHtml(r.tppAccountReference || ''), sort: (r) => r.tppAccountReference || '' },
+        ],
+        'expiry',
+        // By request -- these rows mean the TPP domain's accountReference
+        // has no Name:TPP UDF match on any Autotask Company (see job.js's
+        // own comment); that's exactly what Data Matching's own "TPP
+        // Domains" view is for fixing, not something to resolve here.
+        `<span class="dig-missing-header-note">Fix these on the <a href="#data-matching">Data Matching</a> page (TPP Domains).</span>`
+      )
     );
   }
 

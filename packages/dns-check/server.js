@@ -571,6 +571,33 @@ const EXPIRY_FIELD_LABELS = [
   'Expire Date',
   'paid-till',
 ];
+// "Status" repeats (like Name Server) on both a generic registry
+// ("Domain Status: clientTransferProhibited ...", confirmed live) and
+// auDA's own .au ("Status: clientDeleteProhibited ...", confirmed live
+// -- notably WITHOUT the "Domain" prefix, a real label difference between
+// the two, not a typo).
+const STATUS_FIELD_LABELS = ['Domain Status', 'Status'];
+// "Registrant" -- auDA's own .au publishes a single plain "Registrant:"
+// line holding the entity name itself (confirmed live, e.g. "AUSTRALIA
+// AND NEW ZEALAND BANKING GROUP LIMITED"); a generic ICANN registry
+// instead splits this into "Registrant Organization"/"Registrant Name"
+// (often redacted for privacy on those). Tried in this order so a real
+// organization name wins over a bare person's name when both exist.
+const REGISTRANT_NAME_FIELD_LABELS = ['Registrant Organization', 'Registrant'];
+// Confirmed live, auDA's own .au only -- no equivalent found on a generic
+// ICANN record (those don't expose a separate registrant ID via WHOIS).
+const REGISTRANT_ID_FIELD_LABELS = ['Registrant ID'];
+// auDA's own .au separates the REGISTRANT (the entity, above) from its
+// own named CONTACT, confirmed live as "Registrant Contact Name"; a
+// generic ICANN record has no such split, just "Registrant Name" (the
+// person), so that's included here as this field's own closest
+// equivalent there.
+const CONTACT_NAME_FIELD_LABELS = ['Registrant Contact Name', 'Registrant Name'];
+// Standard ICANN WHOIS field for a generic registry. auDA's own .au
+// publishes no registrant email via public WHOIS at all (confirmed live
+// -- privacy policy, same as it withholds registrant phone/address) --
+// only ever available there via TPP's own API for a domain we manage.
+const CONTACT_EMAIL_FIELD_LABELS = ['Registrant Email'];
 
 // Best-effort public WHOIS, used only when a domain isn't in our own TPP
 // Wholesale reseller account. Not every registry publishes an expiry date
@@ -590,6 +617,11 @@ async function publicWhoisLookup(domain) {
   let registrar = parseWhoisField(text, REGISTRAR_FIELD_LABELS);
   let expiryDate = parseWhoisField(text, EXPIRY_FIELD_LABELS);
   let nameServers = parseWhoisFieldAll(text, NAME_SERVER_FIELD_LABELS);
+  let statusCodes = parseWhoisFieldAll(text, STATUS_FIELD_LABELS);
+  let registrantName = parseWhoisField(text, REGISTRANT_NAME_FIELD_LABELS);
+  let registrantId = parseWhoisField(text, REGISTRANT_ID_FIELD_LABELS);
+  let contactName = parseWhoisField(text, CONTACT_NAME_FIELD_LABELS);
+  let contactEmail = parseWhoisField(text, CONTACT_EMAIL_FIELD_LABELS);
 
   // Thin registries (Verisign's .com/.net chief among them) hand back the
   // sponsoring registrar's name plus a referral to THAT registrar's own
@@ -603,6 +635,11 @@ async function publicWhoisLookup(domain) {
         registrar = registrar || parseWhoisField(referredText, REGISTRAR_FIELD_LABELS);
         expiryDate = expiryDate || parseWhoisField(referredText, EXPIRY_FIELD_LABELS);
         if (nameServers.length === 0) nameServers = parseWhoisFieldAll(referredText, NAME_SERVER_FIELD_LABELS);
+        if (statusCodes.length === 0) statusCodes = parseWhoisFieldAll(referredText, STATUS_FIELD_LABELS);
+        registrantName = registrantName || parseWhoisField(referredText, REGISTRANT_NAME_FIELD_LABELS);
+        registrantId = registrantId || parseWhoisField(referredText, REGISTRANT_ID_FIELD_LABELS);
+        contactName = contactName || parseWhoisField(referredText, CONTACT_NAME_FIELD_LABELS);
+        contactEmail = contactEmail || parseWhoisField(referredText, CONTACT_EMAIL_FIELD_LABELS);
       } catch {
         // Best-effort only -- the registry's own answer (if any) still stands.
       }
@@ -621,8 +658,14 @@ async function publicWhoisLookup(domain) {
   // already lower-case -- matched here so this reads consistently with them.
   nameServers = nameServers.map((ns) => ns.toLowerCase());
 
-  if (!registrar && !expiryDate && nameServers.length === 0) return null;
-  return { registrar, expiryDate, nameServers };
+  // Each EPP status line carries a trailing explainer URL (confirmed live,
+  // e.g. "clientTransferProhibited https://icann.org/epp#..."), only the
+  // status word itself is worth showing -- the URL is dropped here rather
+  // than carried through to the client as noise.
+  const status = statusCodes.length > 0 ? statusCodes.map((s) => s.split(/\s+/)[0]).join(', ') : null;
+
+  if (!registrar && !expiryDate && !status && !registrantName && !registrantId && !contactName && !contactEmail && nameServers.length === 0) return null;
+  return { registrar, expiryDate, status, registrantName, registrantId, contactName, contactEmail, nameServers };
 }
 
 // Both lookups run every time, by request -- TPP Wholesale is a RESELLER,
@@ -655,6 +698,28 @@ async function getRegistrationInfo(domain) {
   let registrar = whois?.registrar || null;
   if (registrar && registrar.trim().toLowerCase() === 'domain directors pty ltd trading as instra') registrar = `${registrar} (TPP)`;
   const expiryDate = tppWhois ? tppWhois.expiryDate || null : whois?.expiryDate || null;
+  // Status, by request ("add some basic whois info") -- same TPP-
+  // preferred precedence as expiry above. TPP's own `status` is a single
+  // plain word ("Locked"/"Unlocked", confirmed live); public WHOIS's own
+  // status is a list of real EPP codes (see publicWhoisLookup's own
+  // comment) -- both are just plain display strings by the time they get
+  // here, no shape difference the client needs to know about.
+  const status = tppWhois ? tppWhois.status || null : whois?.status || null;
+  // Registrant/Contact Name/Contact Email, by request. TPP's own
+  // `registrant` object has no separate ID field (confirmed live, unlike
+  // auDA's own public WHOIS "Registrant ID") -- registrantId is simply
+  // null for a TPP-managed domain, same "omit what's not there" handling
+  // as every other field here. registrantName prefers the organization
+  // (TPP's own `registrant.org`, confirmed populated on every real TPP
+  // domain checked) but falls back to the registrant's own first/last
+  // name for the rare case org is blank (a personal, not business,
+  // registration).
+  const registrantName = tppWhois
+    ? tppWhois.registrant?.org || [tppWhois.registrant?.firstName, tppWhois.registrant?.lastName].filter(Boolean).join(' ') || null
+    : whois?.registrantName || null;
+  const registrantId = tppWhois ? null : whois?.registrantId || null;
+  const contactName = tppWhois ? [tppWhois.registrant?.firstName, tppWhois.registrant?.lastName].filter(Boolean).join(' ') || null : whois?.contactName || null;
+  const contactEmail = tppWhois ? tppWhois.registrant?.email || null : whois?.contactEmail || null;
   // Registered nameservers -- same TPP-preferred precedence as expiry above
   // (confirmed live: TPP's own `nameServer` array and public WHOIS's
   // repeated "Name Server:" lines agree for a domain in our own reseller
@@ -662,8 +727,8 @@ async function getRegistrationInfo(domain) {
   // ("VIOLET.NS.CLOUDFLARE.COM", confirmed live) to the rest of this page.
   const nameServersRaw = tppWhois?.nameServer?.length ? tppWhois.nameServer : whois?.nameServers || [];
   const nameServers = nameServersRaw.map((ns) => ns.toLowerCase());
-  if (!registrar && !expiryDate && nameServers.length === 0) return null;
-  return { registrar, expiryDate, nameServers, source: tppWhois ? 'tpp' : 'whois' };
+  if (!registrar && !expiryDate && !status && !registrantName && !registrantId && !contactName && !contactEmail && nameServers.length === 0) return null;
+  return { registrar, expiryDate, status, registrantName, registrantId, contactName, contactEmail, nameServers, source: tppWhois ? 'tpp' : 'whois' };
 }
 
 router.get('/', async (req, res) => {

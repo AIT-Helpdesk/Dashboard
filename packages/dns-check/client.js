@@ -282,7 +282,17 @@ export function mount(container) {
   function registrationHtml(registration) {
     if (!registration) return '';
     const hasNameServers = registration.nameServers && registration.nameServers.length > 0;
-    if (!registration.registrar && !registration.expiryDate && !hasNameServers) return '';
+    if (
+      !registration.registrar &&
+      !registration.expiryDate &&
+      !registration.status &&
+      !registration.registrantName &&
+      !registration.registrantId &&
+      !registration.contactName &&
+      !registration.contactEmail &&
+      !hasNameServers
+    )
+      return '';
     // No lookup/propagation icons here, by request -- those live once, in
     // the Name Servers section below, rather than repeated before every
     // nameserver (both sections would otherwise be checking the exact same
@@ -291,13 +301,27 @@ export function mount(container) {
     const nameServersCell = hasNameServers
       ? registration.nameServers.map((ns) => boldEasyDmarc(escapeHtml(ns))).join('<br>')
       : '<span class="inline-subtext">Unknown</span>';
+    // Status sits next to the heading itself, by request, not its own
+    // table row -- same small-text-next-to-heading convention Domain /
+    // IT Glue Gaps' own header note uses.
+    const statusNoteHtml = registration.status ? `<span class="dns-check-status-note">-- ${escapeHtml(registration.status)}</span>` : '';
+    // "Registrant (Contact Name)", by request -- one row, the entity name
+    // with its own contact person's name in brackets right after (e.g.
+    // "Shepherd Contracting Pty Ltd (Adrian Prevost)") when both are
+    // known; just the name alone otherwise. No separate Contact Name row
+    // anymore -- merged into this one.
+    const registrantCell = registration.registrantName
+      ? `${escapeHtml(registration.registrantName)}${registration.contactName ? ` (${escapeHtml(registration.contactName)})` : ''}`
+      : '<span class="inline-subtext">Unknown</span>';
     return `
       <div class="resource-group dns-check-compact-table">
-        <div class="resource-group-header"><span>Domain Registration</span></div>
+        <div class="resource-group-header"><span>Domain Registration ${statusNoteHtml}</span></div>
         <table>
           <tbody>
             <tr><th>Registrar</th><td>${registration.registrar ? boldEasyDmarc(escapeHtml(registration.registrar)) : '<span class="inline-subtext">Unknown</span>'}</td></tr>
             <tr><th>Expiry Date</th><td>${registration.expiryDate ? escapeHtml(registration.expiryDate) : '<span class="inline-subtext">Unknown</span>'}</td></tr>
+            <tr><th>Registrant</th><td>${registrantCell}</td></tr>
+            <tr><th>Contact Email</th><td>${registration.contactEmail ? escapeHtml(registration.contactEmail) : '<span class="inline-subtext">Unknown</span>'}</td></tr>
             <tr><th>Registered Name Servers</th><td>${nameServersCell}</td></tr>
           </tbody>
         </table>

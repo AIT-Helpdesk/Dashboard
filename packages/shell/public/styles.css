@@ -12710,6 +12710,14 @@ tr.accrued-time-yellow-row th {
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
 }
 
+/* DNS Check -- domain Status shown next to the "Domain Registration"
+   heading, by request, not its own table row. */
+.dns-check-status-note {
+  font-weight: 400;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
 /* DNS Check -- "easydmarc" bolded wherever it appears (client.js's own
    boldEasyDmarc()), by request, now also coloured to stand out. */
 .dns-check-easydmarc {
