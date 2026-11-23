@@ -79,6 +79,12 @@ router.get('/', async (req, res) => {
   // name and same "no isActive filter at all when ticked" convention
   // @dashboard/client-contacts' own server.js already uses.
   const showInactive = req.query.showInactive === 'true';
+  // "No Contracts" checkbox (default unticked) -- by request, a flip
+  // between the two, not a three-way "show everyone" state: unticked shows
+  // only clients WITH an active contract (the page's own original
+  // behaviour before this flag existed), ticked flips to clients with
+  // ZERO active contracts (a data-hygiene/sales-opportunity view).
+  const noContracts = req.query.noContracts === 'true';
 
   try {
     const client = await getClient();
@@ -89,13 +95,35 @@ router.get('/', async (req, res) => {
     ]);
     const companyIds = companies.map((c) => c.id);
 
+    // Active (status 1, "In Effect") Contracts -- needed on EVERY dimension
+    // now, by request, for the Contracts/Seats columns every tab's client
+    // list shows, not just Contract Name/Service (which also GROUP by
+    // these same contracts, see below).
+    const contracts = await fetchByFieldIn(client.contracts, 'companyID', companyIds, [
+      { op: 'eq', field: 'status', value: CONTRACT_STATUS_IN_EFFECT },
+    ]);
+    const contractCountByCompanyId = new Map();
+    for (const ct of contracts) {
+      contractCountByCompanyId.set(ct.companyID, (contractCountByCompanyId.get(ct.companyID) || 0) + 1);
+    }
+
+    // Apply the No Contracts flip BEFORE everything downstream (contacts,
+    // enrichment, grouping) -- a filtered-out company never shows up
+    // anywhere on the page, same "fetch the narrower set, not everyone"
+    // reasoning Show Inactive's own companies query already follows.
+    const filteredCompanies = companies.filter((c) => {
+      const count = contractCountByCompanyId.get(c.id) || 0;
+      return noContracts ? count === 0 : count > 0;
+    });
+    const filteredCompanyIds = filteredCompanies.map((c) => c.id);
+
     const [classificationLabels, marketSegmentLabels, primaryContacts] = await Promise.all([
       getPicklistLabels(client.companies, 'classification'),
       getPicklistLabels(client.companies, 'marketSegmentID'),
-      // Scoped to just the active companies (chunked `in` filter), same
+      // Scoped to just the filtered companies (chunked `in` filter), same
       // "no need to fetch every contact account-wide" convention Client
       // Details' own server.js already uses for this exact lookup.
-      fetchByFieldIn(client.contacts, 'companyID', companyIds, [{ op: 'eq', field: 'primaryContact', value: true }]),
+      fetchByFieldIn(client.contacts, 'companyID', filteredCompanyIds, [{ op: 'eq', field: 'primaryContact', value: true }]),
     ]);
     // A company could in theory have more than one contact flagged primary
     // (Autotask doesn't enforce uniqueness) -- first one found wins, same
@@ -105,12 +133,13 @@ router.get('/', async (req, res) => {
       if (!primaryContactByCompanyId.has(c.companyID)) primaryContactByCompanyId.set(c.companyID, c);
     }
 
-    // One shared, enriched row per active company -- the SAME 4 display
+    // One shared, enriched row per active company -- the SAME 5 display
     // columns every tab's own client list shows (Client Name,
-    // Classification, Market Segment, Primary Contact), by request,
-    // regardless of which dimension that tab is actually grouped by.
+    // Classification, Market Segment, Primary Contact, Contracts), by
+    // request, regardless of which dimension that tab is actually grouped
+    // by.
     const enrichedByCompanyId = new Map();
-    for (const c of companies) {
+    for (const c of filteredCompanies) {
       enrichedByCompanyId.set(c.id, {
         id: c.id,
         companyName: c.companyName,
@@ -120,6 +149,7 @@ router.get('/', async (req, res) => {
         marketSegment: c.marketSegmentID != null ? marketSegmentLabels.get(c.marketSegmentID) || `#${c.marketSegmentID}` : null,
         primaryContactName: contactName(primaryContactByCompanyId.get(c.id)),
         referrer: referrerOrganisation(c),
+        contractCount: contractCountByCompanyId.get(c.id) || 0,
       });
     }
     const enrichedRows = [...enrichedByCompanyId.values()];
@@ -131,35 +161,38 @@ router.get('/', async (req, res) => {
       groups = groupByValue(enrichedRows, (r) => r.marketSegment, 'No Market Segment');
     } else if (dimension === 'referrer') {
       groups = groupByValue(enrichedRows, (r) => r.referrer, 'No Referrer');
+    } else if (dimension === 'contractName') {
+      // When "No Contracts" is ticked, every remaining company has ZERO
+      // active contracts by definition -- skip straight to an empty result
+      // rather than doing the membership join just to produce nothing.
+      groups = noContracts
+        ? []
+        : groupByMembership(
+            enrichedByCompanyId,
+            contracts.map((ct) => ({ companyId: ct.companyID, key: (ct.contractName || '').trim() || 'Unnamed Contract' }))
+          );
+    } else if (noContracts) {
+      // Same reasoning as Contract Name above -- Service is also a
+      // contract-membership dimension, so skip the ContractServices/
+      // Services fetch entirely rather than doing it for a guaranteed-empty
+      // result.
+      groups = [];
     } else {
-      // Contract Name / Service both need real, currently-in-effect
-      // Contracts -- only fetched for these two dimensions, not on every
-      // request.
-      const contracts = await fetchByFieldIn(client.contracts, 'companyID', companyIds, [
-        { op: 'eq', field: 'status', value: CONTRACT_STATUS_IN_EFFECT },
+      const contractIds = [...new Set(contracts.map((ct) => ct.id))];
+      const companyIdByContractId = new Map(contracts.map((ct) => [ct.id, ct.companyID]));
+      const [contractServices, services] = await Promise.all([
+        fetchByFieldIn(client.contractServices, 'contractID', contractIds),
+        // Active services only, by request -- same convention @dashboard/
+        // contract-services' own server.js already uses: a retired
+        // service definition isn't something a client "currently has".
+        listAll(client.services, [{ op: 'eq', field: 'isActive', value: true }]),
       ]);
-      if (dimension === 'contractName') {
-        groups = groupByMembership(
-          enrichedByCompanyId,
-          contracts.map((ct) => ({ companyId: ct.companyID, key: (ct.contractName || '').trim() || 'Unnamed Contract' }))
-        );
-      } else {
-        const contractIds = [...new Set(contracts.map((ct) => ct.id))];
-        const companyIdByContractId = new Map(contracts.map((ct) => [ct.id, ct.companyID]));
-        const [contractServices, services] = await Promise.all([
-          fetchByFieldIn(client.contractServices, 'contractID', contractIds),
-          // Active services only, by request -- same convention @dashboard/
-          // contract-services' own server.js already uses: a retired
-          // service definition isn't something a client "currently has".
-          listAll(client.services, [{ op: 'eq', field: 'isActive', value: true }]),
-        ]);
-        const serviceNameById = new Map(services.map((s) => [s.id, s.name]));
-        const memberships = contractServices.map((cs) => ({
-          companyId: companyIdByContractId.get(cs.contractID),
-          key: serviceNameById.get(cs.serviceID),
-        }));
-        groups = groupByMembership(enrichedByCompanyId, memberships);
-      }
+      const serviceNameById = new Map(services.map((s) => [s.id, s.name]));
+      const memberships = contractServices.map((cs) => ({
+        companyId: companyIdByContractId.get(cs.contractID),
+        key: serviceNameById.get(cs.serviceID),
+      }));
+      groups = groupByMembership(enrichedByCompanyId, memberships);
     }
 
     groups = groups.filter((g) => matchesWildcard(g.name, q));
@@ -170,7 +203,8 @@ router.get('/', async (req, res) => {
       dimension,
       q,
       showInactive,
-      totalCompanies: companies.length,
+      noContracts,
+      totalCompanies: filteredCompanies.length,
       groups: groups.map((g) => ({
         name: g.name,
         count: g.companies.length,
@@ -182,6 +216,7 @@ router.get('/', async (req, res) => {
           classification: c.classification,
           marketSegment: c.marketSegment,
           primaryContactName: c.primaryContactName,
+          contractCount: c.contractCount,
         })),
       })),
     });

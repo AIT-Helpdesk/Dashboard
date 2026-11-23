@@ -471,12 +471,25 @@ app.get('/pages-registry.js', (req, res) => {
         `  { id: ${JSON.stringify(p.id)}, label: ${JSON.stringify(p.label)}, external: ${JSON.stringify(!!p.external)}, tabbed: ${JSON.stringify(!!p.tabbed)}, module: () => import('/pages/${p.id}/client.js') },`
     )
     .join('\n');
+  // Never cached, by request (a real incident -- a page's own client.js was
+  // edited/fixed on disk, but a browser that only ever clicked that page's
+  // own in-app "Refresh" button, never a real page reload, kept running the
+  // STALE dynamically-imported module indefinitely; Express's default
+  // sendFile/send Cache-Control still lets a browser serve a disk-cached
+  // copy without even a revalidation round trip in some cases). These two
+  // routes are the ENTIRE page-loading mechanism (the module list, and
+  // every page's own client.js), so a normal page reload must always see
+  // the current file, not a cached one.
+  res.set('Cache-Control', 'no-store');
   res.type('application/javascript').send(`export const pages = [\n${entries}\n];\n`);
 });
 
 app.get('/pages/:id/client.js', (req, res) => {
   const page = pages.find((p) => p.id === req.params.id);
   if (!page || !page.client || !pageVisibleTo(page, req.session.user)) return res.status(404).end();
+  // See /pages-registry.js's own comment above -- same "never cached"
+  // reasoning, same incident.
+  res.set('Cache-Control', 'no-store');
   res.type('application/javascript').sendFile(path.join(page.root, page.client));
 });
 

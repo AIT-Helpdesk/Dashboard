@@ -81,11 +81,21 @@ dashboard already follows elsewhere (e.g. the widget-rendering functions in
 
 ## Client list columns
 
-Client Name, Classification, Market Segment, Primary Contact -- the SAME 4
-columns on every tab, by request, regardless of which dimension that tab is
-actually grouped by (so e.g. the Classification tab still shows each row's
-own Classification column, even though that's also the grouping key).
-Primary Contact is the `Contacts` row (scoped to the matched companies, one
-query) with `primaryContact = true` set, same flag/convention Client
-Details already uses; first match wins if more than one contact somehow has
-it set (Autotask doesn't enforce uniqueness).
+Client Name, Classification, Market Segment, Primary Contact, Contracts --
+the SAME columns on every tab, by request, regardless of which dimension
+that tab is actually grouped by (so e.g. the Classification tab still
+shows each row's own Classification column, even though that's also the
+grouping key). Primary Contact is the `Contacts` row (scoped to the
+matched companies, one query) with `primaryContact = true` set, same
+flag/convention Client Details already uses; first match wins if more than
+one contact somehow has it set (Autotask doesn't enforce uniqueness).
+
+- **Contracts** - the count of this client's own active (`status = 1`)
+  Contracts -- the same contracts fetched for every dimension now (not just
+  Contract Name/Service's own grouping use of them).
+
+A "Seats" column (Microsoft/M365 contract licence count) was attempted and
+then pulled back out -- fetching `ContractServiceUnits` for the ~250 real
+active M365-named contracts on top of everything else this route already
+does made the page fail outright (500, no data) rather than merely slow.
+Not re-added yet; see this package's own git history for the attempt.

@@ -35,6 +35,13 @@ let activeRender = null;
 // dimension's cached data, since each was loaded under the old setting.
 let showInactive = false;
 
+// "No Contracts" checkbox, default unticked -- a flip, not a third "show
+// everyone" state: unticked (default) shows clients WITH an active
+// contract (the page's original behaviour); ticked flips to clients with
+// NO active contracts. Module scope for the same "survives a re-mount"
+// reason as showInactive above.
+let noContracts = false;
+
 const TABS = [
   { key: 'classification', label: 'By Classification' },
   { key: 'marketSegment', label: 'By Market Segment' },
@@ -78,6 +85,9 @@ export function mount(container) {
       <label class="inline-checkbox-label">
         <input type="checkbox" id="show-inactive-input" /> Show Inactive Clients
       </label>
+      <label class="inline-checkbox-label">
+        <input type="checkbox" id="no-contracts-input" /> No Contracts
+      </label>
     </div>
     <p id="status" class="status">Loading...</p>
     <div id="summary" class="summary" hidden></div>
@@ -89,6 +99,8 @@ export function mount(container) {
   const searchInput = container.querySelector('#search-input');
   const showInactiveInput = container.querySelector('#show-inactive-input');
   showInactiveInput.checked = showInactive;
+  const noContractsInput = container.querySelector('#no-contracts-input');
+  noContractsInput.checked = noContracts;
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
@@ -127,6 +139,12 @@ export function mount(container) {
     load();
   });
 
+  noContractsInput.addEventListener('change', () => {
+    noContracts = noContractsInput.checked;
+    for (const key of Object.keys(lastDataByDimension)) lastDataByDimension[key] = null;
+    load();
+  });
+
   refreshButton.addEventListener('click', () => load(true));
 
   async function load(force) {
@@ -138,7 +156,7 @@ export function mount(container) {
     resultsEl.innerHTML = '';
 
     try {
-      const res = await fetch(`/api/classification-summary?dimension=${encodeURIComponent(activeDimension)}${showInactive ? '&showInactive=true' : ''}`);
+      const res = await fetch(`/api/classification-summary?dimension=${encodeURIComponent(activeDimension)}${showInactive ? '&showInactive=true' : ''}${noContracts ? '&noContracts=true' : ''}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastDataByDimension[data.dimension] = data;
@@ -160,7 +178,7 @@ export function mount(container) {
     const expanded = expandedByDimension[data.dimension];
 
     summaryEl.hidden = false;
-    summaryEl.innerHTML = `<strong>${data.totalCompanies}</strong> ${data.showInactive ? '' : 'active '}client${data.totalCompanies === 1 ? '' : 's'}${data.showInactive ? ' (including inactive)' : ''} across ${groups.length} group${groups.length === 1 ? '' : 's'}${term.trim() ? ` matching "${escapeHtml(term.trim())}"` : ''}`;
+    summaryEl.innerHTML = `<strong>${data.totalCompanies}</strong> ${data.showInactive ? '' : 'active '}client${data.totalCompanies === 1 ? '' : 's'}${data.showInactive ? ' (including inactive)' : ''} ${data.noContracts ? 'with no active contracts' : 'with an active contract'} across ${groups.length} group${groups.length === 1 ? '' : 's'}${term.trim() ? ` matching "${escapeHtml(term.trim())}"` : ''}`;
 
     if (groups.length === 0) {
       resultsEl.innerHTML = '<p class="status">No groups match.</p>';
@@ -212,15 +230,17 @@ export function mount(container) {
     return wrap;
   }
 
-  // Client Name, Classification, Market Segment, Primary Contact -- by
-  // request, the SAME 4 columns on every tab regardless of which dimension
-  // it's grouped by (so e.g. "By Classification" still shows each client's
-  // own Classification column, even though that's also the grouping key).
+  // Client Name, Classification, Market Segment, Primary Contact,
+  // Contracts -- by request, the SAME columns on every tab regardless of
+  // which dimension it's grouped by (so e.g. "By Classification" still
+  // shows each client's own Classification column, even though that's
+  // also the grouping key). Contracts is the count of this client's own
+  // active contracts.
   function clientsTableHtml(companies) {
     return `
       <table>
         <thead>
-          <tr><th>Client Name</th><th>Classification</th><th>Market Segment</th><th>Primary Contact</th></tr>
+          <tr><th>Client Name</th><th>Classification</th><th>Market Segment</th><th>Primary Contact</th><th>Contracts</th></tr>
         </thead>
         <tbody>
           ${companies
@@ -231,6 +251,7 @@ export function mount(container) {
               <td>${escapeHtml(c.classification)}</td>
               <td>${escapeHtml(c.marketSegment)}</td>
               <td>${escapeHtml(c.primaryContactName)}</td>
+              <td>${c.contractCount}</td>
             </tr>`
             )
             .join('')}
