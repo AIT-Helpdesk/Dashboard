@@ -368,7 +368,10 @@ async function runFullPull() {
     }
   }
 
-  const verdict = siteDown.length > 0 || tier2.some((t) => t.signals.length) ? 'RED' : siteOutage.length || isolated.length || recurrence.some((r) => r.pattern === 'flapping') ? 'AMBER' : 'GREEN';
+  // RED/WARNING/GREEN, not the more conventional RAG "AMBER" -- by
+  // request, to avoid the badge's own displayed text reading as a
+  // (coincidental) reference to a real person on this team named Amber.
+  const verdict = siteDown.length > 0 || tier2.some((t) => t.signals.length) ? 'RED' : siteOutage.length || isolated.length || recurrence.some((r) => r.pattern === 'flapping') ? 'WARNING' : 'GREEN';
 
   const report = {
     generatedAt: new Date(startedAt).toISOString(),

@@ -12925,10 +12925,10 @@ tr.accrued-time-yellow-row th {
   background: #c0392b;
   color: #fff;
 }
-.mp-verdict--amber {
+.mp-verdict--warning {
   border-left-color: #d68910;
 }
-.mp-verdict--amber .mp-verdict-badge {
+.mp-verdict--warning .mp-verdict-badge {
   background: #d68910;
   color: #fff;
 }
