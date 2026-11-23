@@ -25,6 +25,23 @@ router.use(express.json());
 const KNOWN_TEAM_VALUES = new Set(['serviceDesk', 'professionalServices', 'leadership']);
 const VALID_SEVERITIES = new Set(['info', 'warning', 'critical']);
 
+// Names to leave off the "Acknowledged"/"Hasn't acknowledged yet" lists
+// entirely, by request -- comma-separated exact Entra display names in
+// .env, same ADMIN_FULL_ACCESS/TRACKER_MANAGER format/matching convention
+// (@dashboard/shell/registry.js's own adminFullAccessNames()) rather than
+// a new one-off parsing shape. Doesn't affect whether that person's own
+// pop-up still asks them to acknowledge -- only these two display lists.
+function ackIgnoreNames() {
+  return (process.env.ANNOUNCEMENT_ACK_IGNORE || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+function isAckIgnored(name) {
+  const n = (name || '').trim().toLowerCase();
+  return !!n && ackIgnoreNames().includes(n);
+}
+
 // Resources.licenseType 7 is "API User" -- same real fact @dashboard/
 // accrued-time's own fetchAccrualResources() already relies on -- excluded
 // here too, since a service account was never going to acknowledge
@@ -253,14 +270,20 @@ router.get('/:id/acknowledgements', async (req, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid announcement id.' });
   const announcement = getAnnouncement(id);
   if (!announcement) return res.status(404).json({ error: 'Announcement not found.' });
-  const acknowledgements = listAcknowledgements(id);
+  const allAcknowledgements = listAcknowledgements(id);
+  // ANNOUNCEMENT_ACK_IGNORE (see ackIgnoreNames() above) -- applied to both
+  // lists below, not to ackedEmails itself, so an ignored person's own
+  // acknowledgement still counts normally everywhere else (e.g.
+  // hasAcknowledged()'s own per-user pop-up gating); they're just left off
+  // these two display lists.
+  const acknowledgements = allAcknowledgements.filter((a) => !isAckIgnored(a.name));
   try {
     const targets = JSON.parse(announcement.targets_json || '[]');
     const client = await getClient();
     const eligible = await fetchEligibleUsers(client, targets);
-    const ackedEmails = new Set(acknowledgements.map((a) => a.email));
+    const ackedEmails = new Set(allAcknowledgements.map((a) => a.email));
     const notAcknowledged = eligible
-      .filter((u) => u.email && !ackedEmails.has(u.email))
+      .filter((u) => u.email && !ackedEmails.has(u.email) && !isAckIgnored(u.name))
       .map((u) => ({ name: u.name, email: u.email }))
       .sort((a, b) => a.name.localeCompare(b.name));
     res.json({ acknowledgements, notAcknowledged });
