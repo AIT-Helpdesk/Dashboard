@@ -198,7 +198,18 @@ function mapAlert(a) {
     message: a.alertContext?.description || a.diagnostics || null,
     deviceUid: a.alertSourceInfo?.deviceUid || null,
     deviceName: a.alertSourceInfo?.deviceName || 'Unknown device',
+    siteUid: a.alertSourceInfo?.siteUid || null,
     siteName: a.alertSourceInfo?.siteName || '—',
+    // Additive -- confirmed live on both /open and /resolved (same shape).
+    // Morning Pulse needs all four: muted (jump-the-queue), ticketNumber
+    // (null/empty both mean "no ticket"), and resolvedBy/resolvedOn (only
+    // ever present on a resolved alert) to tell a monitor that cleared
+    // itself ("CAG"/"AUTORESOLVER", case-insensitive) from one a human
+    // resolved, and to measure how long an incident actually lasted.
+    muted: Boolean(a.muted),
+    ticketNumber: a.ticketNumber || null,
+    resolvedBy: a.resolvedBy || null,
+    resolvedOn: a.resolvedOn || null,
     // What KIND of alert this is (e.g. "perf_disk_usage_ctx",
     // "endpoint_security_threat_ctx", "eventlog_ctx") -- confirmed live on
     // a REAL raw alert object this session: it's a class discriminator
@@ -232,6 +243,22 @@ function mapAlert(a) {
 async function fetchRawOpenAlerts() {
   const rawAlerts = await fetchAllPages('/v2/account/alerts/open', {}, 'alerts', MAX_ALERT_PAGES);
   const hitSafetyCap = rawAlerts.length >= MAX_ALERT_PAGES * 250;
+  return { alerts: rawAlerts.map(mapAlert), hitSafetyCap };
+}
+
+// Account-wide resolved alerts, same shape/pagination as fetchRawOpenAlerts()
+// above -- confirmed live this session that /v2/account/alerts/resolved is
+// a real, working, genuinely account-wide endpoint (unlike the per-site
+// open|resolved pair above, which needs a siteUid). Added for Morning
+// Pulse's own "what flapped overnight" pass -- most disk dips, backup
+// pauses and brief offline/online flaps resolve within minutes, so they
+// only ever show up here, never in the open-alerts pull. Same safety-cap
+// reasoning as fetchRawOpenAlerts(); callers should bound this further by
+// timestamp themselves (this account's full resolved history is far too
+// much to ever want unfiltered).
+async function fetchRawResolvedAlerts(maxPages = MAX_ALERT_PAGES) {
+  const rawAlerts = await fetchAllPages('/v2/account/alerts/resolved', {}, 'alerts', maxPages);
+  const hitSafetyCap = rawAlerts.length >= maxPages * 250;
   return { alerts: rawAlerts.map(mapAlert), hitSafetyCap };
 }
 
@@ -725,6 +752,7 @@ module.exports = {
   getDeviceDetails,
   getOpenAlerts,
   fetchRawOpenAlerts,
+  fetchRawResolvedAlerts,
   getAllDevices,
   getAllSites,
   getDeviceAudit,

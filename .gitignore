@@ -71,6 +71,10 @@ packages/domain-itglue-gap/data.db
 packages/domain-itglue-gap/data.db-shm
 packages/domain-itglue-gap/data.db-wal
 
+# Same reasoning, for morning-pulse's own run.js -- last-run.json IS the
+# report itself (status.js), runtime state, not source.
+packages/morning-pulse/last-run.json
+
 # Same reasoning, for Report Ingest's own runtime state (which SharePoint
 # items have already been processed, plus the last run's own result) -- see
 # packages/meeting-prep/ingest.js.

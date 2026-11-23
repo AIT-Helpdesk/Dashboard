@@ -1,97 +1,189 @@
 const express = require('express');
-const { getClient, listAll, getCompanyUrl, getPicklistLabels, resolveCompanyName, mapWithConcurrency } = require('@dashboard/autotask-client');
+const { getClient, listAll, getCompanyUrl, getPicklistLabels, fetchByFieldIn, matchesWildcard } = require('@dashboard/autotask-client');
 
 // companyType picklist codes (Autotask-wide, not org-specific config): 1 =
 // Customer, 3 = Prospect -- same "clients" definition Client Details uses.
 const CUSTOMER_OR_PROSPECT_TYPES = [1, 3];
 
+// Contracts.status -- confirmed live (@dashboard/contract-services' own
+// buildActiveContracts() comment): 1 = "In Effect", 3 = "Terminated". Only
+// in-effect contracts count for the Contract Name/Service tabs -- a client's
+// historical/cancelled contract isn't something they currently HAVE.
+const CONTRACT_STATUS_IN_EFFECT = 1;
+
+// "Referrer Organisation" -- a real Companies UDF, confirmed live with
+// actual data (468 of 1029 active companies have it set) -- read the same
+// way every other Companies UDF on this dashboard is (c.userDefinedFields,
+// included by default on every bulk list/query result, no special
+// include-param needed -- see @dashboard/autotask-client's own
+// getCompanyUdfValueToNameMap() comment for that same confirmed behaviour).
+// NOT a field on Opportunities -- that was checked first and was a dead
+// end (zero real usage across 2852 opportunities); this is the real one.
+const REFERRER_UDF_NAME = 'Referrer Organisation';
+function referrerOrganisation(company) {
+  const udf = (company.userDefinedFields || []).find((u) => u.name === REFERRER_UDF_NAME);
+  return udf?.value?.trim() || null;
+}
+
+const DIMENSIONS = new Set(['classification', 'marketSegment', 'referrer', 'contractName', 'service']);
+
+function contactName(contact) {
+  if (!contact) return null;
+  return [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim() || null;
+}
+
+// Groups a plain value (classification/marketSegment/referrer) straight off
+// each enriched row -- one group per distinct value, a company can only
+// ever land in exactly one.
+function groupByValue(rows, valueFn, noValueLabel) {
+  const map = new Map();
+  for (const row of rows) {
+    const key = valueFn(row) || noValueLabel;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(row);
+  }
+  return [...map.entries()].map(([name, companies]) => ({ name, companies }));
+}
+
+// Groups by a MEMBERSHIP relation (a company can belong to several groups at
+// once, e.g. holding 3 differently-named active contracts) -- `memberships`
+// is a flat `{ companyId, key }[]`, deduplicated per group via a Set so a
+// company with the same key from two different contracts/services only
+// shows once in that group's own list.
+function groupByMembership(enrichedByCompanyId, memberships) {
+  const map = new Map(); // key -> Set<companyId>
+  for (const { companyId, key } of memberships) {
+    if (companyId == null || !key) continue;
+    if (!map.has(key)) map.set(key, new Set());
+    map.get(key).add(companyId);
+  }
+  return [...map.entries()].map(([name, companyIdSet]) => ({
+    name,
+    companies: [...companyIdSet].map((id) => enrichedByCompanyId.get(id)).filter(Boolean),
+  }));
+}
+
 const router = express.Router();
 
 router.get('/', async (req, res) => {
+  const dimension = req.query.dimension || 'classification';
+  if (!DIMENSIONS.has(dimension)) {
+    return res.status(400).json({ error: `Query param "dimension" must be one of: ${[...DIMENSIONS].join(', ')}.` });
+  }
+  // Wildcard applied to the GROUP NAME, by request ("allow wildcard entry to
+  // limit search or retrieve all") -- an empty q matches every group
+  // (matchesWildcard()'s own "no term = always true" behaviour), so leaving
+  // it blank is how "retrieve all" works, not a separate code path.
+  const q = (req.query.q || '').trim();
+  // "Show Inactive Clients" checkbox (default unticked) -- same query param
+  // name and same "no isActive filter at all when ticked" convention
+  // @dashboard/client-contacts' own server.js already uses.
+  const showInactive = req.query.showInactive === 'true';
+
   try {
     const client = await getClient();
 
-    // parentCompanyID -- a real Autotask field (integer, references another
-    // Company), confirmed via a live entityInformation/fields lookup. Pulled
-    // in for the chart's own no-parent/has-parent split below; the field
-    // list here doesn't otherwise restrict what listAll() returns (it
-    // returns full company objects regardless), this is just documenting
-    // which field this route additionally depends on now.
-    const [companies, classificationLabels] = await Promise.all([
-      listAll(client.companies, [
-        { op: 'eq', field: 'isActive', value: true },
-        { op: 'in', field: 'companyType', value: CUSTOMER_OR_PROSPECT_TYPES },
-      ]),
-      getPicklistLabels(client.companies, 'classification'),
+    const companies = await listAll(client.companies, [
+      ...(showInactive ? [] : [{ op: 'eq', field: 'isActive', value: true }]),
+      { op: 'in', field: 'companyType', value: CUSTOMER_OR_PROSPECT_TYPES },
     ]);
+    const companyIds = companies.map((c) => c.id);
 
-    // Grouped by classification, WITH each group's company list attached -- the
-    // whole point is that clicking a bar shows that group's clients with no
-    // further request, so the list has to already be in this payload.
-    const companiesByClassification = new Map(); // code (or null) -> Company[]
-    for (const c of companies) {
-      const key = c.classification ?? null;
-      if (!companiesByClassification.has(key)) companiesByClassification.set(key, []);
-      companiesByClassification.get(key).push(c);
+    const [classificationLabels, marketSegmentLabels, primaryContacts] = await Promise.all([
+      getPicklistLabels(client.companies, 'classification'),
+      getPicklistLabels(client.companies, 'marketSegmentID'),
+      // Scoped to just the active companies (chunked `in` filter), same
+      // "no need to fetch every contact account-wide" convention Client
+      // Details' own server.js already uses for this exact lookup.
+      fetchByFieldIn(client.contacts, 'companyID', companyIds, [{ op: 'eq', field: 'primaryContact', value: true }]),
+    ]);
+    // A company could in theory have more than one contact flagged primary
+    // (Autotask doesn't enforce uniqueness) -- first one found wins, same
+    // convention Client Details already follows.
+    const primaryContactByCompanyId = new Map();
+    for (const c of primaryContacts) {
+      if (!primaryContactByCompanyId.has(c.companyID)) primaryContactByCompanyId.set(c.companyID, c);
     }
 
-    const groups = [];
-    for (const [code, group] of companiesByClassification) {
-      const rows = [];
-      for (const c of group) {
-        rows.push({
-          id: c.id,
-          companyName: c.companyName,
-          companyUrl: await getCompanyUrl(c.id),
-          state: c.state || null,
-          phone: c.phone || null,
-          // By request -- the chart splits each classification's bar into a
-          // no-parent/has-parent stack, and the drilldown filters on this
-          // same flag when a bar segment (rather than the row's own title)
-          // is clicked. See CUSTOMER_OR_PROSPECT_TYPES comment above for why
-          // parentCompanyID is queryable on every row here regardless of
-          // whether listAll() was asked to select it explicitly.
-          hasParent: !!c.parentCompanyID,
-          // Resolved to a real name below, once every distinct parent id
-          // across every group is known -- kept as the raw id for now.
-          parentCompanyID: c.parentCompanyID || null,
-        });
-      }
-      rows.sort((a, b) => a.companyName.localeCompare(b.companyName));
-      const noParentCount = rows.filter((r) => !r.hasParent).length;
-      groups.push({
-        classification: code === null ? 'Unclassified' : classificationLabels.get(code) || `#${code}`,
-        count: rows.length,
-        noParentCount,
-        parentCount: rows.length - noParentCount,
-        companies: rows,
+    // One shared, enriched row per active company -- the SAME 4 display
+    // columns every tab's own client list shows (Client Name,
+    // Classification, Market Segment, Primary Contact), by request,
+    // regardless of which dimension that tab is actually grouped by.
+    const enrichedByCompanyId = new Map();
+    for (const c of companies) {
+      enrichedByCompanyId.set(c.id, {
+        id: c.id,
+        companyName: c.companyName,
+        isActive: c.isActive !== false,
+        companyUrl: await getCompanyUrl(c.id),
+        classification: c.classification != null ? classificationLabels.get(c.classification) || `#${c.classification}` : null,
+        marketSegment: c.marketSegmentID != null ? marketSegmentLabels.get(c.marketSegmentID) || `#${c.marketSegmentID}` : null,
+        primaryContactName: contactName(primaryContactByCompanyId.get(c.id)),
+        referrer: referrerOrganisation(c),
       });
     }
-    groups.sort((a, b) => b.count - a.count || a.classification.localeCompare(b.classification));
+    const enrichedRows = [...enrichedByCompanyId.values()];
 
-    // Resolve every distinct parent company id (across every group at once,
-    // not per-group) to its real name -- by request, shown as its own
-    // "Parent Name" column in the drilldown. resolveCompanyName() caches
-    // per id for the life of this server process, so most of these come
-    // back instantly on a second load; mapWithConcurrency (bounded at 5,
-    // same convention already used for per-ticket Autotask lookups
-    // elsewhere on this dashboard) keeps a first cold load from bursting
-    // Autotask's own rate limit if there are many distinct parents.
-    const distinctParentIds = [...new Set(groups.flatMap((g) => g.companies.map((c) => c.parentCompanyID).filter(Boolean)))];
-    const parentNamesById = new Map();
-    await mapWithConcurrency(distinctParentIds, 5, async (id) => {
-      parentNamesById.set(id, await resolveCompanyName(client, id));
-    });
-    for (const g of groups) {
-      for (const c of g.companies) {
-        c.parentCompanyName = c.parentCompanyID ? parentNamesById.get(c.parentCompanyID) || null : null;
-        delete c.parentCompanyID; // the client only needs the resolved name, not the raw id
+    let groups;
+    if (dimension === 'classification') {
+      groups = groupByValue(enrichedRows, (r) => r.classification, 'Unclassified');
+    } else if (dimension === 'marketSegment') {
+      groups = groupByValue(enrichedRows, (r) => r.marketSegment, 'No Market Segment');
+    } else if (dimension === 'referrer') {
+      groups = groupByValue(enrichedRows, (r) => r.referrer, 'No Referrer');
+    } else {
+      // Contract Name / Service both need real, currently-in-effect
+      // Contracts -- only fetched for these two dimensions, not on every
+      // request.
+      const contracts = await fetchByFieldIn(client.contracts, 'companyID', companyIds, [
+        { op: 'eq', field: 'status', value: CONTRACT_STATUS_IN_EFFECT },
+      ]);
+      if (dimension === 'contractName') {
+        groups = groupByMembership(
+          enrichedByCompanyId,
+          contracts.map((ct) => ({ companyId: ct.companyID, key: (ct.contractName || '').trim() || 'Unnamed Contract' }))
+        );
+      } else {
+        const contractIds = [...new Set(contracts.map((ct) => ct.id))];
+        const companyIdByContractId = new Map(contracts.map((ct) => [ct.id, ct.companyID]));
+        const [contractServices, services] = await Promise.all([
+          fetchByFieldIn(client.contractServices, 'contractID', contractIds),
+          // Active services only, by request -- same convention @dashboard/
+          // contract-services' own server.js already uses: a retired
+          // service definition isn't something a client "currently has".
+          listAll(client.services, [{ op: 'eq', field: 'isActive', value: true }]),
+        ]);
+        const serviceNameById = new Map(services.map((s) => [s.id, s.name]));
+        const memberships = contractServices.map((cs) => ({
+          companyId: companyIdByContractId.get(cs.contractID),
+          key: serviceNameById.get(cs.serviceID),
+        }));
+        groups = groupByMembership(enrichedByCompanyId, memberships);
       }
     }
 
+    groups = groups.filter((g) => matchesWildcard(g.name, q));
+    for (const g of groups) g.companies.sort((a, b) => a.companyName.localeCompare(b.companyName));
+    groups.sort((a, b) => b.companies.length - a.companies.length || a.name.localeCompare(b.name));
+
     res.json({
-      totalCount: companies.length,
-      groups,
+      dimension,
+      q,
+      showInactive,
+      totalCompanies: companies.length,
+      groups: groups.map((g) => ({
+        name: g.name,
+        count: g.companies.length,
+        companies: g.companies.map((c) => ({
+          id: c.id,
+          companyName: c.companyName,
+          isActive: c.isActive,
+          companyUrl: c.companyUrl,
+          classification: c.classification,
+          marketSegment: c.marketSegment,
+          primaryContactName: c.primaryContactName,
+        })),
+      })),
     });
   } catch (err) {
     console.error(err);

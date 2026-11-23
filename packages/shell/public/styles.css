@@ -6003,11 +6003,10 @@ tr.row-text-highlight-blue td {
   background: var(--border);
   border-radius: 4px;
   overflow: hidden;
-  /* flex, not the default inline layout, so classification-summary's own
-     two-segment stacked bars (see .cs-bar-fill below) lay their segments
-     out side-by-side rather than one below the other -- a block element's
-     normal stacking direction. A no-op for every other .bar-track user
-     still rendering just one plain .bar-fill child (ticket-dashboards-test),
+  /* flex, not the default inline layout -- lets a multi-segment stacked bar
+     lay its segments out side-by-side rather than one below the other (a
+     block element's normal stacking direction). A no-op for a .bar-track
+     user rendering just one plain .bar-fill child (ticket-dashboards-test),
      since flex with a single child sizes identically to block. */
   display: flex;
 }
@@ -6972,41 +6971,6 @@ tbody tr[draggable="true"] {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   font-size: 0.9rem;
-}
-
-/* Clients by Classification -- each bar is a stack of two clickable
-   segments (no parent company / has a parent company), not one solid
-   .bar-fill. No border-radius of their own -- .bar-track's own
-   overflow:hidden + border-radius already clips the stack's outer corners,
-   same as the .vbar-fill--critical/--medium pair does vertically. Real
-   <button>s (see client.js), so the usual button chrome is stripped. */
-.cs-bar-fill {
-  display: block;
-  height: 100%;
-  min-width: 3px;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-}
-.cs-bar-fill--no-parent {
-  background: var(--accent);
-}
-.cs-bar-fill--parent {
-  background: #8b5cf6; /* same purple TC Elite Rollout's "Issue" status / Workshop's "Next Up" already use */
-}
-.cs-bar-fill:hover {
-  filter: brightness(1.15);
-}
-.cs-bar-fill:focus-visible {
-  outline: 2px solid var(--fg);
-  outline-offset: -2px;
-}
-
-.cs-legend-swatch--no-parent {
-  background: var(--accent);
-}
-.cs-legend-swatch--parent {
-  background: #8b5cf6;
 }
 
 /* Vertical stacked bar chart -- Security Alerts' weekly chart (critical +
@@ -12930,4 +12894,64 @@ tr.accrued-time-yellow-row th {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* Morning Pulse's verdict banner -- RED/AMBER/GREEN, same binary "any is
+   worth flagging" color convention @dashboard/datto-rmm's own metricStatus()
+   already documents (danger reserved for an actually-firing problem, not a
+   percentage). A colored left border + faint tint, not a solid fill -- the
+   badge text itself carries the color, the banner is just its backdrop. */
+.mp-verdict {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--muted);
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  background: var(--surface-alt, rgba(0, 0, 0, 0.03));
+}
+.mp-verdict-badge {
+  font-weight: 700;
+  font-size: 1.1rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.mp-verdict--red {
+  border-left-color: #c0392b;
+}
+.mp-verdict--red .mp-verdict-badge {
+  background: #c0392b;
+  color: #fff;
+}
+.mp-verdict--amber {
+  border-left-color: #d68910;
+}
+.mp-verdict--amber .mp-verdict-badge {
+  background: #d68910;
+  color: #fff;
+}
+.mp-verdict--green {
+  border-left-color: #1e8449;
+}
+.mp-verdict--green .mp-verdict-badge {
+  background: #1e8449;
+  color: #fff;
+}
+.mp-verdict-headline {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+}
+.mp-verdict-meta {
+  margin: 0;
+  color: var(--muted);
+}
+.mp-list {
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+}
+.mp-coverage {
+  color: var(--muted);
+  margin-top: 1.5rem;
 }

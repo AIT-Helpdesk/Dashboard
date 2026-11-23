@@ -1,22 +1,91 @@
 # @dashboard/classification-summary
 
-Dashboard page: a horizontal bar chart, one bar per `Companies.classification` value, counting active clients. Click a bar to open that classification's client list below the chart (company name, state, phone) -- no extra request, since the full company list per group is already in the initial payload. No filters or date scoping -- a live snapshot, auto-loaded on open (with a Refresh button), unlike every other page on this dashboard, which waits for an explicit Search click. That's a deliberate difference, not an oversight: every other page has criteria to fill in first; this one doesn't, so there's nothing to wait for.
+Dashboard page: active clients, grouped by one of 5 real Autotask dimensions,
+one tab each -- By Classification, By Market Segment, By Referrer, By Contract
+Name, By Service. Each group starts collapsed (count only); click to expand
+its own client list. No date scoping -- a live snapshot, auto-loaded per tab
+(with a Refresh button), same "nothing to wait for" reasoning the original
+single-chart version of this page already had.
 
-- `client.js` - frontend module. Exports `id`, `label`, and `mount(container)`, picked up automatically by the shell.
-- `server.js` - Express router mounted by the shell at `/api/classification-summary`.
+- `client.js` - frontend module: tabs (reusing RMM Filter Checks' own
+  `.rmmf-tabs`/`.rmmf-tab` convention), a wildcard search box, and a
+  collapsible `.resource-group` per group (same `.resource-group-header--toggle`
+  convention Check Client's Datto device-type breakdown already uses).
+  Exports `id`, `label`, and `mount(container)`, picked up automatically by
+  the shell.
+- `server.js` - Express router mounted by the shell at
+  `/api/classification-summary?dimension=<key>&q=<wildcard>`.
+
+Supersedes the original page's own single bar chart (classification only,
+split by has-parent/no-parent) -- that chart and its drill-down are gone,
+replaced entirely by this tabbed design, by request.
 
 ## Scope
 
-Active companies only, restricted to `companyType` Customer (1) or Prospect (3) -- the same "clients" definition Client Details and Client Contacts use.
+Active companies only, restricted to `companyType` Customer (1) or Prospect
+(3) -- the same "clients" definition Client Details and Client Contacts use.
 
-## Classification bucketing
+## The 5 dimensions
 
-`Companies.classification` is a picklist field storing an integer code; the label is resolved via `getPicklistLabels()` in `@dashboard/autotask-client` (shared with Client Details / Client Contacts, cached). A company with no classification set at all falls into an "Unclassified" bucket rather than being dropped -- every active client is accounted for in one bar or another. Bars are sorted by count descending, so the largest groups lead.
+- **Classification** - `Companies.classification`, a picklist. Resolved via
+  `getPicklistLabels()` (shared with Client Details/Client Contacts, cached).
+- **Market Segment** - `Companies.marketSegmentID`, a picklist -- confirmed
+  live via a real `entityInformation/fields` lookup (17 real values on this
+  account: Healthcare, Financial, Real Estate, Services, ...).
+- **Referrer** - `Companies`' own `Referrer Organisation` User Defined Field,
+  read the same way every other Companies UDF on this dashboard is
+  (`c.userDefinedFields`, included by default on every bulk list/query
+  result -- no special include-param needed). Confirmed live with real,
+  substantial data: 468 of 1029 active companies have it set (real values
+  include "BNI Aurora", "BNI Affordable Staff", "BNCC", etc.). Opportunities'
+  own `leadSource` field and its `Referrer Organisation`/`Referrer Name`/
+  `Referrer Comment` UDFs were checked FIRST and ruled out -- confirmed live
+  that none of the 2852 real Opportunities on this account have any of those
+  set at all; the real, populated field turned out to live on Companies
+  instead, not Opportunities.
+- **Contract Name** - `Contracts.contractName`, scoped to contracts with
+  `status = 1` ("In Effect" -- confirmed live, same convention
+  `@dashboard/contract-services`' own `buildActiveContracts()` already
+  established; a terminated contract isn't something a client currently
+  has). A company holding several differently-named active contracts
+  appears once under EACH of those contract names, by request -- these are
+  membership groups, not a single-valued field the way Classification/
+  Market Segment/Referrer are.
+- **Service** - resolved via each company's active (`status = 1`) Contracts
+  -> `ContractServices` -> `Services.name` (active services only, same
+  `isActive` convention `@dashboard/contract-services` already uses for this
+  exact entity). Same "appears under every one they have" membership
+  reasoning as Contract Name.
 
-## Bar color
+A company with nothing set for Classification/Market Segment/Referrer falls
+into its own "Unclassified"/"No Market Segment"/"No Referrer" bucket rather
+than being dropped -- every active client is accounted for somewhere. There
+is no equivalent bucket for Contract Name/Service -- a company with zero
+active contracts (or zero services on those contracts) simply doesn't appear
+in any group for that dimension, since "has no contract" isn't itself a
+named group the way "has no classification set" is.
 
-Classification names are NOMINAL, not ordinal -- swapping their display order doesn't change what they mean (unlike, say, funnel stages or size tiers, where order carries meaning and would call for a one-hue lightness ramp). Per the dataviz skill's color-job rules, nominal categories that aren't being compared as identity-bearing series all take the *same* single accent hue; bar length already encodes the count, so shading each bar by its own magnitude would spend the color channel re-encoding what the length already shows. A distinct hue per classification would also have been the "generated 9th+ hue" anti-pattern for the ~15 classification values this Autotask instance has configured.
+## Wildcard search
 
-## Click-to-drill-down
+A blank search box returns every group ("retrieve all"); typing narrows
+which GROUP NAMES are shown (`*` leading/trailing wildcard, same convention
+`@dashboard/autotask-client`'s own `parseWildcard()`/`matchesWildcard()`
+established dashboard-wide) -- e.g. "Tech*" on the Classification tab shows
+only "Tech Cover Essentials"/"Tech Cover Elite". Filtered entirely
+client-side against whichever dimension's groups are already loaded (no
+extra request per keystroke) -- `client.js` duplicates a small local
+`matchesWildcard()` rather than sharing the server-only module across the
+browser/server boundary, same "copy the small shared logic" convention this
+dashboard already follows elsewhere (e.g. the widget-rendering functions in
+`report-widgets.js`).
 
-Each bar is a real `<button>` (not a `<div>` with a click handler), so it's keyboard-operable (Tab + Enter/Space) with a visible focus ring for free, no extra ARIA wiring beyond `aria-expanded` to track which bar is currently open. Clicking the open bar again closes the drill-down; clicking a different bar swaps to that classification's list. The drill-down table reuses the same `.resource-group` card styling as every other page's result tables.
+## Client list columns
+
+Client Name, Classification, Market Segment, Primary Contact -- the SAME 4
+columns on every tab, by request, regardless of which dimension that tab is
+actually grouped by (so e.g. the Classification tab still shows each row's
+own Classification column, even though that's also the grouping key).
+Primary Contact is the `Contacts` row (scoped to the matched companies, one
+query) with `primaryContact = true` set, same flag/convention Client
+Details already uses; first match wins if more than one contact somehow has
+it set (Autotask doesn't enforce uniqueness).

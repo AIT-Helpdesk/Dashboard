@@ -417,6 +417,76 @@ Register-ScheduledTask -TaskName "AmbientDomainItGlueGapSync" -Action $action -T
 Get-ScheduledTask -TaskName "AmbientDomainItGlueGapSync"
 ```
 
+## Setting up the Morning Pulse sync (Windows Task Scheduler)
+
+`@dashboard/morning-pulse` (see its own README) is a brand-new workspace
+package -- run `npm install` after pulling, even if you'd normally judge it
+unnecessary for a given update, so it's actually linked before the
+scheduled task tries to run it. Unlike every job above, this one needs no
+`.env` of its own and no one-time OAuth connect step -- it reuses the
+dashboard's existing `DATTO_API_KEY`/`DATTO_API_SECRET`/`DATTO_API_URL`
+from the repo-root `.env` (the same ones `@dashboard/datto-rmm`'s own page
+already uses), which is already in place on production.
+
+Daily, early morning -- the page only ever shows the last scheduled run
+(see the README's "How it runs"), so this has to land before the team's
+own morning starts. 6am chosen to be well clear of the overnight window the
+report itself covers (previous day 18:00 AEST onward); change `-At` to
+taste.
+
+### 1. Create the scheduled task
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\apps\autotask-dashboard-git\logs | Out-Null
+
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c node packages\morning-pulse\run.js > logs\morning-pulse.log 2>&1' `
+  -WorkingDirectory "C:\apps\autotask-dashboard-git"
+
+$trigger = New-ScheduledTaskTrigger -Daily -At 6am
+
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "AmbientMorningPulse" -Action $action -Trigger $trigger -Settings $settings `
+  -Description "Daily 6am: Datto RMM overnight briefing for the Morning Pulse dashboard page"
+```
+
+Runs as SYSTEM by default (no `-User` specified), same reasoning as every
+other scheduled job above. The log is overwritten each run (`>` not `>>`)
+-- `last-run.json` is the real durable record the dashboard page reads; the
+log is only for diagnosing a failed run.
+
+### 2. Verify it actually works before waiting for the first real run
+
+```powershell
+Start-ScheduledTask -TaskName "AmbientMorningPulse"
+Start-Sleep -Seconds 20
+Get-ScheduledTaskInfo -TaskName "AmbientMorningPulse"   # LastTaskResult: 0 means success
+Get-Content C:\apps\autotask-dashboard-git\logs\morning-pulse.log
+Get-Content C:\apps\autotask-dashboard-git\packages\morning-pulse\last-run.json
+```
+
+Then open the Morning Pulse page itself and confirm it renders the same
+report, not "No run yet".
+
+**Changing the schedule later**: same real gotcha as every job above --
+`Set-ScheduledTask -Trigger` doesn't reliably swap a trigger in place, so
+unregister and re-register together as one paste, then re-run the
+`Get-ScheduledTask` verify step immediately to confirm it actually exists:
+
+```powershell
+Unregister-ScheduledTask -TaskName "AmbientMorningPulse" -Confirm:$false
+
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c node packages\morning-pulse\run.js > logs\morning-pulse.log 2>&1' `
+  -WorkingDirectory "C:\apps\autotask-dashboard-git"
+$trigger = New-ScheduledTaskTrigger -Daily -At 6am
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "AmbientMorningPulse" -Action $action -Trigger $trigger -Settings $settings `
+  -Description "Daily 6am: Datto RMM overnight briefing for the Morning Pulse dashboard page"
+
+Get-ScheduledTask -TaskName "AmbientMorningPulse"
+```
+
 ## One-time data sync -- product_mappings' real Microsoft SKU GUIDs
 
 Needed once, the first deploy after this was added (not part of the normal "Updating later" flow below -- `git pull` brings the CODE change, `db.js`'s own `migrateAddMsSkuId()` adds the empty COLUMN automatically on next start, but the real per-row DATA (every SKU's actual `ms_sku_id`, a few corrected/new rows) only exists in this chat session and has to be applied by hand, same reasoning as every other real per-environment `data.db` on this dashboard):
