@@ -3,6 +3,16 @@ const dnsCallbacks = require('dns');
 const dns = dnsCallbacks.promises;
 const net = require('net');
 const { tppFindDnsRecords, tppRecordsToNsAndEntries, tppGetDomainWhois } = require('@dashboard/tpp-client');
+const { getClient, listAll, getCompanyUrl } = require('@dashboard/autotask-client');
+// Reused, not duplicated -- the exact same account-wide "every IT Glue
+// domain, grouped by its own organisation" bulk fetch @dashboard/domain-
+// itglue-gap's own job.js already does for its "wrong client" check, see
+// that file's own comment. Confirmed live that IT Glue's own `/domains`
+// endpoint ignores a `filter[name]` param entirely (returns the same first
+// page regardless of its value) -- there's no server-side way to ask IT
+// Glue for just one domain, so this fetches everything (694 real domains,
+// one page at page[size]=1000) and matches client-side, same as job.js.
+const { fetchAllDomainsGroupedByOrg, normalizeDomainName, organizationUrlById } = require('@dashboard/domain-itglue-gap/itglue-domains.js');
 
 // Confirmed the hard way: crt.sh (below) has a real AAAA record, and this
 // network blackholes outbound IPv6 -- Node's fetch() tried IPv6 first every
@@ -731,6 +741,40 @@ async function getRegistrationInfo(domain) {
   return { registrar, expiryDate, status, registrantName, registrantId, contactName, contactEmail, nameServers, source: tppWhois ? 'tpp' : 'whois' };
 }
 
+// Resolves this domain's own Autotask Client, by request ("At the top
+// after the domain name, put the Autotask Client name in brackets. Get
+// the Autotask Client by looking up the Domain in the IT Glue Domain
+// Tracker") -- looked up via IT Glue's own Domain Tracker (which
+// organisation this domain currently sits under in IT Glue), then matched
+// to a real Autotask Company by exact (case-insensitive) name, same
+// "never guess past an exact match" convention @dashboard/domain-itglue-
+// gap already follows for its own "wrong client" check. A domain found in
+// IT Glue but whose organisation name doesn't match any real Autotask
+// Company still gets the IT Glue link (just no Autotask one) rather than
+// being dropped entirely -- same "show what's real, don't guess the rest"
+// handling as that package's own gap checks. Never throws -- a total
+// failure here just means the bracketed name doesn't render (see
+// clientHtml on the client), same "degrade, don't fail the whole page"
+// treatment every other best-effort lookup in this file already gets.
+async function resolveAutotaskClientForDomain(domain) {
+  try {
+    const itGlueDomains = await fetchAllDomainsGroupedByOrg();
+    const target = normalizeDomainName(domain);
+    const match = itGlueDomains.find((d) => normalizeDomainName(d.name) === target);
+    if (!match || !match.organizationName) return null;
+
+    const itGlueUrl = organizationUrlById(match.organizationId);
+    const client = await getClient();
+    const companies = await listAll(client.companies, [{ op: 'eq', field: 'companyName', value: match.organizationName }]);
+    const company = companies[0];
+    if (!company) return { name: match.organizationName, autotaskUrl: null, itGlueUrl };
+    return { name: company.companyName, autotaskUrl: await getCompanyUrl(company.id), itGlueUrl };
+  } catch (err) {
+    console.error(`DNS Check: Autotask Client resolution failed for "${domain}":`, err.message);
+    return null;
+  }
+}
+
 router.get('/', async (req, res) => {
   const domain = normalizeDomain(req.query.domain);
   if (!domain) return res.status(400).json({ error: 'A domain is required.' });
@@ -748,6 +792,11 @@ router.get('/', async (req, res) => {
   // Cloudflare and TPP checks below (see nsMatchesLiveDelegation) plus the
   // guess-based path itself, rather than re-resolved for each.
   const liveNsPromise = lookup(dns.resolveNs, domain);
+  // Kicked off immediately alongside the above, same "wholly separate
+  // question, no reason to wait in line" reasoning -- included in every
+  // response branch below (Cloudflare/TPP's own early returns, and the
+  // final guess-based one), same as registrationPromise.
+  const autotaskClientPromise = resolveAutotaskClientForDomain(domain);
 
   try {
     const cfMatch = await cloudflareFindZone(domain).catch((err) => {
@@ -776,6 +825,7 @@ router.get('/', async (req, res) => {
             soa,
             certTransparency: null,
             registration: await registrationPromise,
+            autotaskClient: await autotaskClientPromise,
           });
         }
         console.error(
@@ -817,6 +867,7 @@ router.get('/', async (req, res) => {
           soa: { ok: false, code: 'ENODATA', message: 'No SOA record' },
           certTransparency: null,
           registration: await registrationPromise,
+          autotaskClient: await autotaskClientPromise,
         });
       }
       console.error(
@@ -975,7 +1026,19 @@ router.get('/', async (req, res) => {
     // own section at the TOP (next to the hoster guess, by request), soa in
     // its own section at the bottom -- rather than as just more rows in the
     // flat table.
-    res.json({ domain, asOf: new Date().toISOString(), source: 'guess', hoster, ns, entries, notFound, soa, certTransparency, registration: await registrationPromise });
+    res.json({
+      domain,
+      asOf: new Date().toISOString(),
+      source: 'guess',
+      hoster,
+      ns,
+      entries,
+      notFound,
+      soa,
+      certTransparency,
+      registration: await registrationPromise,
+      autotaskClient: await autotaskClientPromise,
+    });
   } catch (err) {
     console.error('DNS Check: lookup failed for', domain, '--', err.message);
     res.status(500).json({ error: err.message });

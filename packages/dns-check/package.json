@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@dashboard/tpp-client": "*",
+    "@dashboard/autotask-client": "*",
+    "@dashboard/domain-itglue-gap": "*",
     "express": "^4.19.2"
   }
 }

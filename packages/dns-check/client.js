@@ -45,6 +45,22 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+// The Autotask Client name in brackets, right after the domain, by
+// request -- resolved server-side (server.js's own
+// resolveAutotaskClientForDomain(), via IT Glue's own Domain Tracker).
+// Nothing rendered at all when the domain wasn't found in IT Glue; a
+// plain button (.link-button -- same dashboard-wide "looks like a link,
+// not a real <a>" convention) when it was, since clicking it opens a
+// choice of Autotask/IT Glue rather than navigating straight there (see
+// openClientMenu() below). `autotaskUrl` can be null even when `name` is
+// set -- the IT Glue organisation itself didn't match any real Autotask
+// Company by exact name -- so the button still shows, just offering only
+// the IT Glue option once clicked.
+function clientBracketHtml(client) {
+  if (!client || !client.name) return '';
+  return ` (<button type="button" class="link-button dns-check-client-btn" data-autotask-url="${escapeHtml(client.autotaskUrl || '')}" data-itglue-url="${escapeHtml(client.itGlueUrl || '')}">${escapeHtml(client.name)}</button>)`;
+}
+
 // By request -- bolds every occurrence of "easydmarc" (case-insensitive,
 // original casing preserved) wherever it shows up in the page's own text,
 // AND colours it the dashboard's established warning-orange (.dns-check-
@@ -158,6 +174,64 @@ export function mount(container) {
     if (propagationBtn) handlePropagationClick(propagationBtn);
   });
 
+  summaryEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.dns-check-client-btn');
+    if (btn) openClientMenu(btn);
+  });
+
+  // "(Client Name)" popup -- same floating-menu shell (.entry-popup-menu/
+  // .entry-popup-menu-item, shared styles.css) and outside-click/Escape
+  // dismissal convention @dashboard/service-calls' own openServiceCallMenu()
+  // established, reused here rather than reinvented. Only one option shown
+  // when the IT Glue organisation didn't match a real Autotask Company
+  // (autotaskUrl null -- see clientBracketHtml()'s own comment).
+  let openClientMenuEl = null;
+  function closeClientMenu() {
+    if (!openClientMenuEl) return;
+    openClientMenuEl.remove();
+    openClientMenuEl = null;
+    document.removeEventListener('click', onClientMenuOutsideClick, true);
+    document.removeEventListener('keydown', onClientMenuKeydown);
+  }
+  function onClientMenuOutsideClick(e) {
+    if (openClientMenuEl && !openClientMenuEl.contains(e.target)) closeClientMenu();
+  }
+  function onClientMenuKeydown(e) {
+    if (e.key === 'Escape') closeClientMenu();
+  }
+  function openInPopupWindow(url) {
+    window.open(url, '_blank', 'noopener,noreferrer,width=1200,height=900');
+  }
+  function openClientMenu(anchorEl) {
+    closeClientMenu();
+    const autotaskUrl = anchorEl.dataset.autotaskUrl;
+    const itglueUrl = anchorEl.dataset.itglueUrl;
+
+    const menu = document.createElement('div');
+    menu.className = 'entry-popup-menu';
+    menu.innerHTML = `
+      ${autotaskUrl ? '<button type="button" class="entry-popup-menu-item" data-target="autotask">Open in Autotask</button>' : ''}
+      ${itglueUrl ? '<button type="button" class="entry-popup-menu-item" data-target="itglue">Open in IT Glue</button>' : ''}
+    `;
+    document.body.appendChild(menu);
+    openClientMenuEl = menu;
+
+    const rect = anchorEl.getBoundingClientRect();
+    menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
+    menu.style.left = `${rect.left + window.scrollX}px`;
+
+    const autotaskBtn = menu.querySelector('[data-target="autotask"]');
+    if (autotaskBtn) autotaskBtn.addEventListener('click', () => { openInPopupWindow(autotaskUrl); closeClientMenu(); });
+    const itglueBtn = menu.querySelector('[data-target="itglue"]');
+    if (itglueBtn) itglueBtn.addEventListener('click', () => { openInPopupWindow(itglueUrl); closeClientMenu(); });
+
+    // Deferred, not added synchronously -- otherwise the very click that
+    // opened this menu would immediately bubble up to document and close
+    // it again in the same tick.
+    setTimeout(() => document.addEventListener('click', onClientMenuOutsideClick, true), 0);
+    document.addEventListener('keydown', onClientMenuKeydown);
+  }
+
   async function load(domain, ctEnabled) {
     searchButton.disabled = true;
     statusEl.hidden = false;
@@ -199,7 +273,7 @@ export function mount(container) {
       return;
     }
 
-    summaryEl.innerHTML = `<span class="inline-subtext"><strong>${escapeHtml(data.domain)}</strong> -- as of ${formatDateTime(data.asOf)}</span>`;
+    summaryEl.innerHTML = `<span class="inline-subtext"><strong>${escapeHtml(data.domain)}</strong>${clientBracketHtml(data.autotaskClient)} -- as of ${formatDateTime(data.asOf)}</span>`;
 
     const tableHtml =
       data.entries.length > 0
