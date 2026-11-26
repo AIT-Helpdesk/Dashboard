@@ -14,6 +14,7 @@ const {
   excludeMonitoringAlerts,
 } = require('@dashboard/autotask-client');
 const { get: saasAlertsGet } = require('@dashboard/saasalerts-client');
+const { resolveOrganizationUrlByName } = require('@dashboard/itglue-client');
 const { findSaasAlertsCustomerId, buildInstalledServices } = require('./installed-services.js');
 
 // Company-level UDFs to surface next to Primary/Billing Contact, by request.
@@ -142,14 +143,17 @@ async function buildActiveContracts(client, company, classification) {
 
   // 2 blue "contract pills", by request -- which active contract (if any)
   // is this client's billing default, and which (if any) is its "Tech
-  // Cover Elite*" contract (the SAME wildcard-prefix match the warning
-  // above already uses). Shown here and on TC Elite Services (every TC
-  // Elite client at once) -- TC Elite Services builds the identical pair
-  // itself from its own batched contract fetch, not via this function
-  // (that page never resolves one company's Active Contracts section at
-  // all), but the two are deliberately the exact same rule.
+  // Cover Elite*" OR "Tech Cover Essentials*" contract (same wildcard-
+  // prefix matches the warnings above already use -- a client should be
+  // on exactly one of the two tiers, never both). Shown here and on TC
+  // Elite Services (every TC Elite client at once) -- TC Elite Services
+  // builds the identical pair itself from its own batched contract fetch,
+  // not via this function (that page never resolves one company's Active
+  // Contracts section at all), but the two are deliberately the exact
+  // same rule for the Elite side.
   const defaultContract = contracts.find((c) => c.isDefaultContract) || null;
   const eliteContract = contracts.find((c) => normalizeContractName(c.contractName).startsWith('TECH COVER ELITE')) || null;
+  const essentialsContract = contracts.find((c) => normalizeContractName(c.contractName).startsWith('TECH COVER ESSENTIALS')) || null;
 
   return {
     rows,
@@ -161,6 +165,13 @@ async function buildActiveContracts(client, company, classification) {
     defaultContractUrl: defaultContract ? await getContractUrl(defaultContract.id) : null,
     eliteContractName: eliteContract ? eliteContract.contractName : null,
     eliteContractUrl: eliteContract ? await getContractUrl(eliteContract.id) : null,
+    essentialsContractName: essentialsContract ? essentialsContract.contractName : null,
+    essentialsContractUrl: essentialsContract ? await getContractUrl(essentialsContract.id) : null,
+    // Both an active Elite* AND Essentials* contract at once is a real
+    // billing/config anomaly (a client should only ever be on one tier),
+    // by request -- flagged on its own so client.js can show a big red
+    // warning rather than just one quietly-wrong pill.
+    bothTechCoverTiersActive: !!(eliteContract && essentialsContract),
   };
 }
 
@@ -348,11 +359,21 @@ router.get('/', async (req, res) => {
     const billingContact = contacts.find((c) => c.billingContact === true) || null;
     const classification = classificationLabels.get(company.classification) || null;
 
-    const [activeContracts, installedServices, recentTickets, securityAlerts] = await Promise.all([
+    const [activeContracts, installedServices, recentTickets, securityAlerts, itGlueOrgUrl] = await Promise.all([
       buildActiveContracts(client, company, classification),
       buildInstalledServices(company),
       buildRecentTickets(client, company),
       buildSecurityAlertsSummary(company),
+      // Powers the Client Name's own "Open in Autotask / Open in IT
+      // Glue" choice, by request. Best-effort -- a lookup failure (or no
+      // exact-name match in IT Glue) just means the name stays a plain
+      // Autotask link, same non-fatal "the page still works without it"
+      // convention @dashboard/domain-itglue-gap/server.js's own ticket
+      // lookup already uses.
+      resolveOrganizationUrlByName(company.companyName).catch((err) => {
+        console.error('client-summary: IT Glue organization lookup failed:', err.message);
+        return null;
+      }),
     ]);
 
     res.json({
@@ -361,6 +382,7 @@ router.get('/', async (req, res) => {
       companyId: company.id,
       companyName: company.companyName,
       companyUrl: await getCompanyUrl(company.id),
+      itGlueOrgUrl,
       isActive: company.isActive,
       classification,
       address: {

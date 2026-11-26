@@ -113,6 +113,7 @@ export function mount(container) {
     const heading = document.createElement('div');
     heading.className = 'summary';
     heading.innerHTML = `<strong>${companyLink(data)}</strong> -- last 12 months`;
+    wireNameMenu(heading, data);
     resultsEl.appendChild(heading);
 
     resultsEl.appendChild(sectionHeading('Tickets'));
@@ -293,13 +294,41 @@ export function mount(container) {
     return wrap;
   }
 
+  // Plain popup-window Autotask link, same convention this page's own
+  // ticket link (and every other Autotask/IT Glue link on this
+  // dashboard) uses -- UNLESS an IT Glue organisation also resolved for
+  // this Client (data.itGlueOrgUrl), in which case this renders as a
+  // data-name-menu link instead, by request ("clicking on the Client
+  // Name title should give the options of opening in Autotask or IT
+  // Glue"); wireNameMenu() below wires its actual click handler (a real
+  // click position is needed to place the menu, which doesn't exist yet
+  // at template-build time here). Same pattern @dashboard/client-summary
+  // uses for its own Client Name.
   function companyLink(data) {
     const label = escapeHtml(data.companyName);
     if (!data.companyUrl) return label;
-    // Real popup window, not just a new tab -- same convention this page's
-    // own ticket link (and every other Autotask/IT Glue link on this
-    // dashboard) uses.
-    return `<a href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+    if (!data.itGlueOrgUrl) {
+      return `<a href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+    }
+    return `<a data-name-menu="1" href="${escapeHtml(data.companyUrl)}">${label}</a>`;
+  }
+
+  // Wires the Client Name's own "Open in Autotask / Open in IT Glue"
+  // choice, by request -- reuses app.js's own window.showNavContextMenu()
+  // (the exact same small menu the sidebar's own right-click uses) rather
+  // than building a second popup-menu implementation. Only present at all
+  // when companyLink() above rendered the data-name-menu variant (both
+  // URLs resolved); a no-op otherwise.
+  function wireNameMenu(container, data) {
+    const nameLink = container.querySelector('a[data-name-menu]');
+    if (!nameLink) return;
+    nameLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.showNavContextMenu(e.clientX, e.clientY, [
+        { label: 'Open in Autotask', onClick: () => window.open(data.companyUrl, '_blank', 'noopener,noreferrer,width=1200,height=900') },
+        { label: 'Open in IT Glue', onClick: () => window.open(data.itGlueOrgUrl, '_blank', 'noopener,noreferrer,width=1200,height=900') },
+      ]);
+    });
   }
 
   function ticketLink(t) {

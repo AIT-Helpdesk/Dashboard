@@ -14,6 +14,7 @@ const {
   monthKeysWindow,
   excludeMonitoringAlerts,
 } = require('@dashboard/autotask-client');
+const { resolveOrganizationUrlByName } = require('@dashboard/itglue-client');
 
 // Statuses treated as "done" (closed for Currently Open / Completed purposes).
 // Autotask's actual per-status "SLA Event" mapping (None/First Response/
@@ -212,12 +213,24 @@ router.get('/', async (req, res) => {
       { billable: 0, nonBillable: 0, total: 0 }
     );
 
+    // Powers the Client Name's own "Open in Autotask / Open in IT Glue"
+    // choice, by request. Best-effort -- a lookup failure (or no exact-
+    // name match in IT Glue) just means the name stays a plain Autotask
+    // link, same non-fatal "the page still works without it" convention
+    // @dashboard/domain-itglue-gap/server.js's own ticket lookup already
+    // uses.
+    const itGlueOrgUrl = await resolveOrganizationUrlByName(company.companyName).catch((err) => {
+      console.error('client-activity: IT Glue organization lookup failed:', err.message);
+      return null;
+    });
+
     res.json({
       client: clientSearch,
       status: 'ok',
       companyId: company.id,
       companyName: company.companyName,
       companyUrl: await getCompanyUrl(company.id),
+      itGlueOrgUrl,
       ticketMonths,
       hourMonths,
       hourTotals,

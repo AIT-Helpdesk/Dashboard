@@ -153,6 +153,7 @@ export function mount(container) {
         </div>
       </div>
     `;
+    wireNameMenu(wrap, data);
     return wrap;
   }
 
@@ -263,31 +264,38 @@ export function mount(container) {
   function renderInstalledServiceBadges(services, activeContracts) {
     // 2 "contract pills", by request -- which active contract (if any)
     // is this client's billing default, and which (if any) is its "Tech
-    // Cover Elite*" contract (same wildcard-prefix match Active
-    // Contracts' own orange warning below already uses). Default's own
-    // pill shows just the matched contract's own NAME as its label (no
-    // "Default: " caption, by request) and stays blue either way -- the
-    // Tech Cover Elite pill instead keeps a fixed, short label ("Tech
-    // Cover Elite") when a match IS found (full contract name moved to
-    // the hover tooltip only, since real names here -- "Tech Cover Elite
-    // - Managed Support Plan" -- are long enough to otherwise widen the
-    // pill row a lot), but turns RED with the label "No Tech Cover
-    // Contract" when no active contract starts with "Tech Cover Elite",
-    // by request -- same red .client-summary-service-badge--no every
-    // other "not installed" pill on this page already uses. Same 2 pills
-    // TC Elite Services shows for every TC Elite client at once, by
-    // request.
+    // Cover Elite*" OR "Tech Cover Essentials*" contract (same wildcard-
+    // prefix matches Active Contracts' own orange warnings below already
+    // use). Default's own pill shows just the matched contract's own NAME
+    // as its label (no "Default: " caption, by request) and stays blue
+    // either way -- the Tech Cover pill instead keeps a fixed, short
+    // label ("Tech Cover Elite"/"Tech Cover Essentials", whichever one
+    // was actually found) when a match IS found (full contract name moved
+    // to the hover tooltip only, since real names here -- "Tech Cover
+    // Elite - Managed Support Plan" -- are long enough to otherwise widen
+    // the pill row a lot), but turns RED with the label "No Tech Cover
+    // Contract" when NEITHER an active "Tech Cover Elite*" nor "Tech
+    // Cover Essentials*" contract is found, by request -- same red
+    // .client-summary-service-badge--no every other "not installed" pill
+    // on this page already uses. A client with BOTH active at once (by
+    // request, should never happen -- a client is only ever meant to be
+    // on one tier) gets its own big red warning banner below instead of
+    // just one quietly-wrong pill. Same 2 pills TC Elite Services shows
+    // for every TC Elite client at once, by request (that page's own
+    // Elite-only half of this rule, unchanged).
     const defaultContractTitle = activeContracts.defaultContractName ? `Default: ${activeContracts.defaultContractName}` : 'Default: None';
     const defaultContractPill = pillHtml('client-summary-service-badge--info', activeContracts.defaultContractName || 'None', defaultContractTitle, activeContracts.defaultContractUrl);
 
-    const eliteContractCls = activeContracts.eliteContractName ? 'client-summary-service-badge--info' : 'client-summary-service-badge--no';
-    const eliteContractText = activeContracts.eliteContractName ? 'Tech Cover Elite' : 'No Tech Cover Contract';
-    const eliteContractTitle = activeContracts.eliteContractName
-      ? `Tech Cover Elite: ${activeContracts.eliteContractName}`
-      : 'No active contract starting with "Tech Cover Elite" was found.';
-    const eliteContractPill = pillHtml(eliteContractCls, eliteContractText, eliteContractTitle, activeContracts.eliteContractUrl);
+    const techCoverName = activeContracts.eliteContractName || activeContracts.essentialsContractName || null;
+    const techCoverLabel = activeContracts.eliteContractName ? 'Tech Cover Elite' : activeContracts.essentialsContractName ? 'Tech Cover Essentials' : 'No Tech Cover Contract';
+    const techCoverUrl = activeContracts.eliteContractName ? activeContracts.eliteContractUrl : activeContracts.essentialsContractUrl;
+    const techCoverCls = techCoverName ? 'client-summary-service-badge--info' : 'client-summary-service-badge--no';
+    const techCoverTitle = techCoverName
+      ? `${techCoverLabel}: ${techCoverName}`
+      : 'No active contract starting with "Tech Cover Elite" or "Tech Cover Essentials" was found.';
+    const techCoverPill = pillHtml(techCoverCls, techCoverLabel, techCoverTitle, techCoverUrl);
 
-    const contractPillsHtml = defaultContractPill + eliteContractPill;
+    const contractPillsHtml = defaultContractPill + techCoverPill;
 
     const items = [
       { label: 'SaaS Alerts', installed: services.saasAlerts.installed },
@@ -357,7 +365,21 @@ export function mount(container) {
           return `<span class="client-summary-service-badge ${cls}" title="${escapeHtml(title)}">${escapeHtml(i.label)}</span>`;
         })
         .join('');
-    return wrap;
+
+    if (!activeContracts.bothTechCoverTiersActive) return wrap;
+
+    // Big red warning, by request -- a client should never be on both
+    // Tech Cover tiers at once. Same solid-red/white-text/centered
+    // convention Tickets' own "Overdue tickets" banner already uses for
+    // an alarming count (.tickets-dashboard-overdue-banner), not a new
+    // one-off style.
+    const container = document.createElement('div');
+    const banner = document.createElement('div');
+    banner.className = 'client-summary-tech-cover-conflict-banner';
+    banner.textContent = `Both Tech Cover Elite (${activeContracts.eliteContractName}) and Tech Cover Essentials (${activeContracts.essentialsContractName}) are active at once -- this client should only ever be on one tier.`;
+    container.appendChild(banner);
+    container.appendChild(wrap);
+    return container;
   }
 
   // --- Recent Tickets ------------------------------------------
@@ -446,13 +468,43 @@ export function mount(container) {
 
   if (lastData) render(lastData);
 
-  // Both real popup windows, not just a new tab -- same convention this
-  // page's own invoice/ticket links (and every other Autotask/IT Glue link
-  // on this dashboard) use.
+  // Plain popup-window Autotask link, same convention this page's own
+  // invoice/ticket links (and every other Autotask/IT Glue link on this
+  // dashboard) use -- UNLESS an IT Glue organisation also resolved for
+  // this Client (data.itGlueOrgUrl), in which case this renders as a
+  // data-name-menu link instead, by request ("clicking on the Client
+  // Name title should give the options of opening in Autotask or IT
+  // Glue"); renderHeader() below wires its actual click handler (a real
+  // click position is needed to place the menu, which doesn't exist yet
+  // at template-build time here). Same "only becomes a choice when
+  // there's a real second option" rule the 2 contract pills below
+  // already follow -- plain direct link when there's nothing to choose
+  // between.
   function companyLink(data) {
     const label = escapeHtml(data.companyName);
     if (!data.companyUrl) return label;
-    return `<a class="client-summary-name-link" href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+    if (!data.itGlueOrgUrl) {
+      return `<a class="client-summary-name-link" href="${escapeHtml(data.companyUrl)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${label}</a>`;
+    }
+    return `<a class="client-summary-name-link" href="${escapeHtml(data.companyUrl)}" data-name-menu="1">${label}</a>`;
+  }
+
+  // Wires the Client Name's own "Open in Autotask / Open in IT Glue"
+  // choice, by request -- reuses app.js's own window.showNavContextMenu()
+  // (the exact same small menu the sidebar's own right-click uses) rather
+  // than building a second popup-menu implementation. Only present at all
+  // when companyLink() above rendered the data-name-menu variant (both
+  // URLs resolved); a no-op otherwise.
+  function wireNameMenu(wrap, data) {
+    const nameLink = wrap.querySelector('a[data-name-menu]');
+    if (!nameLink) return;
+    nameLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.showNavContextMenu(e.clientX, e.clientY, [
+        { label: 'Open in Autotask', onClick: () => window.open(data.companyUrl, '_blank', 'noopener,noreferrer,width=1200,height=900') },
+        { label: 'Open in IT Glue', onClick: () => window.open(data.itGlueOrgUrl, '_blank', 'noopener,noreferrer,width=1200,height=900') },
+      ]);
+    });
   }
 
   function contractLink(c) {

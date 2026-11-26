@@ -405,6 +405,16 @@ export function mount(container) {
     ingramClientFieldEl.innerHTML = '';
     dattoSiteFieldEl.hidden = true;
     dattoSiteFieldEl.innerHTML = '';
+    // Exact Client Match only ever means something for the name it was
+    // ticked against (set automatically by the "N Autotask companies
+    // matched -- choose one" picker further down), by request -- the
+    // moment someone starts typing a new search term, that's stale too,
+    // same reasoning as everything else this listener already clears.
+    // Doesn't fire on the picker's own programmatic
+    // autotaskClientInput.value= (no native `input` event from a plain
+    // assignment), so it can't undo that one's own
+    // exactClientInput.checked = true right after it.
+    exactClientInput.checked = false;
   });
 
   form.addEventListener('submit', (e) => {

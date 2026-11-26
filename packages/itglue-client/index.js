@@ -8,7 +8,7 @@ const axios = require('axios');
 // api.eu.itglue.com, api.au.itglue.com) -- confirmed against the real
 // account this dashboard is for, which is api.au.itglue.com. Configurable
 // via env rather than hardcoded, in case that ever needs to change.
-const { ITGLUE_API_KEY: API_KEY, ITGLUE_API_BASE: BASE_URL } = process.env;
+const { ITGLUE_API_KEY: API_KEY, ITGLUE_API_BASE: BASE_URL, ITGLUE_WEB_BASE_URL: WEB_BASE_URL } = process.env;
 
 // Auth is a plain `x-api-key` header, not Bearer/Basic -- confirmed against
 // the real API.
@@ -150,6 +150,30 @@ async function setPrimaryDomain(organizationId, domainId) {
   }
 }
 
+// Resolves ONE Autotask Client's own IT Glue organisation page URL by
+// name -- promoted here (not left living in just one consumer package)
+// because @dashboard/client-summary and @dashboard/client-activity both
+// need the exact same single-client lookup, for their own "Open in IT
+// Glue" option next to the Client Name. Same "filter[name] does a
+// partial/contains match, so fall back to an exact (case-insensitive)
+// match among the hits, never guess past an ambiguous one" convention
+// @dashboard/live-reports/email-domain-protection.js's own
+// resolveOrganization() already established for exactly this kind of
+// lookup. No stored id mapping -- resolved fresh every call, same as
+// every other Autotask<->IT Glue name match on this dashboard. IT Glue
+// has no "resource-url" on organisations (confirmed live, same finding
+// @dashboard/domain-itglue-gap/itglue-domains.js's own
+// fetchOrganizationUrlsByName() already documents), so the URL is built
+// from ITGLUE_WEB_BASE_URL + "/" + the org's own id.
+async function resolveOrganizationUrlByName(name) {
+  if (!WEB_BASE_URL || !name) return null;
+  const res = await get('/organizations', { 'filter[name]': name, 'page[size]': 10 });
+  const matches = res.data || [];
+  if (matches.length === 0) return null;
+  const org = matches.length === 1 ? matches[0] : matches.find((o) => (o.attributes.name || '').trim().toLowerCase() === name.trim().toLowerCase());
+  return org ? `${WEB_BASE_URL}/${org.id}` : null;
+}
+
 module.exports = {
   get,
   patch,
@@ -159,4 +183,5 @@ module.exports = {
   getAllPrimaryDomainTaggedOrganizationIds,
   getAllPrimaryDomainsByOrganizationId,
   setPrimaryDomain,
+  resolveOrganizationUrlByName,
 };

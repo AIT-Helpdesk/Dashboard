@@ -4381,6 +4381,22 @@ td.ticket-number {
   background: #dc2626;
   border-radius: 6px;
 }
+
+/* Client Summary's own "both Tech Cover Elite AND Essentials active at
+   once" warning, by request -- same solid-red/white/centred convention
+   as .tickets-dashboard-overdue-banner above, not a new one-off style,
+   just full-width (this one carries a sentence, not a bare count) and
+   placed above the row of contract/service pills it's warning about. */
+.client-summary-tech-cover-conflict-banner {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 1rem;
+  text-align: center;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #fff;
+  background: #dc2626;
+  border-radius: 6px;
+}
 /* The 3 new widgets (DO TODAY/Scheduled Me/Client Updates), by request,
    sit on one row underneath Triage Now -- each is still the SAME full
    renderTicketWidget() donut+list layout Critical (P1)/Triage Now use

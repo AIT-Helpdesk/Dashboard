@@ -1739,6 +1739,14 @@ function showNavContextMenu(x, y, actions) {
     document.addEventListener('keydown', onKeydown);
   }, 0);
 }
+// Exposed on window (same convention window.openImageLightbox/
+// window.openAnnouncementsPopup already use) so any page's own client.js
+// can reuse this one menu implementation -- e.g. Client Summary's/Client
+// Activity's own Client Name "Open in Autotask / Open in IT Glue" choice
+// -- instead of building a second one. app.js is always loaded and
+// evaluated before any page's own client.js module is mounted, so this
+// is guaranteed to exist by the time a page calls it.
+window.showNavContextMenu = showNavContextMenu;
 
 // Auto-opens the category containing `activeId`, but only the first time a
 // given page becomes active -- not on every re-render. Without that guard,
