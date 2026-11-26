@@ -61,7 +61,14 @@ async function fetchOrganizationUrlsByName() {
 // discarding them. Used by primary-domain-gaps.js (which organisations have
 // domains on file at all) and by job.js's own computeGaps() (which
 // organisation a given domain actually sits under, for the "wrong client in
-// IT Glue" check -- see that file's own comment).
+// IT Glue" check, and `expiresOn` for the "Expiry Mismatch" check -- see
+// that file's own comments). `expires-on` is a real plain `YYYY-MM-DD`
+// attribute on IT Glue's own Domains resource, confirmed live -- same
+// format TPP Wholesale's own `expiryDate` already uses, so the two compare
+// directly as strings with no reformatting. Confirmed live it can also be
+// the literal non-date string "Processing" (IT Glue's own in-progress sync
+// state, not a real value) -- left as-is here, job.js's own comparison is
+// what guards against treating that as a real date.
 async function fetchAllDomainsGroupedByOrg() {
   const rows = [];
   let page = 1;
@@ -74,6 +81,7 @@ async function fetchAllDomainsGroupedByOrg() {
           name: d.attributes.name,
           organizationId: String(d.attributes['organization-id']),
           organizationName: d.attributes['organization-name'] || null,
+          expiresOn: d.attributes['expires-on'] || null,
         });
       }
     }

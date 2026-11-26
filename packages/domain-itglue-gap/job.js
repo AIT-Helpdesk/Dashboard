@@ -125,10 +125,10 @@ async function computeGaps() {
   const itGlueOrgByDomain = new Map();
   for (const d of itGlueDomains) {
     const key = normalizeDomainName(d.name);
-    if (!itGlueOrgByDomain.has(key)) itGlueOrgByDomain.set(key, { organizationId: d.organizationId, organizationName: d.organizationName });
+    if (!itGlueOrgByDomain.has(key)) itGlueOrgByDomain.set(key, { organizationId: d.organizationId, organizationName: d.organizationName, expiresOn: d.expiresOn });
   }
 
-  // Three outcomes for a MATCHED domain (a real Name:TPP UDF resolved it to
+  // Four outcomes for a MATCHED domain (a real Name:TPP UDF resolved it to
   // an Autotask Client), by request ("If a domain appears on an IT Glue
   // Client but that Client is not the same client as the Autotask Client on
   // which the TPP Account appears in the UDF"):
@@ -142,8 +142,38 @@ async function computeGaps() {
   // A domain whose IT Glue organisation name is missing/blank is left out
   // of the wrong-client check entirely (nothing to compare against), not
   // flagged as wrong.
+  //
+  // Independently of all three of those -- "Expiry Mismatch", by request
+  // ("checks the 'Expires' date in the IT Glue Domain Tracker against the
+  // 'Expiry Date' in TPP Wholesale") -- any domain actually FOUND in IT
+  // Glue (regardless of which org it sits under -- a domain can be both
+  // wrong-client AND expiry-mismatched at once, these aren't mutually
+  // exclusive) whose own tracked `expires-on` doesn't match TPP's real
+  // expiryDate. Both sides are already the same plain `YYYY-MM-DD` string
+  // (confirmed live), so this is a direct string comparison, no reparsing.
+  // IT Glue's own "Processing" sync-placeholder (confirmed live -- not a
+  // real date) and a genuinely blank `expires-on` are treated the same way:
+  // nothing to compare against, so flagged with itglueExpiresOn null rather
+  // than silently skipped -- IT Glue simply not knowing this domain's
+  // expiry at all is itself worth a person's attention.
+  //
+  // A real 1-calendar-day difference is its own separate bucket
+  // (expiryCloseMismatchBeforeOrgLink), by request -- confirmed live that
+  // the overwhelming majority of real differences on this account are
+  // EXACTLY one day apart (487 of 561 matched domains flagged, 322 of
+  // those off by exactly 1 day), almost certainly a timezone/date-boundary
+  // display quirk between the two systems rather than a genuine
+  // discrepancy worth a person's attention -- as opposed to a domain like
+  // "setmaritime.com.au" (confirmed live: IT Glue said 2025-02-11, TPP said
+  // the real 2027-02-10 -- already over a year stale) that a 1-day
+  // tolerance correctly still catches. Only ever applies when BOTH sides
+  // have a real date -- a blank/"Processing" IT Glue value has no day
+  // count to compare, so it always lands in the main bucket regardless.
+  const ITGLUE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   const gapsBeforeOrgLink = [];
   const wrongClientBeforeOrgLink = [];
+  const expiryMismatchBeforeOrgLink = [];
+  const expiryCloseMismatchBeforeOrgLink = [];
   for (const d of matched) {
     const orgInfo = itGlueOrgByDomain.get(normalizeDomainName(d.domainName));
     if (!orgInfo) {
@@ -155,9 +185,20 @@ async function computeGaps() {
     if (normalizedOrgName && normalizedOrgName !== normalizedClientName) {
       wrongClientBeforeOrgLink.push({ ...d, wrongOrgId: orgInfo.organizationId, wrongOrgName: orgInfo.organizationName });
     }
+    const itglueExpiresOn = ITGLUE_DATE_RE.test(orgInfo.expiresOn || '') ? orgInfo.expiresOn : null;
+    if (itglueExpiresOn !== d.expiryDate) {
+      const dayDiff = itglueExpiresOn ? Math.abs(daysBetween(d.expiryDate, itglueExpiresOn)) : null;
+      if (dayDiff === 1) {
+        expiryCloseMismatchBeforeOrgLink.push({ ...d, itglueExpiresOn });
+      } else {
+        expiryMismatchBeforeOrgLink.push({ ...d, itglueExpiresOn });
+      }
+    }
   }
   gapsBeforeOrgLink.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
   wrongClientBeforeOrgLink.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
+  expiryMismatchBeforeOrgLink.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
+  expiryCloseMismatchBeforeOrgLink.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
   unmatched.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
 
   // Email Domain Mismatch, by request ("List where Domain is different
@@ -263,17 +304,30 @@ async function computeGaps() {
     ...d,
     itGlueOrgUrl: orgUrlByName.get(d.autotaskClientName.trim().toLowerCase()) || null,
   }));
+  // Same "should be" link convention as every other section -- the
+  // resolved Client's own IT Glue org page (not necessarily the one the
+  // domain actually sits under right now; that's wrongClient's own job).
+  const expiryMismatch = expiryMismatchBeforeOrgLink.map((d) => ({
+    ...d,
+    itGlueOrgUrl: orgUrlByName.get(d.autotaskClientName.trim().toLowerCase()) || null,
+  }));
+  const expiryCloseMismatch = expiryCloseMismatchBeforeOrgLink.map((d) => ({
+    ...d,
+    itGlueOrgUrl: orgUrlByName.get(d.autotaskClientName.trim().toLowerCase()) || null,
+  }));
 
   logEvent({
     stage: 'comparison',
-    message: `${gaps.length} domains missing from IT Glue, ${unmatched.length} domains with no matching Autotask Client, ${wrongClient.length} domains filed under the wrong Client in IT Glue, ${emailDomainMismatch.length} domains different from their Primary Contact's email domain.`,
+    message: `${gaps.length} domains missing from IT Glue, ${unmatched.length} domains with no matching Autotask Client, ${wrongClient.length} domains filed under the wrong Client in IT Glue, ${expiryMismatch.length} domains with an Expiry Mismatch (${expiryCloseMismatch.length} more off by exactly 1 day, hidden by default), ${emailDomainMismatch.length} domains different from their Primary Contact's email domain.`,
     gapCount: gaps.length,
     unmatchedCount: unmatched.length,
     wrongClientCount: wrongClient.length,
+    expiryMismatchCount: expiryMismatch.length,
+    expiryCloseMismatchCount: expiryCloseMismatch.length,
     emailDomainMismatchCount: emailDomainMismatch.length,
   });
 
-  return { gaps, unmatched, wrongClient, emailDomainMismatch };
+  return { gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch };
 }
 
 // Same real "scan every Company's own Name:TPP UDF" query
@@ -307,6 +361,15 @@ async function buildTppAccountRefToCompanyIdMap(client) {
 // list now lives on its own dashboard page (persisted in db.js) instead --
 // this body is just the summary + counts + a link there, plus the
 // attached CSV as an offline copy.
+// Neither expiryMismatch nor expiryCloseMismatch (Expiry Mismatch's own
+// "off by exactly 1 day" bucket) is ever mentioned here or in the
+// attached CSV -- by request ("Don't add the expiry discrepancies to the
+// ticket at all ... it's all too crappy"), the whole Expiry Mismatch
+// check is dashboard-only. It's still fully computed and persisted in
+// db.js either way -- that's what the dashboard page's own two Expiry
+// Mismatch sections read; only Autotask-facing output (this ticket body,
+// the attached CSV, and run()'s own "is there anything to do" zero-check)
+// leaves it out.
 function buildTicketBody({ gaps, unmatched, wrongClient, emailDomainMismatch }, asOfIso) {
   const lines = [];
   lines.push(`Run date: ${asOfIso}`);
@@ -331,7 +394,10 @@ function buildTicketBody({ gaps, unmatched, wrongClient, emailDomainMismatch }, 
 // speculates on WHY a domain dropped out (now in IT Glue? now matched?
 // expired? reclassified "Not Required"?) -- just that it's no longer in
 // this run's gap list, same "don't guess, let a person check" convention
-// this job already follows elsewhere.
+// this job already follows elsewhere. `resolvedRows` is already pre-
+// filtered by the caller to exclude both expiry_mismatch and
+// expiry_close_mismatch -- see refreshLive()'s own comment for why
+// (the whole Expiry Mismatch check is dashboard-only, by request).
 function buildFixedNoteBody(resolvedRows, asOfIso) {
   const lines = [`Live refresh ${asOfIso} -- ${resolvedRows.length} domain(s) no longer appear in the gap list:`, ''];
   for (const r of resolvedRows) {
@@ -361,12 +427,19 @@ function buildFixedNoteBody(resolvedRows, asOfIso) {
 // happens at all -- only the dashboard's own db.js state changes.
 async function refreshLive() {
   const client = await getClient();
-  const { gaps, unmatched, wrongClient, emailDomainMismatch } = await computeGaps();
-  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient, emailDomainMismatch);
+  const { gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch } = await computeGaps();
+  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch);
   logEvent({ stage: 'comparison', message: `Live refresh: ${dbResult.upserted} currently open, ${dbResult.resolved} resolved since last stored state.`, ...dbResult });
 
-  if (dbResult.resolvedRows.length === 0) {
-    return { gaps, unmatched, wrongClient, emailDomainMismatch, fixed: [], ticketNoteAdded: false };
+  // expiry_close_mismatch resolutions are never worth a ticket note -- by
+  // request, that whole category is treated as noise everywhere Autotask-
+  // facing (same reasoning as buildTicketBody()'s own comment). A refresh
+  // where EVERYTHING that resolved was just 1-day noise clearing posts no
+  // note at all, same as if nothing had resolved.
+  const reportableResolvedRows = dbResult.resolvedRows.filter((r) => r.category !== 'expiry_close_mismatch');
+
+  if (reportableResolvedRows.length === 0) {
+    return { gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch, fixed: [], ticketNoteAdded: false };
   }
 
   let openTicket = null;
@@ -378,36 +451,36 @@ async function refreshLive() {
     openTicket = existing[0] || null;
   } catch (err) {
     logFailure('autotask-search', err, { endpoint: 'Tickets (live refresh fixed-note check)' });
-    return { gaps, unmatched, wrongClient, emailDomainMismatch, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
+    return { gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch, fixed: reportableResolvedRows, ticketNoteAdded: false };
   }
 
   // No open ticket -- nothing to note. Deliberately never creates one here;
   // that's run()'s job alone, per request.
   if (!openTicket) {
-    return { gaps, unmatched, wrongClient, emailDomainMismatch, fixed: dbResult.resolvedRows, ticketNoteAdded: false };
+    return { gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch, fixed: reportableResolvedRows, ticketNoteAdded: false };
   }
 
   const asOfIso = new Date().toISOString();
-  await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: buildFixedNoteBody(dbResult.resolvedRows, asOfIso), noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
-  logEvent({ stage: 'ticket-update', message: `Live refresh: added a fixed-items note to ticket ${openTicket.ticketNumber} (${dbResult.resolvedRows.length} domain(s)).`, ticketNumber: openTicket.ticketNumber, fixedCount: dbResult.resolvedRows.length });
+  await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: buildFixedNoteBody(reportableResolvedRows, asOfIso), noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
+  logEvent({ stage: 'ticket-update', message: `Live refresh: added a fixed-items note to ticket ${openTicket.ticketNumber} (${reportableResolvedRows.length} domain(s)).`, ticketNumber: openTicket.ticketNumber, fixedCount: reportableResolvedRows.length });
 
-  return { gaps, unmatched, wrongClient, emailDomainMismatch, fixed: dbResult.resolvedRows, ticketNoteAdded: true, ticket: openTicket };
+  return { gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch, fixed: reportableResolvedRows, ticketNoteAdded: true, ticket: openTicket };
 }
 
 // Dry run computes everything for real (TPP, IT Glue, Autotask search) and
 // returns what WOULD happen, without ever writing to Autotask.
 async function run({ dryRun }) {
   const client = await getClient();
-  const { gaps, unmatched, wrongClient, emailDomainMismatch } = await computeGaps();
+  const { gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch } = await computeGaps();
   const asOfIso = new Date().toISOString();
-  const body = buildTicketBody({ gaps, unmatched, wrongClient, emailDomainMismatch }, asOfIso);
+  const body = buildTicketBody({ gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch }, asOfIso);
   const csv = buildGapCsv(gaps, unmatched, wrongClient, emailDomainMismatch);
 
   // Persisted regardless of dry-run -- the dashboard page's own db.js is
   // this job's own local state, not an Autotask write, so it always
   // reflects the latest real computation (ticked state preserved for any
   // domain still present; rows for anything now resolved are dropped).
-  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient, emailDomainMismatch);
+  const dbResult = replaceCurrentGaps(gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch);
   logEvent({ stage: 'comparison', message: `Dashboard list updated: ${dbResult.upserted} currently open, ${dbResult.resolved} resolved since last run.`, ...dbResult });
 
   let existing;
@@ -424,30 +497,35 @@ async function run({ dryRun }) {
 
   const openTicket = existing[0] || null;
 
-  if (gaps.length === 0 && unmatched.length === 0 && wrongClient.length === 0 && emailDomainMismatch.length === 0) {
+  // expiryCloseMismatch deliberately never counts towards "is there
+  // anything to report" -- by request, treated as noise everywhere
+  // Autotask-facing (see buildTicketBody()'s own comment); a run where
+  // it's the only non-empty bucket behaves exactly as if everything were
+  // resolved.
+  if (gaps.length === 0 && unmatched.length === 0 && wrongClient.length === 0 && expiryMismatch.length === 0 && emailDomainMismatch.length === 0) {
     if (!openTicket) {
       logEvent({ stage: 'comparison', message: 'No gaps, no open ticket -- nothing to do.' });
-      return { action: 'none', gaps, unmatched, wrongClient, emailDomainMismatch };
+      return { action: 'none', gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch };
     }
     const resolveNote = 'All domains previously listed on this ticket are now resolved. Left open for a person to close.';
     if (dryRun) {
       logEvent({ stage: 'comparison', message: `DRY RUN: would add a resolved-note to ticket ${openTicket.ticketNumber} and leave it open.` });
-      return { action: 'note-resolved', ticket: openTicket, note: resolveNote, gaps, unmatched, wrongClient, emailDomainMismatch };
+      return { action: 'note-resolved', ticket: openTicket, note: resolveNote, gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch };
     }
     await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: resolveNote, noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
     logEvent({ stage: 'ticket-update', message: `Added resolved-note to ticket ${openTicket.ticketNumber}.`, ticketNumber: openTicket.ticketNumber });
-    return { action: 'note-resolved', ticket: openTicket, gaps, unmatched, wrongClient, emailDomainMismatch };
+    return { action: 'note-resolved', ticket: openTicket, gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch };
   }
 
   if (openTicket) {
     if (dryRun) {
       logEvent({ stage: 'comparison', message: `DRY RUN: would update ticket ${openTicket.ticketNumber} with a refreshed note + CSV.` });
-      return { action: 'update', ticket: openTicket, body, csv, gaps, unmatched, wrongClient, emailDomainMismatch };
+      return { action: 'update', ticket: openTicket, body, csv, gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch };
     }
     await client.ticketNotes.create(openTicket.id, { title: TICKET_TITLE, description: body, noteType: NOTE_TYPE, publish: NOTE_PUBLISH });
     logEvent({ stage: 'ticket-update', message: `Added refreshed note to ticket ${openTicket.ticketNumber}.`, ticketNumber: openTicket.ticketNumber });
     await attachCsv(client, openTicket.id, csv, asOfIso);
-    return { action: 'update', ticket: openTicket, gaps, unmatched, wrongClient, emailDomainMismatch };
+    return { action: 'update', ticket: openTicket, gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch };
   }
 
   // No open ticket -- was there a RECENTLY CLOSED one with this exact title?
@@ -473,7 +551,7 @@ async function run({ dryRun }) {
 
   if (dryRun) {
     logEvent({ stage: 'comparison', message: 'DRY RUN: would create a new ticket.' });
-    return { action: 'create', body: finalBody, csv, picklists, dueDateTime, recentlyClosed, gaps, unmatched, wrongClient, emailDomainMismatch };
+    return { action: 'create', body: finalBody, csv, picklists, dueDateTime, recentlyClosed, gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch };
   }
 
   const createRes = await client.tickets.create({
@@ -490,7 +568,7 @@ async function run({ dryRun }) {
   const ticketUrl = await getTicketUrl(ticketId);
   logEvent({ stage: 'ticket-create', message: `Created ticket #${ticketId}.`, ticketId, ticketUrl });
   await attachCsv(client, ticketId, csv, asOfIso);
-  return { action: 'create', ticketId, ticketUrl, gaps, unmatched, wrongClient, emailDomainMismatch };
+  return { action: 'create', ticketId, ticketUrl, gaps, unmatched, wrongClient, expiryMismatch, expiryCloseMismatch, emailDomainMismatch };
 }
 
 // Same POST /Tickets/{id}/Attachments shape @dashboard/workshop/server.js

@@ -11,6 +11,13 @@ let lastNoPrimaryDomainClients = null;
 // default on this page any more. Module-scope so the choice survives a
 // Refresh (a fresh render() call), not reset back to hidden every time.
 let emailMismatchExpanded = false;
+// Same "hidden behind a button by default" convention as
+// emailMismatchExpanded above, by request -- Expiry Mismatch's own "off by
+// exactly 1 day" rows (almost certainly a timezone display quirk between
+// IT Glue and TPP Wholesale, not a real discrepancy, see job.js's own
+// comment), still fully computed every run (ticket/CSV/summary counts
+// unaffected), just not shown automatically alongside the real mismatches.
+let expiryCloseMismatchExpanded = false;
 
 export function mount(container) {
   // Scopes the narrower-row/smaller-text table style below (styles.css)
@@ -264,6 +271,8 @@ export function mount(container) {
     const gapRows = data.rows.filter((r) => r.category === 'missing_from_itglue');
     const unmatchedRows = data.rows.filter((r) => r.category === 'unmatched_client');
     const wrongClientRows = data.rows.filter((r) => r.category === 'wrong_client');
+    const expiryMismatchRows = data.rows.filter((r) => r.category === 'expiry_mismatch');
+    const expiryCloseMismatchRows = data.rows.filter((r) => r.category === 'expiry_close_mismatch');
     const emailDomainMismatchRows = data.rows.filter((r) => r.category === 'email_domain_mismatch');
 
     resultsEl.appendChild(
@@ -305,6 +314,98 @@ export function mount(container) {
         `<span class="dig-missing-header-note">Fix these on the <a href="#data-matching">Data Matching</a> page (TPP Domains).</span>`
       )
     );
+    resultsEl.appendChild(
+      sectionTable(
+        'Expiry Mismatch',
+        expiryMismatchRows,
+        [
+          { key: 'domain', label: 'Domain', cell: (r) => escapeHtml(r.domainName), sort: (r) => r.domainName || '' },
+          { key: 'expiry', label: 'Expiry Date (TPP)', className: 'ticket-number', cell: (r) => formatDate(r.expiryDate), sort: (r) => r.expiryDate || '' },
+          {
+            key: 'itglueExpires',
+            label: 'IT Glue Expires',
+            className: 'ticket-number',
+            // Red specifically for a genuine CONFLICT -- IT Glue has its
+            // own real date on file and it's different from TPP's -- by
+            // request ("Put differences first and make them RED"). A
+            // blank itglueExpiresOn means IT Glue has no real date at all
+            // (never set, or still showing its own "Processing" sync
+            // placeholder -- see job.js's own comment), which is a
+            // different, less urgent problem, so it's shown plainly
+            // instead.
+            cell: (r) => (r.itglueExpiresOn ? `<span class="cell-flag-red">${escapeHtml(formatDate(r.itglueExpiresOn))}</span>` : '<span class="inline-subtext">Not set in IT Glue</span>'),
+            // A real conflicting date sorts before a blank one in the
+            // default ascending view ("differences first", by request) --
+            // '￿' sorts after every real "YYYY-MM-DD" string, so a
+            // blank row always lands at the end rather than the start.
+            sort: (r) => r.itglueExpiresOn || '￿',
+          },
+          { key: 'tppAcc', label: 'TPP Acc', cell: (r) => escapeHtml(r.tppAccountReference || ''), sort: (r) => r.tppAccountReference || '' },
+          {
+            key: 'client',
+            label: 'IT Glue Client Name',
+            cell: (r) =>
+              r.autotaskClientName && r.itglueOrgUrl
+                ? `<a href="${escapeHtml(r.itglueOrgUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.autotaskClientName)}</a>`
+                : escapeHtml(r.autotaskClientName || ''),
+            sort: (r) => r.autotaskClientName || '',
+          },
+        ],
+        'itglueExpires',
+        `<span class="dig-missing-header-note">Update IT Glue's own Expires date to match TPP Wholesale's real one.</span>`,
+        true // starts minimised, by request
+      )
+    );
+    // Hidden behind a button by default, by request -- same "most of them
+    // are ok so let's just put a button to view these on request"
+    // convention Email Domain Mismatch already established (see
+    // expiryCloseMismatchExpanded's own comment). Same column shape as the
+    // main Expiry Mismatch section above, since these are the same kind of
+    // row, just filtered out of the default view.
+    if (expiryCloseMismatchExpanded) {
+      resultsEl.appendChild(
+        sectionTable(
+          'Expiry Mismatch -- 1 Day Difference',
+          expiryCloseMismatchRows,
+          [
+            { key: 'domain', label: 'Domain', cell: (r) => escapeHtml(r.domainName), sort: (r) => r.domainName || '' },
+            { key: 'expiry', label: 'Expiry Date (TPP)', className: 'ticket-number', cell: (r) => formatDate(r.expiryDate), sort: (r) => r.expiryDate || '' },
+            { key: 'itglueExpires', label: 'IT Glue Expires', className: 'ticket-number', cell: (r) => formatDate(r.itglueExpiresOn), sort: (r) => r.itglueExpiresOn || '' },
+            { key: 'tppAcc', label: 'TPP Acc', cell: (r) => escapeHtml(r.tppAccountReference || ''), sort: (r) => r.tppAccountReference || '' },
+            {
+              key: 'client',
+              label: 'IT Glue Client Name',
+              cell: (r) =>
+                r.autotaskClientName && r.itglueOrgUrl
+                  ? `<a href="${escapeHtml(r.itglueOrgUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.autotaskClientName)}</a>`
+                  : escapeHtml(r.autotaskClientName || ''),
+              sort: (r) => r.autotaskClientName || '',
+            },
+          ],
+          'domain',
+          `<span class="dig-missing-header-note">Almost always a timezone display difference between the two systems, not a real discrepancy.</span>`
+        )
+      );
+      const hideButton = document.createElement('button');
+      hideButton.type = 'button';
+      hideButton.className = 'button-link button-link--small dig-section-toggle-btn';
+      hideButton.textContent = 'Hide Expiry Mismatch -- 1 Day Difference';
+      hideButton.addEventListener('click', () => {
+        expiryCloseMismatchExpanded = false;
+        render(lastData);
+      });
+      resultsEl.appendChild(hideButton);
+    } else {
+      const showButton = document.createElement('button');
+      showButton.type = 'button';
+      showButton.className = 'button-link button-link--small dig-section-toggle-btn';
+      showButton.textContent = `View Expiry Mismatch -- 1 Day Difference (${expiryCloseMismatchRows.length})`;
+      showButton.addEventListener('click', () => {
+        expiryCloseMismatchExpanded = true;
+        render(lastData);
+      });
+      resultsEl.appendChild(showButton);
+    }
     resultsEl.appendChild(
       sectionTable(
         'Wrong Client in IT Glue',
@@ -386,7 +487,7 @@ export function mount(container) {
       );
       const hideButton = document.createElement('button');
       hideButton.type = 'button';
-      hideButton.className = 'button-link button-link--small';
+      hideButton.className = 'button-link button-link--small dig-section-toggle-btn';
       hideButton.textContent = 'Hide Email Domain Mismatches';
       hideButton.addEventListener('click', () => {
         emailMismatchExpanded = false;
@@ -396,7 +497,7 @@ export function mount(container) {
     } else {
       const showButton = document.createElement('button');
       showButton.type = 'button';
-      showButton.className = 'button-link button-link--small';
+      showButton.className = 'button-link button-link--small dig-section-toggle-btn';
       showButton.textContent = `View Email Domain Mismatches (${emailDomainMismatchRows.length})`;
       showButton.addEventListener('click', () => {
         emailMismatchExpanded = true;
@@ -410,11 +511,18 @@ export function mount(container) {
   // same "header built once, only tbody replaced on sort" convention
   // @dashboard/contact-search's own results table already established, so
   // a sort click never disturbs any other row's checkbox mid-interaction.
-  function sectionTable(heading, rows, columns, defaultSortKey, headerExtraHtml) {
+  // `collapsedByDefault` (by request, for Expiry Mismatch specifically --
+  // not a dashboard-wide default for every section) wraps the header in
+  // the same .resource-group-header--toggle/.toggle-arrow convention
+  // Check Client/Classification Summary already use elsewhere, starting
+  // the table hidden; the table itself is still built up front either
+  // way (this function already does that unconditionally), just its
+  // visibility toggles on header click.
+  function sectionTable(heading, rows, columns, defaultSortKey, headerExtraHtml, collapsedByDefault) {
     const groupEl = document.createElement('div');
     groupEl.className = 'resource-group';
     const headerEl = document.createElement('div');
-    headerEl.className = 'resource-group-header';
+    headerEl.className = collapsedByDefault ? 'resource-group-header resource-group-header--toggle' : 'resource-group-header';
     // The count sits in brackets right after the heading TEXT, at the same
     // size as the heading (by request) -- not the dashboard's usual
     // smaller/muted .count badge, which is why this builds a plain string
@@ -422,7 +530,8 @@ export function mount(container) {
     // flex item too, so it renders right next to the heading+count rather
     // than floating to the middle of the bar (this header has only ONE
     // top-level flex child now, not two).
-    headerEl.innerHTML = `<span>${escapeHtml(heading)} (${rows.length})${headerExtraHtml || ''}</span>`;
+    const arrowHtml = collapsedByDefault ? '<span class="toggle-arrow">&#9656;</span>' : '';
+    headerEl.innerHTML = `<span>${arrowHtml}${escapeHtml(heading)} (${rows.length})${headerExtraHtml || ''}</span>`;
     groupEl.appendChild(headerEl);
 
     if (rows.length === 0) {
@@ -436,6 +545,7 @@ export function mount(container) {
     let sortState = { key: defaultSortKey || columns[0].key, direction: 'asc' };
 
     const table = document.createElement('table');
+    table.hidden = !!collapsedByDefault;
     table.innerHTML = `
       <thead>
         <tr>
@@ -446,6 +556,13 @@ export function mount(container) {
       <tbody></tbody>
     `;
     groupEl.appendChild(table);
+
+    if (collapsedByDefault) {
+      headerEl.addEventListener('click', () => {
+        table.hidden = !table.hidden;
+        headerEl.querySelector('.toggle-arrow').innerHTML = table.hidden ? '&#9656;' : '&#9662;';
+      });
+    }
 
     const tbody = table.querySelector('tbody');
     const sortButtons = [...table.querySelectorAll('.dig-sort-btn')];
@@ -477,13 +594,13 @@ export function mount(container) {
         <tr>
           ${columns.map((c) => `<td${c.className ? ` class="${c.className}"` : ''}>${c.cell(r)}</td>`).join('')}
           <td><label class="inline-checkbox-label" title="${r.ticked ? `Marked done${r.tickedByName ? ` by ${escapeHtml(r.tickedByName)}` : ''}${r.tickedAt ? ` on ${formatDateTime(r.tickedAt)}` : ''}` : 'Mark as handled'}">
-            <input type="checkbox" class="gap-tick-input" data-domain="${escapeHtml(r.domainName)}" ${r.ticked ? 'checked' : ''} />
+            <input type="checkbox" class="gap-tick-input" data-domain="${escapeHtml(r.domainName)}" data-category="${escapeHtml(r.category)}" ${r.ticked ? 'checked' : ''} />
           </label>${stillMissingFlag}</td>
         </tr>`;
         })
         .join('');
       tbody.querySelectorAll('.gap-tick-input').forEach((input) => {
-        input.addEventListener('change', () => toggleTick(input.dataset.domain, input.checked, input, renderRows));
+        input.addEventListener('change', () => toggleTick(input.dataset.domain, input.dataset.category, input.checked, input, renderRows));
       });
     }
 
@@ -501,19 +618,22 @@ export function mount(container) {
     return groupEl;
   }
 
-  async function toggleTick(domainName, ticked, input, onSuccess) {
+  async function toggleTick(domainName, category, ticked, input, onSuccess) {
     input.disabled = true;
     try {
       const res = await fetch(`/api/domain-itglue-gap/${encodeURIComponent(domainName)}/tick`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticked }),
+        body: JSON.stringify({ category, ticked }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       // Update in place rather than a full reload -- keeps scroll position
-      // and every other row's own just-clicked state intact.
-      const row = lastData.rows.find((r) => r.domainName === domainName);
+      // and every other row's own just-clicked state intact. Matched by
+      // BOTH domainName and category -- the same domain can have more than
+      // one currently-open row now (see db.js's own top comment), so
+      // domainName alone could update the wrong one.
+      const row = lastData.rows.find((r) => r.domainName === domainName && r.category === category);
       if (row) Object.assign(row, data);
       onSuccess(); // re-renders this table's own tbody so the "still showing as missing" flag/tooltip reflect the new state immediately
     } catch (err) {

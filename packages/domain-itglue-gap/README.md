@@ -41,6 +41,40 @@ job can never disagree with either of those about what counts as matched.
   `accountReference`, `expiryDate`, `createdDate`, `modifiedDate`, `login`,
   `autoRenew`) -- the account reference code is shown as-is, by request,
   rather than presenting it as if it were a real name.
+- **Resolved + in IT Glue, but its own tracked Expires date doesn't match
+  TPP's real one** -> "Expiry Mismatch", by request ("checks the 'Expires'
+  date in the IT Glue Domain Tracker against the 'Expiry Date' in TPP
+  Wholesale"). Independent of every other check here -- a domain can be
+  Wrong Client AND Expiry Mismatch at once, confirmed live (14 real
+  domains on this account are both). IT Glue's own `expires-on` attribute
+  (confirmed live: a real `YYYY-MM-DD` string, same format TPP's own
+  `expiryDate` already uses -- or the literal non-date string
+  `"Processing"`, IT Glue's own in-progress sync placeholder, or genuinely
+  blank) is compared directly; a blank/"Processing" value is flagged too
+  (IT Glue simply not knowing this domain's expiry at all is itself worth
+  a person's attention, confirmed by request), shown as "Not set in IT
+  Glue" rather than silently skipped. A real 1-calendar-day difference is
+  split into its own "Expiry Mismatch -- 1 Day Difference" section, hidden
+  behind a button by default (same convention Email Domain Mismatch
+  below already established) -- confirmed live that the overwhelming
+  majority of real differences on this account (251 of 487) are exactly
+  one day apart, almost certainly a timezone/date-boundary display quirk
+  between the two systems, not a genuine discrepancy; the 1-day tolerance
+  still correctly surfaces a real stale record in the main section (e.g.
+  `setmaritime.com.au`, confirmed live: IT Glue said `2025-02-11`, TPP
+  said the real `2027-02-10` -- already over a year stale). The main
+  section starts minimised, by request -- click its header to expand
+  (same `.resource-group-header--toggle` convention this dashboard already
+  uses elsewhere, not the separate show/hide-behind-a-button convention
+  its own 1-day sibling section uses). Dashboard-only, by request ("Don't
+  add the expiry discrepancies to the ticket at all ... it's all too
+  crappy") -- NEITHER bucket is ever mentioned in the ticket body or the
+  attached CSV, unlike every other category on this list; see "Ticket"
+  below. There's no way to fix this FROM the dashboard either way -- IT
+  Glue's own Domains resource is confirmed read-only via its public API
+  (no documented PATCH/update for it, confirmed against IT Glue's own
+  developer docs and its official PowerShell wrapper), so a real mismatch
+  still has to be corrected by hand in IT Glue's own UI.
 - **Resolved + in IT Glue, but under the WRONG organisation** -> "Wrong
   Client in IT Glue", by request ("If a domain appears on an IT Glue Client
   but that Client is not the same client as the Autotask Client on which
@@ -100,9 +134,11 @@ Glue" check above.
 ## The dashboard page
 
 `client.js`/`server.js` -- "Domain / IT Glue Gaps" in the sidebar. Reads
-`db.js`'s own `domain_gaps` table (one row per domain currently open in
-either list) and shows two sections, each a plain table with a "Done"
-checkbox per row:
+`db.js`'s own `domain_gaps` table (one row per (domain, category) pair
+currently open -- NOT one row per domain, see db.js's own top comment for
+why: a domain can genuinely belong to more than one category's own list at
+once) and shows one section per category, each a plain table with a "Done"
+checkbox per row, in this order:
 - **Missing from IT Glue** -- Domain, Expiry Date, "IT Glue Client Name".
   The Client name is a link to that Client's own IT Glue
   organisation page (not the domain itself -- it's a gap precisely because
@@ -117,6 +153,19 @@ checkbox per row:
 - **No matching Autotask Client** -- Domain, Expiry Date, TPP Account
   Reference. No Client name here at all (nothing's been resolved), so no
   link.
+- **Expiry Mismatch** -- Domain, Expiry Date (TPP), IT Glue Expires (red
+  when it's a real, differing date -- a genuine conflict, by request;
+  plain "Not set in IT Glue" when IT Glue has none at all -- a different,
+  less urgent problem), TPP Acc, IT Glue Client Name. Sorted with real
+  conflicts first by default (by request), a blank IT Glue value always
+  sorting last. Its own "-- 1 Day Difference" sibling section sits right
+  after it, hidden behind a button by default (see "Matching" above).
+- **Wrong Client in IT Glue** -- Domain, Expiry Date, TPP Acc, "Autotask
+  Client UDF" (links to Autotask, by request), "Domain Tracker (IT Glue)"
+  (links to the wrong org it's actually filed under).
+- **Email Domain Mismatch** -- hidden behind a "View ... (N)" button by
+  default (by request -- "turns out most of them are ok"), still fully
+  computed/persisted/ticketed every run regardless of whether it's shown.
 
 **The page's own Refresh button is a real LIVE pull**, by request -- clicking
 it hits `GET /api/domain-itglue-gap?force=true`, which calls `job.js`'s own
@@ -140,19 +189,27 @@ expired? -- same "never guess" convention this job follows elsewhere). If
 nothing changed, or there's no open ticket, no Autotask write happens at
 all -- only `db.js`'s own state updates.
 
-Ticking a checkbox (`POST /api/domain-itglue-gap/:domainName/tick`) is
-**per domain, not per run or per ticket** -- by request, ticking off a
-domain that's STILL a gap on a LATER run keeps its tick (no lost progress)
-rather than resetting; the row is instead flagged "still showing as
-missing" in red so staff notice it wasn't actually fixed, same "never
-auto-resolve, let a person decide" convention this dashboard already
-follows elsewhere. A domain that genuinely stops being a gap (now found in
-IT Glue, or now resolves to a Client) just disappears from both the table
-and the ticket's next summary -- `db.js`'s own `replaceCurrentGaps()`
-deletes rows that aren't in the freshly computed set, so presence in the
+Ticking a checkbox (`POST /api/domain-itglue-gap/:domainName/tick`, body
+`{ category, ticked }`) is **per (domain, category), not per run or per
+ticket** -- `category` is required in the body, not just the URL's own
+domainName, because the same domain can have more than one currently-open
+row (see above); ticking the Wrong Client row for a domain that's ALSO
+Expiry Mismatched leaves that other row's own tick state untouched
+(confirmed live). By request, ticking off a row that's STILL a gap on a
+LATER run keeps its tick (no lost progress) rather than resetting; the row
+is instead flagged "still showing as missing" in red so staff notice it
+wasn't actually fixed, same "never auto-resolve, let a person decide"
+convention this dashboard already follows elsewhere. A (domain, category)
+pair that genuinely stops being a gap in that category (now found in IT
+Glue, now resolves to a Client, now matches TPP's expiry, etc.) just
+disappears from both the table and the ticket's next summary -- `db.js`'s
+own `replaceCurrentGaps()` deletes exactly that pair once it's no longer
+in the freshly computed set for that category (a different category's own
+row for the same domain is untouched either way), so presence in the
 table IS the "still open" signal; there's no separate resolved/history
-table. `data.db` (per-domain state) is updated on EVERY run, including dry
-runs -- it's this job's own local state, not an Autotask write.
+table. `data.db` (per-(domain, category) state) is updated on EVERY run,
+including dry runs -- it's this job's own local state, not an Autotask
+write.
 
 ## Ticket
 
@@ -174,6 +231,11 @@ hardcoded, by request, deliberately NOT read from `APP_BASE_URL`/env, so a
 manual run from a dev machine never puts a `localhost` link in a real
 ticket) -- the full, tickable list lives there instead. A CSV of all four
 lists is still attached as an offline copy.
+
+**Only four of the dashboard page's six categories ever reach Autotask** --
+Expiry Mismatch and its own 1-day-difference sibling are deliberately left
+out of both the ticket body and the CSV (see "Matching" above) -- dashboard-
+only, by request.
 
 **Dedup/update, not one ticket per run**: searches for an open ticket (status
 not in `[5, 20]` -- Complete / Billing-Contract, the same open/closed

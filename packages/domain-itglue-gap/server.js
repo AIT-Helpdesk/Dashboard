@@ -19,6 +19,7 @@ function rowToJson(row) {
     wrongItglueOrgName: row.wrong_itglue_org_name,
     wrongItglueOrgUrl: row.wrong_itglue_org_url,
     autotaskClientUrl: row.autotask_client_url,
+    itglueExpiresOn: row.itglue_expires_on,
     contactEmailDomain: row.contact_email_domain,
     tppAccountReference: row.tpp_account_reference,
     firstSeenAt: row.first_seen_at,
@@ -69,16 +70,22 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Ticking is per-domain, not per-ticket -- a domain that's STILL a gap on a
-// later run KEEPS its tick (by request, "keep it ticked, but flag it" --
-// see db.js's own comment), so this never auto-clears; only a person can
-// untick (ticked: false).
+// Ticking is per (domain, category), not per-ticket -- a domain that's
+// STILL a gap on a later run KEEPS its tick (by request, "keep it ticked,
+// but flag it" -- see db.js's own comment), so this never auto-clears;
+// only a person can untick (ticked: false). `category` is required in the
+// body -- the SAME domain can have more than one currently-open row (e.g.
+// wrong-client AND expiry-mismatched at once, see db.js's own top
+// comment), so the URL's own domainName alone doesn't uniquely identify
+// which row to tick.
 router.post('/:domainName/tick', (req, res) => {
   const { domainName } = req.params;
+  const category = req.body?.category;
   const ticked = req.body?.ticked !== false; // default true -- the button is "mark done"
+  if (!category) return res.status(400).json({ error: 'Body field "category" is required.' });
   try {
-    const row = setTicked(domainName, ticked, getActor(req));
-    if (!row) return res.status(404).json({ error: `"${domainName}" is not a currently-open gap.` });
+    const row = setTicked(domainName, category, ticked, getActor(req));
+    if (!row) return res.status(404).json({ error: `"${domainName}" (${category}) is not a currently-open gap.` });
     res.json(rowToJson(row));
   } catch (err) {
     console.error('domain-itglue-gap: failed to update tick state:', err.message);

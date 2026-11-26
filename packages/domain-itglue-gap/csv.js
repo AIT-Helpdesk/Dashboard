@@ -17,9 +17,14 @@ function csvRow(values) {
 // bulk domain list has no actual customer-name field, confirmed live, so
 // the account reference is labelled honestly as what it is), domains
 // filed under the WRONG Client in IT Glue (both the correct Client and the
-// wrong organisation it's actually sitting under, by request), and
-// domains that don't match their Client's own Primary Contact email
-// domain (by request).
+// wrong organisation it's actually sitting under, by request), and domains
+// that don't match their Client's own Primary Contact email domain (by
+// request). Neither Expiry Mismatch nor its own "off by exactly 1 day"
+// sibling bucket is included here at all -- by request ("Don't add the
+// expiry discrepancies to the ticket at all ... it's all too crappy"),
+// the whole check is dashboard-only (see job.js's own buildTicketBody()
+// comment). The "IT Glue Expires" column this file used to carry only for
+// Expiry Mismatch's own rows is gone too, for the same reason.
 function buildGapCsv(gaps, unmatched, wrongClient, emailDomainMismatch) {
   const lines = [
     'Section,Domain,Expiry Date,Autotask Client,Currently Filed Under (IT Glue),Primary Contact Email Domain,TPP Account Reference',

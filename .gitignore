@@ -208,3 +208,11 @@ packages/invoice-intake/data.db-wal
 # A stray real client report PDF that ended up sitting untracked in the
 # repo root -- not source, never meant to be committed.
 /1834 Hotels September 2026 Managed Services Report.pdf
+
+# ViCyber Reports' own SQLite database (db.js) -- real uploaded client scan
+# data (findings) and the reports that produced them, not source, same
+# "live operational data never committed" reasoning as every other data.db
+# in this section.
+packages/vicyber-reports/data.db
+packages/vicyber-reports/data.db-shm
+packages/vicyber-reports/data.db-wal

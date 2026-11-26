@@ -12718,6 +12718,16 @@ tr.accrued-time-yellow-row th {
   margin-left: 0.6rem;
 }
 
+/* The Expiry Mismatch/Email Domain Mismatch "View/Hide ... (N)" toggle
+   buttons, by request -- a bare <button> appended straight into .results
+   has no margin of its own (unlike .resource-group, which already has
+   margin-bottom: 1rem), so it otherwise sits flush against whichever
+   .resource-group comes right after it. */
+.dig-section-toggle-btn {
+  display: block;
+  margin-bottom: 1rem;
+}
+
 /* Admin -- new page, by request ("tabs like RMM Filter Checks"). Table
    fits its content, not 100% width, same standing convention every other
    page's own table follows. */

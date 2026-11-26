@@ -1,0 +1,18 @@
+{
+  "name": "@dashboard/vicyber-reports",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "vicyber-reports",
+    "label": "ViCyber Reports",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "express": "^4.19.2",
+    "multer": "^2.0.0",
+    "xlsx": "^0.18.5"
+  }
+}
