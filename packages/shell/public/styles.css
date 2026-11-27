@@ -1190,16 +1190,6 @@ h1 {
 .tab-button.drag-over {
   box-shadow: inset 2px 0 0 0 var(--accent);
 }
-/* A utility tab (Ticket Info's own "Help" tab) set apart from the content
-   tabs beside it by request -- narrower padding and pushed to the far
-   right of the bar (of whichever row it ends up on, if the strip has
-   wrapped), rather than reading as a fifth report of equal weight to the
-   other four. */
-.tab-button--small {
-  padding: 0.2rem 0.45rem;
-  margin-left: auto;
-}
-
 /* Dragging a page in FROM the sidebar to add it as a tab (see app.js's
    dragstart on .nav-item, and this page's own wireSidebarDropTarget()) --
    a dashed accent outline on the whole bar while a valid drag hovers over

@@ -9,15 +9,29 @@ export const label = "Client Financials";
 let lastQuery = null; // { client }
 let lastData = null;
 
-// Whichever mount() is CURRENTLY on screen registers its own render()
-// here. Fixes a real bug: load()'s render(data) call is a closure over
-// THAT mount's own statusEl/resultsEl -- if you navigate away before a
-// search resolves and come back before it actually finishes, the old
-// mount's load() still runs to completion and would otherwise call its
+// True for the whole span between load() starting and finishing --
+// survives a remount same as lastQuery/lastData above (module-scope, not
+// inside mount()). By request ("keep loaded data ... not stop the
+// loading") -- switching tabs away mid-search never cancels the fetch
+// (nothing here ever did), but mount() used to have no way to tell a
+// load was still running, so coming back showed the pristine "Type a
+// client name..." form -- indistinguishable from never having searched,
+// which is what made it LOOK stopped and prompted re-running it. mount()
+// checks this now (see its own bottom) and resumes showing "Loading..."
+// instead.
+let loadInFlight = false;
+
+// Whichever mount() is CURRENTLY on screen registers its own render()/
+// setLoading() here. Fixes a real bug: load()'s render(data) call is a
+// closure over THAT mount's own statusEl/resultsEl -- if you navigate away
+// before a search resolves and come back before it actually finishes, the
+// old mount's load() still runs to completion and would otherwise call its
 // own (now detached, invisible) render(), so the currently-visible new
-// mount never shows the result. Routing load()'s render call through this
-// instead means whichever mount is actually visible always receives it.
+// mount never shows the result. Routing load()'s render/setLoading calls
+// through these instead means whichever mount is actually visible always
+// receives them.
 let activeRender = null;
+let activeSetLoading = null;
 
 export function mount(container) {
   container.innerHTML = `
@@ -44,18 +58,31 @@ export function mount(container) {
   // This mount is now the active one -- see activeRender's own comment
   // up top.
   activeRender = render;
+  activeSetLoading = setLoading;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     load(clientInput.value);
   });
 
+  // Disables Search and shows "Loading..." (isLoading) or hands back
+  // control (!isLoading, render() itself re-shows/hides statusEl per the
+  // result it got) -- split out of load() so mount() below can call it
+  // directly too, to resume into the same look when returning to a tab
+  // whose load is still running.
+  function setLoading(isLoading) {
+    searchButton.disabled = isLoading;
+    if (isLoading) {
+      statusEl.hidden = false;
+      statusEl.className = 'status';
+      statusEl.textContent = 'Loading...';
+      resultsEl.innerHTML = '';
+    }
+  }
+
   async function load(clientName, companyId) {
-    searchButton.disabled = true;
-    statusEl.hidden = false;
-    statusEl.className = 'status';
-    statusEl.textContent = 'Loading...';
-    resultsEl.innerHTML = '';
+    loadInFlight = true;
+    activeSetLoading(true);
 
     try {
       const params = new URLSearchParams({ client: clientName });
@@ -65,19 +92,27 @@ export function mount(container) {
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       lastQuery = { client: clientName };
       lastData = data;
-      // A pick from the ambiguous-match list resolves to one company; reflect
-      // that in the input so the field matches what's actually displayed.
-      if (data.status === 'ok') clientInput.value = data.companyName;
       activeRender(data);
     } catch (err) {
-      statusEl.className = 'status error';
-      statusEl.textContent = `Error: ${err.message}`;
+      // Not persisted to lastData -- an error is shown live only to
+      // whoever's watching right now, same as before this change; a
+      // later remount falls back to the last good result (or pristine),
+      // not a stale error.
+      activeRender({ status: 'fetch-error', message: err.message });
     } finally {
-      searchButton.disabled = false;
+      loadInFlight = false;
+      activeSetLoading(false);
     }
   }
 
   function render(data) {
+    if (data.status === 'fetch-error') {
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.textContent = `Error: ${data.message}`;
+      resultsEl.innerHTML = '';
+      return;
+    }
     if (data.status === 'not-found') {
       statusEl.hidden = false;
       statusEl.className = 'status error';
@@ -109,6 +144,10 @@ export function mount(container) {
       return;
     }
 
+    // Through render() (not load()) so it always lands on the CURRENTLY
+    // visible mount's own input -- same reason load()'s render call is
+    // indirected at all, see activeRender's own comment up top.
+    clientInput.value = data.companyName;
     statusEl.hidden = true;
     resultsEl.innerHTML = '';
 
@@ -178,7 +217,10 @@ export function mount(container) {
     resultsEl.appendChild(invoiceGroup);
   }
 
-  if (lastData) render(lastData);
+  // A load still in flight wins over a stale finished result -- see
+  // loadInFlight's own comment up top.
+  if (loadInFlight) setLoading(true);
+  else if (lastData) render(lastData);
 
   function summaryRow(label, values, total, isTotalRow) {
     const rowClass = isTotalRow ? ' class="shaded-row"' : '';

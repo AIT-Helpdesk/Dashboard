@@ -10,15 +10,36 @@ export const label = "Contract Services";
 let lastQuery = null; // { month, search, client }
 let lastData = null;
 
-// Whichever mount() is CURRENTLY on screen registers its own render()
-// here. Fixes a real bug: load()'s render(data) call is a closure over
-// THAT mount's own statusEl/resultsEl -- if you navigate away before a
-// search resolves and come back before it actually finishes, the old
-// mount's load() still runs to completion and would otherwise call its
+// The query currently being searched -- set right before the fetch
+// starts, cleared once it finishes (success or error). Separate from
+// lastQuery (only ever set on SUCCESS) so a mount resumed mid-search can
+// restore the exact in-flight inputs, not whatever the last FINISHED
+// search happened to be.
+let pendingQuery = null;
+
+// True for the whole span between load() starting and finishing --
+// survives a remount same as lastQuery/lastData/pendingQuery above
+// (module-scope, not inside mount()). By request ("keep loaded data ...
+// not stop the loading") -- switching tabs away mid-search never cancels
+// the fetch (nothing here ever did), but mount() used to have no way to
+// tell a load was still running, so coming back showed the pristine
+// "Optionally filter by..." form -- indistinguishable from never having
+// searched, which is what made it LOOK stopped and prompted re-running
+// it. mount() checks this now (see its own bottom) and resumes showing
+// "Loading..." instead.
+let loadInFlight = false;
+
+// Whichever mount() is CURRENTLY on screen registers its own render()/
+// setLoading() here. Fixes a real bug: load()'s render(data) call is a
+// closure over THAT mount's own statusEl/resultsEl -- if you navigate away
+// before a search resolves and come back before it actually finishes, the
+// old mount's load() still runs to completion and would otherwise call its
 // own (now detached, invisible) render(), so the currently-visible new
-// mount never shows the result. Routing load()'s render call through this
-// instead means whichever mount is actually visible always receives it.
+// mount never shows the result. Routing load()'s render/setLoading calls
+// through these instead means whichever mount is actually visible always
+// receives them.
 let activeRender = null;
+let activeSetLoading = null;
 
 export function mount(container) {
   container.innerHTML = `
@@ -46,6 +67,7 @@ export function mount(container) {
   const statusEl = container.querySelector('#status');
   const summaryEl = container.querySelector('#summary');
   const resultsEl = container.querySelector('#results');
+  const button = form.querySelector('button');
 
   // AEST (UTC+10, no DST in Queensland) "this month", not the browser's own
   // local timezone -- computed explicitly so the month picker defaults to
@@ -56,7 +78,11 @@ export function mount(container) {
   }
   monthInput.value = currentMonthISO();
 
-  if (lastQuery) {
+  if (pendingQuery) {
+    monthInput.value = pendingQuery.month;
+    searchInput.value = pendingQuery.search;
+    clientInput.value = pendingQuery.client;
+  } else if (lastQuery) {
     monthInput.value = lastQuery.month;
     searchInput.value = lastQuery.search;
     clientInput.value = lastQuery.client;
@@ -65,20 +91,35 @@ export function mount(container) {
   // This mount is now the active one -- see activeRender's own comment
   // up top.
   activeRender = render;
+  activeSetLoading = setLoading;
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     load(monthInput.value, searchInput.value, clientInput.value);
   });
 
+  // Disables Search and shows "Loading..." (isLoading) or hands back
+  // control (!isLoading, render() itself re-shows/hides statusEl per the
+  // result it got) -- split out of load() so mount() below can call it
+  // directly too, to resume into the same look when returning to a tab
+  // whose load is still running. Reads monthInput.value, not a captured
+  // parameter -- by the time this runs on a resumed mount, the pendingQuery
+  // restore above has already set it to the actual in-flight month.
+  function setLoading(isLoading) {
+    button.disabled = isLoading;
+    if (isLoading) {
+      statusEl.hidden = false;
+      statusEl.className = 'status';
+      statusEl.textContent = `Loading services active in ${formatMonth(monthInput.value)}...`;
+      summaryEl.hidden = true;
+      resultsEl.innerHTML = '';
+    }
+  }
+
   async function load(month, search, clientName) {
-    const button = form.querySelector('button');
-    button.disabled = true;
-    statusEl.hidden = false;
-    statusEl.className = 'status';
-    statusEl.textContent = `Loading services active in ${formatMonth(month)}...`;
-    summaryEl.hidden = true;
-    resultsEl.innerHTML = '';
+    pendingQuery = { month, search, client: clientName };
+    loadInFlight = true;
+    activeSetLoading(true);
 
     try {
       const params = new URLSearchParams({ month });
@@ -91,14 +132,27 @@ export function mount(container) {
       lastData = data;
       activeRender(data);
     } catch (err) {
-      statusEl.className = 'status error';
-      statusEl.textContent = `Error: ${err.message}`;
+      // Not persisted to lastData -- an error is shown live only to
+      // whoever's watching right now, same as before this change; a
+      // later remount falls back to the last good result (or pristine),
+      // not a stale error.
+      activeRender({ status: 'fetch-error', message: err.message });
     } finally {
-      button.disabled = false;
+      loadInFlight = false;
+      pendingQuery = null;
+      activeSetLoading(false);
     }
   }
 
   function render(data) {
+    if (data.status === 'fetch-error') {
+      statusEl.hidden = false;
+      statusEl.className = 'status error';
+      statusEl.textContent = `Error: ${data.message}`;
+      summaryEl.hidden = true;
+      resultsEl.innerHTML = '';
+      return;
+    }
     statusEl.hidden = true;
 
     summaryEl.hidden = false;
@@ -165,7 +219,10 @@ export function mount(container) {
     }
   }
 
-  if (lastData) render(lastData);
+  // A load still in flight wins over a stale finished result -- see
+  // loadInFlight's own comment up top.
+  if (loadInFlight) setLoading(true);
+  else if (lastData) render(lastData);
 
   // Telco service descriptions often end with an AVC (Access Virtual Circuit)
   // reference code glued on with no natural wrap point of its own -- force it

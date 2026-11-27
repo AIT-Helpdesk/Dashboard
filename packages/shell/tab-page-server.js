@@ -27,9 +27,6 @@ const { isDashboardAdmin, readNavLayout, writeNavLayout, unregisterPage } = requ
 //     list layered on top, same "don't touch the generated file, persist
 //     a small overlay instead" shape permanent-tabs.json already uses
 //     for the opposite direction (adding, not removing).
-//   - help-text.json -- free-form custom notes the admin can add to that
-//     page's own Help tab, on top of the always-generated "how this
-//     works" explanation.
 //   - tab-order.json -- the admin's own tab ORDER, by request ("I would
 //     like them to appear like that for everyone... they don't even
 //     retain that new position for me"). Always applied for every
@@ -37,7 +34,6 @@ const { isDashboardAdmin, readNavLayout, writeNavLayout, unregisterPage } = requ
 function createTabPageRouter(storageDir) {
   const permanentTabsPath = path.join(storageDir, 'permanent-tabs.json');
   const removedDefaultTabsPath = path.join(storageDir, 'removed-default-tabs.json');
-  const helpTextPath = path.join(storageDir, 'help-text.json');
   const defaultTabsPath = path.join(storageDir, 'default-tabs.json');
   const tabOrderPath = path.join(storageDir, 'tab-order.json');
 
@@ -106,19 +102,6 @@ function createTabPageRouter(storageDir) {
 
   function writeRemovedDefaultTabIds(ids) {
     fs.writeFileSync(removedDefaultTabsPath, JSON.stringify(ids, null, 2));
-  }
-
-  function readHelpText() {
-    try {
-      const data = JSON.parse(fs.readFileSync(helpTextPath, 'utf8'));
-      return typeof data === 'string' ? data : '';
-    } catch {
-      return ''; // no file yet, or unreadable -- no custom notes yet
-    }
-  }
-
-  function writeHelpText(text) {
-    fs.writeFileSync(helpTextPath, JSON.stringify(text));
   }
 
   function readTabOrder() {
@@ -194,21 +177,6 @@ function createTabPageRouter(storageDir) {
       return res.status(400).json({ error: 'Body must be { tabIds: [...] }.' });
     }
     writeTabOrder(req.body.tabIds);
-    res.json({ ok: true });
-  });
-
-  router.get('/help-text', (req, res) => {
-    res.json({ text: readHelpText(), editable: isDashboardAdmin(req) });
-  });
-
-  router.put('/help-text', (req, res) => {
-    if (!isDashboardAdmin(req)) {
-      return res.status(403).json({ error: 'Only Amber can edit this page\'s notes.' });
-    }
-    if (typeof req.body?.text !== 'string') {
-      return res.status(400).json({ error: 'Body must be { text: string }.' });
-    }
-    writeHelpText(req.body.text);
     res.json({ ok: true });
   });
 

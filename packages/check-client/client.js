@@ -52,6 +52,30 @@ let lastM365UsersData = null;
 // fresh search.
 let lastOtherContractsData = null;
 
+// True for the whole span between search() starting and finishing --
+// survives a remount same as every lastXxxData above (module-scope, not
+// inside mount()). By request ("keep loaded data ... not stop the
+// loading") -- switching tabs away mid-search never cancels any fetch
+// (nothing here ever did), but mount() used to have no way to tell a
+// search was still running, so coming back showed the pristine form --
+// indistinguishable from never having searched, which is what made it
+// LOOK stopped and prompted re-running it. mount() checks this now (see
+// its own bottom) and resumes showing the Search button disabled, same
+// as mid-search. Each SECTION's own in-flight state is tracked
+// separately below (ordersInFlight etc.) since they settle at different
+// times -- this one flag only covers the Search button itself.
+let searchInFlight = false;
+let ordersInFlight = false;
+let subsInFlight = false;
+let servicesInFlight = false;
+let dattoInFlight = false;
+// 'waiting' (Orders/Subscriptions/Services/Datto still running -- see
+// loadSubscriptions()'s own "stale the moment a new search starts" block)
+// or 'loading' (loadM365Tenancy()'s own fetch actually in flight) or null
+// (idle) -- a 2-state enum, not a boolean, so a resumed mount can tell
+// which of its own two different status messages to show.
+let m365Phase = null;
+
 // Whichever mount() is CURRENTLY on screen registers its own section
 // render functions here, overwriting whatever the previous mount left
 // behind. Fixes a real bug (by request, "if i change pages in the
@@ -622,6 +646,7 @@ export function mount(container) {
     const exactDattoSite = exactDattoSiteInput.checked;
     const since = sinceInput.value;
     const month = monthInput.value;
+    searchInFlight = true;
     searchButton.disabled = true;
     // Clears the Client Check Summary immediately, by request -- otherwise
     // the PREVIOUS client's own comparison rows keep showing right through
@@ -704,6 +729,7 @@ export function mount(container) {
       lastResolveMatches = resolveMatches;
       lastSince = since;
       lastMonth = month;
+      searchInFlight = false;
       searchButton.disabled = false;
     }
   }
@@ -1901,20 +1927,37 @@ export function mount(container) {
       updateClientLabel();
       return;
     }
-    ordersStatusEl.className = 'status loading';
-    ordersStatusEl.textContent = `Loading orders for "${client}"...`;
+    ordersInFlight = true;
+    activeRenderers.setOrdersLoading(client);
     try {
       const params = new URLSearchParams({ client, since });
       const data = await fetchJson(`/api/check-client/orders?${params.toString()}`, 'GET');
       lastOrdersData = data;
       activeRenderers.renderOrders(data);
     } catch (err) {
-      ordersStatusEl.className = 'status error';
-      ordersStatusEl.textContent = `Error: ${err.message}`;
+      activeRenderers.renderOrdersError(err.message);
     } finally {
+      ordersInFlight = false;
       ordersSettled = true;
       updateClientLabel();
     }
+  }
+
+  // Split out of loadOrders() so mount() below can call it directly too,
+  // to resume into the same look when returning to a tab whose load is
+  // still running -- see searchInFlight's own comment up top.
+  function setOrdersLoading(client) {
+    ordersStatusEl.hidden = false;
+    ordersStatusEl.className = 'status loading';
+    ordersStatusEl.textContent = `Loading orders for "${client}"...`;
+    ordersSummaryEl.hidden = true;
+    ordersResultsEl.innerHTML = '';
+  }
+
+  function renderOrdersError(message) {
+    ordersStatusEl.hidden = false;
+    ordersStatusEl.className = 'status error';
+    ordersStatusEl.textContent = `Error: ${message}`;
   }
 
   function renderOrders(data) {
@@ -2422,13 +2465,8 @@ export function mount(container) {
     // derived from this section's (and Contract Services') own results (see
     // loadM365Tenancy() below), so the previous search's answer shouldn't
     // linger on screen while a new one is in flight.
-    m365StatusEl.hidden = false;
-    m365StatusEl.className = 'status loading';
-    m365StatusEl.textContent = 'Waiting for Subscriptions and Contracts...';
-    m365SummaryEl.hidden = true;
-    m365CurrentDataNoteEl.hidden = true;
-    m365ResultsEl.innerHTML = '';
-    syncSummaryM365Pending();
+    m365Phase = 'waiting';
+    activeRenderers.setM365Waiting();
     // No confirmed Ingram Client (see effectiveValue() above) -- by
     // request, this page no longer falls back to a fuzzy search here;
     // skips the fetch entirely rather than guessing.
@@ -2440,8 +2478,8 @@ export function mount(container) {
       updateClientLabel();
       return;
     }
-    subsStatusEl.className = 'status loading';
-    subsStatusEl.textContent = `Loading subscriptions for "${client}"...`;
+    subsInFlight = true;
+    activeRenderers.setSubsLoading(client);
     try {
       const params = new URLSearchParams({ client });
       const data = await fetchJson(`/api/check-client/subscriptions?${params.toString()}`, 'GET');
@@ -2449,12 +2487,41 @@ export function mount(container) {
       activeRenderers.renderSubscriptions(data);
       activeRenderers.renderClientCheckSummary();
     } catch (err) {
-      subsStatusEl.className = 'status error';
-      subsStatusEl.textContent = `Error: ${err.message}`;
+      activeRenderers.renderSubsError(err.message);
     } finally {
+      subsInFlight = false;
       subsSettled = true;
       updateClientLabel();
     }
+  }
+
+  // Split out of loadSubscriptions() -- see setOrdersLoading()'s own
+  // comment above.
+  function setSubsLoading(client) {
+    subsStatusEl.hidden = false;
+    subsStatusEl.className = 'status loading';
+    subsStatusEl.textContent = `Loading subscriptions for "${client}"...`;
+    subsSummaryEl.hidden = true;
+    subsCurrentDataNoteEl.hidden = true;
+    subsResultsEl.innerHTML = '';
+  }
+
+  function renderSubsError(message) {
+    subsStatusEl.hidden = false;
+    subsStatusEl.className = 'status error';
+    subsStatusEl.textContent = `Error: ${message}`;
+  }
+
+  // Same "stale the moment a new search starts" message loadSubscriptions()
+  // above sets inline -- split out so mount() below can resume into it too.
+  function setM365Waiting() {
+    m365StatusEl.hidden = false;
+    m365StatusEl.className = 'status loading';
+    m365StatusEl.textContent = 'Waiting for Subscriptions and Contracts...';
+    m365SummaryEl.hidden = true;
+    m365CurrentDataNoteEl.hidden = true;
+    m365ResultsEl.innerHTML = '';
+    syncSummaryM365Pending();
   }
 
   // Microsoft 365 Tenancy -- runs after Orders/Subscriptions/Contracts have
@@ -2483,12 +2550,6 @@ export function mount(container) {
   // that doesn't resolve -- so sending both here is safe, never a
   // name-match overriding a good tenant-id match.
   async function loadM365Tenancy() {
-    m365StatusEl.hidden = false;
-    m365StatusEl.className = 'status';
-    m365SummaryEl.hidden = true;
-    m365CurrentDataNoteEl.hidden = true;
-    m365ResultsEl.innerHTML = '';
-
     let subscriptionId = null;
     if (lastSubscriptionsData && lastSubscriptionsData.byClient.length === 1) {
       const msSub = lastSubscriptionsData.byClient[0].subscriptions.find((s) => /microsoft/i.test(s.name));
@@ -2500,17 +2561,16 @@ export function mount(container) {
     const clientName = autotaskNames.length === 1 ? autotaskNames[0] : ingramNames.length === 1 ? ingramNames[0] : null;
 
     if (!subscriptionId && !clientName) {
-      m365StatusEl.textContent = 'No single client resolved above -- narrow the search to look up Microsoft 365 Tenancy.';
-      syncSummaryM365Pending();
+      m365Phase = null;
+      activeRenderers.setM365NoClient();
       activeRenderers.renderClientCheckSummary();
       microsoftSettled = true;
       updateClientLabel();
       return;
     }
 
-    m365StatusEl.className = 'status loading';
-    m365StatusEl.textContent = 'Loading Microsoft 365 Tenancy...';
-    syncSummaryM365Pending();
+    m365Phase = 'loading';
+    activeRenderers.setM365Loading();
     try {
       const params = new URLSearchParams();
       if (subscriptionId) params.set('subscriptionId', subscriptionId);
@@ -2520,14 +2580,45 @@ export function mount(container) {
       activeRenderers.renderM365Tenancy(data);
       activeRenderers.renderClientCheckSummary();
     } catch (err) {
-      m365StatusEl.className = 'status error';
-      m365StatusEl.textContent = `Error: ${err.message}`;
-      syncSummaryM365Pending();
+      activeRenderers.renderM365Error(err.message);
       activeRenderers.renderClientCheckSummary();
     } finally {
+      m365Phase = null;
       microsoftSettled = true;
       updateClientLabel();
     }
+  }
+
+  // Split out of loadM365Tenancy() -- see setOrdersLoading()'s own
+  // comment above.
+  function setM365NoClient() {
+    m365StatusEl.hidden = false;
+    m365StatusEl.className = 'status';
+    m365StatusEl.textContent = 'No single client resolved above -- narrow the search to look up Microsoft 365 Tenancy.';
+    m365SummaryEl.hidden = true;
+    m365CurrentDataNoteEl.hidden = true;
+    m365ResultsEl.innerHTML = '';
+    syncSummaryM365Pending();
+  }
+
+  function setM365Loading() {
+    m365StatusEl.hidden = false;
+    m365StatusEl.className = 'status loading';
+    m365StatusEl.textContent = 'Loading Microsoft 365 Tenancy...';
+    m365SummaryEl.hidden = true;
+    m365CurrentDataNoteEl.hidden = true;
+    m365ResultsEl.innerHTML = '';
+    syncSummaryM365Pending();
+  }
+
+  function renderM365Error(message) {
+    m365StatusEl.hidden = false;
+    m365StatusEl.className = 'status error';
+    m365StatusEl.textContent = `Error: ${message}`;
+    m365SummaryEl.hidden = true;
+    m365CurrentDataNoteEl.hidden = true;
+    m365ResultsEl.innerHTML = '';
+    syncSummaryM365Pending();
   }
 
   // "Refresh" button, by request -- re-fetches just this section (a live
@@ -3012,11 +3103,8 @@ export function mount(container) {
   // ---------------------------------------------------------------------
 
   async function loadServices(client, exactClient, month) {
-    servicesStatusEl.hidden = false;
-    servicesStatusEl.className = 'status loading';
-    servicesStatusEl.textContent = `Loading services active in ${formatMonth(month)}...`;
-    servicesSummaryEl.hidden = true;
-    servicesResultsEl.innerHTML = '';
+    servicesInFlight = true;
+    activeRenderers.setServicesLoading(month);
     try {
       const params = new URLSearchParams({ client, month });
       if (exactClient) params.set('exactClient', 'true');
@@ -3043,13 +3131,29 @@ export function mount(container) {
       // the Summary showing fully-current data regardless of order.
       activeRenderers.renderClientCheckSummary();
     } catch (err) {
-      servicesStatusEl.className = 'status error';
-      servicesStatusEl.textContent = `Error: ${err.message}`;
+      activeRenderers.renderServicesError(err.message);
       activeRenderers.renderClientCheckSummary();
     } finally {
+      servicesInFlight = false;
       servicesSettled = true;
       updateClientLabel();
     }
+  }
+
+  // Split out of loadServices() -- see setOrdersLoading()'s own comment
+  // above.
+  function setServicesLoading(month) {
+    servicesStatusEl.hidden = false;
+    servicesStatusEl.className = 'status loading';
+    servicesStatusEl.textContent = `Loading services active in ${formatMonth(month)}...`;
+    servicesSummaryEl.hidden = true;
+    servicesResultsEl.innerHTML = '';
+  }
+
+  function renderServicesError(message) {
+    servicesStatusEl.hidden = false;
+    servicesStatusEl.className = 'status error';
+    servicesStatusEl.textContent = `Error: ${message}`;
   }
 
   // "Other Contracts" box on Client Check Summary, by request -- every
@@ -3537,8 +3641,8 @@ export function mount(container) {
       updateClientLabel();
       return;
     }
-    dattoStatusEl.className = 'status loading';
-    dattoStatusEl.textContent = `Loading Datto RMM devices for "${site}"...`;
+    dattoInFlight = true;
+    activeRenderers.setDattoLoading(site);
     try {
       const params = new URLSearchParams({ site });
       if (force) params.set('force', 'true');
@@ -3548,13 +3652,30 @@ export function mount(container) {
       activeRenderers.renderDattoRmm(data);
       activeRenderers.renderClientCheckSummary();
     } catch (err) {
-      dattoStatusEl.className = 'status error';
-      dattoStatusEl.textContent = `Error: ${err.message}`;
+      activeRenderers.renderDattoError(err.message);
       activeRenderers.renderClientCheckSummary();
     } finally {
+      dattoInFlight = false;
       dattoSettled = true;
       updateClientLabel();
     }
+  }
+
+  // Split out of loadDattoRmm() -- see setOrdersLoading()'s own comment
+  // above.
+  function setDattoLoading(site) {
+    dattoStatusEl.hidden = false;
+    dattoStatusEl.className = 'status loading';
+    dattoStatusEl.textContent = `Loading Datto RMM devices for "${site}"...`;
+    dattoSummaryEl.hidden = true;
+    dattoCurrentDataNoteEl.hidden = true;
+    dattoResultsEl.innerHTML = '';
+  }
+
+  function renderDattoError(message) {
+    dattoStatusEl.hidden = false;
+    dattoStatusEl.className = 'status error';
+    dattoStatusEl.textContent = `Error: ${message}`;
   }
 
   function renderDattoRmm(data) {
@@ -3696,7 +3817,26 @@ export function mount(container) {
   // up top. Registered before the restore calls below (though it wouldn't
   // matter either way -- these are hoisted function declarations, already
   // callable from the top of mount()).
-  activeRenderers = { renderOrders, renderSubscriptions, renderM365Tenancy, renderServices, renderDattoRmm, renderClientCheckSummary };
+  activeRenderers = {
+    renderOrders,
+    renderSubscriptions,
+    renderM365Tenancy,
+    renderServices,
+    renderDattoRmm,
+    renderClientCheckSummary,
+    setOrdersLoading,
+    renderOrdersError,
+    setSubsLoading,
+    renderSubsError,
+    setM365Waiting,
+    setM365NoClient,
+    setM365Loading,
+    renderM365Error,
+    setServicesLoading,
+    renderServicesError,
+    setDattoLoading,
+    renderDattoError,
+  };
 
   // Restores the resolved-field UI (and the effective values it implies)
   // on a same-session remount, same as every lastXxxData restore below --
@@ -3719,11 +3859,23 @@ export function mount(container) {
   servicesSettled = lastServicesData !== null;
   dattoSettled = lastDattoData !== null;
 
-  if (lastOrdersData) renderOrders(lastOrdersData);
-  if (lastSubscriptionsData) renderSubscriptions(lastSubscriptionsData);
-  if (lastM365Data) renderM365Tenancy(lastM365Data);
-  if (lastServicesData) renderServices(lastServicesData);
-  if (lastDattoData) renderDattoRmm(lastDattoData);
+  // A load still in flight wins over a stale finished result, section by
+  // section -- see searchInFlight's own comment up top. searchButton's
+  // own disabled state (and each section's own loading text) is restored
+  // this way rather than left to default back to enabled/pristine, which
+  // is what made an in-flight search look stopped on return to this tab.
+  searchButton.disabled = searchInFlight;
+  if (ordersInFlight) setOrdersLoading(effectiveIngramClientValue);
+  else if (lastOrdersData) renderOrders(lastOrdersData);
+  if (subsInFlight) setSubsLoading(effectiveIngramClientValue);
+  else if (lastSubscriptionsData) renderSubscriptions(lastSubscriptionsData);
+  if (m365Phase === 'loading') setM365Loading();
+  else if (m365Phase === 'waiting') setM365Waiting();
+  else if (lastM365Data) renderM365Tenancy(lastM365Data);
+  if (servicesInFlight) setServicesLoading(monthInput.value);
+  else if (lastServicesData) renderServices(lastServicesData);
+  if (dattoInFlight) setDattoLoading(effectiveDattoSiteValue);
+  else if (lastDattoData) renderDattoRmm(lastDattoData);
   renderClientCheckSummary();
   updateClientLabel();
 

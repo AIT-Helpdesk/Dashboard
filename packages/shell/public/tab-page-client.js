@@ -20,16 +20,9 @@ const PAGES_BY_ID = new Map(registeredPages.map((p) => [p.id, p]));
 // module is loaded by whichever tabbed page is currently mounted).
 const SIDEBAR_DRAG_TYPE = 'application/x-dashboard-page-id';
 
-// Not a real page id -- handled directly in selectTab() below instead of
-// going through the dynamic import path every other tab uses. Rendered
-// narrower (.tab-button--small) and pushed to the far right via CSS
-// (margin-left: auto), and deliberately NOT draggable/reorderable/
-// removable -- a fixed utility tab, not one of the content tabs.
-const HELP_TAB = { id: 'help', label: 'Help', small: true };
-
 // The one thing every tabbed page provides: its own id/label (for
-// self-reference exclusion and the generic Help text), where its own
-// permanent-tabs/help-text GET/PUT live (apiBase, backed by
+// self-reference exclusion), where its own permanent-tabs/removed-
+// default-tabs/tab-order GET/PUT live (apiBase, backed by
 // @dashboard/shell/tab-page-server.js's createTabPageRouter on that
 // page's own server.js), and its fixed, permanent starting tabs
 // (defaultTabs -- {id, label} pairs, e.g. Ticket Info's four reports).
@@ -128,10 +121,9 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
   // memory (which tab YOU were looking at), not a customization of which
   // tabs exist or their order, so it's unaffected by removing the
   // personal-tabs/personal-order concepts above -- validated against the
-  // known-at-this-point id set (plus the Help tab) -- a stale id (a
-  // permanent tab removed since, or one not yet known this early) just
-  // falls back to the first tab, same as a brand-new visit, rather than
-  // erroring.
+  // known-at-this-point id set -- a stale id (a permanent tab removed
+  // since, or one not yet known this early) just falls back to the first
+  // tab, same as a brand-new visit, rather than erroring.
   const LAST_ACTIVE_TAB_KEY = `${id}.lastActiveTab`;
   function loadLastActiveTabId(knownIds) {
     let saved;
@@ -149,19 +141,7 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
       // localStorage unavailable -- a refresh just lands on the first tab again, same as before this existed.
     }
   }
-  let lastActiveTabId = loadLastActiveTabId(new Set([...DEFAULT_TAB_IDS, HELP_TAB.id]));
-
-  // Custom, admin-editable notes shown on this page's own Help tab, on
-  // top of the always-generated "how this works" explanation below --
-  // by request. Genuinely shared (every viewer sees the same notes), so
-  // fetched from the server (<apiBase>/help-text) the same way
-  // permanentTabIds is, not stored locally.
-  let customHelpText = '';
-  let isHelpEditable = false;
-  // Whether the inline textarea editor is currently open -- reset
-  // whenever a non-Help tab is selected (see selectTab() below), so
-  // coming back to Help later never reopens a stale editor.
-  let helpEditing = false;
+  let lastActiveTabId = loadLastActiveTabId(DEFAULT_TAB_IDS);
 
   return function mount(container) {
     container.innerHTML = `
@@ -188,7 +168,6 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     fetchPermanentTabs();
     fetchRemovedDefaultTabs();
     fetchSharedTabOrder();
-    fetchHelpText();
 
     // Recomputes tabOrder fresh from the three current raw inputs
     // (computeTabOrder(), factory scope) and re-renders -- called after
@@ -200,8 +179,8 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     // removed from a DIFFERENT browser since this one last loaded).
     function syncTabOrder() {
       tabOrder = computeTabOrder();
-      if (!tabOrder.includes(lastActiveTabId) && lastActiveTabId !== HELP_TAB.id) {
-        selectTab(tabOrder[0] ?? HELP_TAB.id);
+      if (!tabOrder.includes(lastActiveTabId)) {
+        selectTab(tabOrder[0]);
       } else {
         renderTabBar();
       }
@@ -247,24 +226,6 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
       }
     }
 
-    async function fetchHelpText() {
-      try {
-        const res = await fetch(`${apiBase}/help-text`);
-        const data = await res.json();
-        if (!res.ok) return;
-        customHelpText = data.text || '';
-        isHelpEditable = !!data.editable;
-        // Only re-render if the Help tab is what's actually showing right
-        // now -- this fetch can resolve well after the viewer has already
-        // moved on to a different tab, and overwriting THAT with Help's
-        // own content would be wrong.
-        if (lastActiveTabId === HELP_TAB.id) renderHelpTab();
-      } catch {
-        // Best-effort -- custom notes just won't show for this load if
-        // the fetch fails; the generated explanation still works regardless.
-      }
-    }
-
     // Combines the built-in tabs with whatever the admin has added,
     // resolving each one's real label fresh from PAGES_BY_ID every time
     // -- recomputed rather than cached, since both sources can change at
@@ -299,17 +260,16 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
 
     // Renders the tab strip in tabOrder's current order (draggable for
     // the admin only -- see wireDragReorder below, a non-admin's strip is
-    // read-only) plus HELP_TAB fixed at the end. Called again after every
-    // reorder, add, or remove. (The minimize-to-a-toggle-button state this
-    // used to have was removed by request.)
+    // read-only). Called again after every reorder, add, or remove. (The
+    // minimize-to-a-toggle-button state this used to have was removed by
+    // request; the fixed Help tab that used to sit at the far right was
+    // removed by request too.)
     function renderTabBar() {
       const tabsById = allTabsById();
       const orderedTabs = tabOrder.map((tabId) => tabsById.get(tabId)).filter(Boolean);
-      tabBarEl.innerHTML =
-        orderedTabs
-          .map((t) => `<button type="button" class="tab-button" draggable="${isTabAdmin}" data-tab-id="${t.id}">${escapeHtml(t.label)}</button>`)
-          .join('') +
-        `<button type="button" class="tab-button tab-button--small" data-tab-id="${HELP_TAB.id}">${escapeHtml(HELP_TAB.label)}</button>`;
+      tabBarEl.innerHTML = orderedTabs
+        .map((t) => `<button type="button" class="tab-button" draggable="${isTabAdmin}" data-tab-id="${t.id}">${escapeHtml(t.label)}</button>`)
+        .join('');
 
       tabBarEl.querySelectorAll('.tab-button').forEach((btn) => {
         const tabId = btn.dataset.tabId;
@@ -318,17 +278,13 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         // Right-click -- wired for EVERY viewer now, not just the tab
         // admin (by request: "add that page to the current user's
         // favourites" needs to work for anyone, same as the sidebar's own
-        // right-click Add/Remove Favourites). Never on Help, which is
-        // always fixed and isn't a real favouritable page anyway.
-        // showTabContextMenu() below is the one place that decides which
-        // actions actually show -- Remove This Tab stays admin-only
-        // there, Favourites doesn't.
-        if (tabId !== HELP_TAB.id) {
-          btn.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            showTabContextMenu(e.clientX, e.clientY, tabId);
-          });
-        }
+        // right-click Add/Remove Favourites). showTabContextMenu() below
+        // is the one place that decides which actions actually show --
+        // Remove This Tab stays admin-only there, Favourites doesn't.
+        btn.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          showTabContextMenu(e.clientX, e.clientY, tabId);
+        });
       });
 
       wireDragReorder();
@@ -409,7 +365,6 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         btn.addEventListener('dragend', (e) => {
           btn.classList.remove('dragging');
           if (e.dataTransfer.dropEffect !== 'none') return; // dropped somewhere valid -- already handled by that drop
-          if (tabId === HELP_TAB.id) return; // Help is always fixed
           confirmDeleteTab().then((confirmed) => {
             if (!confirmed) return;
             if (DEFAULT_TAB_IDS.has(tabId)) removeDefaultTab(tabId);
@@ -431,7 +386,7 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
           if (!dragSrcId || dragSrcId === targetId) return;
           const fromIndex = tabOrder.indexOf(dragSrcId);
           const toIndex = tabOrder.indexOf(targetId);
-          if (fromIndex === -1 || toIndex === -1) return; // dropped on the (non-draggable) Help tab -- no-op
+          if (fromIndex === -1 || toIndex === -1) return; // not a known draggable tab -- no-op
           const next = [...tabOrder];
           next.splice(fromIndex, 1);
           next.splice(toIndex, 0, dragSrcId);
@@ -504,9 +459,8 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
       if (pageId === id) return; // dragging this page itself onto its own tab bar -- no-op
       // A removed built-in tab dragged back in from the sidebar restores
       // it, rather than treating it as "already a tab here" (it isn't,
-      // any more) -- a second, more discoverable way back besides the
-      // Help tab's own "Restore" button below, for whichever page still
-      // independently has a sidebar entry of its own.
+      // any more) -- the way back for whichever page still independently
+      // has a sidebar entry of its own.
       if (DEFAULT_TAB_IDS.has(pageId) && removedDefaultTabIds.includes(pageId)) {
         if (isTabAdmin) restoreDefaultTab(pageId);
         return;
@@ -566,7 +520,7 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         tabOrder = computeTabOrder();
         savedTabOrderIds = tabOrder;
         await pushSharedTabOrder(tabOrder);
-        if (lastActiveTabId === pageId) selectTab(tabOrder[0] ?? HELP_TAB.id);
+        if (lastActiveTabId === pageId) selectTab(tabOrder[0]);
         else renderTabBar();
       });
     }
@@ -575,9 +529,9 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     // membership never changes (that's the page's own fixed defaultTabs
     // config), only whether a given id is currently excluded via
     // removedDefaultTabIds, so removing one simply drops it from view
-    // for everyone until an admin restores it (right-click here, drag it
-    // back in from the sidebar if it still has its own entry there --
-    // see addTab() -- or the Help tab's own "Removed tabs" list below).
+    // for everyone until an admin restores it (right-click here, or drag
+    // it back in from the sidebar if it still has its own entry there --
+    // see addTab()).
     async function saveRemovedDefaultTabIds(nextIds) {
       try {
         const res = await fetch(`${apiBase}/removed-default-tabs`, {
@@ -603,7 +557,7 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         tabOrder = computeTabOrder();
         savedTabOrderIds = tabOrder;
         await pushSharedTabOrder(tabOrder);
-        if (lastActiveTabId === pageId) selectTab(tabOrder[0] ?? HELP_TAB.id);
+        if (lastActiveTabId === pageId) selectTab(tabOrder[0]);
         else renderTabBar();
       });
     }
@@ -618,7 +572,6 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         savedTabOrderIds = tabOrder;
         await pushSharedTabOrder(tabOrder);
         renderTabBar();
-        if (lastActiveTabId === HELP_TAB.id) renderHelpTab(); // "Removed tabs" list needs to drop this one too
       });
     }
 
@@ -705,29 +658,25 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
     }
 
     async function selectTab(tabId) {
-      if (!tabId) tabId = HELP_TAB.id; // every real tab removed -- Help is always there
+      if (!tabId) {
+        // Every real tab removed (an admin can empty every built-in and
+        // permanent tab out) -- nothing left to show.
+        lastActiveTabId = null;
+        tabBarEl.querySelectorAll('.tab-button').forEach((btn) => btn.classList.remove('active'));
+        tabContentEl.innerHTML = '<p class="status">No tabs available.</p>';
+        return;
+      }
       lastActiveTabId = tabId;
       saveLastActiveTabId(tabId);
       // Dashboard-wide Help button (app.js's openHelpModal()) reads this
       // to know which real page's README to show for a "-tabs" wrapper
       // page -- the active TAB's own underlying page id, not this
       // wrapper's own (app.js's loadPage() already set it to the
-      // wrapper's id by default; this overrides it). Guarded to skip
-      // HELP_TAB itself ('help') -- that's this page's own built-in Help
-      // TAB (admin-editable notes, see renderHelpTab() below), a
-      // different, unrelated feature; if it weren't guarded, viewing that
-      // tab would wrongly clobber this with the literal string 'help',
-      // which isn't a real page id anywhere.
-      if (tabId !== HELP_TAB.id) container.dataset.helpPageId = tabId;
+      // wrapper's id by default; this overrides it).
+      container.dataset.helpPageId = tabId;
       tabBarEl.querySelectorAll('.tab-button').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.tabId === tabId);
       });
-
-      if (tabId === 'help') {
-        renderHelpTab();
-        return;
-      }
-      helpEditing = false; // leaving Help -- don't come back to a stale open editor later
 
       tabContentEl.innerHTML = '<p class="status">Loading...</p>';
       try {
@@ -759,169 +708,6 @@ export function createTabbedPageMount({ id, label, apiBase, defaultTabs }) {
         return 'This may be due to a recent update -- try refreshing the page. If it keeps happening, there may be a permission issue -- contact the administrator.';
       }
       return `Error loading this tab: ${err.message}`;
-    }
-
-    // True once stripped of tags/whitespace -- customHelpText is HTML
-    // now (see renderHelpTab() below), so a "no notes yet" check can't
-    // just be `!customHelpText`: contenteditable's own habit of leaving
-    // an empty `<div><br></div>` behind after the last character is
-    // deleted would otherwise still count as "has notes".
-    function isHelpTextBlank(html) {
-      if (!html) return true;
-      const probe = document.createElement('div');
-      probe.innerHTML = html;
-      return probe.textContent.trim() === '';
-    }
-
-    // Toolbar commands for the rich-text editor below -- Bold/Italic/
-    // Bulleted list/Numbered list/Link, by request ("rich text
-    // formatting" over a plain textarea). document.execCommand() is
-    // deprecated but still functional in every browser this dashboard
-    // actually runs in for exactly this small a command set (no rich-
-    // text library pulled in for what's a handful of admin notes --
-    // same "zero new runtime dependencies where a simple native option
-    // exists" reasoning as this dashboard's own server-side sqlite
-    // choice). `prompt` for the link URL is the simplest reliable input
-    // for a one-off value, same reasoning renamePage()/etc. elsewhere on
-    // this dashboard already use prompt() for.
-    const HELP_TOOLBAR_COMMANDS = [
-      { label: 'B', title: 'Bold', command: 'bold', style: 'font-weight:700;' },
-      { label: 'I', title: 'Italic', command: 'italic', style: 'font-style:italic;' },
-      { label: '• List', title: 'Bulleted list', command: 'insertUnorderedList' },
-      { label: '1. List', title: 'Numbered list', command: 'insertOrderedList' },
-      { label: '🔗 Link', title: 'Link', command: 'createLink', promptForUrl: true },
-    ];
-
-    // Generic (not hand-written per tab) -- built-in tab NAMES are listed
-    // (so it's still a useful orientation), but the mechanism itself
-    // (drag to add, right-click for admin) is what's explained, since
-    // this same generated explanation is shared by every tabbed page on
-    // the dashboard rather than maintained separately per page. On top
-    // of it, an admin-editable CUSTOM notes section -- by request, "the
-    // capability to edit the help pages" -- fetched via fetchHelpText()
-    // above, shown first, with its own inline rich-text editor (admin
-    // only) toggled by helpEditing. customHelpText holds real HTML (a
-    // contenteditable div's own innerHTML), not plain text -- rendered
-    // directly (trusted, admin-authored content, same "server/admin-
-    // supplied HTML is trusted" model this dashboard's own link-building
-    // helpers already use elsewhere), not escaped.
-    function renderHelpTab() {
-      if (helpEditing) {
-        const toolbarHtml = HELP_TOOLBAR_COMMANDS.map(
-          (c) => `<button type="button" class="button-link button-link--small" data-help-command="${c.command}" data-help-prompt="${!!c.promptForUrl}" title="${escapeHtml(c.title)}" style="${c.style || ''}">${c.label}</button>`
-        ).join(' ');
-        tabContentEl.innerHTML = `
-          <div class="resource-group" style="padding: 0.25rem 1.25rem 1.25rem;">
-            <h2 style="font-size: 1rem;">Edit notes for this page</h2>
-            <div style="margin-bottom:0.4rem;">${toolbarHtml}</div>
-            <div id="help-text-input" contenteditable="true" style="display:block; width:100%; max-width:40rem; min-height:8rem; font:inherit; box-sizing:border-box; border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.75rem; background:var(--bg);">${customHelpText}</div>
-            <div class="date-form" style="margin-top:0.5rem;">
-              <button type="button" id="save-help-btn">Save</button>
-              <button type="button" id="cancel-help-btn">Cancel</button>
-            </div>
-          </div>
-        `;
-        const editableEl = tabContentEl.querySelector('#help-text-input');
-        // preventDefault on mousedown (not click) is what actually keeps
-        // the contenteditable's current text selection alive -- a button
-        // click alone would blur the editable div FIRST (losing the
-        // selection execCommand needs to act on) before the click handler
-        // even runs.
-        tabContentEl.querySelectorAll('[data-help-command]').forEach((btn) => {
-          btn.addEventListener('mousedown', (e) => e.preventDefault());
-          btn.addEventListener('click', () => {
-            const command = btn.dataset.helpCommand;
-            if (btn.dataset.helpPrompt === 'true') {
-              const url = prompt('Link URL:', 'https://');
-              if (!url) return;
-              document.execCommand(command, false, url);
-            } else {
-              document.execCommand(command, false, null);
-            }
-            editableEl.focus();
-          });
-        });
-        tabContentEl.querySelector('#cancel-help-btn').addEventListener('click', () => {
-          helpEditing = false;
-          renderHelpTab();
-        });
-        tabContentEl.querySelector('#save-help-btn').addEventListener('click', async () => {
-          const text = editableEl.innerHTML;
-          try {
-            const res = await fetch(`${apiBase}/help-text`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text }),
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-            customHelpText = text;
-            helpEditing = false;
-            renderHelpTab();
-          } catch (err) {
-            alert(`Error: ${err.message}`);
-          }
-        });
-        return;
-      }
-
-      // By request (2026-11-01): tabs are admin-only to add/remove/
-      // reorder now, shared for everyone -- no more per-viewer "personal"
-      // tabs or order. These explanations only show for the admin;
-      // everyone else just sees whatever tabs the admin has set, with no
-      // affordance to change them.
-      const adminNote = isTabAdmin
-        ? `<p class="inline-subtext">You're the dashboard admin: drag any other page from the sidebar onto the
-            tab strip above to add it here for everyone (it stays in its own place in the sidebar too, this just
-            adds a shortcut), drag any tab in the strip to reorder it, or right-click a tab (or drag it out) to
-            remove it -- a removed BUILT-IN tab can be restored from the list below, or by dragging that page
-            back in from the sidebar if it still has its own entry there. You can also rename this page itself
-            from the sidebar (right-click "${escapeHtml(label)}").</p>`
-        : '';
-      // Admin-only, by request -- a removed built-in tab doesn't
-      // necessarily still have its own sidebar entry to drag back in
-      // from (see addTab()'s own restore path), so this is the
-      // guaranteed way back regardless. Only ever lists ids still in
-      // removedDefaultTabIds -- resolved against DEFAULT_TABS_BY_ID
-      // (not allTabsById(), which excludes them) since that's the one
-      // map that still carries a removed tab's own label.
-      const removedDefaultTabsHtml =
-        isTabAdmin && removedDefaultTabIds.length > 0
-          ? `<p class="inline-subtext">Removed tabs: ${removedDefaultTabIds
-              .map((tabId) => {
-                const tab = DEFAULT_TABS_BY_ID.get(tabId);
-                return tab ? `${escapeHtml(tab.label)} <button type="button" class="button-link button-link--small" data-restore-tab-id="${tabId}">Restore</button>` : '';
-              })
-              .join(' &middot; ')}</p>`
-          : '';
-      const hasNotes = !isHelpTextBlank(customHelpText);
-      const customSectionHtml = hasNotes ? `<div style="margin-bottom: 0.75rem;">${customHelpText}</div>` : '';
-      const editButtonHtml = isHelpEditable
-        ? `<button type="button" id="edit-help-btn" class="button-link button-link--small" style="margin-bottom:0.75rem;">${hasNotes ? 'Edit Notes' : 'Add Notes'}</button>`
-        : '';
-
-      // The "About this page" heading, the "Each tab above mounts..."
-      // paragraph, and the built-in-tabs list were removed, by request --
-      // just boilerplate ahead of the actually-useful bits (the custom
-      // notes, and the admin explanation right below).
-      tabContentEl.innerHTML = `
-        <div class="resource-group" style="padding: 0.25rem 1.25rem 1.25rem;">
-          ${customSectionHtml}
-          ${editButtonHtml}
-          ${adminNote}
-          ${removedDefaultTabsHtml}
-        </div>
-      `;
-      const editBtn = tabContentEl.querySelector('#edit-help-btn');
-      if (editBtn) {
-        editBtn.addEventListener('click', () => {
-          helpEditing = true;
-          renderHelpTab();
-        });
-      }
-      tabContentEl.querySelectorAll('[data-restore-tab-id]').forEach((btn) => {
-        btn.addEventListener('click', () => restoreDefaultTab(btn.dataset.restoreTabId));
-      });
     }
 
     function escapeHtml(str) {
