@@ -2193,8 +2193,23 @@ function parseHashRoute() {
 
 function currentPageId() {
   const { pageId } = parseHashRoute();
+  // Checked against EVERY real page this viewer can see (pagesById --
+  // server-filtered already, see pages-registry.js), not just
+  // flattenPageIds()'s narrower "placed somewhere in the shared sidebar
+  // tree" list -- a page can be real and favouritable (any id
+  // pagesById.has()) without being placed in the tree at all, e.g.
+  // check-client and every other page bundled inside Client Info's own
+  // tab strip. Real bug, confirmed live: favouriting one of those and
+  // clicking it in the sidebar's own Favourites category correctly set
+  // #check-client in the address bar (renderPageItem()'s plain <a
+  // href="#...">, shared by every nav item including Favourites), but
+  // this function couldn't find it in flattenPageIds() and silently fell
+  // back to the first TREE page (What's On) -- which is also what ended
+  // up loaded and highlighted, since both loadPage() and renderNav() are
+  // driven entirely by this function's return value.
+  if (pagesById.has(pageId)) return pageId;
   const ids = flattenPageIds();
-  return ids.includes(pageId) ? pageId : ids[0];
+  return ids[0];
 }
 
 // Auto-enters Full Screen (Focus Mode -- hides the sidebar, same as the
