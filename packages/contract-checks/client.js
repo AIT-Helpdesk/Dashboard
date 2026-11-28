@@ -410,7 +410,10 @@ export function mount(container) {
             <th>Order #</th><th>Type</th><th>Status</th><th>Created</th><th>Provisioned</th>
             <th>PO #</th><th>Product</th><th>Licenses</th>
             ${TOGGLE_COLUMNS.filter((c) => c.field !== 'all_done')
-              .map((c) => `<th>${escapeHtml(c.label)}</th>`)
+              .map(
+                (c) =>
+                  `<th class="cc-toggle-col"><input type="checkbox" class="cc-toggle-select-all" data-field="${c.field}" hidden title="Tick this for every selected (bulk-close-checked) row in ${escapeHtml(c.label)}" /> ${escapeHtml(c.label)}</th>`
+              )
               .join('')}
             <th>Info</th><th>DONE</th>
           </tr>
@@ -454,7 +457,7 @@ export function mount(container) {
         <td class="cc-product-cell">${escapeHtml((o.products || []).map((p) => p.name).join(', '))}</td>
         <td class="ticket-number">${licensesCellHtml(o)}</td>
         ${TOGGLE_COLUMNS.filter((c) => c.field !== 'all_done')
-          .map((c) => `<td>${toggleCellHtml(o, c)}</td>`)
+          .map((c) => `<td class="cc-toggle-col">${toggleCellHtml(o, c)}</td>`)
           .join('')}
         <td>${infoIconsHtml(o)}</td>
         <td>${toggleCellHtml(o, TOGGLE_COLUMNS.find((c) => c.field === 'all_done'))}</td>
@@ -1037,6 +1040,37 @@ export function mount(container) {
       selectAllEl.checked = selectedCount === rowEls.length;
       selectAllEl.indeterminate = selectedCount > 0 && selectedCount < rowEls.length;
     });
+    // The per-column "tick every bulk-close-selected row" header
+    // checkboxes (Contract..Others only), by request -- visible ONLY in
+    // the group matching the active bulk-close selection (nothing to act
+    // on in any other client's group), and only while at least one row is
+    // selected there at all. checked/indeterminate recomputed fresh each
+    // time from just the SELECTED rows in this column (same tri-state
+    // convention as .cc-select-all-checkbox above), ignoring any selected
+    // row that's locked (ALL DONE already ticked on it) -- a header
+    // checkbox with nothing actionable left among its selection disables
+    // itself entirely.
+    resultsEl.querySelectorAll('.cc-toggle-select-all').forEach((headerEl) => {
+      const groupEl = headerEl.closest('.resource-group');
+      const groupCustomerId = groupEl?.querySelector('.cc-row-select')?.dataset.customerId;
+      const showHere = bulkSelection.itemIds.size > 0 && groupCustomerId === bulkSelection.customerId;
+      headerEl.hidden = !showHere;
+      if (!showHere) return;
+      const selectedEls = [...groupEl.querySelectorAll(`.cc-toggle[data-field="${headerEl.dataset.field}"]`)].filter((el) =>
+        bulkSelection.itemIds.has(Number(el.dataset.id))
+      );
+      const actionableEls = selectedEls.filter((el) => !el.disabled);
+      if (actionableEls.length === 0) {
+        headerEl.checked = false;
+        headerEl.indeterminate = false;
+        headerEl.disabled = true;
+        return;
+      }
+      const checkedCount = actionableEls.filter((el) => el.checked).length;
+      headerEl.disabled = false;
+      headerEl.checked = checkedCount === actionableEls.length;
+      headerEl.indeterminate = checkedCount > 0 && checkedCount < actionableEls.length;
+    });
     // Restores any pending (unsaved) ALL DONE ticks too -- a render()
     // triggered by an unrelated toggle elsewhere on the page shouldn't
     // silently un-tick boxes the user already ticked as part of building
@@ -1096,6 +1130,43 @@ export function mount(container) {
         updateRowSelectionUI();
       });
     }
+
+    // Per-column "tick every bulk-close-selected row" header checkbox
+    // (Contract..Others only), by request -- only acts on rows that are
+    // PART of the active bulk-close selection (bulkSelection.itemIds),
+    // never every row in the table, and never the locked (ALL DONE)
+    // ones. ALL DONE has its own confirm/Autotask-note dance and its own
+    // distinct bulk-close mechanism already (the .cc-toggle change
+    // handler further below) -- these 5 fields have no server-side side
+    // effect to merge, so a plain PATCH per changed row (same
+    // /items/:id/toggle route a single click already uses) is all that's
+    // needed, with just ONE reload at the end rather than one per row.
+    groupEl.querySelectorAll('.cc-toggle-select-all').forEach((headerEl) => {
+      headerEl.addEventListener('change', async () => {
+        const field = headerEl.dataset.field;
+        const targets = [...groupEl.querySelectorAll(`.cc-toggle[data-field="${field}"]`)].filter(
+          (el) => !el.disabled && bulkSelection.itemIds.has(Number(el.dataset.id)) && el.checked !== headerEl.checked
+        );
+        if (targets.length === 0) return;
+        headerEl.disabled = true;
+        const newValue = headerEl.checked;
+        targets.forEach((el) => {
+          el.checked = newValue;
+          el.disabled = true;
+        });
+        try {
+          const results = await Promise.allSettled(
+            targets.map((el) => fetchJson(`/api/contract-checks/items/${el.dataset.id}/toggle`, 'PATCH', { field, value: newValue }))
+          );
+          const failed = results.filter((r) => r.status === 'rejected');
+          if (failed.length > 0) {
+            alert(`${failed.length} of ${targets.length} failed to save:\n${failed.map((r) => r.reason.message).join('\n')}`);
+          }
+        } finally {
+          await loadPreservingScroll();
+        }
+      });
+    });
 
     groupEl.querySelectorAll('.cc-ticket-link').forEach((el) => {
       el.addEventListener('click', (e) => {

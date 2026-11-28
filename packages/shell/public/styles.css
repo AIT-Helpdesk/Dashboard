@@ -2789,6 +2789,14 @@ h1 {
 .contract-checks-table {
   table-layout: auto;
 }
+/* Contract..Others columns (header label + its new select-all checkbox,
+   and every row's own toggle checkbox below it), by request -- centered
+   rather than left-aligned, same column both the label/checkbox pair and
+   the checkboxes below it line up under. */
+.contract-checks-table th.cc-toggle-col,
+.contract-checks-table td.cc-toggle-col {
+  text-align: center;
+}
 /* Don't wrap the Product name, by request -- with table-layout: auto this
    is what actually forces the column to size to its content's real width
    instead of wrapping into the space auto-layout would otherwise guess at. */
