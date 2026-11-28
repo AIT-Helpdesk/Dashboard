@@ -1,6 +1,18 @@
 const express = require('express');
 const { isDashboardAdmin } = require('@dashboard/shell/registry.js');
-const { matchesWildcard, aestDayBoundsIso, getTicketUrl, getClient, fetchByFieldIn, getPicklistLabels, resolveCompanyName, mapWithConcurrency } = require('@dashboard/autotask-client');
+const {
+  matchesWildcard,
+  aestDayBoundsIso,
+  getTicketUrl,
+  getClient,
+  fetchByFieldIn,
+  getPicklistLabels,
+  resolveCompanyName,
+  mapWithConcurrency,
+  listAll,
+  last12MonthKeys,
+  monthKeysWindow,
+} = require('@dashboard/autotask-client');
 const {
   TOGGLE_FIELDS,
   setToggle,
@@ -1160,6 +1172,83 @@ router.get('/items/:id/history', (req, res) => {
   res.json({ history });
 });
 
+// "Search Order Number" -- by request, replaces the Order # cell's old
+// click action ("copy this order's ticket details" -- see client.js's own
+// former copyOrderTicket()). Given this order's own Ingram order number
+// (e.g. "CH005960"), finds every real Autotask ticket that mentions it --
+// in the ticket's own TITLE, in a TicketNote's description, or in a
+// TimeEntry's summaryNotes/internalNotes -- dated on or after the 1st of
+// LAST calendar month (AEST), by request.
+//
+// No Autotask query joins Tickets/TicketNotes/TimeEntries directly (and no
+// existing page in this codebase searched any of these 3 for free text at
+// all before this -- confirmed), so this runs 3 separate `contains`-
+// filtered queries in parallel and resolves each TicketNotes/TimeEntries
+// hit back to its own parent ticket (listAll()'s own 'id' `in` fetch,
+// skipping any ticket a title-match already resolved), then merges
+// everything into one de-duplicated list keyed by ticket id. Confirmed
+// LIVE against this exact real order (CH005960, from Pacgold): 1 real
+// TicketNote match found, 0 title/time-entry matches -- the 3-way search
+// is necessary, a title-only search would have found nothing.
+// Pulled out of the route below into its own function (same "testable
+// without spinning up Express/auth" convention @dashboard/tc-essentials-
+// seat-check's own router.buildReport uses) -- confirmed live this way
+// before ever being wired to the route.
+//
+// TicketNotes only -- by request ("the order number will never appear in
+// the title or the description. It will be in a tech note"), dropping the
+// earlier Tickets.title and TimeEntries search branches entirely rather
+// than keeping them as unused dead weight. Not narrowed to one specific
+// noteType code either -- the real confirmed match for a live order
+// (CH005960) turned out to carry this account's own noteType 2 ("Task
+// Detail" is how this account's picklist itself labels it, not literally
+// "Tech Note" -- confirmed live), so matching on TicketNotes.description
+// alone, regardless of noteType, is what actually finds it.
+async function searchOrderNumber(orderNumber) {
+  const client = await getClient();
+  // last12MonthKeys()'s own last entry is the current (partial) month --
+  // one before that is "last calendar month"; monthKeysWindow()'s own
+  // windowStart is AEST midnight on the 1st of it, as a UTC ISO instant.
+  const lastMonthKey = last12MonthKeys().at(-2);
+  const { windowStart } = monthKeysWindow([lastMonthKey]);
+
+  const noteMatches = await listAll(client.ticketNotes, [
+    { op: 'contains', field: 'description', value: orderNumber },
+    { op: 'gte', field: 'createDateTime', value: windowStart },
+  ]);
+
+  const ticketIds = [...new Set(noteMatches.map((n) => n.ticketID).filter((id) => id != null))];
+  const tickets =
+    ticketIds.length > 0
+      ? await (async () => {
+          const resolved = await fetchByFieldIn(client.tickets, 'id', ticketIds);
+          const result = await Promise.all(
+            resolved.map(async (t) => ({
+              id: t.id,
+              ticketNumber: t.ticketNumber,
+              title: t.title,
+              url: await getTicketUrl(t.id),
+            }))
+          );
+          result.sort((a, b) => (a.ticketNumber || '').localeCompare(b.ticketNumber || ''));
+          return result;
+        })()
+      : [];
+
+  return { orderNumber, windowStart, tickets };
+}
+
+router.get('/search-order-number', async (req, res) => {
+  const orderNumber = (req.query.orderNumber || '').trim();
+  if (!orderNumber) return res.status(400).json({ error: 'Query param "orderNumber" is required.' });
+  try {
+    res.json(await searchOrderNumber(orderNumber));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DB-backed canned text ("Get Note Template"/"Edit Template" in the Ticket
 // Note popup, client.js) -- see db.js's own comment on templates for why
 // this exists (a real Autotask feature this replaced has no REST API).
@@ -1212,5 +1301,9 @@ router.attachTicketDetails = attachTicketDetails;
 // product_mappings reference table (see db.js) for a friendly product
 // name, same in-process reuse pattern as the two lines above.
 router.listProductMappings = listProductMappings;
+// Exposed for direct in-process testing (confirmed live this way before
+// ever being wired to the route below it), same convention as the others
+// on this router.
+router.searchOrderNumber = searchOrderNumber;
 
 module.exports = router;

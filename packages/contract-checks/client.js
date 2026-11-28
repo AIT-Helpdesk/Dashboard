@@ -463,16 +463,19 @@ export function mount(container) {
       .join('');
   }
 
-  // Order # text itself, by request -- click copies a ticket-ready text
-  // summary (same "Ingram Order ... / Client: ... / Subscription: ..."
-  // shape Ingram Orders' own Copy feature builds) straight to the
-  // clipboard, previewed as the native `title` tooltip on hover. A
-  // 'termination' row has no real backing Ingram order (sourceOrderId is a
-  // SUBSCRIPTION id there instead -- see server.js's shapeItem() comment),
-  // so it stays plain text, same as a row with no sourceOrderId at all.
+  // Order # text itself. Hover still previews a ticket-ready text summary
+  // (same "Ingram Order ... / Client: ... / Subscription: ..." shape Ingram
+  // Orders' own Copy feature builds) as the native `title` tooltip,
+  // unchanged. Click now instead searches Autotask for tickets mentioning
+  // this order number, by request -- replacing the old "copy to clipboard"
+  // click action entirely (see openOrderSearchModal()/searchOrderNumber()
+  // further down). A 'termination' row has no real backing Ingram order
+  // (sourceOrderId is a SUBSCRIPTION id there instead -- see server.js's
+  // shapeItem() comment), so it stays plain text, same as a row with no
+  // sourceOrderId at all.
   function orderNumberCellHtml(o) {
     if (o.orderType === 'termination' || !o.sourceOrderId) return escapeHtml(o.orderNumber);
-    return `<span class="order-copy-btn" data-id="${o.id}" title="Click to copy this order's ticket details">${escapeHtml(o.orderNumber)}</span>`;
+    return `<span class="order-copy-btn" data-id="${o.id}" title="Click to search for tickets mentioning this order number">${escapeHtml(o.orderNumber)}</span>`;
   }
 
   // Ingram order/subscription detail isn't stored in this page's own
@@ -558,21 +561,59 @@ export function mount(container) {
     el.title = ticket ? buildOrderTicketText(o, ticket) : "No ticket details available for this order.";
   }
 
-  async function copyOrderTicket(el, o) {
-    const ticket = await ensureOrderTicket(o);
-    if (!ticket) {
-      el.title = 'No ticket details available for this order.';
-      return;
+  // Click action for the Order # cell, by request -- replaces the old
+  // "copy this order's ticket details to clipboard" behaviour entirely.
+  // Searches Autotask ticket notes for any real ticket mentioning this
+  // order's own Ingram order number (server.js's own searchOrderNumber():
+  // TicketNotes.description, dated since the 1st of last calendar month --
+  // deliberately NOT the ticket's own title, by request: "the order number
+  // will never appear in the title or the description. It will be in a
+  // tech note") and shows the results in the same shared .history-modal-*
+  // overlay/panel every other popup on this page already uses (e.g.
+  // openHistoryModal() further down) -- no new modal mechanism invented.
+  async function openOrderSearchModal(o) {
+    const overlay = document.createElement('div');
+    overlay.className = 'history-modal-overlay';
+    overlay.innerHTML = `
+      <div class="history-modal-panel">
+        <div class="history-modal-panel-header">
+          <span>Tickets mentioning "${escapeHtml(o.orderNumber)}"</span>
+          <button type="button" class="history-modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="history-modal-body"><p class="status">Searching tickets since last month...</p></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    };
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
     }
-    const text = buildOrderTicketText(o, ticket);
-    el.title = text;
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelector('.history-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
     try {
-      await navigator.clipboard.writeText(text);
-      el.classList.add('order-copy-btn--copied');
-      setTimeout(() => el.classList.remove('order-copy-btn--copied'), 1200);
+      const data = await fetchJson(`/api/contract-checks/search-order-number?orderNumber=${encodeURIComponent(o.orderNumber)}`, 'GET');
+      const body = overlay.querySelector('.history-modal-body');
+      if (!data.tickets || data.tickets.length === 0) {
+        body.innerHTML = '<p class="status">No matching tickets found since last month.</p>';
+        return;
+      }
+      body.innerHTML = `<ul class="history-modal-list">${data.tickets.map(orderSearchResultHtml).join('')}</ul>`;
     } catch (err) {
-      alert(`Couldn't copy: ${err.message}`);
+      overlay.querySelector('.history-modal-body').innerHTML = `<p class="status error">Error: ${escapeHtml(err.message)}</p>`;
     }
+  }
+
+  // Same real popup-window convention every other Autotask link on this
+  // dashboard already uses.
+  function orderSearchResultHtml(t) {
+    return `<li class="history-modal-entry"><a href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(t.ticketNumber)}</a> -- ${escapeHtml(t.title)}</li>`;
   }
 
   // Single Provisioned column, by request -- shows the real provisioningDate
@@ -1054,7 +1095,7 @@ export function mount(container) {
       const o = findOrder(el.dataset.id);
       if (!o) return;
       el.addEventListener('mouseenter', () => warmOrderTicketTooltip(el, o), { once: true });
-      el.addEventListener('click', () => copyOrderTicket(el, o));
+      el.addEventListener('click', () => openOrderSearchModal(o));
     });
 
     groupEl.querySelectorAll('.cc-toggle').forEach((el) => {

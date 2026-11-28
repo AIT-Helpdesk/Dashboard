@@ -102,13 +102,20 @@ function expectedAllocation(workstations, licensedUsers) {
 // account is returned back to the caller (buildLicensedUserCounts()
 // below), never silently subtracted -- a naming convention this doesn't
 // recognize stays visible to review instead of invisibly wrong.
-function isExcludedAdminAccount(u) {
+// Returns which of the 2 excluded categories an account matches ('breakGlass'
+// or 'admin' -- O365Admin/M365Admin collapsed into one category, since
+// they're the same real-world role just under 2 different product names),
+// or null when it isn't excluded at all. Split out from a single boolean so
+// buildLicensedUserCounts() below can separately count how many of each
+// category a client actually has (see excludedCountUnusual's own comment).
+function classifyExcludedAccount(u) {
   const hay = `${u.name || ''} ${u.email || ''}`.toLowerCase();
-  return (
-    /break[\s._-]*glass/.test(hay) ||
-    /(?:[o0]365|office[\s._-]*365)[\s._-]*admin/.test(hay) ||
-    /m365[\s._-]*admin/.test(hay)
-  );
+  if (/break[\s._-]*glass/.test(hay)) return 'breakGlass';
+  if (/(?:[o0]365|office[\s._-]*365)[\s._-]*admin/.test(hay) || /m365[\s._-]*admin/.test(hay)) return 'admin';
+  return null;
+}
+function isExcludedAdminAccount(u) {
+  return classifyExcludedAccount(u) !== null;
 }
 
 // TODAY's current contract lines for the 3 target services/bundles,
@@ -273,12 +280,23 @@ async function buildLicensedUserCounts(essentialsCompanyIds) {
       // purely additive over data already fetched for the count above, no
       // extra SaaS Alerts call.
       const included = billable.filter((u) => !isExcludedAdminAccount(u));
+      // "Unusual" exclusions -- by request, flagged (orange) when a client
+      // has MORE excluded accounts than the normal, expected baseline: up
+      // to 2 Break Glass accounts (the confirmed real "AIT Break Glass
+      // 1"/"2" pair) and up to 1 admin account (O365Admin/M365Admin
+      // collapsed into one category -- see classifyExcludedAccount()).
+      // More than that isn't necessarily wrong, but it's a real deviation
+      // from the normal pattern worth a second look (an extra admin
+      // account nobody mentioned, a 3rd break-glass account, etc).
+      const breakGlassCount = excluded.filter((u) => classifyExcludedAccount(u) === 'breakGlass').length;
+      const adminCount = excluded.filter((u) => classifyExcludedAccount(u) === 'admin').length;
       result.set(companyId, {
         customerName: customer.name,
         licensedUsers: included.length,
         includedNames: included.map(nameOf).sort((a, b) => a.localeCompare(b)),
         excludedCount: excluded.length,
         excludedNames: excluded.map(nameOf).sort((a, b) => a.localeCompare(b)),
+        excludedCountUnusual: breakGlassCount > 2 || adminCount > 1,
       });
     } catch (err) {
       // Left unresolved (no entry -> null licensedUsers downstream) rather
@@ -376,6 +394,7 @@ async function buildReport() {
       includedAccountNames: licensedInfo ? licensedInfo.includedNames : [],
       excludedAccountCount: licensedInfo ? licensedInfo.excludedCount : 0,
       excludedAccountNames: licensedInfo ? licensedInfo.excludedNames : [],
+      excludedAccountCountUnusual: licensedInfo ? licensedInfo.excludedCountUnusual : false,
       bundle: bundleCell,
       endpoint: endpointCell,
       user: userCell,

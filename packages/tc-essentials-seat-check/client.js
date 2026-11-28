@@ -241,9 +241,18 @@ export function mount(container) {
   // when there weren't any, same "don't show it when there's nothing to
   // say" convention the Client column's own "(showing of total)" count
   // already follows.
+  //
+  // Orangy-yellow (.cell-flag-orange, same established colour this
+  // dashboard already uses elsewhere), by request, ONLY on the bracketed
+  // number itself -- never the Included count beside it -- when
+  // server.js's own excludedAccountCountUnusual says this client has MORE
+  // excluded accounts than the normal baseline (up to 2 Break Glass + 1
+  // admin account). Not necessarily wrong, but a real deviation worth a
+  // second look.
   function licensedUsersSuffix(r) {
     if (r.licensedUsers === null || r.excludedAccountCount === 0) return '';
-    return ` <span class="inline-subtext">(${r.excludedAccountCount})</span>`;
+    const cls = r.excludedAccountCountUnusual ? 'cell-flag-orange' : 'inline-subtext';
+    return ` <span class="${cls}">(${r.excludedAccountCount})</span>`;
   }
 
   // A count cell -- "Not available" (muted, not red -- this is a data gap,
