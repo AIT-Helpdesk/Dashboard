@@ -2332,9 +2332,9 @@ h1 {
    with the ticket link itself; full opacity on hover, matching the same
    hover-brightens convention .wsp-icon-btn already uses elsewhere. */
 .cc-rewst-icon {
-  width: 0.95rem;
-  height: 0.95rem;
-  vertical-align: -0.15rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  vertical-align: -0.25rem;
   margin-left: 0.3rem;
   opacity: 0.75;
   cursor: default;
