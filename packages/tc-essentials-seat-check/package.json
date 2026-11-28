@@ -1,0 +1,20 @@
+{
+  "name": "@dashboard/tc-essentials-seat-check",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "dashboardPage": {
+    "id": "tc-essentials-seat-check",
+    "label": "TC Essentials Seat Check",
+    "client": "client.js",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@dashboard/autotask-client": "*",
+    "@dashboard/tc-elite-services": "*",
+    "@dashboard/datto-rmm": "*",
+    "@dashboard/rmm-filters": "*",
+    "@dashboard/saasalerts-client": "*",
+    "express": "^4.19.2"
+  }
+}

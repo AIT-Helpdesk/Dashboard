@@ -416,3 +416,10 @@ router.delete('/exceptions/:id', (req, res) => {
 // everywhere that just does `require(...)`.
 module.exports = router;
 module.exports.getRmmFilters = getRmmFilters;
+// Reused by TC Essentials Seat Check for the same company<->Datto-site
+// resolution (native PSA link -> Name:Datto RMM UDF -> exact name match),
+// rather than a second, independently-drifting matcher -- see
+// resolveCompanyForSite()'s own header comment for the full 3-source
+// priority order and why it beats a fuzzy-only matcher.
+module.exports.resolveCompanyForSite = resolveCompanyForSite;
+module.exports.normalizeName = normalizeName;

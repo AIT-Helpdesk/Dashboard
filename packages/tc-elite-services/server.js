@@ -222,4 +222,11 @@ router.get('/', async (req, res) => {
 // own header comment.
 router.resolveTcEliteCompanies = resolveTcEliteCompanies;
 
+// Reused by TC Essentials Seat Check -- same "who counts as a TC Essentials
+// client" membership test this page's own Essentials tab already resolves,
+// generalized (resolveTcEliteCompanies() above is hardcoded to the Elite
+// label). Kept as a plain delegate to the already-generic function above,
+// not a new query.
+router.resolveCompaniesByClassification = resolveCompaniesByClassification;
+
 module.exports = router;

@@ -12642,6 +12642,165 @@ tr.accrued-time-yellow-row th {
   margin: 0 0 0.5rem;
   white-space: pre-wrap;
 }
+
+/* TC Essentials Seat Check's own table -- width:auto (fit content), not
+   this dashboard's own default `table { width: 100% }`, since 6 narrow
+   columns stretched across the full page width would leave huge, pointless
+   gaps between the numbers this table is actually about comparing. */
+.tcess-table {
+  width: auto;
+}
+.tcess-table th {
+  text-align: center;
+}
+.tcess-table th:first-child {
+  text-align: left;
+}
+.tcess-table td:first-child {
+  white-space: nowrap;
+}
+/* Every count column centred, by request -- matches this table's own
+   headers (.tcess-table th above is already centred except Client).
+   Scoped to .tcess-table, not the bare .ticket-number class itself, which
+   is shared dashboard-wide and stays left-aligned everywhere else. */
+.tcess-table td.ticket-number {
+  text-align: center;
+}
+/* Workstations/Licensed Users hover popups, by request ("make those hover
+   results appear as tables") -- a native title= tooltip is plain text
+   only and can't render a <table>, so this is a plain CSS :hover-revealed
+   positioned box instead (no JS show/hide needed). .tcess-hover-wrap goes
+   on the WHOLE <td> (client.js's own renderRow()), not a small inline
+   span -- by request ("too hard to get to the popup... mouse passes
+   another entry on the way"): anchoring on just the small number left a
+   real dead zone the cursor had to cross to reach/scroll the popup below
+   it, and crossing that handed hover to whatever sat underneath (the next
+   row's own trigger) instead. The full cell is a much bigger, more
+   forgiving target, and margin-top: 0 below means the popup sits flush
+   against the cell's own bottom edge -- no dead pixel to cross at all.
+   z-index above both the sticky header (2) and everything else on the
+   page. Sized generously (not capped tight), by request ("fit data on
+   width and a little longer") -- wide enough that a real hostname/
+   username/date doesn't force scrolling sideways, tall enough that most
+   real device/user lists fit without scrolling at all. */
+.tcess-hover-wrap {
+  position: relative;
+}
+.tcess-hover-trigger {
+  border-bottom: 1px dotted var(--muted);
+  cursor: help;
+}
+.tcess-hover-popup {
+  /* visibility/opacity, not display:none/block, by request -- a short
+     delay before SHOWING (so passing the mouse across several cells on
+     the way somewhere else doesn't flash a popup for each one), but
+     instant HIDING the moment the cursor actually leaves (so it never
+     lingers once you've moved away). This is the standard CSS-only way to
+     give show/hide two different timings: the base (non-hover) rule below
+     is what applies the instant the cursor leaves, so its own
+     transition-delay: 0s governs hiding; the :hover rule further down
+     carries its OWN transition-delay: 0.4s, which only takes effect while
+     entering the hovered state, governing showing. pointer-events: none
+     while hidden stops the popup (sized and positioned the same whether
+     visible or not) from intercepting hover meant for whatever's visually
+     underneath it during that 0.4s delay. */
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0s linear 0s, visibility 0s linear 0s;
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+  text-align: left;
+  width: max-content;
+  max-width: 34rem;
+  max-height: 28rem;
+  overflow: auto;
+}
+.tcess-hover-wrap:hover .tcess-hover-popup {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 0s linear 0.4s, visibility 0s linear 0.4s;
+}
+.tcess-hover-heading {
+  font-weight: 600;
+  font-size: 0.78rem;
+  margin-bottom: 0.3rem;
+  white-space: nowrap;
+}
+.tcess-hover-table {
+  width: auto;
+}
+.tcess-hover-table th,
+.tcess-hover-table td {
+  padding: 0.15rem 0.6rem;
+  font-size: 0.75rem;
+  text-align: left;
+  white-space: nowrap;
+}
+/* Whole row shaded red, by request -- a Tech Cover Essentials client with
+   NONE of the 3 Kaseya 365 lines on its contract at all (see server.js's
+   own hasNoContractAtAll). Same tr.chk-summary-row-mismatch/--row-warn-bg
+   convention Check Client's own Client Check Summary already uses for
+   "shade the row red". */
+.tcess-row-no-contract {
+  background: var(--row-warn-bg) !important;
+}
+/* Sticky header, by request -- stays visible scrolling past 183 real
+   rows. Same position: sticky/top: 0/z-index: 2 convention Rollout
+   Tracker's own .rt-table thead th already uses for a plain top-level
+   page table (not inside a modal, so no header-height offset is needed).
+   Background set directly on the <th> itself, not inherited from
+   .shaded-row on its <tr> -- same real gotcha that page's own comment
+   documents: a <tr>-only background can fail to paint reliably on a
+   sticky-positioned cell, letting body rows show through as they scroll
+   past underneath it. */
+.tcess-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--section-header-bg);
+}
+/* Narrower rows/smaller text, by request -- same 0.78rem/0.3rem 0.75rem
+   convention DNS Check/Contract Services/Data Matching/Domain IT Glue
+   Gaps/Coming Soon/RMM Filters/TC Elite's own tables all already use. */
+.tcess-table th,
+.tcess-table td {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.75rem;
+}
+/* A box around the OUTSIDE of the last 3 columns (Bundle/User/Endpoint --
+   the actual contract-vs-expected check) as one group, by request --
+   visually separating them from the first 3 (Client/Licensed Users/
+   Workstations -- the live source data those 3 are checked against), with
+   no line between Bundle/User/Endpoint themselves. Only column 4 (Bundle)
+   gets the left edge -- NOT nth-child(n + 4) on every one of the 3, which
+   would also draw an (unwanted) line between User and Endpoint.
+   border-collapse: collapse (this dashboard's own table-wide default)
+   keeps all 4 sides a clean single width with no doubling at the corners. */
+.tcess-table th:nth-child(4),
+.tcess-table td:nth-child(4) {
+  border-left: 1px solid var(--border);
+}
+.tcess-table th:last-child,
+.tcess-table td:last-child {
+  border-right: 1px solid var(--border);
+}
+.tcess-table thead tr th:nth-child(n + 4) {
+  border-top: 1px solid var(--border);
+}
+.tcess-table tbody tr:last-child td:nth-child(n + 4) {
+  border-bottom: 1px solid var(--border);
+}
 /* "Black for the text on Warning and Info", by request -- the heading
    stays in severity color (inherited from .ann-severity-warning/-info's
    own `color`, which the admin list's own badge above also relies on, so

@@ -856,12 +856,29 @@ export function mount(container) {
     // than defaulting to 0, since Contract Services only resolves this
     // when it found a real next-period row to look it up from -- a
     // contract with no known next period shouldn't display as "(0)".
+    //
+    // Real bug, confirmed against Kraftur's real "Microsoft 365 Copilot"
+    // contract line: once hasNextPeriod is true for the GROUP, a line
+    // whose OWN nextPeriodUnits is null must be summed as 0 (it genuinely
+    // isn't renewing), NOT as a fallback to its current units. Kraftur's
+    // contract carries a base recurring line (5 units, Autotask-generated
+    // periods out to 2045 -- a real scheduled continuation) alongside a
+    // one-off top-up line (1 unit, a single period with nothing after it
+    // at all -- confirmed live, not a generation lag: findNextPeriodUnits()
+    // in Contract Services' own server.js fetches that line's ENTIRE
+    // period history with no date cutoff, so "nothing found" there means
+    // "this line ends," the same way the base line's own real continuation
+    // was found by the identical exhaustive lookup). The OLD `?? r.units`
+    // fallback silently re-added that ending line's current count into the
+    // projected total (5 + 1 = 6, identical to today's 6, so the "(NN)"
+    // bracket never appeared at all) instead of reflecting that it drops
+    // out (5 + 0 = 5) -- hiding a real, already-scheduled reduction.
     return [...byContract.entries()]
       .map(([contractName, lines]) => {
         const picked = [...lines.values()];
         const units = picked.reduce((n, r) => n + (r.units || 0), 0);
         const hasNextPeriod = picked.some((r) => r.nextPeriodUnits !== null && r.nextPeriodUnits !== undefined);
-        const nextPeriodUnits = hasNextPeriod ? picked.reduce((n, r) => n + (r.nextPeriodUnits ?? r.units ?? 0), 0) : null;
+        const nextPeriodUnits = hasNextPeriod ? picked.reduce((n, r) => n + (r.nextPeriodUnits ?? 0), 0) : null;
         return { contractName, units, nextPeriodUnits };
       })
       .sort((a, b) => a.contractName.localeCompare(b.contractName));
