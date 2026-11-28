@@ -2375,6 +2375,30 @@ h1 {
 .cc-po-not-found {
   color: #f59e0b;
 }
+/* Auto-discovered ticket link(s) (client.js's own autoTicketLinksHtml()),
+   by request -- its own small line below the PO # line, muted so it reads
+   as a secondary, supplementary finding rather than competing with the
+   real PO # text above it. */
+.cc-po-auto-links {
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+/* Autotask's own logo mark per auto-discovered link, by request -- same
+   sizing/opacity-on-hover convention .cc-rewst-icon above already uses for
+   Rewst's own logo image, so each one reads as verified ("this ticket
+   really exists in Autotask") at a glance, not just plain text. */
+.cc-po-auto-found-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  vertical-align: -0.15rem;
+  margin-left: 0.2rem;
+  opacity: 0.75;
+  cursor: default;
+}
+.cc-po-auto-found-icon:hover {
+  opacity: 1;
+}
 /* Client Financials' unpaid-invoice warning (client.js's unpaidIconHtml())
    -- real red, unlike the amber "worth checking" convention just above:
    an invoice with no Date Paid recorded is an actual money-owing signal,

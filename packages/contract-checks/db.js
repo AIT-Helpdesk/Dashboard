@@ -337,6 +337,26 @@ function migrateAddTermJson() {
 }
 migrateAddTermJson();
 
+// Adds auto_ticket_autotask_ids_json, by request -- a SECOND, independent
+// ticket-link list alongside ticket_autotask_ids_json above, auto-
+// discovered by sync.js searching ticket notes for this order's own
+// Ingram order number (@dashboard/contract-checks' order-note-search.js),
+// rather than relying on a human typing a ticket number into PO # at all.
+// Deliberately its own column, never merged into ticket_autotask_ids_json
+// -- the manual, human-entered list stays exactly what it's always been
+// (po_number_manual's own protection, display, "not found" flagging all
+// unchanged), this is purely additive. Same plain nullable ADD COLUMN, no
+// CHECK constraint, as every other migration in this file. Same JSON
+// shape as ticket_autotask_ids_json ([{ticketNumber, autotaskId}]), for
+// shapeItem()/attachTicketUrls() in server.js to enrich/render both the
+// same way.
+function migrateAddAutoTicketAutotaskIdsJson() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('items')`).all();
+  if (columns.some((c) => c.name === 'auto_ticket_autotask_ids_json')) return;
+  db.exec(`ALTER TABLE items ADD COLUMN auto_ticket_autotask_ids_json TEXT`);
+}
+migrateAddAutoTicketAutotaskIdsJson();
+
 // One-time correction: terminations first synced into their own
 // 'ingram_termination' process_type, before being merged into the main
 // 'ingram_subscription' list by request, so they show up alongside
@@ -884,6 +904,15 @@ function upsertOrder(order) {
       ? order.ticketLinks
       : [];
   const firstResolvedTicketId = ticketLinks.find((t) => t.autotaskId != null)?.autotaskId ?? null;
+  // order.autoTicketLinks -- the SECOND, independent list (see
+  // migrateAddAutoTicketAutotaskIdsJson()'s own comment above), auto-
+  // discovered by sync.js from ticket notes mentioning this order's own
+  // Ingram order number. No po_number_manual-style protection needed here
+  // -- sync.js itself already decides whether to pass a freshly re-searched
+  // result or the existing one back in unchanged (it only re-searches
+  // while this is still empty), so whatever it passes is always correct to
+  // just write straight through.
+  const autoTicketLinks = Array.isArray(order.autoTicketLinks) ? order.autoTicketLinks : [];
   const shared = {
     $orderNumber: order.orderNumber || null,
     $orderType: order.orderType || null,
@@ -896,6 +925,7 @@ function upsertOrder(order) {
     $poNumber: preserveManualPo ? existing.po_number : order.poNumber || null,
     $ticketAutotaskId: firstResolvedTicketId,
     $ticketAutotaskIdsJson: JSON.stringify(ticketLinks),
+    $autoTicketAutotaskIdsJson: JSON.stringify(autoTicketLinks),
     $productsJson: JSON.stringify(order.products || []),
     $currentTotal: order.currentTotal ?? null,
     $termJson: order.term ? JSON.stringify(order.term) : null,
@@ -908,6 +938,7 @@ function upsertOrder(order) {
          client_name = $clientName, status = $status, creation_date = $creationDate,
          provisioning_date = $provisioningDate, pending_date = $pendingDate, po_number = $poNumber,
          ticket_autotask_id = $ticketAutotaskId, ticket_autotask_ids_json = $ticketAutotaskIdsJson,
+         auto_ticket_autotask_ids_json = $autoTicketAutotaskIdsJson,
          products_json = $productsJson, current_total = $currentTotal, term_json = $termJson,
          updated_at = $updatedAt
        WHERE id = $id`
@@ -920,11 +951,11 @@ function upsertOrder(order) {
       `INSERT INTO items (
          process_type, source_order_id, order_number, order_type, customer_id, client_name, status,
          creation_date, provisioning_date, pending_date, po_number, ticket_autotask_id, ticket_autotask_ids_json,
-         products_json, current_total, term_json, created_at, updated_at
+         auto_ticket_autotask_ids_json, products_json, current_total, term_json, created_at, updated_at
        ) VALUES (
          $processType, $sourceOrderId, $orderNumber, $orderType, $customerId, $clientName, $status,
          $creationDate, $provisioningDate, $pendingDate, $poNumber, $ticketAutotaskId, $ticketAutotaskIdsJson,
-         $productsJson, $currentTotal, $termJson, $createdAt, $updatedAt
+         $autoTicketAutotaskIdsJson, $productsJson, $currentTotal, $termJson, $createdAt, $updatedAt
        )`
     )
     .run({ ...shared, $processType: order.processType, $sourceOrderId: order.sourceOrderId, $createdAt: now, $updatedAt: now });

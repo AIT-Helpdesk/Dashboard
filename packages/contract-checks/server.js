@@ -32,6 +32,7 @@ const {
   listProductMappings,
   getSyncState,
 } = require('./db.js');
+const { findTicketsByNoteText } = require('./order-note-search.js');
 const { runSync, PROCESS_TYPE, resolveTicketAutotaskIds } = require('./sync.js');
 
 // Edit Template (below) is restricted to ADMIN_FULL_ACCESS (.env,
@@ -362,6 +363,14 @@ function shapeItem(row) {
     // ticketAutotaskId above stays too, just as "the first resolved one",
     // for anything that hasn't been updated to this plural shape.
     ticketLinks: JSON.parse(row.ticket_autotask_ids_json || '[]'),
+    // The SECOND, independent list, by request -- auto-discovered by
+    // sync.js from ticket notes mentioning this order's own Ingram order
+    // number, no human typing a PO # required at all. Same
+    // {ticketNumber, autotaskId} shape as ticketLinks above, enriched with
+    // its own url the exact same way (attachTicketUrls() below, extended
+    // to cover both lists) -- never merged into ticketLinks itself, so the
+    // manual, human-entered list stays untouched either way.
+    autoTicketLinks: JSON.parse(row.auto_ticket_autotask_ids_json || '[]'),
     products: JSON.parse(row.products_json || '[]'),
     currentTotal: row.current_total,
     // {type: 'year'|'month', duration} -- a renewal order's own underlying
@@ -668,13 +677,12 @@ async function attachRewstStageDoneFlags(orders) {
   }
 }
 
-// Mutates every one of shaped.ticketLinks with its own `url`, by request
-// ("more than one ticket associated with an order") -- so client.js's PO #
-// cell can link each resolved ticket number independently, not just the
-// first. getTicketUrl() caches per id, so this only costs a real request
-// the first time any given id is looked up.
+// Mutates every one of shaped.ticketLinks (AND shaped.autoTicketLinks, by
+// request -- the auto-discovered list needs the exact same treatment) with
+// its own `url`. getTicketUrl() caches per id, so this only costs a real
+// request the first time any given id is looked up.
 async function attachTicketUrls(shaped) {
-  for (const link of shaped.ticketLinks) {
+  for (const link of [...shaped.ticketLinks, ...shaped.autoTicketLinks]) {
     if (link.autotaskId != null) link.url = await getTicketUrl(link.autotaskId);
   }
 }
@@ -1241,23 +1249,18 @@ async function searchOrderNumber(orderNumber) {
   const lastMonthKey = last12MonthKeys().at(-2);
   const { windowStart } = monthKeysWindow([lastMonthKey]);
 
-  const noteMatches = await listAll(client.ticketNotes, [
-    { op: 'contains', field: 'description', value: orderNumber },
-    { op: 'gte', field: 'createDateTime', value: windowStart },
-  ]);
-
-  const ticketIds = [...new Set(noteMatches.map((n) => n.ticketID).filter((id) => id != null))];
+  // Same query sync.js's own per-order auto-discovery uses (order-note-
+  // search.js), so the interactive popup and the automatic sync-time
+  // discovery can never quietly drift apart on what counts as a match.
+  const resolved = await findTicketsByNoteText(client, orderNumber, windowStart);
   const tickets =
-    ticketIds.length > 0
+    resolved.length > 0
       ? await (async () => {
           // Rewst Rooster icon, by request -- same ticketIdsWithRewstNote()
           // check attachRewstStageDoneFlags() uses for the main table, just
           // uncached here (this route already does a fresh live query per
           // click, so there's no existing cache to populate or read).
-          const [resolved, rewstTicketIds] = await Promise.all([
-            fetchByFieldIn(client.tickets, 'id', ticketIds),
-            ticketIdsWithRewstNote(client, ticketIds),
-          ]);
+          const rewstTicketIds = await ticketIdsWithRewstNote(client, resolved.map((t) => t.id));
           const result = await Promise.all(
             resolved.map(async (t) => ({
               id: t.id,

@@ -16,6 +16,7 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', 
 const { getToken, getPage, fetchAllPages, getOrderDetail, getSubscriptionDetail } = require('@dashboard/ingram-client');
 const { getClient, listAll, matchesWildcard } = require('@dashboard/autotask-client');
 const { upsertOrder, getItemBySource, getSyncState, saveSyncState, listOutstandingProcessing, listCompletedMissingProvisioningDate, nowIso } = require('./db.js');
+const { findTicketsByNoteText } = require('./order-note-search.js');
 
 const PROCESS_TYPE = 'ingram_subscription';
 // A subscription that's terminated OUTSIDE Ingram's own ordering system --
@@ -286,6 +287,46 @@ function isRnRenewal(orderType, orderNumber) {
   return orderType === 'renewal' && matchesWildcard(orderNumber || '', 'RN*');
 }
 
+// Auto-discovers ticket(s) that reference this order via a real ticket
+// note, by request ("check for the CH order number in tickets... to try
+// to get the ticket number right" -- no human has to type a PO #/ticket
+// number in at all for this to work). Kept entirely separate from
+// ticketLinks (the manual, PO#-driven list) -- db.js's own
+// auto_ticket_autotask_ids_json is a second, independent column.
+//
+// Only (re-)searched while nothing's been found yet for this order --
+// once a match is confirmed it can never become wrong by waiting (a
+// ticket note is append-only), so there's no reason to keep re-querying
+// Autotask for it on every single sync run forever. This also solves a
+// real timing problem: the ticket note that actually mentions this order
+// is usually written by a technician well AFTER the order first appears
+// here, not at the same moment -- a ONE-TIME check right when the order
+// is first synced would most often find nothing and never check again.
+// Piggybacking on the SAME re-check cadence sync.js already uses for
+// "outstanding" orders (still processing, or completed but missing a
+// provisioning date -- see runSync()'s own refresh-outstanding step)
+// means this keeps trying on every later sync until a match turns up,
+// then stops, at no extra cost beyond what's already being re-fetched for
+// other reasons.
+async function resolveAutoTicketLinks(sourceOrderId, orderNumber) {
+  const existing = getItemBySource(PROCESS_TYPE, String(sourceOrderId));
+  const existingLinks = existing ? JSON.parse(existing.auto_ticket_autotask_ids_json || '[]') : [];
+  if (existingLinks.length > 0 || !orderNumber) return existingLinks;
+
+  try {
+    const client = await getClient();
+    const found = await findTicketsByNoteText(client, orderNumber);
+    return found.map((t) => ({ ticketNumber: t.ticketNumber, autotaskId: t.id }));
+  } catch (err) {
+    // Best-effort, same "don't fail the whole sync over one lookup"
+    // reasoning as fetchOrderDetailWithRetry/resolveTicketAutotaskId above
+    // -- leaves this empty, so it's simply retried on the next sync run
+    // rather than remembered as a false "nothing found".
+    console.error(`Contract Checks: failed to auto-discover ticket(s) for order ${orderNumber}:`, err.message);
+    return existingLinks;
+  }
+}
+
 // Fetches detail, resolves the ticket, and upserts one order into the
 // database. `orderStub` is either a real /orders list entry or just an
 // {id} (the "refresh outstanding" call site only has the local DB's own
@@ -310,6 +351,7 @@ async function syncOneOrder(orderStub, token, customerNameById) {
   // so client.js can still flag exactly WHICH typed piece didn't resolve,
   // not just whether the order has at least one real link.
   const ticketLinks = clearPo ? [] : await resolveTicketAutotaskIds(detail.poNumber);
+  const autoTicketLinks = await resolveAutoTicketLinks(orderStub.id, orderNumber);
 
   upsertOrder({
     processType: PROCESS_TYPE,
@@ -330,6 +372,7 @@ async function syncOneOrder(orderStub, token, customerNameById) {
     pendingDate: detail.pendingDate,
     poNumber,
     ticketLinks,
+    autoTicketLinks,
     products: detail.products,
     currentTotal: detail.currentTotal,
     term: detail.term,
