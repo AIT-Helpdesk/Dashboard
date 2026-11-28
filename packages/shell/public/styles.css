@@ -1889,6 +1889,53 @@ h1 {
 .chk-summary-table {
   table-layout: fixed;
 }
+/* Contract lines contractMatchesForSku() dropped (client.js's own
+   excludedAdjustmentLinesHtml()), by request -- deliberately greyed/muted
+   and visually separate from the real summary table above it, so it reads
+   as "worth a glance, not part of the real counts" rather than competing
+   with the table's own numbers. */
+.chk-summary-excluded-lines {
+  /* Same box recipe as .chk-tce-notes/.chk-other-contracts-box further
+     down, by request ("put that in a box like we do with this") -- own
+     class, not a reuse of either (a genuinely different feature from both
+     the Calculations legend and the Other Contracts list). Text stays at
+     0.75rem (not those boxes' own 0.62rem legend size) -- matches the real
+     table's own td text, per the size this was just set to match. */
+  margin-top: 0.5rem;
+  background: var(--row-alt-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  /* No max-width, by request ("don't wrap the lines... as long as they
+     don't go past the above table") -- a block element already stretches
+     no wider than its container (the same one .chk-summary-table's own
+     100% width sits in), so this naturally caps out at the table's own
+     width without a separate number to keep in sync. overflow-x is the
+     safety net for the rare line that's wider even than that. */
+  overflow-x: auto;
+}
+.chk-summary-excluded-lines-heading {
+  margin: 0 0 0.2rem;
+  font-weight: 600;
+}
+.chk-summary-excluded-lines ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.chk-summary-excluded-lines li {
+  white-space: nowrap;
+}
+/* "[Check item name in contract]" (client.js's own checkContractBadge),
+   by request -- sits on its OWN line below the Subscription name rather
+   than wrapping awkwardly right after it, and not bold (.cell-flag-orange's
+   own font-weight: 600 read too loud here) -- same compound-selector
+   override convention as .cell-flag-orange.saas-accepted-note elsewhere. */
+.cell-flag-orange.chk-check-contract-badge {
+  display: block;
+  font-weight: 400;
+}
 .chk-summary-table th:nth-child(1),
 .chk-summary-table td:nth-child(1) {
   /* Narrowed from 28% to make room for the new "Contract (AT)" column

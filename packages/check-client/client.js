@@ -39,6 +39,19 @@ let lastSubscriptionsData = null;
 let lastM365Data = null;
 let lastServicesData = null;
 let lastDattoData = null;
+// Adjustment-worded contract lines (Refund/Prorate) that contractMatchesForSku()
+// dropped from a Contract (AT) total because a real sibling line already
+// covered it -- by request, surfaced in their own list below the summary
+// table instead of silently disappearing, so a genuinely temporary
+// adjustment (self-resolves) can be told apart from leftover garbage from
+// historical bad data (never goes away on its own). Keyed by the line's own
+// real id (ContractServiceUnits/ContractServiceBundleUnits row id) so the
+// same line encountered more than once (contractMatchesForSku() runs once
+// per SKU, and the same underlying ghost-license check below also calls it)
+// only ever lists once. Reset at the start of every buildClientCheckSummaryRows()
+// call -- reflects exactly the current render, not a stale accumulation
+// from an earlier search.
+let excludedAdjustmentLines = new Map();
 // Only ever set once the "Show Users" button (Microsoft 365 Tenancy's own
 // lazy toggle) has actually been clicked -- by request, the Tech Cover
 // Elite section's own licensed-users count does NOT trigger that fetch on
@@ -840,7 +853,6 @@ export function mount(container) {
     // keep whichever one started most recently.
     const byContract = new Map(); // contractName -> Map(lineKey -> latest-period row)
     for (const r of allServiceRows()) {
-      if (isAdjustmentLine(r)) continue;
       const matches = serviceRowNameStartsWithAny(r.serviceItemName, names) || serviceRowNameStartsWithAny(r.serviceName, names);
       if (!matches) continue;
       const contractKey = r.contractName || '(no contract name)';
@@ -875,16 +887,80 @@ export function mount(container) {
     // out (5 + 0 = 5) -- hiding a real, already-scheduled reduction.
     return [...byContract.entries()]
       .map(([contractName, lines]) => {
-        const picked = [...lines.values()];
+        // A Refund/Prorate-worded line (isAdjustmentLine()) is dropped
+        // here -- but ONLY when a real, non-adjustment line is ALSO
+        // present for this same contract -- not unconditionally.
+        // Real bug, confirmed against Medical Administration Training's
+        // own M365 Business Standard contract line: its own (and ONLY)
+        // ContractServiceUnits row for this period is genuinely the real
+        // standing quantity (5 units), but its invoice description
+        // happens to read "...- Refund" -- dropping it unconditionally
+        // (the old behaviour) left nothing at all to sum, so Contract
+        // (AT) showed blank despite a real, correct contract existing.
+        // Compare Business Basic on the same client/contract: a real
+        // "Recurring" line (3 units) PLUS a genuinely separate one-time
+        // "Prorate" line (1 unit, its own distinct contractServiceID) --
+        // there, the Prorate line IS redundant (double-counting against
+        // the Recurring line it tops up), so it's still right to drop.
+        // The real line's own presence is what distinguishes "safe to
+        // drop" from "this is literally the only count there is."
+        const allLines = [...lines.values()];
+        const hasRealLine = allLines.some((r) => !isAdjustmentLine(r));
+        const picked = hasRealLine ? allLines.filter((r) => !isAdjustmentLine(r)) : allLines;
+        // Record every line actually dropped here (real sibling present,
+        // so it isn't counted above) that still carries a non-zero count
+        // for this period -- by request, listed separately below the
+        // summary table rather than just silently vanishing. A dropped
+        // line with 0 units isn't worth surfacing at all.
+        if (hasRealLine) {
+          for (const r of allLines) {
+            if (!isAdjustmentLine(r) || !r.units) continue;
+            excludedAdjustmentLines.set(r.id, { contractName, description: r.serviceName || r.serviceItemName, units: r.units });
+          }
+        }
         const units = picked.reduce((n, r) => n + (r.units || 0), 0);
         const hasNextPeriod = picked.some((r) => r.nextPeriodUnits !== null && r.nextPeriodUnits !== undefined);
         const nextPeriodUnits = hasNextPeriod ? picked.reduce((n, r) => n + (r.nextPeriodUnits ?? 0), 0) : null;
-        return { contractName, units, nextPeriodUnits };
+        // True when NOTHING backs this count except Refund/Prorate-worded
+        // line(s) (no real sibling line at all for this contract) -- by
+        // request, surfaced to the human as a "[Check item name in
+        // contract]" prompt next to the Subscription name
+        // (clientCheckSummaryRowHtml() below), since this is exactly the
+        // case the Contract-count fix can't tell apart from a genuine
+        // one-off refund with no real standing quantity behind it at all.
+        const isAdjustmentOnly = !hasRealLine;
+        return { contractName, units, nextPeriodUnits, isAdjustmentOnly };
       })
       .sort((a, b) => a.contractName.localeCompare(b.contractName));
   }
 
+  // The contract lines contractMatchesForSku() dropped (Refund/Prorate
+  // wording, real sibling line already covering the count), listed
+  // plainly below the summary table, by request -- just the line's own
+  // invoice description text and its unit count for this period, nothing
+  // else (no contract breakdown, no next-period bracket -- those belong
+  // to the real line already shown in the table above, and mixing them in
+  // here risks being mistaken for that same "(N) = next period" notation
+  // used elsewhere on this page). Lets a genuinely temporary adjustment
+  // (self-resolves next period) be told apart from leftover garbage from
+  // historical bad data (sits here release after release) at a glance,
+  // without silently disappearing either way.
+  function excludedAdjustmentLinesHtml() {
+    if (excludedAdjustmentLines.size === 0) return '';
+    const items = [...excludedAdjustmentLines.values()]
+      .sort((a, b) => a.description.localeCompare(b.description))
+      .map((l) => `<li>${escapeHtml(l.description)}: ${l.units}</li>`)
+      .join('');
+    return `
+      <div class="chk-summary-excluded-lines">
+        <p class="chk-summary-excluded-lines-heading">Other contract lines not included above:</p>
+        <ul>${items}</ul>
+      </div>
+    `;
+  }
+
   function buildClientCheckSummaryRows() {
+    excludedAdjustmentLines = new Map();
     const subscriptions = (lastSubscriptionsData?.byClient || []).flatMap((c) => c.subscriptions);
     const skus = lastM365Data?.matched ? lastM365Data.skus.filter((s) => !s.isFree && s.ingramProductName) : [];
 
@@ -1151,6 +1227,17 @@ export function mount(container) {
     // "Enabled" -- same .cell-flag-blue colour (and same `!== 'Enabled'`
     // check) that table's own Status column already uses for this.
     const statusBadge = sku && sku.status && sku.status !== 'Enabled' ? ` <span class="cell-flag-blue">[${escapeHtml(sku.status)}]</span>` : '';
+    // "[Check item name in contract]", by request -- when the Contract
+    // count above came ENTIRELY from a Refund/Prorate-worded line with no
+    // real sibling line to back it up (contractMatchesForSku()'s own
+    // isAdjustmentOnly), there's no way to tell from the number alone
+    // whether that's a genuine standing quantity (just oddly invoiced) or
+    // leftover garbage from a real one-off refund -- this prompts a human
+    // to go look at the real line in Autotask rather than trusting it
+    // silently either way.
+    const checkContractBadge = contractMatches.some((m) => m.isAdjustmentOnly)
+      ? `<span class="cell-flag-orange chk-check-contract-badge" title="This Contract count came from a line whose own invoice description reads Refund/Prorate, with no other line to back it up -- go check the real item name on the contract in Autotask">[Check item name in contract]</span>`
+      : '';
     // Renews and Expires merged into one column, by request -- whichever
     // one is actually the meaningful date for this subscription (Renews
     // when it auto-renews and a renewal date is known, Expires
@@ -1178,7 +1265,7 @@ export function mount(container) {
     const m365Red = m365Mismatch || (mixedBlanks && !m365Blank);
     return `
       <tr${m365Mismatch ? ' class="chk-summary-row-mismatch"' : ''}>
-        <td>${escapeHtml(row.name || '')}${statusBadge}</td>
+        <td>${escapeHtml(row.name || '')}${statusBadge}${checkContractBadge}</td>
         <td class="ticket-number${imRed ? ' cell-flag-red' : ''}">${licenseTotal ?? ''}</td>
         <td class="ticket-number${contractRed ? ' cell-flag-red' : ''}">${contractCell}</td>
         <td class="ticket-number${m365Red ? ' cell-flag-red' : ''}">${sku ? (sku.enabled ?? '') : ''}</td>
@@ -1917,6 +2004,7 @@ export function mount(container) {
         </thead>
         <tbody>${rows.map(clientCheckSummaryRowHtml).join('')}</tbody>
       </table>
+      ${excludedAdjustmentLinesHtml()}
       ${tceHtml ? `<hr class="chk-box-divider" />${tceHtml}` : ''}
     `;
     wireTechCoverUpdateButtons(summaryResultsEl);
