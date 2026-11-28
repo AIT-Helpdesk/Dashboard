@@ -143,7 +143,7 @@ export function mount(container) {
     return `
       <tr${rowCls}>
         <td>${companyLink(r)}</td>
-        <td class="ticket-number tcess-hover-wrap">${countCell(r.licensedUsers, licensedUsersPopupHtml(r))}</td>
+        <td class="ticket-number tcess-hover-wrap">${countCell(r.licensedUsers, licensedUsersPopupHtml(r), licensedUsersSuffix(r))}</td>
         <td class="ticket-number tcess-hover-wrap">${countCell(r.workstations, workstationsPopupHtml(r))}</td>
         <td class="ticket-number">${lineCell(r.bundle)}</td>
         <td class="ticket-number">${lineCell(r.user)}</td>
@@ -235,24 +235,45 @@ export function mount(container) {
     return `${heading}<table class="tcess-hover-table"><thead><tr><th>User</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+  // "(N)" after the Licensed Users count, by request -- how many
+  // admin/break-glass accounts were excluded to get there, right where the
+  // count itself is shown, not just buried in the hover popup. Omitted
+  // when there weren't any, same "don't show it when there's nothing to
+  // say" convention the Client column's own "(showing of total)" count
+  // already follows.
+  function licensedUsersSuffix(r) {
+    if (r.licensedUsers === null || r.excludedAccountCount === 0) return '';
+    return ` <span class="inline-subtext">(${r.excludedAccountCount})</span>`;
+  }
+
   // A count cell -- "Not available" (muted, not red -- this is a data gap,
   // not a billing mismatch) when there's no match at all for this client,
   // still with its own hover popup explaining why (popupHtml already
   // covers the null case -- see workstationsPopupHtml()/
-  // licensedUsersPopupHtml() above), otherwise the plain number.
-  function countCell(value, popupHtml) {
-    const trigger = value === null ? '<span class="inline-subtext">Not available</span>' : escapeHtml(String(value));
+  // licensedUsersPopupHtml() above), otherwise the plain number plus an
+  // optional suffix (the Licensed Users column's own excluded-count, see
+  // licensedUsersSuffix() above -- unused by Workstations).
+  function countCell(value, popupHtml, suffix) {
+    const trigger = value === null ? '<span class="inline-subtext">Not available</span>' : escapeHtml(String(value)) + (suffix || '');
     return hoverCell(trigger, popupHtml);
   }
 
-  // One Bundle/Endpoint/User cell -- "Contracted / Expected", both numbers
-  // flagged together when they genuinely disagree, same .cell-flag-*
-  // convention Check Client's own TC Calc column uses. "—" (muted, not
-  // flagged) when Expected itself couldn't be computed at all (no Datto
-  // match and/or no SaaS Alerts match for this client) -- there's nothing
-  // to compare against, so this is a data gap, not a mismatch. "None" (bold,
-  // only when Expected > 0) covers a company that's missing this line on
-  // its contract entirely.
+  // One Bundle/Endpoint/User cell. "Contracted / Expected" (both numbers
+  // flagged together, same .cell-flag-* convention Check Client's own TC
+  // Calc column uses) ONLY when there's something actually worth comparing
+  // side by side -- a real mismatch, or a reconciled one. By request,
+  // every OTHER case collapses to a single plain number instead, since
+  // pairing it with a second value that's either unknown ("—", Expected
+  // couldn't be computed at all -- no Datto and/or no SaaS Alerts match
+  // for this client) or identical (a clean match, e.g. "4 / 4") adds
+  // nothing.
+  //
+  // "None" vs "0" when there's no contract line at all for this service:
+  // "None" means live usage (Expected) says this line SHOULD carry some
+  // units -- a real gap. "0" means Expected agrees nothing's needed here
+  // either -- not a problem, shown as a plain 0 rather than reading as
+  // "something's missing". When Expected itself is unknown, "None" is
+  // used (there's no Expected to say otherwise).
   //
   // Green (.cell-flag-green, same convention as every other green flag on
   // this dashboard), by request, when server.js's own
@@ -270,29 +291,22 @@ export function mount(container) {
   // already uses for e.g. SaaS Protection's Backup % column). Contracted <
   // Expected means the client's being billed for LESS than their real
   // usage -- Ambient iT is actually losing money here -- stays red
-  // (.cell-flag-red). A missing line ("None") with an Expected > 0 is
-  // always this red "losing money" case (0 contracted can never be more
-  // than a positive Expected).
+  // (.cell-flag-red).
   function lineCell(cellData) {
-    if (cellData.expected === null) return '<span class="inline-subtext">—</span>';
-    let cls = '';
-    if (cellData.reconciled) {
-      cls = ' cell-flag-green';
-    } else if (cellData.mismatch) {
-      const contractedForCompare = cellData.contracted ?? 0;
-      cls = contractedForCompare > cellData.expected ? ' cell-flag-orange' : ' cell-flag-red';
-    }
     const contractedText =
-      cellData.contracted === null ? (cellData.expected > 0 ? 'None' : '0') : String(cellData.contracted);
+      cellData.contracted === null ? (cellData.expected !== null && cellData.expected <= 0 ? '0' : 'None') : String(cellData.contracted);
+
+    if (!cellData.mismatch && !cellData.reconciled) {
+      const title = cellData.contractName ? `Contract: ${cellData.contractName}` : 'No active contract line found for this service.';
+      return `<span title="${escapeHtml(title)}">${escapeHtml(contractedText)}</span>`;
+    }
+
+    const cls = cellData.reconciled ? ' cell-flag-green' : (cellData.contracted ?? 0) > cellData.expected ? ' cell-flag-orange' : ' cell-flag-red';
     const title = cellData.reconciled
       ? 'Billed differently than expected, but the combined total across Bundle and this line is correct -- not a real discrepancy.'
-      : cellData.mismatch
-        ? cls.includes('orange')
-          ? 'Billed higher than expected -- in our favour, not a revenue loss, but still worth checking against real usage.'
-          : 'Billed lower than expected -- we are undercharging relative to real usage.'
-        : cellData.contractName
-          ? `Contract: ${cellData.contractName}`
-          : 'No active contract line found for this service.';
+      : cls.includes('orange')
+        ? 'Billed higher than expected -- in our favour, not a revenue loss, but still worth checking against real usage.'
+        : 'Billed lower than expected -- we are undercharging relative to real usage.';
     return `<span class="${cls.trim()}" title="${escapeHtml(title)}">${escapeHtml(contractedText)}</span> / <span class="${cls.trim()}">${cellData.expected}</span>`;
   }
 
