@@ -11,5 +11,9 @@
   },
   "engines": {
     "node": ">=23.8.0"
+  },
+  "allowScripts": {
+    "msgpackr-extract@3.0.4": true,
+    "sqlite3@6.0.1": true
   }
 }
