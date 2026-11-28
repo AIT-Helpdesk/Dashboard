@@ -363,14 +363,15 @@ function shapeItem(row) {
     // ticketAutotaskId above stays too, just as "the first resolved one",
     // for anything that hasn't been updated to this plural shape.
     ticketLinks: JSON.parse(row.ticket_autotask_ids_json || '[]'),
-    // The SECOND, independent list, by request -- auto-discovered by
-    // sync.js from ticket notes mentioning this order's own Ingram order
-    // number, no human typing a PO # required at all. Same
-    // {ticketNumber, autotaskId} shape as ticketLinks above, enriched with
-    // its own url the exact same way (attachTicketUrls() below, extended
-    // to cover both lists) -- never merged into ticketLinks itself, so the
-    // manual, human-entered list stays untouched either way.
-    autoTicketLinks: JSON.parse(row.auto_ticket_autotask_ids_json || '[]'),
+    // True when the CURRENT ticketLinks/PO # content above was written by
+    // sync.js's own autoDiscoverTicketNumbers() -- found by searching
+    // ticket notes for this order's own Ingram order number, rather than a
+    // human typing a PO # in (po_number_manual) or Ingram's own raw PO #.
+    // Drives ONLY the Autotask icon shown next to the Rewst icon in the
+    // same PO # cell (client.js) -- by request, specifically NOT a second,
+    // separate line of its own, since ticketLinks above already IS "the"
+    // ticket either way.
+    ticketAutoFound: !!row.ticket_auto_found,
     products: JSON.parse(row.products_json || '[]'),
     currentTotal: row.current_total,
     // {type: 'year'|'month', duration} -- a renewal order's own underlying
@@ -677,12 +678,11 @@ async function attachRewstStageDoneFlags(orders) {
   }
 }
 
-// Mutates every one of shaped.ticketLinks (AND shaped.autoTicketLinks, by
-// request -- the auto-discovered list needs the exact same treatment) with
-// its own `url`. getTicketUrl() caches per id, so this only costs a real
-// request the first time any given id is looked up.
+// Mutates every one of shaped.ticketLinks with its own `url`.
+// getTicketUrl() caches per id, so this only costs a real request the
+// first time any given id is looked up.
 async function attachTicketUrls(shaped) {
-  for (const link of [...shaped.ticketLinks, ...shaped.autoTicketLinks]) {
+  for (const link of shaped.ticketLinks) {
     if (link.autotaskId != null) link.url = await getTicketUrl(link.autotaskId);
   }
 }

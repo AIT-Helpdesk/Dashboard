@@ -337,25 +337,51 @@ function migrateAddTermJson() {
 }
 migrateAddTermJson();
 
-// Adds auto_ticket_autotask_ids_json, by request -- a SECOND, independent
-// ticket-link list alongside ticket_autotask_ids_json above, auto-
-// discovered by sync.js searching ticket notes for this order's own
-// Ingram order number (@dashboard/contract-checks' order-note-search.js),
-// rather than relying on a human typing a ticket number into PO # at all.
-// Deliberately its own column, never merged into ticket_autotask_ids_json
-// -- the manual, human-entered list stays exactly what it's always been
-// (po_number_manual's own protection, display, "not found" flagging all
-// unchanged), this is purely additive. Same plain nullable ADD COLUMN, no
-// CHECK constraint, as every other migration in this file. Same JSON
-// shape as ticket_autotask_ids_json ([{ticketNumber, autotaskId}]), for
-// shapeItem()/attachTicketUrls() in server.js to enrich/render both the
-// same way.
+// auto_ticket_autotask_ids_json -- a first attempt at ticket-note-based
+// auto-discovery that stored the found ticket(s) in their OWN separate
+// column, displayed as a second "Auto:" line below the real PO # line.
+// Superseded immediately, by request, before this ever shipped anywhere:
+// "there's no point in finding the order on a ticket if we don't use it
+// ... I don't need it if it puts it only somewhere I still have to
+// manually get it and update the ticket number" -- a found ticket now
+// writes DIRECTLY into po_number/ticket_autotask_ids_json below (the same
+// fields a human typing one in already uses), via ticket_auto_found's own
+// migration further down, not a separate list nobody acts on. This
+// migration function/column is left in place, unused, same "harmless
+// leftover, not worth a destructive DROP COLUMN" convention
+// migrateAddTicketAutotaskIdsJson() above already follows for the even
+// older singular ticket_autotask_id column.
 function migrateAddAutoTicketAutotaskIdsJson() {
   const columns = db.prepare(`SELECT name FROM pragma_table_info('items')`).all();
   if (columns.some((c) => c.name === 'auto_ticket_autotask_ids_json')) return;
   db.exec(`ALTER TABLE items ADD COLUMN auto_ticket_autotask_ids_json TEXT`);
 }
 migrateAddAutoTicketAutotaskIdsJson();
+
+// Adds ticket_auto_found, by request -- a plain boolean flag: TRUE when
+// the CURRENT po_number/ticket_autotask_ids_json content was populated by
+// searching ticket notes for this order's own Ingram order number
+// (sync.js's own autoDiscoverTicketNumbers(), @dashboard/contract-checks'
+// order-note-search.js), rather than Ingram's own raw PO # or a human
+// typing one in. Drives ONLY the Autotask logo icon shown next to the
+// Rewst icon in the SAME PO # cell (client.js) -- by request, specifically
+// NOT a separate line/column of its own: "The Autotask icon will go next
+// to the Rewst icon" (both confirm something ABOUT the one real linked
+// ticket already shown there, not a second, different ticket).
+//
+// Reset back to 0 the moment a human edits po_number through the edit
+// pencil (updateItemFields() below, alongside po_number_manual flipping to
+// 1) -- a manual decision is never still shown as "found via Autotask".
+// Never set on the INSERT/sync path in upsertOrder() -- only
+// setAutoDiscoveredTicket() below (used exclusively by sync.js's own
+// auto-discovery pass) and updateItemFields()'s own reset-to-0 ever touch
+// this column.
+function migrateAddTicketAutoFound() {
+  const columns = db.prepare(`SELECT name FROM pragma_table_info('items')`).all();
+  if (columns.some((c) => c.name === 'ticket_auto_found')) return;
+  db.exec(`ALTER TABLE items ADD COLUMN ticket_auto_found INTEGER NOT NULL DEFAULT 0`);
+}
+migrateAddTicketAutoFound();
 
 // One-time correction: terminations first synced into their own
 // 'ingram_termination' process_type, before being merged into the main
@@ -847,6 +873,12 @@ function updateItemFields(itemId, fields, actor) {
     params.$ticketAutotaskIdsJson = JSON.stringify(ticketLinks);
     sets.push('po_number_manual = $poNumberManual');
     params.$poNumberManual = fields.poNumber ? 1 : 0;
+    // A human editing the PO # here -- whether setting it or clearing it
+    // back to blank -- always resets ticket_auto_found back to 0, by
+    // request: a manual decision is never still shown as "found via
+    // Autotask" (the Autotask icon, client.js) once a person has actually
+    // looked at and changed this row themselves.
+    sets.push('ticket_auto_found = 0');
   }
   if (sets.length === 1) return existing; // nothing actually changed
 
@@ -886,8 +918,14 @@ function upsertOrder(order) {
   // value. Every OTHER field on the row still refreshes normally either
   // way -- this only protects these two columns. Never applies on the
   // INSERT path below (existing is null there -- a brand-new row can't
-  // already have been manually protected).
-  const preserveManualPo = !!(existing && existing.po_number_manual);
+  // already have been manually protected). ticket_auto_found gets the
+  // EXACT same protection, by request -- a routine sync must never
+  // overwrite an auto-discovered ticket (found by searching ticket notes
+  // for this order's own Ingram order number, see setAutoDiscoveredTicket()
+  // below) back to Ingram's own raw po_number any more than it would a
+  // human's own manual entry; both represent a real, already-confirmed
+  // answer that plain Ingram-sourced data should never quietly replace.
+  const preserveExistingTicket = !!(existing && (existing.po_number_manual || existing.ticket_auto_found));
 
   // order.ticketLinks is the FULL [{ticketNumber, autotaskId}] list
   // sync.js's own resolveTicketAutotaskIds() now produces -- one entry
@@ -898,21 +936,12 @@ function upsertOrder(order) {
   // so a direct look at the row still shows something sane; nothing
   // reads that column anymore (see migrateAddTicketAutotaskIdsJson()'s
   // own comment above).
-  const ticketLinks = preserveManualPo
+  const ticketLinks = preserveExistingTicket
     ? JSON.parse(existing.ticket_autotask_ids_json || '[]')
     : Array.isArray(order.ticketLinks)
       ? order.ticketLinks
       : [];
   const firstResolvedTicketId = ticketLinks.find((t) => t.autotaskId != null)?.autotaskId ?? null;
-  // order.autoTicketLinks -- the SECOND, independent list (see
-  // migrateAddAutoTicketAutotaskIdsJson()'s own comment above), auto-
-  // discovered by sync.js from ticket notes mentioning this order's own
-  // Ingram order number. No po_number_manual-style protection needed here
-  // -- sync.js itself already decides whether to pass a freshly re-searched
-  // result or the existing one back in unchanged (it only re-searches
-  // while this is still empty), so whatever it passes is always correct to
-  // just write straight through.
-  const autoTicketLinks = Array.isArray(order.autoTicketLinks) ? order.autoTicketLinks : [];
   const shared = {
     $orderNumber: order.orderNumber || null,
     $orderType: order.orderType || null,
@@ -922,23 +951,26 @@ function upsertOrder(order) {
     $creationDate: order.creationDate || null,
     $provisioningDate: order.provisioningDate || null,
     $pendingDate: order.pendingDate || null,
-    $poNumber: preserveManualPo ? existing.po_number : order.poNumber || null,
+    $poNumber: preserveExistingTicket ? existing.po_number : order.poNumber || null,
     $ticketAutotaskId: firstResolvedTicketId,
     $ticketAutotaskIdsJson: JSON.stringify(ticketLinks),
-    $autoTicketAutotaskIdsJson: JSON.stringify(autoTicketLinks),
     $productsJson: JSON.stringify(order.products || []),
     $currentTotal: order.currentTotal ?? null,
     $termJson: order.term ? JSON.stringify(order.term) : null,
   };
 
   if (existing) {
+    // ticket_auto_found deliberately NOT in this SET list -- this routine
+    // sync path never sets or clears it either way (see
+    // setAutoDiscoveredTicket()/updateItemFields() below, the only 2
+    // places that ever do), so whatever it already is stays untouched
+    // regardless of preserveExistingTicket above.
     db.prepare(
       `UPDATE items SET
          order_number = $orderNumber, order_type = $orderType, customer_id = $customerId,
          client_name = $clientName, status = $status, creation_date = $creationDate,
          provisioning_date = $provisioningDate, pending_date = $pendingDate, po_number = $poNumber,
          ticket_autotask_id = $ticketAutotaskId, ticket_autotask_ids_json = $ticketAutotaskIdsJson,
-         auto_ticket_autotask_ids_json = $autoTicketAutotaskIdsJson,
          products_json = $productsJson, current_total = $currentTotal, term_json = $termJson,
          updated_at = $updatedAt
        WHERE id = $id`
@@ -951,11 +983,11 @@ function upsertOrder(order) {
       `INSERT INTO items (
          process_type, source_order_id, order_number, order_type, customer_id, client_name, status,
          creation_date, provisioning_date, pending_date, po_number, ticket_autotask_id, ticket_autotask_ids_json,
-         auto_ticket_autotask_ids_json, products_json, current_total, term_json, created_at, updated_at
+         products_json, current_total, term_json, created_at, updated_at
        ) VALUES (
          $processType, $sourceOrderId, $orderNumber, $orderType, $customerId, $clientName, $status,
          $creationDate, $provisioningDate, $pendingDate, $poNumber, $ticketAutotaskId, $ticketAutotaskIdsJson,
-         $autoTicketAutotaskIdsJson, $productsJson, $currentTotal, $termJson, $createdAt, $updatedAt
+         $productsJson, $currentTotal, $termJson, $createdAt, $updatedAt
        )`
     )
     .run({ ...shared, $processType: order.processType, $sourceOrderId: order.sourceOrderId, $createdAt: now, $updatedAt: now });
@@ -1120,6 +1152,51 @@ function listCompletedMissingProvisioningDate(processType) {
   return db.prepare(`SELECT * FROM items WHERE process_type = ? AND status = 'completed' AND (provisioning_date IS NULL OR provisioning_date = '')`).all(processType);
 }
 
+// Every item not yet marked "ALL DONE", regardless of status (processing,
+// completed, cancelled, terminated -- whatever) -- sync.js's own
+// auto-discovery pass (autoDiscoverTicketNumbers()) runs over this exact
+// set on every "Check IM for More" run, by request: broader than
+// listOutstandingProcessing()/listCompletedMissingProvisioningDate() above
+// (which both stop covering a row once Ingram itself considers the ORDER
+// finished), since a ticket note mentioning this order can genuinely get
+// written well after that point -- all_done_at is the real "nothing left
+// to check here" signal a human actually controls, not Ingram's own
+// order status.
+function listNotAllDone(processType) {
+  return db.prepare(`SELECT * FROM items WHERE process_type = ? AND all_done_at IS NULL`).all(processType);
+}
+
+// Writes a ticket auto-discovered by searching ticket notes for this
+// order's own Ingram order number DIRECTLY into po_number/
+// ticket_autotask_id(s)_json -- the SAME fields a human typing one into
+// the edit pencil already uses, by request ("the same database field can
+// be used") -- NOT a second, separate list. `po_number_manual = 0` in the
+// WHERE clause is a second, belt-and-braces guard against ever overwriting
+// a manual entry (sync.js's own caller already checks this first too, via
+// the row it read before calling this). Sets ticket_auto_found = 1, which
+// is what actually drives the Autotask icon (client.js) -- deliberately
+// the ONLY place in this file that ever sets it to 1 (updateItemFields()
+// above is the only place that ever resets it back to 0). No audit_log
+// entry -- same "sync-driven, not a human edit" convention upsertOrder()
+// itself already follows; this is really just a more targeted version of
+// what a routine sync already does to this same row.
+function setAutoDiscoveredTicket(itemId, { poNumber, ticketLinks }) {
+  const firstResolvedTicketId = ticketLinks.find((t) => t.autotaskId != null)?.autotaskId ?? null;
+  db.prepare(
+    `UPDATE items SET
+       po_number = $poNumber, ticket_autotask_id = $ticketAutotaskId,
+       ticket_autotask_ids_json = $ticketAutotaskIdsJson, ticket_auto_found = 1,
+       updated_at = $updatedAt
+     WHERE id = $id AND po_number_manual = 0`
+  ).run({
+    $poNumber: poNumber,
+    $ticketAutotaskId: firstResolvedTicketId,
+    $ticketAutotaskIdsJson: JSON.stringify(ticketLinks),
+    $updatedAt: nowIso(),
+    $id: itemId,
+  });
+}
+
 // One batched COUNT per item, for the History icon's "N records" hover
 // tooltip -- avoids a full history fetch (or one COUNT query per row) just
 // to show a number on every row of the list view.
@@ -1186,6 +1263,8 @@ module.exports = {
   listRenewalsEligibleForBulkDone,
   listOutstandingProcessing,
   listCompletedMissingProvisioningDate,
+  listNotAllDone,
+  setAutoDiscoveredTicket,
   getItemHistory,
   getHistoryCounts,
   getToggleHistories,

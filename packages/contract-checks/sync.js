@@ -14,8 +14,18 @@
 // (`node sync.js`, e.g. from a future scheduled task -- see README).
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', '.env') });
 const { getToken, getPage, fetchAllPages, getOrderDetail, getSubscriptionDetail } = require('@dashboard/ingram-client');
-const { getClient, listAll, matchesWildcard } = require('@dashboard/autotask-client');
-const { upsertOrder, getItemBySource, getSyncState, saveSyncState, listOutstandingProcessing, listCompletedMissingProvisioningDate, nowIso } = require('./db.js');
+const { getClient, listAll, matchesWildcard, last12MonthKeys, monthKeysWindow, mapWithConcurrency } = require('@dashboard/autotask-client');
+const {
+  upsertOrder,
+  getItemBySource,
+  getSyncState,
+  saveSyncState,
+  listOutstandingProcessing,
+  listCompletedMissingProvisioningDate,
+  listNotAllDone,
+  setAutoDiscoveredTicket,
+  nowIso,
+} = require('./db.js');
 const { findTicketsByNoteText } = require('./order-note-search.js');
 
 const PROCESS_TYPE = 'ingram_subscription';
@@ -287,44 +297,86 @@ function isRnRenewal(orderType, orderNumber) {
   return orderType === 'renewal' && matchesWildcard(orderNumber || '', 'RN*');
 }
 
-// Auto-discovers ticket(s) that reference this order via a real ticket
-// note, by request ("check for the CH order number in tickets... to try
-// to get the ticket number right" -- no human has to type a PO #/ticket
-// number in at all for this to work). Kept entirely separate from
-// ticketLinks (the manual, PO#-driven list) -- db.js's own
-// auto_ticket_autotask_ids_json is a second, independent column.
+// Auto-discovers ticket(s) that reference an order via a real ticket note,
+// by request ("check for the CH order number in tickets... to try to get
+// the ticket number right" -- no human has to type a PO #/ticket number in
+// at all for this to work). Runs once per sync, AFTER the new-order-fetch
+// and refresh-outstanding steps above (runSync()'s own call site) -- the
+// user left the ordering up to us; doing it last means a brand-new order
+// synced earlier in THIS SAME run gets checked too (a trivial, harmless
+// re-check -- its notes almost never exist yet on the same run it first
+// appears) rather than needing its own separate tracking to avoid that.
 //
-// Only (re-)searched while nothing's been found yet for this order --
-// once a match is confirmed it can never become wrong by waiting (a
-// ticket note is append-only), so there's no reason to keep re-querying
-// Autotask for it on every single sync run forever. This also solves a
-// real timing problem: the ticket note that actually mentions this order
-// is usually written by a technician well AFTER the order first appears
-// here, not at the same moment -- a ONE-TIME check right when the order
-// is first synced would most often find nothing and never check again.
-// Piggybacking on the SAME re-check cadence sync.js already uses for
-// "outstanding" orders (still processing, or completed but missing a
-// provisioning date -- see runSync()'s own refresh-outstanding step)
-// means this keeps trying on every later sync until a match turns up,
-// then stops, at no extra cost beyond what's already being re-fetched for
-// other reasons.
-async function resolveAutoTicketLinks(sourceOrderId, orderNumber) {
-  const existing = getItemBySource(PROCESS_TYPE, String(sourceOrderId));
-  const existingLinks = existing ? JSON.parse(existing.auto_ticket_autotask_ids_json || '[]') : [];
-  if (existingLinks.length > 0 || !orderNumber) return existingLinks;
+// Scoped to every item NOT YET marked "ALL DONE" (db.js's own
+// listNotAllDone()), by request -- broader than the "outstanding" set
+// above (processing, or completed but missing a provisioning date), since
+// a ticket note mentioning this order can genuinely get written well after
+// Ingram itself considers the order finished.
+//
+// Further scoped to orderType === 'change' ("CH" orders) ONLY, by
+// request ("The only orders that will appear on tickets are CH - Change
+// orders") -- confirmed live against the real dev data this matters a
+// lot: of 925 not-all-done rows, 720 were RN Renewal orders alone ("never
+// check RN = Renewal orders" -- also, separately, by request), and of the
+// 205 left, only 132 were actually 'change' type -- the rest (sales,
+// cancellation, termination) can never legitimately match a ticket note
+// either, so searching them at all was pure wasted Autotask API calls on
+// rows that could never produce a real result. This one condition already
+// excludes every renewal (RN or not) on its own, same net effect as also
+// calling isRnRenewal() here, so that check isn't duplicated.
+//
+// Skips a row that's either already manually confirmed (po_number_manual)
+// or already auto-found (ticket_auto_found) -- never overwrite a manual
+// decision, and never re-search once a match is already confirmed (a
+// ticket note is append-only, so a found match can't become wrong by
+// waiting, and there's no reason to keep re-querying Autotask for it on
+// every later sync run forever).
+//
+// windowStart is computed ONCE for the whole pass (first of last calendar
+// month, AEST) -- the exact same window the interactive "Search Order
+// Number" popup uses (server.js's own searchOrderNumber()), not
+// recalculated per order.
+// Concurrency 5 -- same conservative-but-parallel convention server.js's
+// own resolveCompanyName() loop already uses (mapWithConcurrency(ids, 3,
+// ...)), just slightly higher here since each unit of work below is a
+// single independent read against Autotask with no shared lookup to
+// contend over. Logged up front with the real candidate count -- a silent
+// multi-minute sequential version of this (one row at a time, no
+// progress output at all) is exactly what made a real run of this
+// impossible to tell apart from a hang.
+async function autoDiscoverTicketNumbers() {
+  const client = await getClient();
+  const lastMonthKey = last12MonthKeys().at(-2);
+  const { windowStart } = monthKeysWindow([lastMonthKey]);
 
-  try {
-    const client = await getClient();
-    const found = await findTicketsByNoteText(client, orderNumber);
-    return found.map((t) => ({ ticketNumber: t.ticketNumber, autotaskId: t.id }));
-  } catch (err) {
-    // Best-effort, same "don't fail the whole sync over one lookup"
-    // reasoning as fetchOrderDetailWithRetry/resolveTicketAutotaskId above
-    // -- leaves this empty, so it's simply retried on the next sync run
-    // rather than remembered as a false "nothing found".
-    console.error(`Contract Checks: failed to auto-discover ticket(s) for order ${orderNumber}:`, err.message);
-    return existingLinks;
-  }
+  const candidates = listNotAllDone(PROCESS_TYPE).filter(
+    (row) => row.order_type === 'change' && !row.po_number_manual && !row.ticket_auto_found && row.order_number
+  );
+  console.log(`Contract Checks: auto-discovering ticket numbers for ${candidates.length} not-all-done order(s)...`);
+
+  let doneCount = 0;
+  const results = await mapWithConcurrency(candidates, 5, async (row) => {
+    try {
+      const found = await findTicketsByNoteText(client, row.order_number, windowStart);
+      doneCount++;
+      if (doneCount % 25 === 0 || doneCount === candidates.length) {
+        console.log(`Contract Checks: auto-discovery checked ${doneCount}/${candidates.length}...`);
+      }
+      if (found.length === 0) return false;
+      const ticketLinks = found.map((t) => ({ ticketNumber: t.ticketNumber, autotaskId: t.id }));
+      const poNumber = ticketLinks.map((t) => t.ticketNumber).join(' & ');
+      setAutoDiscoveredTicket(row.id, { poNumber, ticketLinks });
+      return true;
+    } catch (err) {
+      // Best-effort, same "don't fail the whole sync over one lookup"
+      // reasoning as fetchOrderDetailWithRetry/resolveTicketAutotaskId
+      // above -- left untouched, so it's simply retried on the next sync
+      // run rather than remembered as a false "nothing found".
+      console.error(`Contract Checks: failed to auto-discover ticket(s) for order ${row.order_number}:`, err.message);
+      return false;
+    }
+  });
+  return results.filter(Boolean).length;
 }
 
 // Fetches detail, resolves the ticket, and upserts one order into the
@@ -351,7 +403,6 @@ async function syncOneOrder(orderStub, token, customerNameById) {
   // so client.js can still flag exactly WHICH typed piece didn't resolve,
   // not just whether the order has at least one real link.
   const ticketLinks = clearPo ? [] : await resolveTicketAutotaskIds(detail.poNumber);
-  const autoTicketLinks = await resolveAutoTicketLinks(orderStub.id, orderNumber);
 
   upsertOrder({
     processType: PROCESS_TYPE,
@@ -372,7 +423,6 @@ async function syncOneOrder(orderStub, token, customerNameById) {
     pendingDate: detail.pendingDate,
     poNumber,
     ticketLinks,
-    autoTicketLinks,
     products: detail.products,
     currentTotal: detail.currentTotal,
     term: detail.term,
@@ -583,9 +633,14 @@ async function runSync() {
     // snapshot rather than something with its own cursor/bootstrap state.
     newTerminationsCount = await syncTerminations(token, customerNameById);
 
-    const message = `Synced ${newCount} new, refreshed ${refreshedCount} outstanding, ${newTerminationsCount} new termination${newTerminationsCount === 1 ? '' : 's'}.`;
+    // Runs last, over every not-all-done item regardless of which branch
+    // above touched it this run -- see autoDiscoverTicketNumbers()'s own
+    // comment for why it's scoped and ordered this way.
+    const autoFoundCount = await autoDiscoverTicketNumbers();
+
+    const message = `Synced ${newCount} new, refreshed ${refreshedCount} outstanding, ${newTerminationsCount} new termination${newTerminationsCount === 1 ? '' : 's'}, ${autoFoundCount} ticket${autoFoundCount === 1 ? '' : 's'} auto-found in notes.`;
     saveSyncState(PROCESS_TYPE, { last_run_at: nowIso(), last_run_ok: 1, last_run_message: message, last_run_new_count: newCount, last_run_refreshed_count: refreshedCount });
-    return { ok: true, newCount, refreshedCount, newTerminationsCount, message };
+    return { ok: true, newCount, refreshedCount, newTerminationsCount, autoFoundCount, message };
   } catch (err) {
     console.error('Contract Checks sync failed:', err);
     saveSyncState(PROCESS_TYPE, {
@@ -603,7 +658,7 @@ async function runSync() {
 // /items/:id when a user manually edits a row's PO # (Ticket #), by
 // request, so the linked Autotask ticket gets re-resolved the same way a
 // sync run would resolve it, not a separate copy of this lookup.
-module.exports = { runSync, PROCESS_TYPE, resolveTicketAutotaskId, resolveTicketAutotaskIds };
+module.exports = { runSync, PROCESS_TYPE, resolveTicketAutotaskId, resolveTicketAutotaskIds, autoDiscoverTicketNumbers };
 
 if (require.main === module) {
   runSync()

@@ -651,8 +651,7 @@ export function mount(container) {
     // bright colors, which CSS can't recolor at all (a colored emoji glyph
     // ignores `color`, unlike a currentColor SVG). Styled in styles.css.
     const editIcon = `<button type="button" class="wsp-icon-btn cc-po-edit-btn" data-id="${o.id}" title="Edit ticket number"><svg class="cc-po-edit-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>`;
-    const autoHtml = autoTicketLinksHtml(o);
-    if (!o.poNumber) return `${editIcon}${autoHtml}`;
+    if (!o.poNumber) return editIcon;
     // PO # can now hold more than one ticket number, by request --
     // separated by any mix of "&"/"-"/whitespace, same split sync.js's
     // own parsePoTicketNumbers() uses server-side. A CAPTURING split (not
@@ -673,7 +672,7 @@ export function mount(container) {
     const links = o.ticketLinks || [];
     let linkIndex = 0;
     const piecesHtml = parts.map((part) => (/^[&\-\s]*$/.test(part) ? escapeHtml(part) : ticketPieceHtml(part, links[linkIndex++]))).join('');
-    return `${piecesHtml}${poFlagIconHtml(o)} ${editIcon}${rewstIconHtml(o)}${autoHtml}`;
+    return `${piecesHtml}${poFlagIconHtml(o)} ${editIcon}${rewstIconHtml(o)}${autotaskFoundIconHtml(o)}`;
   }
 
   // One typed ticket-number piece's own link (or not-found span), by
@@ -706,35 +705,6 @@ export function mount(container) {
     if (link.title) tooltipLines.push(`Title: ${link.title}`);
     const tooltip = tooltipLines.join('\n');
     return `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener" class="cc-ticket-link" title="${escapeHtml(tooltip)}">${escapeHtml(text)}</a>`;
-  }
-
-  // Auto-discovered ticket link(s), by request -- sync.js's own
-  // resolveAutoTicketLinks() found these by searching ticket notes for
-  // this order's own Ingram order number, with no PO # typed in at all
-  // needed. Shown as its own small line below the PO # line, by request
-  // ("If multiple tickets are found... show them all") -- every one
-  // found, not just the first, kept visually distinct ("Auto:" prefix)
-  // from the manual PO # line so the two are never confused. Same real
-  // .cc-ticket-link class as ticketPieceHtml() above -- picked up by that
-  // same delegated click handler (wireRowActions() further down) for the
-  // real popup-window behaviour, for free. Skips any ticket id already
-  // covered by a manual link -- no point showing the same real ticket
-  // twice just because it happens to satisfy both paths.
-  function autoTicketLinksHtml(o) {
-    const manualIds = new Set((o.ticketLinks || []).map((l) => l.autotaskId).filter((id) => id != null));
-    const extra = (o.autoTicketLinks || []).filter((l) => l.autotaskId != null && l.url && !manualIds.has(l.autotaskId));
-    if (extra.length === 0) return '';
-    // Autotask's own real logo mark (packages/shell/public/autotask-icon.png),
-    // by request -- same "served as a plain static asset" convention
-    // rewstIconHtml() above already uses for Rewst's own logo -- per link,
-    // so a found ticket reads as verified at a glance, not just plain text.
-    const links = extra
-      .map(
-        (l) =>
-          `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener" class="cc-ticket-link" title="Found by searching ticket notes for this order's own Ingram order number">${escapeHtml(l.ticketNumber)}</a><img src="/autotask-icon.png" class="cc-po-auto-found-icon" alt="Autotask" title="Confirmed: this ticket exists in Autotask" />`
-      )
-      .join(', ');
-    return `<div class="cc-po-auto-links">Auto: ${links}</div>`;
   }
 
   // After the PO #, before the edit pencil, by request -- two mutually
@@ -771,6 +741,23 @@ export function mount(container) {
     // logo.png/favicon.png already sitting in that same folder.
     return o.hasRewstStageDone
       ? `<img src="/rewst-icon.png" class="cc-rewst-icon" alt="Rewst" title="This ticket has a Rewst Automation note on it" />`
+      : '';
+  }
+
+  // Small icon right next to the Rewst icon above, by request -- NOT a
+  // separate line/column of its own ("The Autotask icon will go next to
+  // the Rewst icon"), when the ticket number currently shown in THIS SAME
+  // PO # cell was found by sync.js's own autoDiscoverTicketNumbers()
+  // (searching ticket notes for this order's own Ingram order number)
+  // rather than typed in manually or taken from Ingram's own raw PO #
+  // (server.js's o.ticketAutoFound, db.js's ticket_auto_found). Confirms
+  // something true about the one real ticket already shown here -- by
+  // design it can never appear next to a different, unrelated ticket,
+  // since ticketAutoFound is reset to 0 the moment a human edits the PO #
+  // (db.js's updateItemFields()).
+  function autotaskFoundIconHtml(o) {
+    return o.ticketAutoFound
+      ? `<img src="/autotask-icon.png" class="cc-po-auto-found-icon" alt="Autotask" title="This ticket number was found by Autotask (searched ticket notes for this order's own Ingram order number), not typed in manually" />`
       : '';
   }
 

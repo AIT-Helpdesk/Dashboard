@@ -2375,19 +2375,12 @@ h1 {
 .cc-po-not-found {
   color: #f59e0b;
 }
-/* Auto-discovered ticket link(s) (client.js's own autoTicketLinksHtml()),
-   by request -- its own small line below the PO # line, muted so it reads
-   as a secondary, supplementary finding rather than competing with the
-   real PO # text above it. */
-.cc-po-auto-links {
-  margin-top: 0.15rem;
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-/* Autotask's own logo mark per auto-discovered link, by request -- same
-   sizing/opacity-on-hover convention .cc-rewst-icon above already uses for
-   Rewst's own logo image, so each one reads as verified ("this ticket
-   really exists in Autotask") at a glance, not just plain text. */
+/* Autotask's own logo mark (client.js's own autotaskFoundIconHtml()), by
+   request -- sits right next to .cc-rewst-icon in the SAME PO # line, not
+   a separate line of its own, same sizing/opacity-on-hover convention
+   .cc-rewst-icon above already uses for Rewst's own logo image, so the
+   ticket number already shown there reads as verified ("found via
+   Autotask, not typed in") at a glance. */
 .cc-po-auto-found-icon {
   width: 0.95rem;
   height: 0.95rem;
