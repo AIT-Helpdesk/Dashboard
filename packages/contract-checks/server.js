@@ -572,25 +572,64 @@ async function attachTicketDetails(orders) {
   }
 }
 
-// Flags an order's linked ticket as having passed through "Rewst - Stage
-// Done" at some point in its status history, by request (Contract Checks
-// and Check Client both show a small icon in the PO # cell when true).
-// Confirmed against the real API: TicketHistory can't be filtered by
-// multiple ticket ids at once ("you are required to supply one and only
-// one ticketID equals filter") -- unlike attachTicketDetails() above, this
-// genuinely needs one request per distinct ticket, not one batched query.
-// Bounded concurrency (mapWithConcurrency), not fully sequential, to keep
-// that from being painfully slow with several tickets on screen at once.
+// Flags an order's linked ticket as having a real "Rewst Automation"
+// ticket note on it, by request (Contract Checks and Check Client both
+// show a small icon in the PO # cell when true). Replaces the original
+// "passed through 'Rewst - Stage Done' status at some point in its
+// history" check, by request ("I think this is because we are check for
+// the ticket passing through a Rewst related status. Please check for
+// ticket note entries created by Rewst API and if found add the Rewst
+// icon. Do this instead of the Status check"). Confirmed live: Rewst's own
+// Autotask API user is a real Resource (firstName "Rewst", lastName
+// "API", rewst.api@ambientit.com.au) -- every real automation note it
+// creates carries this resource's id as TicketNotes.creatorResourceID
+// (777 real notes confirmed live, every one titled "Rewst Automation").
 //
-// Cached asymmetrically, deliberately -- history is append-only, so once a
-// ticket is confirmed to have passed through this status that fact can
-// never become false again (cached ~indefinitely, just for basic memory
-// hygiene); a "no" result, by contrast, can genuinely change the moment
-// this ticket next hits that status, so it's only cached briefly and gets
-// rechecked periodically.
+// Unlike the old TicketHistory-based check (which Autotask's real API
+// only allows filtering one ticket id at a time, confirmed: "you are
+// required to supply one and only one ticketID equals filter" -- forcing
+// one request per ticket, via mapWithConcurrency), TicketNotes CAN be
+// filtered by many ticket ids in one batched query (fetchByFieldIn's own
+// chunked 'in' filter) -- this is simpler AND faster, not just more
+// accurate.
+//
+// Cached asymmetrically, deliberately -- a ticket note is append-only, so
+// once a ticket is confirmed to have a Rewst Automation note that fact
+// can never become false again (cached ~indefinitely, just for basic
+// memory hygiene); a "no" result, by contrast, can genuinely change the
+// moment Rewst next touches this ticket, so it's only cached briefly and
+// gets rechecked periodically.
 const REWST_FLAG_TRUE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const REWST_FLAG_FALSE_CACHE_TTL_MS = 20 * 60 * 1000;
 const rewstFlagCache = new Map(); // ticketAutotaskId -> { value: boolean, expiresAt }
+
+// Resolved by name once per process (cached), not hardcoded, same
+// "resolve by name, not a hardcoded id" convention this dashboard already
+// follows elsewhere (e.g. getBillingCodeIdByName() in @dashboard/autotask-
+// client).
+let rewstApiResourceIdPromise = null;
+function getRewstApiResourceId(client) {
+  if (!rewstApiResourceIdPromise) {
+    rewstApiResourceIdPromise = listAll(client.resources, [
+      { op: 'eq', field: 'firstName', value: 'Rewst' },
+      { op: 'eq', field: 'lastName', value: 'API' },
+    ]).then((rows) => rows[0]?.id ?? null);
+  }
+  return rewstApiResourceIdPromise;
+}
+
+// Shared by attachRewstStageDoneFlags() below (the cached, batch-table
+// version) and searchOrderNumber()'s own uncached one-off check (that
+// route already does a fresh live query per click, so it has no cache of
+// its own to populate). Returns the subset of `ticketIds` that have at
+// least one real Rewst Automation note.
+async function ticketIdsWithRewstNote(client, ticketIds) {
+  if (ticketIds.length === 0) return new Set();
+  const rewstResourceId = await getRewstApiResourceId(client);
+  if (rewstResourceId == null) return new Set();
+  const notes = await fetchByFieldIn(client.ticketNotes, 'ticketID', ticketIds, [{ op: 'eq', field: 'creatorResourceID', value: rewstResourceId }]);
+  return new Set(notes.map((n) => n.ticketID));
+}
 
 async function attachRewstStageDoneFlags(orders) {
   const neededIds = [...new Set(orders.flatMap((o) => (o.ticketLinks || []).map((l) => l.autotaskId).filter((id) => id != null)))];
@@ -603,25 +642,24 @@ async function attachRewstStageDoneFlags(orders) {
   });
 
   if (idsToFetch.length > 0) {
-    const client = await getClient();
-    await mapWithConcurrency(idsToFetch, 5, async (id) => {
-      try {
-        const historyRes = await client.ticketHistory.list({ filter: { ticketID: id } });
-        const rows = historyRes.data || historyRes || [];
-        const hasRewst = rows.some((r) => r.action === 'Status Changed' && /Rewst - Stage Done/i.test(r.detail || ''));
+    try {
+      const client = await getClient();
+      const foundIds = await ticketIdsWithRewstNote(client, idsToFetch);
+      for (const id of idsToFetch) {
+        const hasRewst = foundIds.has(id);
         rewstFlagCache.set(id, { value: hasRewst, expiresAt: now + (hasRewst ? REWST_FLAG_TRUE_CACHE_TTL_MS : REWST_FLAG_FALSE_CACHE_TTL_MS) });
-      } catch (err) {
-        // Best-effort, same reasoning as attachTicketDetails() above -- and
-        // deliberately left OUT of the cache on failure (not cached as
-        // false), so a transient error here doesn't get remembered as a
-        // real "no" for the next 20 minutes.
-        console.error(`Contract Checks: failed to fetch ticket history for Rewst flag (ticket ${id}):`, err.message);
       }
-    });
+    } catch (err) {
+      // Best-effort, same reasoning as attachTicketDetails() above -- and
+      // deliberately left OUT of the cache on failure (not cached as
+      // false), so a transient error here doesn't get remembered as a
+      // real "no" for the next 20 minutes.
+      console.error('Contract Checks: failed to fetch Rewst Automation notes:', err.message);
+    }
   }
 
-  // True if ANY linked ticket has passed through this status, by request
-  // -- closing/working several tickets on one order is conceptually one
+  // True if ANY linked ticket has a Rewst Automation note, by request --
+  // closing/working several tickets on one order is conceptually one
   // combined job, so one icon covers all of them rather than one per
   // ticket.
   for (const o of orders) {
@@ -1180,30 +1218,21 @@ router.get('/items/:id/history', (req, res) => {
 // TimeEntry's summaryNotes/internalNotes -- dated on or after the 1st of
 // LAST calendar month (AEST), by request.
 //
-// No Autotask query joins Tickets/TicketNotes/TimeEntries directly (and no
-// existing page in this codebase searched any of these 3 for free text at
-// all before this -- confirmed), so this runs 3 separate `contains`-
-// filtered queries in parallel and resolves each TicketNotes/TimeEntries
-// hit back to its own parent ticket (listAll()'s own 'id' `in` fetch,
-// skipping any ticket a title-match already resolved), then merges
-// everything into one de-duplicated list keyed by ticket id. Confirmed
-// LIVE against this exact real order (CH005960, from Pacgold): 1 real
-// TicketNote match found, 0 title/time-entry matches -- the 3-way search
-// is necessary, a title-only search would have found nothing.
 // Pulled out of the route below into its own function (same "testable
 // without spinning up Express/auth" convention @dashboard/tc-essentials-
 // seat-check's own router.buildReport uses) -- confirmed live this way
 // before ever being wired to the route.
 //
 // TicketNotes only -- by request ("the order number will never appear in
-// the title or the description. It will be in a tech note"), dropping the
-// earlier Tickets.title and TimeEntries search branches entirely rather
-// than keeping them as unused dead weight. Not narrowed to one specific
-// noteType code either -- the real confirmed match for a live order
-// (CH005960) turned out to carry this account's own noteType 2 ("Task
-// Detail" is how this account's picklist itself labels it, not literally
-// "Tech Note" -- confirmed live), so matching on TicketNotes.description
-// alone, regardless of noteType, is what actually finds it.
+// the title or the description. It will be in a tech note"), dropping an
+// earlier draft's Tickets.title and TimeEntries search branches entirely
+// rather than keeping them as unused dead weight. Not narrowed to one
+// specific noteType code either -- the real confirmed match for a live
+// order (CH005960) turned out to carry this account's own noteType 2
+// ("Task Detail" is how this account's picklist itself labels it, not
+// literally "Tech Note" -- confirmed live), so matching on
+// TicketNotes.description alone, regardless of noteType, is what actually
+// finds it.
 async function searchOrderNumber(orderNumber) {
   const client = await getClient();
   // last12MonthKeys()'s own last entry is the current (partial) month --
@@ -1221,13 +1250,21 @@ async function searchOrderNumber(orderNumber) {
   const tickets =
     ticketIds.length > 0
       ? await (async () => {
-          const resolved = await fetchByFieldIn(client.tickets, 'id', ticketIds);
+          // Rewst Rooster icon, by request -- same ticketIdsWithRewstNote()
+          // check attachRewstStageDoneFlags() uses for the main table, just
+          // uncached here (this route already does a fresh live query per
+          // click, so there's no existing cache to populate or read).
+          const [resolved, rewstTicketIds] = await Promise.all([
+            fetchByFieldIn(client.tickets, 'id', ticketIds),
+            ticketIdsWithRewstNote(client, ticketIds),
+          ]);
           const result = await Promise.all(
             resolved.map(async (t) => ({
               id: t.id,
               ticketNumber: t.ticketNumber,
               title: t.title,
               url: await getTicketUrl(t.id),
+              hasRewstStageDone: rewstTicketIds.has(t.id),
             }))
           );
           result.sort((a, b) => (a.ticketNumber || '').localeCompare(b.ticketNumber || ''));

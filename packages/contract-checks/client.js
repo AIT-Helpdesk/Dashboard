@@ -611,9 +611,12 @@ export function mount(container) {
   }
 
   // Same real popup-window convention every other Autotask link on this
-  // dashboard already uses.
+  // dashboard already uses. Same Rewst Rooster icon (rewstIconHtml(),
+  // further down) the main table shows, by request -- these results were
+  // showing none at all before (server.js's searchOrderNumber() now
+  // resolves hasRewstStageDone for them too).
   function orderSearchResultHtml(t) {
-    return `<li class="history-modal-entry"><a href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(t.ticketNumber)}</a> -- ${escapeHtml(t.title)}</li>`;
+    return `<li class="history-modal-entry"><a href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, '_blank', 'noopener,noreferrer,width=1200,height=900'); return false;">${escapeHtml(t.ticketNumber)}</a> -- ${escapeHtml(t.title)} ${rewstIconHtml(t)}</li>`;
   }
 
   // Single Provisioned column, by request -- shows the real provisioningDate
@@ -725,17 +728,19 @@ export function mount(container) {
     return '';
   }
 
-  // Small icon after the edit pencil, by request, when this ticket's
-  // status history ever passed through "Rewst - Stage Done" (server.js's
-  // attachRewstStageDoneFlags() -- a real Autotask history lookup, not
-  // guessed from the ticket's current status alone, since it may have long
-  // since moved on from there).
+  // Small icon after the edit pencil, by request, when this ticket has a
+  // real "Rewst Automation" ticket note on it (server.js's
+  // attachRewstStageDoneFlags()/ticketIdsWithRewstNote() -- a real
+  // TicketNotes.creatorResourceID check against Rewst's own Autotask API
+  // user, not a status-history check, by request: a ticket's STATUS can
+  // move on from "Rewst - Stage Done" long after Rewst actually touched
+  // it, but the note it left behind never goes away).
   function rewstIconHtml(o) {
     // Rewst's own real logo (packages/shell/public/rewst-icon.png), by
     // request -- served as a plain static asset, same convention as
     // logo.png/favicon.png already sitting in that same folder.
     return o.hasRewstStageDone
-      ? `<img src="/rewst-icon.png" class="cc-rewst-icon" alt="Rewst" title="This ticket passed through Rewst - Stage Done" />`
+      ? `<img src="/rewst-icon.png" class="cc-rewst-icon" alt="Rewst" title="This ticket has a Rewst Automation note on it" />`
       : '';
   }
 
